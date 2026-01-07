@@ -200,18 +200,77 @@ A hyper-detailed, framework-agnostic repository of system design patterns, conce
 | [CMU 15-721: Advanced Database Systems](https://15721.courses.cs.cmu.edu/) | CMU | In-memory databases, query optimization |
 | [Stanford CS244B: Distributed Systems](https://www.scs.stanford.edu/20sp-cs244b/) | Stanford | Consensus, replication, distributed storage |
 
-### Tools & Technologies
+### Additional Books
 
-| Category | Tools |
-|----------|-------|
-| Databases | PostgreSQL, MySQL, MongoDB, Cassandra, Redis, CockroachDB, TiDB |
-| Message Queues | Kafka, RabbitMQ, Amazon SQS, Google Pub/Sub, NATS |
-| Caching | Redis, Memcached, Hazelcast |
-| Search | Elasticsearch, Apache Solr, Meilisearch |
-| Monitoring | Prometheus, Grafana, Datadog, New Relic |
-| Tracing | Jaeger, Zipkin, OpenTelemetry |
-| Load Balancers | NGINX, HAProxy, Envoy, AWS ALB |
-| Container Orchestration | Kubernetes, Docker Swarm, Nomad |
+#### Architecture & Design Patterns
+| Book | Author | Topics |
+|------|--------|--------|
+| [Clean Architecture](https://www.oreilly.com/library/view/clean-architecture-a/9780134494272/) | Robert C. Martin | Dependency rule, boundaries, components, frameworks |
+| [Patterns of Enterprise Application Architecture](https://martinfowler.com/books/eaa.html) | Martin Fowler | Domain logic, data source, web presentation patterns |
+| [Domain-Driven Design](https://www.domainlanguage.com/ddd/) | Eric Evans | Bounded contexts, aggregates, ubiquitous language |
+| [Implementing Domain-Driven Design](https://www.oreilly.com/library/view/implementing-domain-driven-design/9780133039900/) | Vaughn Vernon | Practical DDD patterns and techniques |
+| [Release It!](https://pragprog.com/titles/mnee2/release-it-second-edition/) | Michael Nygard | Stability patterns, capacity, networking |
+| [Software Architecture: The Hard Parts](https://www.oreilly.com/library/view/software-architecture-the/9781492086888/) | Ford, Richards, Sadalage, Dehghani | Trade-off analysis, modularity, decomposition |
+| [Fundamentals of Software Architecture](https://www.oreilly.com/library/view/fundamentals-of-software/9781492043447/) | Mark Richards, Neal Ford | Architecture styles, characteristics, decisions |
+| [A Philosophy of Software Design](https://web.stanford.edu/~ouster/cgi-bin/book.php) | John Ousterhout | Complexity, modules, abstractions, comments |
+
+#### Distributed Systems & Reliability
+| Book | Author | Topics |
+|------|--------|--------|
+| [Site Reliability Engineering](https://sre.google/sre-book/table-of-contents/) | Google | SLOs, error budgets, toil, monitoring, on-call |
+| [The Site Reliability Workbook](https://sre.google/workbook/table-of-contents/) | Google | Practical SRE implementation |
+| [Distributed Systems](https://www.distributed-systems.net/index.php/books/ds4/) | Tanenbaum & Van Steen | Processes, communication, naming, coordination |
+| [Designing Distributed Systems](https://www.oreilly.com/library/view/designing-distributed-systems/9781491983638/) | Brendan Burns | Patterns for scalable, reliable services |
+| [Database Reliability Engineering](https://www.oreilly.com/library/view/database-reliability-engineering/9781491925935/) | Campbell & Majors | Database operations, infrastructure, recovery |
+| [Web Scalability for Startup Engineers](https://www.oreilly.com/library/view/web-scalability-for/9780071843669/) | Artur Ejsmont | Practical scaling strategies |
+
+#### Data & Streaming
+| Book | Author | Topics |
+|------|--------|--------|
+| [Streaming Systems](https://www.oreilly.com/library/view/streaming-systems/9781491983867/) | Akidau, Chernyak, Lax | Watermarks, windows, triggers, exactly-once |
+| [Kafka: The Definitive Guide](https://www.oreilly.com/library/view/kafka-the-definitive/9781492043072/) | Shapira, Palino, et al. | Kafka internals, producers, consumers, operations |
+| [Making Sense of Stream Processing](https://www.oreilly.com/library/view/making-sense-of/9781492042563/) | Martin Kleppmann | Event sourcing, change capture, stream processing |
+| [Data Mesh](https://www.oreilly.com/library/view/data-mesh/9781492092384/) | Zhamak Dehghani | Decentralized data architecture |
+| [The Data Warehouse Toolkit](https://www.kimballgroup.com/data-warehouse-business-intelligence-resources/books/) | Ralph Kimball | Dimensional modeling, ETL, BI |
+
+#### Performance & Optimization
+| Book | Author | Topics |
+|------|--------|--------|
+| [Systems Performance](https://www.brendangregg.com/systems-performance-2nd-edition-book.html) | Brendan Gregg | Linux, observability, methodologies, tools |
+| [BPF Performance Tools](https://www.brendangregg.com/bpf-performance-tools-book.html) | Brendan Gregg | Linux BPF observability and tracing |
+| [High Performance MySQL](https://www.oreilly.com/library/view/high-performance-mysql/9781492080503/) | Silvia Botros, Jeremy Tinley | Query optimization, replication, scaling |
+| [High Performance Browser Networking](https://hpbn.co/) | Ilya Grigorik | TCP, UDP, TLS, HTTP/2, WebSocket, WebRTC |
+
+### More Papers
+
+#### Consistency & Transactions
+- [Linearizability: A Correctness Condition for Concurrent Objects](https://cs.brown.edu/~mph/HerlihyW90/p463-herlihy.pdf) - Herlihy & Wing, 1990
+- [A Critique of ANSI SQL Isolation Levels](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/tr-95-51.pdf) - Berenson et al., 1995
+- [Large-scale Incremental Processing Using Distributed Transactions and Notifications (Percolator)](https://research.google/pubs/pub36726/) - Peng & Dabek, 2010
+- [Calvin: Fast Distributed Transactions for Partitioned Database Systems](http://cs.yale.edu/homes/thomson/publications/calvin-sigmod12.pdf) - Thomson et al., 2012
+- [Highly Available Transactions: Virtues and Limitations](https://www.vldb.org/pvldb/vol7/p181-bailis.pdf) - Bailis et al., 2013
+- [Serializable Snapshot Isolation in PostgreSQL](https://drkp.net/papers/ssi-vldb12.pdf) - Ports & Grittner, 2012
+
+#### Distributed Data Structures
+- [Consistent Hashing and Random Trees](https://www.cs.princeton.edu/courses/archive/fall09/cos518/papers/chash.pdf) - Karger et al., 1997
+- [CRUSH: Controlled, Scalable, Decentralized Placement of Replicated Data](https://ceph.io/assets/pdfs/weil-crush-sc06.pdf) - Weil et al., 2006
+- [A Comprehensive Study of Convergent and Commutative Replicated Data Types (CRDTs)](https://hal.inria.fr/inria-00555588/document) - Shapiro et al., 2011
+- [The Phi Accrual Failure Detector](https://www.cs.cornell.edu/projects/Quicksilver/public_pdfs/SRDS04.pdf) - Hayashibara et al., 2004
+
+#### Search & Indexing
+- [The Anatomy of a Large-Scale Hypertextual Web Search Engine](http://infolab.stanford.edu/~backrub/google.html) - Brin & Page, 1998
+- [Web Search for a Planet: The Google Cluster Architecture](https://static.googleusercontent.com/media/research.google.com/en//archive/googlecluster-ieee.pdf) - Barroso et al., 2003
+- [Elasticsearch: The Definitive Guide (online)](https://www.elastic.co/guide/en/elasticsearch/guide/current/index.html) - Clinton Gormley, Zachary Tong
+
+#### Machine Learning Systems
+- [Scaling Distributed Machine Learning with the Parameter Server](https://www.cs.cmu.edu/~muli/file/parameter_server_osdi14.pdf) - Li et al., 2014
+- [TensorFlow: A System for Large-Scale Machine Learning](https://www.usenix.org/system/files/conference/osdi16/osdi16-abadi.pdf) - Abadi et al., 2016
+- [Hidden Technical Debt in Machine Learning Systems](https://papers.nips.cc/paper/2015/file/86df7dcfd896fcaf2674f757a2463eba-Paper.pdf) - Sculley et al., 2015
+
+#### Container & Orchestration
+- [Borg, Omega, and Kubernetes](https://queue.acm.org/detail.cfm?id=2898444) - Burns et al., 2016
+- [Large-scale cluster management at Google with Borg](https://research.google/pubs/pub43438/) - Verma et al., 2015
+- [Mesos: A Platform for Fine-Grained Resource Sharing in the Data Center](https://people.eecs.berkeley.edu/~alig/papers/mesos.pdf) - Hindman et al., 2011
 
 ## License
 
