@@ -30,8 +30,9 @@ jobs:
 
       - name: Generate VitePress Configuration
         run: |
-          # Create .vitepress directory
+          # Create directories
           mkdir -p .vitepress
+          mkdir -p public
 
           # Generate package.json
           cat > package.json << 'PKGJSON'
@@ -413,9 +414,6 @@ jobs:
           LOGO
 
           echo "VitePress configuration generated successfully!"
-
-      - name: Create public directory
-        run: mkdir -p public
 
       - name: Install dependencies
         run: npm install
