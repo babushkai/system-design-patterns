@@ -450,7 +450,7 @@ jobs:
           ]
 
           export default defineConfig({
-            title: 'System Design Patterns',
+            title: 'Babushkai System Design Patterns',
             description: 'A comprehensive guide to distributed systems and system design patterns',
             
             // Base URL for GitHub Pages (repo name)
@@ -463,7 +463,7 @@ jobs:
               ['link', { rel: 'icon', type: 'image/svg+xml', href: '/logo.svg' }],
               ['meta', { name: 'theme-color', content: '#E91E63' }],
               ['meta', { property: 'og:type', content: 'website' }],
-              ['meta', { property: 'og:title', content: 'System Design Patterns | Babushkai' }],
+              ['meta', { property: 'og:title', content: 'Babushkai System Design Patterns' }],
               ['meta', { property: 'og:description', content: 'A comprehensive guide to distributed systems' }],
             ],
 
@@ -565,7 +565,7 @@ jobs:
 
             themeConfig: {
               logo: '/logo.svg',
-              siteTitle: 'System Design Patterns',
+              siteTitle: 'Babushkai System Design Patterns',
               
               socialLinks: [
                 { icon: 'github', link: 'https://github.com/babushkai/system-design-patterns' }
@@ -600,9 +600,9 @@ jobs:
           layout: home
 
           hero:
-            name: "System Design Patterns"
-            text: "A Comprehensive Guide to Distributed Systems"
-            tagline: From fundamentals to production-ready patterns, with real-world case studies and academic whitepapers
+            name: "Babushkai"
+            text: "System Design Patterns"
+            tagline: A comprehensive guide to distributed systems - from fundamentals to production-ready patterns
             image:
               src: /logo.svg
               alt: Babushkai
@@ -696,9 +696,9 @@ jobs:
           layout: home
 
           hero:
-            name: "システム設計パターン"
-            text: "分散システムの総合ガイド"
-            tagline: 基礎から本番運用パターンまで、実際のケーススタディと学術論文を交えて解説
+            name: "Babushkai"
+            text: "システム設計パターン"
+            tagline: 分散システムの総合ガイド - 基礎から本番運用パターンまで
             image:
               src: /logo.svg
               alt: Babushkai
