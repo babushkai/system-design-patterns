@@ -649,42 +649,163 @@ jobs:
               link: /16-llm-systems/01-agent-fundamentals
           ---
 
-          <div class="babushkai-section">
-            <p><strong>Babushkai</strong> - Building knowledge, layer by layer.</p>
+          <div class="two-column-section">
+            <div class="navigation-column">
+              <h2>Quick Navigation</h2>
+              <div class="nav-grid">
+                <a href="/01-foundations/01-acid-transactions" class="nav-item">
+                  <span class="nav-num">01</span>
+                  <span class="nav-title">Foundations</span>
+                </a>
+                <a href="/02-distributed-databases/01-single-leader-replication" class="nav-item">
+                  <span class="nav-num">02</span>
+                  <span class="nav-title">Distributed Databases</span>
+                </a>
+                <a href="/03-storage-engines/01-b-trees" class="nav-item">
+                  <span class="nav-num">03</span>
+                  <span class="nav-title">Storage Engines</span>
+                </a>
+                <a href="/04-caching/01-cache-strategies" class="nav-item">
+                  <span class="nav-num">04</span>
+                  <span class="nav-title">Caching</span>
+                </a>
+                <a href="/05-messaging/01-message-queues" class="nav-item">
+                  <span class="nav-num">05</span>
+                  <span class="nav-title">Messaging</span>
+                </a>
+                <a href="/06-scaling/01-load-balancing" class="nav-item">
+                  <span class="nav-num">06</span>
+                  <span class="nav-title">Scaling</span>
+                </a>
+                <a href="/07-real-time/01-polling" class="nav-item">
+                  <span class="nav-num">07</span>
+                  <span class="nav-title">Real-Time</span>
+                </a>
+                <a href="/08-case-studies/01-twitter" class="nav-item">
+                  <span class="nav-num">08</span>
+                  <span class="nav-title">Case Studies</span>
+                </a>
+                <a href="/09-whitepapers/01-mapreduce" class="nav-item">
+                  <span class="nav-num">09</span>
+                  <span class="nav-title">Whitepapers</span>
+                </a>
+                <a href="/10-security/01-authentication-fundamentals" class="nav-item">
+                  <span class="nav-num">10</span>
+                  <span class="nav-title">Security</span>
+                </a>
+                <a href="/11-observability/01-distributed-tracing" class="nav-item">
+                  <span class="nav-num">11</span>
+                  <span class="nav-title">Observability</span>
+                </a>
+                <a href="/12-service-mesh/01-service-discovery" class="nav-item">
+                  <span class="nav-num">12</span>
+                  <span class="nav-title">Service Mesh</span>
+                </a>
+                <a href="/13-data-pipelines/01-batch-processing" class="nav-item">
+                  <span class="nav-num">13</span>
+                  <span class="nav-title">Data Pipelines</span>
+                </a>
+                <a href="/14-search-systems/01-inverted-indexes" class="nav-item">
+                  <span class="nav-num">14</span>
+                  <span class="nav-title">Search Systems</span>
+                </a>
+                <a href="/15-deployment/01-deployment-strategies" class="nav-item">
+                  <span class="nav-num">15</span>
+                  <span class="nav-title">Deployment</span>
+                </a>
+                <a href="/16-llm-systems/01-agent-fundamentals" class="nav-item">
+                  <span class="nav-num">16</span>
+                  <span class="nav-title">LLM Systems</span>
+                </a>
+              </div>
+            </div>
+            <div class="about-column">
+              <h2>About Babushkai</h2>
+              <p>Like the layers of a Matryoshka doll, great systems are built layer by layer - each component nesting perfectly within the next.</p>
+              <p>This guide covers <strong>80+ patterns</strong> across distributed systems, from foundational concepts to production-ready architectures used by companies like Netflix, Uber, and Stripe.</p>
+              <div class="stats">
+                <div class="stat">
+                  <span class="stat-num">16</span>
+                  <span class="stat-label">Sections</span>
+                </div>
+                <div class="stat">
+                  <span class="stat-num">80+</span>
+                  <span class="stat-label">Patterns</span>
+                </div>
+                <div class="stat">
+                  <span class="stat-num">10</span>
+                  <span class="stat-label">Case Studies</span>
+                </div>
+              </div>
+            </div>
           </div>
 
-          ## Quick Navigation
-
-          | Section | Topics |
-          |---------|--------|
-          | [1. Foundations](/01-foundations/01-acid-transactions) | ACID, CAP, Consistency, Time, Failures |
-          | [2. Distributed Databases](/02-distributed-databases/01-single-leader-replication) | Replication, Sharding, Consensus |
-          | [3. Storage Engines](/03-storage-engines/01-b-trees) | B-Trees, LSM, WAL, Bloom Filters |
-          | [4. Caching](/04-caching/01-cache-strategies) | Strategies, Invalidation, Stampede |
-          | [5. Messaging](/05-messaging/01-message-queues) | Queues, Pub/Sub, Event Sourcing |
-          | [6. Scaling](/06-scaling/01-load-balancing) | Load Balancing, Rate Limiting |
-          | [7. Real-Time](/07-real-time/01-polling) | WebSockets, SSE, WebRTC |
-          | [8. Case Studies](/08-case-studies/01-twitter) | Twitter, Netflix, Uber, etc. |
-          | [9. Whitepapers](/09-whitepapers/01-mapreduce) | MapReduce, Dynamo, Spanner |
-          | [10. Security](/10-security/01-authentication-fundamentals) | Auth, OAuth, Zero Trust |
-          | [11. Observability](/11-observability/01-distributed-tracing) | Tracing, Metrics, Logging |
-          | [12. Service Mesh](/12-service-mesh/01-service-discovery) | Discovery, Gateway, Sidecar |
-          | [13. Data Pipelines](/13-data-pipelines/01-batch-processing) | Batch, Stream, Lambda |
-          | [14. Search](/14-search-systems/01-inverted-indexes) | Inverted Index, Full-Text |
-          | [15. Deployment](/15-deployment/01-deployment-strategies) | Blue-Green, Canary, Flags |
-          | [16. LLM Systems](/16-llm-systems/01-agent-fundamentals) | Agents, RAG, Multi-Agent |
-
           <style>
-          .babushkai-section {
-            text-align: center;
+          .two-column-section {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 3rem;
             padding: 2rem 0;
             margin: 2rem 0;
             border-top: 1px solid var(--vp-c-divider);
           }
-          .babushkai-logo {
-            width: 80px;
-            height: 80px;
+          @media (max-width: 768px) {
+            .two-column-section {
+              grid-template-columns: 1fr;
+            }
+          }
+          .navigation-column h2, .about-column h2 {
+            margin-bottom: 1.5rem;
+            color: var(--vp-c-brand-1);
+          }
+          .nav-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.5rem;
+          }
+          .nav-item {
+            display: flex;
+            align-items: center;
+            padding: 0.5rem;
+            border-radius: 6px;
+            text-decoration: none;
+            color: var(--vp-c-text-1);
+            transition: background 0.2s;
+          }
+          .nav-item:hover {
+            background: var(--vp-c-brand-soft);
+          }
+          .nav-num {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--vp-c-brand-1);
+            margin-right: 0.5rem;
+            min-width: 1.5rem;
+          }
+          .nav-title {
+            font-size: 0.875rem;
+          }
+          .about-column p {
             margin-bottom: 1rem;
+            line-height: 1.7;
+          }
+          .stats {
+            display: flex;
+            gap: 2rem;
+            margin-top: 1.5rem;
+          }
+          .stat {
+            text-align: center;
+          }
+          .stat-num {
+            display: block;
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--vp-c-brand-1);
+          }
+          .stat-label {
+            font-size: 0.875rem;
+            color: var(--vp-c-text-2);
           }
           </style>
           HOMEPAGE
@@ -745,43 +866,163 @@ jobs:
               link: /ja/16-llm-systems/01-agent-fundamentals
           ---
 
-          <div class="babushkai-section">
-
-            <p><strong>Babushkai</strong> - 知識を、層を重ねて構築する。</p>
+          <div class="two-column-section">
+            <div class="navigation-column">
+              <h2>クイックナビゲーション</h2>
+              <div class="nav-grid">
+                <a href="/ja/01-foundations/01-acid-transactions" class="nav-item">
+                  <span class="nav-num">01</span>
+                  <span class="nav-title">基礎</span>
+                </a>
+                <a href="/ja/02-distributed-databases/01-single-leader-replication" class="nav-item">
+                  <span class="nav-num">02</span>
+                  <span class="nav-title">分散データベース</span>
+                </a>
+                <a href="/ja/03-storage-engines/01-b-trees" class="nav-item">
+                  <span class="nav-num">03</span>
+                  <span class="nav-title">ストレージエンジン</span>
+                </a>
+                <a href="/ja/04-caching/01-cache-strategies" class="nav-item">
+                  <span class="nav-num">04</span>
+                  <span class="nav-title">キャッシング</span>
+                </a>
+                <a href="/ja/05-messaging/01-message-queues" class="nav-item">
+                  <span class="nav-num">05</span>
+                  <span class="nav-title">メッセージング</span>
+                </a>
+                <a href="/ja/06-scaling/01-load-balancing" class="nav-item">
+                  <span class="nav-num">06</span>
+                  <span class="nav-title">スケーリング</span>
+                </a>
+                <a href="/ja/07-real-time/01-polling" class="nav-item">
+                  <span class="nav-num">07</span>
+                  <span class="nav-title">リアルタイム</span>
+                </a>
+                <a href="/ja/08-case-studies/01-twitter" class="nav-item">
+                  <span class="nav-num">08</span>
+                  <span class="nav-title">ケーススタディ</span>
+                </a>
+                <a href="/ja/09-whitepapers/01-mapreduce" class="nav-item">
+                  <span class="nav-num">09</span>
+                  <span class="nav-title">論文</span>
+                </a>
+                <a href="/ja/10-security/01-authentication-fundamentals" class="nav-item">
+                  <span class="nav-num">10</span>
+                  <span class="nav-title">セキュリティ</span>
+                </a>
+                <a href="/ja/11-observability/01-distributed-tracing" class="nav-item">
+                  <span class="nav-num">11</span>
+                  <span class="nav-title">オブザーバビリティ</span>
+                </a>
+                <a href="/ja/12-service-mesh/01-service-discovery" class="nav-item">
+                  <span class="nav-num">12</span>
+                  <span class="nav-title">サービスメッシュ</span>
+                </a>
+                <a href="/ja/13-data-pipelines/01-batch-processing" class="nav-item">
+                  <span class="nav-num">13</span>
+                  <span class="nav-title">データパイプライン</span>
+                </a>
+                <a href="/ja/14-search-systems/01-inverted-indexes" class="nav-item">
+                  <span class="nav-num">14</span>
+                  <span class="nav-title">検索システム</span>
+                </a>
+                <a href="/ja/15-deployment/01-deployment-strategies" class="nav-item">
+                  <span class="nav-num">15</span>
+                  <span class="nav-title">デプロイメント</span>
+                </a>
+                <a href="/ja/16-llm-systems/01-agent-fundamentals" class="nav-item">
+                  <span class="nav-num">16</span>
+                  <span class="nav-title">LLMシステム</span>
+                </a>
+              </div>
+            </div>
+            <div class="about-column">
+              <h2>Babushkaiについて</h2>
+              <p>マトリョーシカ人形の層のように、優れたシステムは層を重ねて構築されます。各コンポーネントが次の層に完璧に収まるように。</p>
+              <p>このガイドでは、Netflix、Uber、Stripeなどの企業で使用されている<strong>80以上のパターン</strong>を、基礎概念から本番運用アーキテクチャまでカバーしています。</p>
+              <div class="stats">
+                <div class="stat">
+                  <span class="stat-num">16</span>
+                  <span class="stat-label">セクション</span>
+                </div>
+                <div class="stat">
+                  <span class="stat-num">80+</span>
+                  <span class="stat-label">パターン</span>
+                </div>
+                <div class="stat">
+                  <span class="stat-num">10</span>
+                  <span class="stat-label">ケーススタディ</span>
+                </div>
+              </div>
+            </div>
           </div>
 
-          ## クイックナビゲーション
-
-          | セクション | トピック |
-          |---------|--------|
-          | [1. 基礎](/ja/01-foundations/01-acid-transactions) | ACID、CAP、整合性、時刻、障害 |
-          | [2. 分散データベース](/ja/02-distributed-databases/01-single-leader-replication) | レプリケーション、シャーディング、コンセンサス |
-          | [3. ストレージエンジン](/ja/03-storage-engines/01-b-trees) | B木、LSM、WAL、ブルームフィルタ |
-          | [4. キャッシング](/ja/04-caching/01-cache-strategies) | 戦略、無効化、スタンピード |
-          | [5. メッセージング](/ja/05-messaging/01-message-queues) | キュー、Pub/Sub、イベントソーシング |
-          | [6. スケーリング](/ja/06-scaling/01-load-balancing) | ロードバランシング、レート制限 |
-          | [7. リアルタイム](/ja/07-real-time/01-polling) | WebSocket、SSE、WebRTC |
-          | [8. ケーススタディ](/ja/08-case-studies/01-twitter) | Twitter、Netflix、Uberなど |
-          | [9. 論文](/ja/09-whitepapers/01-mapreduce) | MapReduce、Dynamo、Spanner |
-          | [10. セキュリティ](/ja/10-security/01-authentication-fundamentals) | 認証、OAuth、ゼロトラスト |
-          | [11. オブザーバビリティ](/ja/11-observability/01-distributed-tracing) | トレーシング、メトリクス、ログ |
-          | [12. サービスメッシュ](/ja/12-service-mesh/01-service-discovery) | ディスカバリ、ゲートウェイ、サイドカー |
-          | [13. データパイプライン](/ja/13-data-pipelines/01-batch-processing) | バッチ、ストリーム、Lambda |
-          | [14. 検索](/ja/14-search-systems/01-inverted-indexes) | 転置インデックス、全文検索 |
-          | [15. デプロイメント](/ja/15-deployment/01-deployment-strategies) | Blue-Green、カナリア、フラグ |
-          | [16. LLMシステム](/ja/16-llm-systems/01-agent-fundamentals) | エージェント、RAG、マルチエージェント |
-
           <style>
-          .babushkai-section {
-            text-align: center;
+          .two-column-section {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 3rem;
             padding: 2rem 0;
             margin: 2rem 0;
             border-top: 1px solid var(--vp-c-divider);
           }
-          .babushkai-logo {
-            width: 80px;
-            height: 80px;
+          @media (max-width: 768px) {
+            .two-column-section {
+              grid-template-columns: 1fr;
+            }
+          }
+          .navigation-column h2, .about-column h2 {
+            margin-bottom: 1.5rem;
+            color: var(--vp-c-brand-1);
+          }
+          .nav-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.5rem;
+          }
+          .nav-item {
+            display: flex;
+            align-items: center;
+            padding: 0.5rem;
+            border-radius: 6px;
+            text-decoration: none;
+            color: var(--vp-c-text-1);
+            transition: background 0.2s;
+          }
+          .nav-item:hover {
+            background: var(--vp-c-brand-soft);
+          }
+          .nav-num {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--vp-c-brand-1);
+            margin-right: 0.5rem;
+            min-width: 1.5rem;
+          }
+          .nav-title {
+            font-size: 0.875rem;
+          }
+          .about-column p {
             margin-bottom: 1rem;
+            line-height: 1.7;
+          }
+          .stats {
+            display: flex;
+            gap: 2rem;
+            margin-top: 1.5rem;
+          }
+          .stat {
+            text-align: center;
+          }
+          .stat-num {
+            display: block;
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--vp-c-brand-1);
+          }
+          .stat-label {
+            font-size: 0.875rem;
+            color: var(--vp-c-text-2);
           }
           </style>
           HOMEPAGE_JA
