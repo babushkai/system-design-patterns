@@ -615,35 +615,43 @@ jobs:
                 link: https://github.com/babushkai/system-design-patterns
 
           features:
-            - icon: 🏗️
+            - icon:
+                src: /icons/foundations.svg
               title: Foundations
               details: Master ACID transactions, CAP theorem, consistency models, and distributed time
               link: /01-foundations/01-acid-transactions
-            - icon: 🗄️
+            - icon:
+                src: /icons/database.svg
               title: Distributed Databases
               details: Learn replication, partitioning, consensus algorithms, and distributed transactions
               link: /02-distributed-databases/01-single-leader-replication
-            - icon: ⚡
+            - icon:
+                src: /icons/caching.svg
               title: Caching & Performance
               details: Cache strategies, invalidation patterns, and multi-tier caching architectures
               link: /04-caching/01-cache-strategies
-            - icon: 📨
+            - icon:
+                src: /icons/messaging.svg
               title: Messaging Systems
               details: Message queues, event sourcing, CQRS, and exactly-once delivery semantics
               link: /05-messaging/01-message-queues
-            - icon: 📈
+            - icon:
+                src: /icons/scaling.svg
               title: Scaling Patterns
               details: Load balancing, sharding, rate limiting, circuit breakers, and backpressure
               link: /06-scaling/01-load-balancing
-            - icon: 🏢
+            - icon:
+                src: /icons/casestudies.svg
               title: Case Studies
               details: Learn from Twitter, Netflix, Uber, Stripe, Discord, and other tech giants
               link: /08-case-studies/01-twitter
-            - icon: 📄
+            - icon:
+                src: /icons/whitepapers.svg
               title: Academic Whitepapers
               details: Deep dives into MapReduce, Dynamo, Spanner, Kafka, Raft, and more
               link: /09-whitepapers/01-mapreduce
-            - icon: 🤖
+            - icon:
+                src: /icons/llm.svg
               title: LLM Systems
               details: Agent architectures, orchestration patterns, RAG, and multi-agent systems
               link: /16-llm-systems/01-agent-fundamentals
@@ -832,35 +840,43 @@ jobs:
                 link: https://github.com/babushkai/system-design-patterns
 
           features:
-            - icon: 🏗️
+            - icon:
+                src: /icons/foundations.svg
               title: 基礎
               details: ACIDトランザクション、CAP定理、整合性モデル、分散時刻をマスター
               link: /ja/01-foundations/01-acid-transactions
-            - icon: 🗄️
+            - icon:
+                src: /icons/database.svg
               title: 分散データベース
               details: レプリケーション、パーティショニング、コンセンサスアルゴリズム、分散トランザクション
               link: /ja/02-distributed-databases/01-single-leader-replication
-            - icon: ⚡
+            - icon:
+                src: /icons/caching.svg
               title: キャッシング & パフォーマンス
               details: キャッシュ戦略、無効化パターン、多層キャッシュアーキテクチャ
               link: /ja/04-caching/01-cache-strategies
-            - icon: 📨
+            - icon:
+                src: /icons/messaging.svg
               title: メッセージングシステム
               details: メッセージキュー、イベントソーシング、CQRS、exactly-once配信
               link: /ja/05-messaging/01-message-queues
-            - icon: 📈
+            - icon:
+                src: /icons/scaling.svg
               title: スケーリングパターン
               details: ロードバランシング、シャーディング、レート制限、サーキットブレーカー
               link: /ja/06-scaling/01-load-balancing
-            - icon: 🏢
+            - icon:
+                src: /icons/casestudies.svg
               title: ケーススタディ
               details: Twitter、Netflix、Uber、Stripe、Discordなどの大手企業から学ぶ
               link: /ja/08-case-studies/01-twitter
-            - icon: 📄
+            - icon:
+                src: /icons/whitepapers.svg
               title: 学術論文
               details: MapReduce、Dynamo、Spanner、Kafka、Raftなどを深掘り
               link: /ja/09-whitepapers/01-mapreduce
-            - icon: 🤖
+            - icon:
+                src: /icons/llm.svg
               title: LLMシステム
               details: エージェントアーキテクチャ、オーケストレーション、RAG、マルチエージェント
               link: /ja/16-llm-systems/01-agent-fundamentals
@@ -1055,6 +1071,108 @@ jobs:
             <circle cx="50" cy="68" r="3" fill="#E91E63"/>
           </svg>
           LOGO
+
+          # Generate feature icons
+          mkdir -p public/icons
+
+          cat > public/icons/foundations.svg << 'ICON_FOUNDATIONS'
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+            <rect x="6" y="32" width="36" height="8" rx="2" fill="#E91E63"/>
+            <rect x="10" y="22" width="28" height="8" rx="2" fill="#FF4081"/>
+            <rect x="14" y="12" width="20" height="8" rx="2" fill="#F8BBD9"/>
+            <polygon points="24,4 34,12 14,12" fill="#E91E63"/>
+          </svg>
+          ICON_FOUNDATIONS
+
+          cat > public/icons/database.svg << 'ICON_DATABASE'
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+            <ellipse cx="24" cy="12" rx="16" ry="6" fill="#E91E63"/>
+            <path d="M8 12v8c0 3.3 7.2 6 16 6s16-2.7 16-6v-8" stroke="#E91E63" stroke-width="3" fill="none"/>
+            <ellipse cx="24" cy="20" rx="16" ry="6" fill="none" stroke="#FF4081" stroke-width="2"/>
+            <path d="M8 20v8c0 3.3 7.2 6 16 6s16-2.7 16-6v-8" stroke="#E91E63" stroke-width="3" fill="none"/>
+            <ellipse cx="24" cy="28" rx="16" ry="6" fill="none" stroke="#FF4081" stroke-width="2"/>
+            <path d="M8 28v8c0 3.3 7.2 6 16 6s16-2.7 16-6v-8" stroke="#E91E63" stroke-width="3" fill="none"/>
+            <ellipse cx="24" cy="36" rx="16" ry="6" fill="#F8BBD9"/>
+          </svg>
+          ICON_DATABASE
+
+          cat > public/icons/caching.svg << 'ICON_CACHING'
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+            <circle cx="24" cy="24" r="18" stroke="#E91E63" stroke-width="3" fill="none"/>
+            <circle cx="24" cy="24" r="12" stroke="#FF4081" stroke-width="2" fill="none"/>
+            <circle cx="24" cy="24" r="6" fill="#E91E63"/>
+            <path d="M24 6v4M24 38v4M6 24h4M38 24h4" stroke="#E91E63" stroke-width="2" stroke-linecap="round"/>
+            <path d="M11 11l3 3M34 34l3 3M11 37l3-3M34 14l3-3" stroke="#FF4081" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          ICON_CACHING
+
+          cat > public/icons/messaging.svg << 'ICON_MESSAGING'
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+            <rect x="4" y="8" width="20" height="14" rx="3" fill="#E91E63"/>
+            <polygon points="8,22 12,28 16,22" fill="#E91E63"/>
+            <rect x="24" y="18" width="20" height="14" rx="3" fill="#FF4081"/>
+            <polygon points="28,32 32,38 36,32" fill="#FF4081"/>
+            <path d="M14 14h6M14 18h4" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+            <path d="M34 24h6M34 28h4" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+            <circle cx="38" cy="12" r="6" fill="#F8BBD9" stroke="#E91E63" stroke-width="2"/>
+            <path d="M36 12h4M38 10v4" stroke="#E91E63" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          ICON_MESSAGING
+
+          cat > public/icons/scaling.svg << 'ICON_SCALING'
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+            <rect x="4" y="28" width="8" height="16" rx="2" fill="#F8BBD9"/>
+            <rect x="14" y="20" width="8" height="24" rx="2" fill="#FF4081"/>
+            <rect x="24" y="12" width="8" height="32" rx="2" fill="#E91E63"/>
+            <rect x="34" y="4" width="8" height="40" rx="2" fill="#C2185B"/>
+            <path d="M6 26l8-8 8 8 8-8 8-8" stroke="#E91E63" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+            <circle cx="6" cy="26" r="2" fill="#E91E63"/>
+            <circle cx="14" cy="18" r="2" fill="#E91E63"/>
+            <circle cx="22" cy="26" r="2" fill="#E91E63"/>
+            <circle cx="30" cy="18" r="2" fill="#E91E63"/>
+            <circle cx="38" cy="10" r="2" fill="#E91E63"/>
+          </svg>
+          ICON_SCALING
+
+          cat > public/icons/casestudies.svg << 'ICON_CASESTUDIES'
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+            <rect x="6" y="6" width="36" height="36" rx="4" fill="none" stroke="#E91E63" stroke-width="3"/>
+            <rect x="10" y="10" width="12" height="12" rx="2" fill="#E91E63"/>
+            <rect x="26" y="10" width="12" height="12" rx="2" fill="#FF4081"/>
+            <rect x="10" y="26" width="12" height="12" rx="2" fill="#FF4081"/>
+            <rect x="26" y="26" width="12" height="12" rx="2" fill="#F8BBD9"/>
+            <circle cx="16" cy="16" r="3" fill="#fff"/>
+            <circle cx="32" cy="16" r="3" fill="#fff"/>
+            <circle cx="16" cy="32" r="3" fill="#fff"/>
+            <circle cx="32" cy="32" r="3" fill="#fff"/>
+          </svg>
+          ICON_CASESTUDIES
+
+          cat > public/icons/whitepapers.svg << 'ICON_WHITEPAPERS'
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+            <path d="M12 4h18l10 10v30a2 2 0 01-2 2H12a2 2 0 01-2-2V6a2 2 0 012-2z" fill="#F8BBD9" stroke="#E91E63" stroke-width="2"/>
+            <path d="M30 4v10h10" fill="#E91E63"/>
+            <path d="M30 4l10 10" stroke="#E91E63" stroke-width="2"/>
+            <path d="M16 20h16M16 26h16M16 32h12" stroke="#E91E63" stroke-width="2" stroke-linecap="round"/>
+            <circle cx="36" cy="36" r="8" fill="#E91E63"/>
+            <path d="M33 36h6M36 33v6" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          ICON_WHITEPAPERS
+
+          cat > public/icons/llm.svg << 'ICON_LLM'
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+            <circle cx="24" cy="24" r="18" fill="none" stroke="#E91E63" stroke-width="3"/>
+            <circle cx="24" cy="24" r="10" fill="#F8BBD9"/>
+            <circle cx="24" cy="24" r="4" fill="#E91E63"/>
+            <circle cx="24" cy="8" r="4" fill="#FF4081"/>
+            <circle cx="24" cy="40" r="4" fill="#FF4081"/>
+            <circle cx="10" cy="16" r="3" fill="#FF4081"/>
+            <circle cx="38" cy="16" r="3" fill="#FF4081"/>
+            <circle cx="10" cy="32" r="3" fill="#FF4081"/>
+            <circle cx="38" cy="32" r="3" fill="#FF4081"/>
+            <path d="M24 14v-2M24 36v2M14 18l-2-1M34 18l2-1M14 30l-2 1M34 30l2 1" stroke="#E91E63" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          ICON_LLM
 
           # Generate custom theme CSS to match logo colors
           mkdir -p .vitepress/theme
