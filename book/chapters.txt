@@ -69,19 +69,19 @@ book/front-matter.md
 07-real-time/03-server-sent-events.md
 07-real-time/04-websockets.md
 07-real-time/05-webrtc.md
-07-real-time/06-presence-systems.md
+07-real-time/06-presence.md
 
 # Part 8: Case Studies
-08-case-studies/01-twitter-timeline.md
-08-case-studies/02-instagram-feed.md
-08-case-studies/03-uber-ride-matching.md
-08-case-studies/04-netflix-streaming.md
-08-case-studies/05-slack-messaging.md
-08-case-studies/06-stripe-payments.md
-08-case-studies/07-dropbox-sync.md
-08-case-studies/08-discord-voice.md
-08-case-studies/09-google-search.md
-08-case-studies/10-whatsapp-messaging.md
+08-case-studies/01-twitter.md
+08-case-studies/02-instagram.md
+08-case-studies/03-uber.md
+08-case-studies/04-netflix.md
+08-case-studies/05-slack.md
+08-case-studies/06-stripe.md
+08-case-studies/07-dropbox.md
+08-case-studies/08-discord.md
+08-case-studies/09-google-maps.md
+08-case-studies/10-whatsapp.md
 
 # Part 9: Whitepapers
 09-whitepapers/01-mapreduce.md
