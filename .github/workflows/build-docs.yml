@@ -252,203 +252,6 @@ jobs:
             },
           ]
 
-          // Japanese sidebar
-          const sidebarJA = [
-            {
-              text: '1. 基礎',
-              collapsed: false,
-              items: [
-                { text: 'ACIDトランザクション', link: '/ja/01-foundations/01-acid-transactions' },
-                { text: '分離レベル', link: '/ja/01-foundations/02-isolation-levels' },
-                { text: 'CAP定理', link: '/ja/01-foundations/03-cap-theorem' },
-                { text: '整合性モデル', link: '/ja/01-foundations/04-consistency-models' },
-                { text: '分散時刻', link: '/ja/01-foundations/05-distributed-time' },
-                { text: '障害モード', link: '/ja/01-foundations/06-failure-modes' },
-                { text: 'ネットワーク分断', link: '/ja/01-foundations/07-network-partitions' },
-                { text: '冪等性', link: '/ja/01-foundations/08-idempotency' },
-              ]
-            },
-            {
-              text: '2. 分散データベース',
-              collapsed: true,
-              items: [
-                { text: 'シングルリーダーレプリケーション', link: '/ja/02-distributed-databases/01-single-leader-replication' },
-                { text: 'マルチリーダーレプリケーション', link: '/ja/02-distributed-databases/02-multi-leader-replication' },
-                { text: 'リーダーレスレプリケーション', link: '/ja/02-distributed-databases/03-leaderless-replication' },
-                { text: 'コンフリクト解決', link: '/ja/02-distributed-databases/04-conflict-resolution' },
-                { text: 'パーティショニング戦略', link: '/ja/02-distributed-databases/05-partitioning-strategies' },
-                { text: 'セカンダリインデックス', link: '/ja/02-distributed-databases/06-secondary-indexes' },
-                { text: '分散トランザクション', link: '/ja/02-distributed-databases/07-distributed-transactions' },
-                { text: 'コンセンサスアルゴリズム', link: '/ja/02-distributed-databases/08-consensus-algorithms' },
-                { text: 'リーダー選出', link: '/ja/02-distributed-databases/09-leader-election' },
-              ]
-            },
-            {
-              text: '3. ストレージエンジン',
-              collapsed: true,
-              items: [
-                { text: 'B木', link: '/ja/03-storage-engines/01-b-trees' },
-                { text: 'LSM木', link: '/ja/03-storage-engines/02-lsm-trees' },
-                { text: 'SSTableとコンパクション', link: '/ja/03-storage-engines/03-sstables-compaction' },
-                { text: '先行書き込みログ', link: '/ja/03-storage-engines/04-write-ahead-logging' },
-                { text: 'ブルームフィルタ', link: '/ja/03-storage-engines/05-bloom-filters' },
-                { text: 'カラムストレージ', link: '/ja/03-storage-engines/06-column-storage' },
-                { text: 'データエンコーディング', link: '/ja/03-storage-engines/07-data-encoding' },
-              ]
-            },
-            {
-              text: '4. キャッシング',
-              collapsed: true,
-              items: [
-                { text: 'キャッシュ戦略', link: '/ja/04-caching/01-cache-strategies' },
-                { text: 'キャッシュ無効化', link: '/ja/04-caching/02-cache-invalidation' },
-                { text: '分散キャッシュ', link: '/ja/04-caching/03-distributed-caching' },
-                { text: 'キャッシュスタンピード', link: '/ja/04-caching/04-cache-stampede' },
-                { text: '多層キャッシュ', link: '/ja/04-caching/05-multi-tier-caching' },
-                { text: 'キャッシュウォーミング', link: '/ja/04-caching/06-cache-warming' },
-              ]
-            },
-            {
-              text: '5. メッセージング',
-              collapsed: true,
-              items: [
-                { text: 'メッセージキュー', link: '/ja/05-messaging/01-message-queues' },
-                { text: 'Pub/Sub', link: '/ja/05-messaging/02-pub-sub' },
-                { text: 'メッセージ順序', link: '/ja/05-messaging/03-message-ordering' },
-                { text: '配信保証', link: '/ja/05-messaging/04-delivery-guarantees' },
-                { text: 'イベントソーシング', link: '/ja/05-messaging/05-event-sourcing' },
-                { text: 'CQRS', link: '/ja/05-messaging/06-cqrs' },
-                { text: 'Outboxパターン', link: '/ja/05-messaging/07-outbox-pattern' },
-                { text: 'デッドレターキュー', link: '/ja/05-messaging/08-dead-letter-queues' },
-              ]
-            },
-            {
-              text: '6. スケーリング',
-              collapsed: true,
-              items: [
-                { text: 'ロードバランシング', link: '/ja/06-scaling/01-load-balancing' },
-                { text: '水平 vs 垂直スケーリング', link: '/ja/06-scaling/02-horizontal-vertical' },
-                { text: 'データベースシャーディング', link: '/ja/06-scaling/03-database-sharding' },
-                { text: 'CDNアーキテクチャ', link: '/ja/06-scaling/04-cdn-architecture' },
-                { text: 'レート制限', link: '/ja/06-scaling/05-rate-limiting' },
-                { text: 'サーキットブレーカー', link: '/ja/06-scaling/06-circuit-breakers' },
-                { text: 'バックプレッシャー', link: '/ja/06-scaling/07-backpressure' },
-                { text: 'オートスケーリング', link: '/ja/06-scaling/08-auto-scaling' },
-              ]
-            },
-            {
-              text: '7. リアルタイム',
-              collapsed: true,
-              items: [
-                { text: 'ポーリング', link: '/ja/07-real-time/01-polling' },
-                { text: 'ロングポーリング', link: '/ja/07-real-time/02-long-polling' },
-                { text: 'Server-Sent Events', link: '/ja/07-real-time/03-server-sent-events' },
-                { text: 'WebSocket', link: '/ja/07-real-time/04-websockets' },
-                { text: 'WebRTC', link: '/ja/07-real-time/05-webrtc' },
-                { text: 'プレゼンス', link: '/ja/07-real-time/06-presence' },
-              ]
-            },
-            {
-              text: '8. ケーススタディ',
-              collapsed: true,
-              items: [
-                { text: 'Twitter', link: '/ja/08-case-studies/01-twitter' },
-                { text: 'Instagram', link: '/ja/08-case-studies/02-instagram' },
-                { text: 'Uber', link: '/ja/08-case-studies/03-uber' },
-                { text: 'Netflix', link: '/ja/08-case-studies/04-netflix' },
-                { text: 'Slack', link: '/ja/08-case-studies/05-slack' },
-                { text: 'Stripe', link: '/ja/08-case-studies/06-stripe' },
-                { text: 'Dropbox', link: '/ja/08-case-studies/07-dropbox' },
-                { text: 'Discord', link: '/ja/08-case-studies/08-discord' },
-                { text: 'Google Maps', link: '/ja/08-case-studies/09-google-maps' },
-                { text: 'WhatsApp', link: '/ja/08-case-studies/10-whatsapp' },
-              ]
-            },
-            {
-              text: '9. 論文',
-              collapsed: true,
-              items: [
-                { text: 'MapReduce', link: '/ja/09-whitepapers/01-mapreduce' },
-                { text: 'Dynamo', link: '/ja/09-whitepapers/02-dynamo' },
-                { text: 'Bigtable', link: '/ja/09-whitepapers/03-bigtable' },
-                { text: 'Spanner', link: '/ja/09-whitepapers/04-spanner' },
-                { text: 'TAO', link: '/ja/09-whitepapers/05-tao' },
-                { text: 'Kafka', link: '/ja/09-whitepapers/06-kafka' },
-                { text: 'Raft', link: '/ja/09-whitepapers/07-raft' },
-                { text: 'Chubby', link: '/ja/09-whitepapers/08-chubby' },
-                { text: 'Aurora', link: '/ja/09-whitepapers/09-aurora' },
-                { text: 'CockroachDB', link: '/ja/09-whitepapers/10-cockroachdb' },
-              ]
-            },
-            {
-              text: '10. セキュリティ',
-              collapsed: true,
-              items: [
-                { text: '認証の基礎', link: '/ja/10-security/01-authentication-fundamentals' },
-                { text: 'OAuth2 & OpenID Connect', link: '/ja/10-security/02-oauth2-openid-connect' },
-                { text: 'JWTトークン', link: '/ja/10-security/03-jwt-tokens' },
-                { text: 'APIセキュリティ', link: '/ja/10-security/04-api-security' },
-                { text: 'ゼロトラストアーキテクチャ', link: '/ja/10-security/05-zero-trust-architecture' },
-                { text: '暗号化', link: '/ja/10-security/06-encryption' },
-              ]
-            },
-            {
-              text: '11. オブザーバビリティ',
-              collapsed: true,
-              items: [
-                { text: '分散トレーシング', link: '/ja/11-observability/01-distributed-tracing' },
-                { text: 'メトリクスと監視', link: '/ja/11-observability/02-metrics-monitoring' },
-                { text: 'ログ', link: '/ja/11-observability/03-logging' },
-                { text: 'アラート', link: '/ja/11-observability/04-alerting' },
-              ]
-            },
-            {
-              text: '12. サービスメッシュ',
-              collapsed: true,
-              items: [
-                { text: 'サービスディスカバリ', link: '/ja/12-service-mesh/01-service-discovery' },
-                { text: 'APIゲートウェイ', link: '/ja/12-service-mesh/02-api-gateway' },
-                { text: 'サイドカーパターン', link: '/ja/12-service-mesh/03-sidecar-pattern' },
-              ]
-            },
-            {
-              text: '13. データパイプライン',
-              collapsed: true,
-              items: [
-                { text: 'バッチ処理', link: '/ja/13-data-pipelines/01-batch-processing' },
-                { text: 'ストリーム処理', link: '/ja/13-data-pipelines/02-stream-processing' },
-                { text: 'Lambda & Kappaアーキテクチャ', link: '/ja/13-data-pipelines/03-lambda-kappa-architecture' },
-              ]
-            },
-            {
-              text: '14. 検索システム',
-              collapsed: true,
-              items: [
-                { text: '転置インデックス', link: '/ja/14-search-systems/01-inverted-indexes' },
-                { text: '全文検索', link: '/ja/14-search-systems/02-full-text-search' },
-              ]
-            },
-            {
-              text: '15. デプロイメント',
-              collapsed: true,
-              items: [
-                { text: 'デプロイ戦略', link: '/ja/15-deployment/01-deployment-strategies' },
-                { text: 'フィーチャーフラグ', link: '/ja/15-deployment/02-feature-flags' },
-              ]
-            },
-            {
-              text: '16. LLMシステム',
-              collapsed: true,
-              items: [
-                { text: 'エージェントの基礎', link: '/ja/16-llm-systems/01-agent-fundamentals' },
-                { text: 'オーケストレーションパターン', link: '/ja/16-llm-systems/02-orchestration-patterns' },
-                { text: 'マルチエージェントシステム', link: '/ja/16-llm-systems/03-multi-agent-systems' },
-                { text: 'RAGパターン', link: '/ja/16-llm-systems/04-rag-patterns' },
-                { text: 'LLMインフラストラクチャ', link: '/ja/16-llm-systems/05-llm-infrastructure' },
-              ]
-            },
-          ]
-
           export default defineConfig({
             title: 'Babushkai System Design Patterns',
             description: 'A comprehensive guide to distributed systems and system design patterns',
@@ -507,58 +310,6 @@ jobs:
                     message: 'Released under the MIT License.',
                     copyright: 'Copyright 2024-present Babushkai'
                   },
-                }
-              },
-              ja: {
-                label: '日本語',
-                lang: 'ja',
-                link: '/ja/',
-                themeConfig: {
-                  nav: [
-                    { text: 'ホーム', link: '/ja/' },
-                    { text: 'ガイド', link: '/ja/01-foundations/01-acid-transactions' },
-                    { 
-                      text: 'セクション',
-                      items: [
-                        { text: '基礎', link: '/ja/01-foundations/01-acid-transactions' },
-                        { text: '分散データベース', link: '/ja/02-distributed-databases/01-single-leader-replication' },
-                        { text: 'ストレージエンジン', link: '/ja/03-storage-engines/01-b-trees' },
-                        { text: 'キャッシング', link: '/ja/04-caching/01-cache-strategies' },
-                        { text: 'メッセージング', link: '/ja/05-messaging/01-message-queues' },
-                        { text: 'スケーリング', link: '/ja/06-scaling/01-load-balancing' },
-                        { text: 'リアルタイム', link: '/ja/07-real-time/01-polling' },
-                        { text: 'ケーススタディ', link: '/ja/08-case-studies/01-twitter' },
-                        { text: '論文', link: '/ja/09-whitepapers/01-mapreduce' },
-                        { text: 'セキュリティ', link: '/ja/10-security/01-authentication-fundamentals' },
-                        { text: 'オブザーバビリティ', link: '/ja/11-observability/01-distributed-tracing' },
-                        { text: 'サービスメッシュ', link: '/ja/12-service-mesh/01-service-discovery' },
-                        { text: 'データパイプライン', link: '/ja/13-data-pipelines/01-batch-processing' },
-                        { text: '検索システム', link: '/ja/14-search-systems/01-inverted-indexes' },
-                        { text: 'デプロイメント', link: '/ja/15-deployment/01-deployment-strategies' },
-                        { text: 'LLMシステム', link: '/ja/16-llm-systems/01-agent-fundamentals' },
-                      ]
-                    },
-                    { text: 'GitHub', link: 'https://github.com/babushkai/system-design-patterns' }
-                  ],
-                  sidebar: { '/ja/': sidebarJA },
-                  editLink: {
-                    pattern: 'https://github.com/babushkai/system-design-patterns/edit/main/:path',
-                    text: 'GitHubでこのページを編集'
-                  },
-                  footer: {
-                    message: 'MITライセンスの下で公開',
-                    copyright: 'Copyright 2024-present Babushkai'
-                  },
-                  outline: {
-                    label: '目次'
-                  },
-                  docFooter: {
-                    prev: '前のページ',
-                    next: '次のページ'
-                  },
-                  darkModeSwitchLabel: 'テーマ',
-                  sidebarMenuLabel: 'メニュー',
-                  returnToTopLabel: 'トップに戻る',
                 }
               }
             },
@@ -825,238 +576,6 @@ jobs:
           </style>
           HOMEPAGE
 
-          # Generate Japanese homepage
-          mkdir -p ja
-          cat > ja/index.md << 'HOMEPAGE_JA'
-          ---
-          layout: home
-
-          hero:
-            name: "Babushk<span class='ai-accent'>a<span class='doll-i'>i</span></span>"
-            text: "システム設計パターン"
-            tagline: 分散システムの総合ガイド - 基礎から本番運用パターンまで
-            image:
-              src: /logo.svg
-              alt: Babushkai
-            actions:
-              - theme: brand
-                text: はじめる
-                link: /ja/01-foundations/01-acid-transactions
-              - theme: alt
-                text: GitHubで見る
-                link: https://github.com/babushkai/system-design-patterns
-
-          features:
-            - icon:
-                src: /icons/foundations.svg
-              title: 基礎
-              details: ACIDトランザクション、CAP定理、整合性モデル、分散時刻をマスター
-              link: /ja/01-foundations/01-acid-transactions
-            - icon:
-                src: /icons/database.svg
-              title: 分散データベース
-              details: レプリケーション、パーティショニング、コンセンサスアルゴリズム、分散トランザクション
-              link: /ja/02-distributed-databases/01-single-leader-replication
-            - icon:
-                src: /icons/caching.svg
-              title: キャッシング & パフォーマンス
-              details: キャッシュ戦略、無効化パターン、多層キャッシュアーキテクチャ
-              link: /ja/04-caching/01-cache-strategies
-            - icon:
-                src: /icons/messaging.svg
-              title: メッセージングシステム
-              details: メッセージキュー、イベントソーシング、CQRS、exactly-once配信
-              link: /ja/05-messaging/01-message-queues
-            - icon:
-                src: /icons/scaling.svg
-              title: スケーリングパターン
-              details: ロードバランシング、シャーディング、レート制限、サーキットブレーカー
-              link: /ja/06-scaling/01-load-balancing
-            - icon:
-                src: /icons/casestudies.svg
-              title: ケーススタディ
-              details: Twitter、Netflix、Uber、Stripe、Discordなどの大手企業から学ぶ
-              link: /ja/08-case-studies/01-twitter
-            - icon:
-                src: /icons/whitepapers.svg
-              title: 学術論文
-              details: MapReduce、Dynamo、Spanner、Kafka、Raftなどを深掘り
-              link: /ja/09-whitepapers/01-mapreduce
-            - icon:
-                src: /icons/llm.svg
-              title: LLMシステム
-              details: エージェントアーキテクチャ、オーケストレーション、RAG、マルチエージェント
-              link: /ja/16-llm-systems/01-agent-fundamentals
-          ---
-
-          <div class="two-column-section">
-            <div class="navigation-column">
-              <h2>クイックナビゲーション</h2>
-              <div class="nav-grid">
-                <a href="/ja/01-foundations/01-acid-transactions" class="nav-item">
-                  <img src="/icons/foundations.svg" class="nav-icon" alt="" />
-                  <span class="nav-title">基礎</span>
-                </a>
-                <a href="/ja/02-distributed-databases/01-single-leader-replication" class="nav-item">
-                  <img src="/icons/database.svg" class="nav-icon" alt="" />
-                  <span class="nav-title">分散データベース</span>
-                </a>
-                <a href="/ja/03-storage-engines/01-b-trees" class="nav-item">
-                  <img src="/icons/storage.svg" class="nav-icon" alt="" />
-                  <span class="nav-title">ストレージエンジン</span>
-                </a>
-                <a href="/ja/04-caching/01-cache-strategies" class="nav-item">
-                  <img src="/icons/caching.svg" class="nav-icon" alt="" />
-                  <span class="nav-title">キャッシング</span>
-                </a>
-                <a href="/ja/05-messaging/01-message-queues" class="nav-item">
-                  <img src="/icons/messaging.svg" class="nav-icon" alt="" />
-                  <span class="nav-title">メッセージング</span>
-                </a>
-                <a href="/ja/06-scaling/01-load-balancing" class="nav-item">
-                  <img src="/icons/scaling.svg" class="nav-icon" alt="" />
-                  <span class="nav-title">スケーリング</span>
-                </a>
-                <a href="/ja/07-real-time/01-polling" class="nav-item">
-                  <img src="/icons/realtime.svg" class="nav-icon" alt="" />
-                  <span class="nav-title">リアルタイム</span>
-                </a>
-                <a href="/ja/08-case-studies/01-twitter" class="nav-item">
-                  <img src="/icons/casestudies.svg" class="nav-icon" alt="" />
-                  <span class="nav-title">ケーススタディ</span>
-                </a>
-                <a href="/ja/09-whitepapers/01-mapreduce" class="nav-item">
-                  <img src="/icons/whitepapers.svg" class="nav-icon" alt="" />
-                  <span class="nav-title">論文</span>
-                </a>
-                <a href="/ja/10-security/01-authentication-fundamentals" class="nav-item">
-                  <img src="/icons/security.svg" class="nav-icon" alt="" />
-                  <span class="nav-title">セキュリティ</span>
-                </a>
-                <a href="/ja/11-observability/01-distributed-tracing" class="nav-item">
-                  <img src="/icons/observability.svg" class="nav-icon" alt="" />
-                  <span class="nav-title">オブザーバビリティ</span>
-                </a>
-                <a href="/ja/12-service-mesh/01-service-discovery" class="nav-item">
-                  <img src="/icons/servicemesh.svg" class="nav-icon" alt="" />
-                  <span class="nav-title">サービスメッシュ</span>
-                </a>
-                <a href="/ja/13-data-pipelines/01-batch-processing" class="nav-item">
-                  <img src="/icons/datapipelines.svg" class="nav-icon" alt="" />
-                  <span class="nav-title">データパイプライン</span>
-                </a>
-                <a href="/ja/14-search-systems/01-inverted-indexes" class="nav-item">
-                  <img src="/icons/search.svg" class="nav-icon" alt="" />
-                  <span class="nav-title">検索システム</span>
-                </a>
-                <a href="/ja/15-deployment/01-deployment-strategies" class="nav-item">
-                  <img src="/icons/deployment.svg" class="nav-icon" alt="" />
-                  <span class="nav-title">デプロイメント</span>
-                </a>
-                <a href="/ja/16-llm-systems/01-agent-fundamentals" class="nav-item">
-                  <img src="/icons/llm.svg" class="nav-icon" alt="" />
-                  <span class="nav-title">LLMシステム</span>
-                </a>
-              </div>
-            </div>
-            <div class="about-column">
-              <h2>Babushkaiについて</h2>
-              <p>マトリョーシカ人形の層のように、優れたシステムは層を重ねて構築されます。各コンポーネントが次の層に完璧に収まるように。</p>
-              <p>このガイドでは、Netflix、Uber、Stripeなどの企業で使用されている<strong>80以上のパターン</strong>を、基礎概念から本番運用アーキテクチャまでカバーしています。</p>
-              <div class="stats">
-                <div class="stat">
-                  <img src="/icons/foundations.svg" class="stat-icon" alt="" />
-                  <span class="stat-num">16</span>
-                  <span class="stat-label">セクション</span>
-                </div>
-                <div class="stat">
-                  <img src="/icons/caching.svg" class="stat-icon" alt="" />
-                  <span class="stat-num">80+</span>
-                  <span class="stat-label">パターン</span>
-                </div>
-                <div class="stat">
-                  <img src="/icons/casestudies.svg" class="stat-icon" alt="" />
-                  <span class="stat-num">10</span>
-                  <span class="stat-label">ケーススタディ</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <style>
-          .two-column-section {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 3rem;
-            padding: 2rem 0;
-            margin: 2rem 0;
-            border-top: 1px solid var(--vp-c-divider);
-          }
-          @media (max-width: 768px) {
-            .two-column-section {
-              grid-template-columns: 1fr;
-            }
-          }
-          .navigation-column h2, .about-column h2 {
-            margin-bottom: 1.5rem;
-            color: var(--vp-c-brand-1);
-          }
-          .nav-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 0.5rem;
-          }
-          .nav-item {
-            display: flex;
-            align-items: center;
-            padding: 0.5rem;
-            border-radius: 6px;
-            text-decoration: none;
-            color: var(--vp-c-text-1);
-            transition: background 0.2s;
-          }
-          .nav-item:hover {
-            background: var(--vp-c-brand-soft);
-          }
-          .nav-icon {
-            width: 24px;
-            height: 24px;
-            margin-right: 0.5rem;
-            flex-shrink: 0;
-          }
-          .nav-title {
-            font-size: 0.875rem;
-          }
-          .about-column p {
-            margin-bottom: 1rem;
-            line-height: 1.7;
-          }
-          .stats {
-            display: flex;
-            gap: 2rem;
-            margin-top: 1.5rem;
-          }
-          .stat {
-            text-align: center;
-          }
-          .stat-icon {
-            width: 32px;
-            height: 32px;
-            margin-bottom: 0.25rem;
-          }
-          .stat-num {
-            display: block;
-            font-size: 2rem;
-            font-weight: 700;
-            color: var(--vp-c-brand-1);
-          }
-          .stat-label {
-            font-size: 0.875rem;
-            color: var(--vp-c-text-2);
-          }
-          </style>
-          HOMEPAGE_JA
-
           # Generate Matryoshka doll logo SVG
           cat > public/logo.svg << 'LOGO'
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
@@ -1306,8 +825,55 @@ jobs:
           cat > .vitepress/theme/index.ts << 'THEME'
           import DefaultTheme from 'vitepress/theme'
           import './custom.css'
+          import { onMounted } from 'vue'
 
-          export default DefaultTheme
+          export default {
+            extends: DefaultTheme,
+            enhanceApp({ app }) {
+              // Add Google Translate on mount
+              if (typeof window !== 'undefined') {
+                onMounted(() => {
+                  // Create translate element container
+                  const translateDiv = document.createElement('div')
+                  translateDiv.id = 'google_translate_element'
+                  
+                  // Find navbar actions and insert translate widget
+                  const insertTranslate = () => {
+                    const navBarContent = document.querySelector('.VPNavBarExtra') || 
+                                          document.querySelector('.VPNavBarHamburger')?.parentElement
+                    if (navBarContent && !document.getElementById('google_translate_element')) {
+                      const wrapper = document.createElement('div')
+                      wrapper.className = 'translate-wrapper'
+                      wrapper.appendChild(translateDiv)
+                      navBarContent.parentElement?.insertBefore(wrapper, navBarContent)
+                      
+                      // Load Google Translate script
+                      if (!document.getElementById('google-translate-script')) {
+                        const script = document.createElement('script')
+                        script.id = 'google-translate-script'
+                        script.src = '//translate.google.com/translate_a/element.js?cb=googleTranslateElementInit'
+                        document.body.appendChild(script)
+                        
+                        // Initialize Google Translate
+                        ;(window as any).googleTranslateElementInit = function() {
+                          new (window as any).google.translate.TranslateElement({
+                            pageLanguage: 'en',
+                            includedLanguages: 'ja,zh-CN,zh-TW,ko,es,fr,de,pt,ru,ar,hi',
+                            layout: (window as any).google.translate.TranslateElement.InlineLayout.SIMPLE,
+                            autoDisplay: false
+                          }, 'google_translate_element')
+                        }
+                      }
+                    }
+                  }
+                  
+                  // Try immediately and also after a delay for SPA navigation
+                  insertTranslate()
+                  setTimeout(insertTranslate, 1000)
+                })
+              }
+            }
+          }
           THEME
 
           cat > .vitepress/theme/custom.css << 'CUSTOMCSS'
@@ -1498,6 +1064,66 @@ jobs:
             margin-right: 0.5rem;
             vertical-align: middle;
           }
+
+          /* Google Translate Widget Styling */
+          .translate-wrapper {
+            display: flex;
+            align-items: center;
+            margin-right: 8px;
+          }
+
+          #google_translate_element {
+            display: inline-block;
+          }
+
+          #google_translate_element select {
+            background: var(--vp-c-bg);
+            border: 1px solid var(--vp-c-divider);
+            border-radius: 6px;
+            padding: 4px 8px;
+            font-size: 12px;
+            color: var(--vp-c-text-1);
+            cursor: pointer;
+            outline: none;
+          }
+
+          #google_translate_element select:hover {
+            border-color: var(--vp-c-brand-1);
+          }
+
+          /* Hide Google Translate branding */
+          .goog-logo-link,
+          .goog-te-gadget > span,
+          .goog-te-banner-frame,
+          #goog-gt-tt,
+          .goog-te-balloon-frame {
+            display: none !important;
+          }
+
+          .goog-te-gadget {
+            color: transparent !important;
+            font-size: 0 !important;
+          }
+
+          .goog-te-gadget .goog-te-combo {
+            color: var(--vp-c-text-1) !important;
+            font-size: 12px !important;
+          }
+
+          body {
+            top: 0 !important;
+          }
+
+          .skiptranslate {
+            display: none !important;
+          }
+
+          /* Prevent layout shift from translate bar */
+          .goog-te-banner-frame.skiptranslate {
+            display: none !important;
+          }
+
+          body { top: 0px !important; }
           CUSTOMCSS
 
           echo "VitePress configuration generated successfully!"
