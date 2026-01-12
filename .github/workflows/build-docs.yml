@@ -600,7 +600,7 @@ jobs:
           layout: home
 
           hero:
-            name: "Babushkai"
+            name: "Babushk<span class='ai-accent'>ai</span>"
             text: "System Design Patterns"
             tagline: A comprehensive guide to distributed systems - from fundamentals to production-ready patterns
             image:
@@ -696,7 +696,7 @@ jobs:
           layout: home
 
           hero:
-            name: "Babushkai"
+            name: "Babushk<span class='ai-accent'>ai</span>"
             text: "システム設計パターン"
             tagline: 分散システムの総合ガイド - 基礎から本番運用パターンまで
             image:
@@ -872,6 +872,32 @@ jobs:
 
           .babushkai-section strong {
             color: var(--vp-c-brand-1);
+          }
+
+          /* AI accent styling in Babushkai */
+          .ai-accent {
+            background: linear-gradient(135deg, #00BCD4 0%, #2196F3 50%, #9C27B0 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            font-weight: inherit;
+            position: relative;
+          }
+
+          .ai-accent::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, #00BCD4, #2196F3, #9C27B0);
+            border-radius: 2px;
+          }
+
+          /* Ensure the hero name allows HTML */
+          .VPHero .name {
+            overflow: visible;
           }
           CUSTOMCSS
 
