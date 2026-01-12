@@ -136,6 +136,13 @@ A hyper-detailed, framework-agnostic repository of system design patterns, conce
 - [Deployment Strategies](15-deployment/01-deployment-strategies.md)
 - [Feature Flags](15-deployment/02-feature-flags.md)
 
+### Part 16: LLM Systems
+- [Agent Fundamentals](16-llm-systems/01-agent-fundamentals.md)
+- [Orchestration Patterns](16-llm-systems/02-orchestration-patterns.md)
+- [Multi-Agent Systems](16-llm-systems/03-multi-agent-systems.md)
+- [RAG Patterns](16-llm-systems/04-rag-patterns.md)
+- [LLM Infrastructure](16-llm-systems/05-llm-infrastructure.md)
+
 ## Notation
 
 | Symbol | Meaning |
