@@ -104,6 +104,38 @@ A hyper-detailed, framework-agnostic repository of system design patterns, conce
 - [Aurora](09-whitepapers/09-aurora.md) (2017)
 - [CockroachDB](09-whitepapers/10-cockroachdb.md) (2020)
 
+### Part 10: Security
+- [Authentication Fundamentals](10-security/01-authentication-fundamentals.md)
+- [OAuth 2.0 and OpenID Connect](10-security/02-oauth2-openid-connect.md)
+- [JSON Web Tokens (JWT)](10-security/03-jwt-tokens.md)
+- [API Security](10-security/04-api-security.md)
+- [Zero Trust Architecture](10-security/05-zero-trust-architecture.md)
+- [Encryption Patterns](10-security/06-encryption.md)
+
+### Part 11: Observability
+- [Distributed Tracing](11-observability/01-distributed-tracing.md)
+- [Metrics and Monitoring](11-observability/02-metrics-monitoring.md)
+- [Logging](11-observability/03-logging.md)
+- [Alerting](11-observability/04-alerting.md)
+
+### Part 12: Service Mesh
+- [Service Discovery](12-service-mesh/01-service-discovery.md)
+- [API Gateway](12-service-mesh/02-api-gateway.md)
+- [Sidecar Pattern](12-service-mesh/03-sidecar-pattern.md)
+
+### Part 13: Data Pipelines
+- [Batch Processing](13-data-pipelines/01-batch-processing.md)
+- [Stream Processing](13-data-pipelines/02-stream-processing.md)
+- [Lambda and Kappa Architecture](13-data-pipelines/03-lambda-kappa-architecture.md)
+
+### Part 14: Search Systems
+- [Inverted Indexes](14-search-systems/01-inverted-indexes.md)
+- [Full-Text Search](14-search-systems/02-full-text-search.md)
+
+### Part 15: Deployment
+- [Deployment Strategies](15-deployment/01-deployment-strategies.md)
+- [Feature Flags](15-deployment/02-feature-flags.md)
+
 ## Notation
 
 | Symbol | Meaning |
