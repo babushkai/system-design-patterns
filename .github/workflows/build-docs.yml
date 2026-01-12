@@ -1,0 +1,446 @@
+name: Build and Deploy Documentation Site
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Generate VitePress Configuration
+        run: |
+          # Create .vitepress directory
+          mkdir -p .vitepress
+
+          # Generate package.json
+          cat > package.json << 'PKGJSON'
+          {
+            "name": "system-design-patterns-docs",
+            "private": true,
+            "type": "module",
+            "scripts": {
+              "docs:dev": "vitepress dev",
+              "docs:build": "vitepress build",
+              "docs:preview": "vitepress preview"
+            },
+            "devDependencies": {
+              "vitepress": "^1.5.0"
+            }
+          }
+          PKGJSON
+
+          # Generate VitePress config
+          cat > .vitepress/config.mts << 'VITECONFIG'
+          import { defineConfig } from 'vitepress'
+
+          export default defineConfig({
+            title: 'System Design Patterns',
+            description: 'A comprehensive guide to distributed systems and system design patterns',
+            
+            head: [
+              ['link', { rel: 'icon', type: 'image/svg+xml', href: '/logo.svg' }],
+              ['meta', { name: 'theme-color', content: '#5f67ee' }],
+              ['meta', { property: 'og:type', content: 'website' }],
+              ['meta', { property: 'og:title', content: 'System Design Patterns' }],
+              ['meta', { property: 'og:description', content: 'A comprehensive guide to distributed systems' }],
+            ],
+
+            themeConfig: {
+              logo: '/logo.svg',
+              
+              nav: [
+                { text: 'Home', link: '/' },
+                { text: 'Guide', link: '/01-foundations/01-acid-transactions' },
+                { 
+                  text: 'Sections',
+                  items: [
+                    { text: 'Foundations', link: '/01-foundations/01-acid-transactions' },
+                    { text: 'Distributed Databases', link: '/02-distributed-databases/01-replication' },
+                    { text: 'Storage Engines', link: '/03-storage-engines/01-b-trees' },
+                    { text: 'Caching', link: '/04-caching/01-cache-strategies' },
+                    { text: 'Messaging', link: '/05-messaging/01-message-queues' },
+                    { text: 'Scaling', link: '/06-scaling/01-load-balancing' },
+                    { text: 'Real-Time', link: '/07-real-time/01-polling' },
+                    { text: 'Case Studies', link: '/08-case-studies/01-twitter' },
+                    { text: 'Whitepapers', link: '/09-whitepapers/01-mapreduce' },
+                    { text: 'Security', link: '/10-security/01-authentication' },
+                    { text: 'Observability', link: '/11-observability/01-distributed-tracing' },
+                    { text: 'Service Mesh', link: '/12-service-mesh/01-service-discovery' },
+                    { text: 'Data Pipelines', link: '/13-data-pipelines/01-batch-processing' },
+                    { text: 'Search Systems', link: '/14-search-systems/01-inverted-indexes' },
+                    { text: 'Deployment', link: '/15-deployment/01-deployment-strategies' },
+                    { text: 'LLM Systems', link: '/16-llm-systems/01-agent-fundamentals' },
+                  ]
+                },
+                { text: 'GitHub', link: 'https://github.com/babushkai/system-design-patterns' }
+              ],
+
+              sidebar: {
+                '/': [
+                  {
+                    text: '1. Foundations',
+                    collapsed: false,
+                    items: [
+                      { text: 'ACID Transactions', link: '/01-foundations/01-acid-transactions' },
+                      { text: 'Isolation Levels', link: '/01-foundations/02-isolation-levels' },
+                      { text: 'CAP Theorem', link: '/01-foundations/03-cap-theorem' },
+                      { text: 'Consistency Models', link: '/01-foundations/04-consistency-models' },
+                      { text: 'Distributed Time', link: '/01-foundations/05-distributed-time' },
+                      { text: 'Failure Modes', link: '/01-foundations/06-failure-modes' },
+                      { text: 'Network Partitions', link: '/01-foundations/07-network-partitions' },
+                      { text: 'Idempotency', link: '/01-foundations/08-idempotency' },
+                    ]
+                  },
+                  {
+                    text: '2. Distributed Databases',
+                    collapsed: true,
+                    items: [
+                      { text: 'Replication', link: '/02-distributed-databases/01-replication' },
+                      { text: 'Partitioning', link: '/02-distributed-databases/02-partitioning' },
+                      { text: 'Consistent Hashing', link: '/02-distributed-databases/03-consistent-hashing' },
+                      { text: 'Quorum Consensus', link: '/02-distributed-databases/04-quorum-consensus' },
+                      { text: 'Leader Election', link: '/02-distributed-databases/05-leader-election' },
+                      { text: 'Two-Phase Commit', link: '/02-distributed-databases/06-two-phase-commit' },
+                      { text: 'Saga Pattern', link: '/02-distributed-databases/07-saga-pattern' },
+                      { text: 'Vector Clocks', link: '/02-distributed-databases/08-vector-clocks' },
+                    ]
+                  },
+                  {
+                    text: '3. Storage Engines',
+                    collapsed: true,
+                    items: [
+                      { text: 'B-Trees', link: '/03-storage-engines/01-b-trees' },
+                      { text: 'LSM Trees', link: '/03-storage-engines/02-lsm-trees' },
+                      { text: 'SSTables & Compaction', link: '/03-storage-engines/03-sstables-compaction' },
+                      { text: 'Write-Ahead Logging', link: '/03-storage-engines/04-write-ahead-logging' },
+                      { text: 'Bloom Filters', link: '/03-storage-engines/05-bloom-filters' },
+                      { text: 'Column Storage', link: '/03-storage-engines/06-column-storage' },
+                      { text: 'Data Encoding', link: '/03-storage-engines/07-data-encoding' },
+                    ]
+                  },
+                  {
+                    text: '4. Caching',
+                    collapsed: true,
+                    items: [
+                      { text: 'Cache Strategies', link: '/04-caching/01-cache-strategies' },
+                      { text: 'Cache Invalidation', link: '/04-caching/02-cache-invalidation' },
+                      { text: 'Distributed Caching', link: '/04-caching/03-distributed-caching' },
+                      { text: 'Cache Stampede', link: '/04-caching/04-cache-stampede' },
+                      { text: 'Multi-Tier Caching', link: '/04-caching/05-multi-tier-caching' },
+                      { text: 'Cache Warming', link: '/04-caching/06-cache-warming' },
+                    ]
+                  },
+                  {
+                    text: '5. Messaging',
+                    collapsed: true,
+                    items: [
+                      { text: 'Message Queues', link: '/05-messaging/01-message-queues' },
+                      { text: 'Pub/Sub Systems', link: '/05-messaging/02-pub-sub' },
+                      { text: 'Event Sourcing', link: '/05-messaging/03-event-sourcing' },
+                      { text: 'CQRS', link: '/05-messaging/04-cqrs' },
+                      { text: 'Dead Letter Queues', link: '/05-messaging/05-dead-letter-queues' },
+                      { text: 'Exactly-Once Delivery', link: '/05-messaging/06-exactly-once' },
+                      { text: 'Message Ordering', link: '/05-messaging/07-message-ordering' },
+                      { text: 'Transactional Outbox', link: '/05-messaging/08-transactional-outbox' },
+                    ]
+                  },
+                  {
+                    text: '6. Scaling',
+                    collapsed: true,
+                    items: [
+                      { text: 'Load Balancing', link: '/06-scaling/01-load-balancing' },
+                      { text: 'Horizontal vs Vertical', link: '/06-scaling/02-horizontal-vertical' },
+                      { text: 'Database Sharding', link: '/06-scaling/03-database-sharding' },
+                      { text: 'CDN Architecture', link: '/06-scaling/04-cdn-architecture' },
+                      { text: 'Rate Limiting', link: '/06-scaling/05-rate-limiting' },
+                      { text: 'Circuit Breakers', link: '/06-scaling/06-circuit-breakers' },
+                      { text: 'Backpressure', link: '/06-scaling/07-backpressure' },
+                    ]
+                  },
+                  {
+                    text: '7. Real-Time',
+                    collapsed: true,
+                    items: [
+                      { text: 'Polling', link: '/07-real-time/01-polling' },
+                      { text: 'Long Polling', link: '/07-real-time/02-long-polling' },
+                      { text: 'Server-Sent Events', link: '/07-real-time/03-server-sent-events' },
+                      { text: 'WebSockets', link: '/07-real-time/04-websockets' },
+                      { text: 'WebRTC', link: '/07-real-time/05-webrtc' },
+                      { text: 'Presence', link: '/07-real-time/06-presence' },
+                    ]
+                  },
+                  {
+                    text: '8. Case Studies',
+                    collapsed: true,
+                    items: [
+                      { text: 'Twitter', link: '/08-case-studies/01-twitter' },
+                      { text: 'Instagram', link: '/08-case-studies/02-instagram' },
+                      { text: 'Uber', link: '/08-case-studies/03-uber' },
+                      { text: 'Netflix', link: '/08-case-studies/04-netflix' },
+                      { text: 'Slack', link: '/08-case-studies/05-slack' },
+                      { text: 'Stripe', link: '/08-case-studies/06-stripe' },
+                      { text: 'Dropbox', link: '/08-case-studies/07-dropbox' },
+                      { text: 'Discord', link: '/08-case-studies/08-discord' },
+                      { text: 'Google Maps', link: '/08-case-studies/09-google-maps' },
+                      { text: 'WhatsApp', link: '/08-case-studies/10-whatsapp' },
+                    ]
+                  },
+                  {
+                    text: '9. Whitepapers',
+                    collapsed: true,
+                    items: [
+                      { text: 'MapReduce', link: '/09-whitepapers/01-mapreduce' },
+                      { text: 'Dynamo', link: '/09-whitepapers/02-dynamo' },
+                      { text: 'Bigtable', link: '/09-whitepapers/03-bigtable' },
+                      { text: 'Spanner', link: '/09-whitepapers/04-spanner' },
+                      { text: 'TAO', link: '/09-whitepapers/05-tao' },
+                      { text: 'Kafka', link: '/09-whitepapers/06-kafka' },
+                      { text: 'Raft', link: '/09-whitepapers/07-raft' },
+                      { text: 'Chubby', link: '/09-whitepapers/08-chubby' },
+                      { text: 'Aurora', link: '/09-whitepapers/09-aurora' },
+                      { text: 'CockroachDB', link: '/09-whitepapers/10-cockroachdb' },
+                    ]
+                  },
+                  {
+                    text: '10. Security',
+                    collapsed: true,
+                    items: [
+                      { text: 'Authentication', link: '/10-security/01-authentication' },
+                      { text: 'Authorization', link: '/10-security/02-authorization' },
+                      { text: 'OAuth & OIDC', link: '/10-security/03-oauth-oidc' },
+                      { text: 'API Security', link: '/10-security/04-api-security' },
+                      { text: 'Secrets Management', link: '/10-security/05-secrets-management' },
+                      { text: 'Zero Trust Architecture', link: '/10-security/06-zero-trust' },
+                    ]
+                  },
+                  {
+                    text: '11. Observability',
+                    collapsed: true,
+                    items: [
+                      { text: 'Distributed Tracing', link: '/11-observability/01-distributed-tracing' },
+                      { text: 'Metrics & Monitoring', link: '/11-observability/02-metrics-monitoring' },
+                      { text: 'Log Aggregation', link: '/11-observability/03-log-aggregation' },
+                      { text: 'Alerting Strategies', link: '/11-observability/04-alerting-strategies' },
+                    ]
+                  },
+                  {
+                    text: '12. Service Mesh',
+                    collapsed: true,
+                    items: [
+                      { text: 'Service Discovery', link: '/12-service-mesh/01-service-discovery' },
+                      { text: 'API Gateway', link: '/12-service-mesh/02-api-gateway' },
+                      { text: 'Sidecar Pattern', link: '/12-service-mesh/03-sidecar-pattern' },
+                    ]
+                  },
+                  {
+                    text: '13. Data Pipelines',
+                    collapsed: true,
+                    items: [
+                      { text: 'Batch Processing', link: '/13-data-pipelines/01-batch-processing' },
+                      { text: 'Stream Processing', link: '/13-data-pipelines/02-stream-processing' },
+                      { text: 'Lambda & Kappa Architecture', link: '/13-data-pipelines/03-lambda-kappa-architecture' },
+                    ]
+                  },
+                  {
+                    text: '14. Search Systems',
+                    collapsed: true,
+                    items: [
+                      { text: 'Inverted Indexes', link: '/14-search-systems/01-inverted-indexes' },
+                      { text: 'Full-Text Search', link: '/14-search-systems/02-full-text-search' },
+                    ]
+                  },
+                  {
+                    text: '15. Deployment',
+                    collapsed: true,
+                    items: [
+                      { text: 'Deployment Strategies', link: '/15-deployment/01-deployment-strategies' },
+                      { text: 'Feature Flags', link: '/15-deployment/02-feature-flags' },
+                    ]
+                  },
+                  {
+                    text: '16. LLM Systems',
+                    collapsed: true,
+                    items: [
+                      { text: 'Agent Fundamentals', link: '/16-llm-systems/01-agent-fundamentals' },
+                      { text: 'Orchestration Patterns', link: '/16-llm-systems/02-orchestration-patterns' },
+                      { text: 'Multi-Agent Systems', link: '/16-llm-systems/03-multi-agent-systems' },
+                      { text: 'RAG Patterns', link: '/16-llm-systems/04-rag-patterns' },
+                      { text: 'LLM Infrastructure', link: '/16-llm-systems/05-llm-infrastructure' },
+                    ]
+                  },
+                ]
+              },
+
+              socialLinks: [
+                { icon: 'github', link: 'https://github.com/babushkai/system-design-patterns' }
+              ],
+
+              search: {
+                provider: 'local'
+              },
+
+              editLink: {
+                pattern: 'https://github.com/babushkai/system-design-patterns/edit/main/:path',
+                text: 'Edit this page on GitHub'
+              },
+
+              footer: {
+                message: 'Released under the MIT License.',
+                copyright: 'Copyright 2024-present'
+              },
+
+              outline: {
+                level: [2, 3],
+                label: 'On this page'
+              }
+            },
+
+            markdown: {
+              lineNumbers: true,
+              theme: {
+                light: 'github-light',
+                dark: 'github-dark'
+              }
+            },
+
+            lastUpdated: true,
+            cleanUrls: true,
+          })
+          VITECONFIG
+
+          # Generate homepage
+          cat > index.md << 'HOMEPAGE'
+          ---
+          layout: home
+
+          hero:
+            name: "System Design Patterns"
+            text: "A Comprehensive Guide to Distributed Systems"
+            tagline: From fundamentals to production-ready patterns, with real-world case studies and academic whitepapers
+            actions:
+              - theme: brand
+                text: Get Started
+                link: /01-foundations/01-acid-transactions
+              - theme: alt
+                text: View on GitHub
+                link: https://github.com/babushkai/system-design-patterns
+
+          features:
+            - icon: "🏗️"
+              title: Foundations
+              details: Master ACID transactions, CAP theorem, consistency models, and distributed time
+              link: /01-foundations/01-acid-transactions
+            - icon: "🗄️"
+              title: Distributed Databases
+              details: Learn replication, partitioning, consensus algorithms, and distributed transactions
+              link: /02-distributed-databases/01-replication
+            - icon: "⚡"
+              title: Caching & Performance
+              details: Cache strategies, invalidation patterns, and multi-tier caching architectures
+              link: /04-caching/01-cache-strategies
+            - icon: "📨"
+              title: Messaging Systems
+              details: Message queues, event sourcing, CQRS, and exactly-once delivery semantics
+              link: /05-messaging/01-message-queues
+            - icon: "📈"
+              title: Scaling Patterns
+              details: Load balancing, sharding, rate limiting, circuit breakers, and backpressure
+              link: /06-scaling/01-load-balancing
+            - icon: "🏢"
+              title: Case Studies
+              details: Learn from Twitter, Netflix, Uber, Stripe, Discord, and other tech giants
+              link: /08-case-studies/01-twitter
+            - icon: "📄"
+              title: Academic Whitepapers
+              details: Deep dives into MapReduce, Dynamo, Spanner, Kafka, Raft, and more
+              link: /09-whitepapers/01-mapreduce
+            - icon: "🤖"
+              title: LLM Systems
+              details: Agent architectures, orchestration patterns, RAG, and multi-agent systems
+              link: /16-llm-systems/01-agent-fundamentals
+          ---
+
+          ## Quick Navigation
+
+          | Section | Topics |
+          |---------|--------|
+          | [1. Foundations](/01-foundations/01-acid-transactions) | ACID, CAP, Consistency, Time, Failures |
+          | [2. Distributed Databases](/02-distributed-databases/01-replication) | Replication, Sharding, Consensus |
+          | [3. Storage Engines](/03-storage-engines/01-b-trees) | B-Trees, LSM, WAL, Bloom Filters |
+          | [4. Caching](/04-caching/01-cache-strategies) | Strategies, Invalidation, Stampede |
+          | [5. Messaging](/05-messaging/01-message-queues) | Queues, Pub/Sub, Event Sourcing |
+          | [6. Scaling](/06-scaling/01-load-balancing) | Load Balancing, Rate Limiting |
+          | [7. Real-Time](/07-real-time/01-polling) | WebSockets, SSE, WebRTC |
+          | [8. Case Studies](/08-case-studies/01-twitter) | Twitter, Netflix, Uber, etc. |
+          | [9. Whitepapers](/09-whitepapers/01-mapreduce) | MapReduce, Dynamo, Spanner |
+          | [10. Security](/10-security/01-authentication) | Auth, OAuth, Zero Trust |
+          | [11. Observability](/11-observability/01-distributed-tracing) | Tracing, Metrics, Logging |
+          | [12. Service Mesh](/12-service-mesh/01-service-discovery) | Discovery, Gateway, Sidecar |
+          | [13. Data Pipelines](/13-data-pipelines/01-batch-processing) | Batch, Stream, Lambda |
+          | [14. Search](/14-search-systems/01-inverted-indexes) | Inverted Index, Full-Text |
+          | [15. Deployment](/15-deployment/01-deployment-strategies) | Blue-Green, Canary, Flags |
+          | [16. LLM Systems](/16-llm-systems/01-agent-fundamentals) | Agents, RAG, Multi-Agent |
+          HOMEPAGE
+
+          # Generate simple logo SVG
+          cat > public/logo.svg << 'LOGO'
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+            <rect x="10" y="10" width="80" height="80" rx="10" fill="#5f67ee"/>
+            <path d="M30 50 L50 30 L70 50 L50 70 Z" fill="white"/>
+            <circle cx="50" cy="50" r="8" fill="#5f67ee"/>
+          </svg>
+          LOGO
+
+          echo "VitePress configuration generated successfully!"
+
+      - name: Create public directory
+        run: mkdir -p public
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build documentation
+        run: npm run docs:build
+
+      - name: Setup Pages
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/configure-pages@v4
+
+      - name: Upload artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .vitepress/dist
+
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
