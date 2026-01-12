@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+
+# VitePress build output (generated in CI)
+.vitepress/
+index.md
+public/
+
+# VitePress cache
+*.local
+
+# Build artifacts
+dist/
+
+# Editor directories
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Python virtual environments
+.venv/
+venv/
+__pycache__/
+
+# MkDocs (if testing locally)
+site/
+mkdocs.yml
+
+# Nextra (if testing locally)
+website/
+.next/
+
+# Package manager
+package.json
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
