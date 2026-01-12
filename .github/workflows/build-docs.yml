@@ -809,6 +809,66 @@ jobs:
           </svg>
           LOGO
 
+          # Generate custom theme CSS to match logo colors
+          mkdir -p .vitepress/theme
+          cat > .vitepress/theme/index.ts << 'THEME'
+          import DefaultTheme from 'vitepress/theme'
+          import './custom.css'
+
+          export default DefaultTheme
+          THEME
+
+          cat > .vitepress/theme/custom.css << 'CUSTOMCSS'
+          /* Pink theme to match Matryoshka logo */
+          :root {
+            --vp-c-brand-1: #E91E63;
+            --vp-c-brand-2: #D81B60;
+            --vp-c-brand-3: #C2185B;
+            --vp-c-brand-soft: rgba(233, 30, 99, 0.14);
+            
+            /* Hero gradient */
+            --vp-home-hero-name-color: transparent;
+            --vp-home-hero-name-background: linear-gradient(135deg, #E91E63 0%, #FF4081 100%);
+            
+            /* Button colors */
+            --vp-button-brand-border: #E91E63;
+            --vp-button-brand-text: #fff;
+            --vp-button-brand-bg: #E91E63;
+            --vp-button-brand-hover-border: #D81B60;
+            --vp-button-brand-hover-text: #fff;
+            --vp-button-brand-hover-bg: #D81B60;
+            --vp-button-brand-active-border: #C2185B;
+            --vp-button-brand-active-text: #fff;
+            --vp-button-brand-active-bg: #C2185B;
+          }
+
+          .dark {
+            --vp-c-brand-1: #FF4081;
+            --vp-c-brand-2: #E91E63;
+            --vp-c-brand-3: #F8BBD9;
+            --vp-c-brand-soft: rgba(255, 64, 129, 0.16);
+            
+            --vp-button-brand-border: #FF4081;
+            --vp-button-brand-text: #fff;
+            --vp-button-brand-bg: #FF4081;
+            --vp-button-brand-hover-border: #E91E63;
+            --vp-button-brand-hover-text: #fff;
+            --vp-button-brand-hover-bg: #E91E63;
+          }
+
+          /* Babushkai section styling */
+          .babushkai-section {
+            text-align: center;
+            padding: 2rem 0;
+            margin: 2rem 0;
+            border-top: 1px solid var(--vp-c-divider);
+          }
+
+          .babushkai-section strong {
+            color: var(--vp-c-brand-1);
+          }
+          CUSTOMCSS
+
           echo "VitePress configuration generated successfully!"
 
       - name: Install dependencies
