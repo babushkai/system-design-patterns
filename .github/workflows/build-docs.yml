@@ -600,7 +600,7 @@ jobs:
           layout: home
 
           hero:
-            name: "Babushk<span class='ai-accent'>ai</span>"
+            name: "Babushk<span class='ai-accent'>a<span class='doll-i'>i</span></span>"
             text: "System Design Patterns"
             tagline: A comprehensive guide to distributed systems - from fundamentals to production-ready patterns
             image:
@@ -696,7 +696,7 @@ jobs:
           layout: home
 
           hero:
-            name: "Babushk<span class='ai-accent'>ai</span>"
+            name: "Babushk<span class='ai-accent'>a<span class='doll-i'>i</span></span>"
             text: "システム設計パターン"
             tagline: 分散システムの総合ガイド - 基礎から本番運用パターンまで
             image:
@@ -874,30 +874,44 @@ jobs:
             color: var(--vp-c-brand-1);
           }
 
-          /* AI accent styling in Babushkai */
+          /* AI accent styling in Babushkai - "i" as Matryoshka doll */
           .ai-accent {
-            background: linear-gradient(135deg, #00BCD4 0%, #2196F3 50%, #9C27B0 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
+            color: #FF4081;
             font-weight: inherit;
-            position: relative;
+            font-style: italic;
           }
 
-          .ai-accent::after {
+          .doll-i {
+            display: inline-block;
+            position: relative;
+            font-style: normal;
+            color: transparent;
+            width: 0.5em;
+          }
+
+          .doll-i::before {
             content: '';
             position: absolute;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            height: 3px;
-            background: linear-gradient(90deg, #00BCD4, #2196F3, #9C27B0);
-            border-radius: 2px;
+            top: 0.15em;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 0.35em;
+            height: 0.35em;
+            background: #FFCCBC;
+            border-radius: 50%;
+            border: 2px solid #E91E63;
           }
 
-          /* Ensure the hero name allows HTML */
-          .VPHero .name {
-            overflow: visible;
+          .doll-i::after {
+            content: '';
+            position: absolute;
+            top: 0.5em;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 0.45em;
+            height: 0.6em;
+            background: #E91E63;
+            border-radius: 50% 50% 45% 45%;
           }
           CUSTOMCSS
 
