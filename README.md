@@ -311,6 +311,52 @@ A hyper-detailed, framework-agnostic repository of system design patterns, conce
 - [Large-scale cluster management at Google with Borg](https://research.google/pubs/pub43438/) - Verma et al., 2015
 - [Mesos: A Platform for Fine-Grained Resource Sharing in the Data Center](https://people.eecs.berkeley.edu/~alig/papers/mesos.pdf) - Hindman et al., 2011
 
+## Building the Book
+
+This repository can be compiled into a professional PDF book.
+
+### Prerequisites
+
+```bash
+# macOS
+brew install pandoc
+brew install --cask mactex
+
+# Ubuntu/Debian
+sudo apt install pandoc texlive-xetex texlive-fonts-recommended
+```
+
+### Build Commands
+
+```bash
+# Build PDF book
+make pdf
+
+# Build EPUB ebook
+make epub
+
+# Build all formats
+make all
+
+# Alternative: use the build script
+./book/build.sh pdf
+./book/build.sh epub
+./book/build.sh html
+
+# Check if dependencies are installed
+make check-deps
+
+# Preview a single chapter
+make pdf-chapter CHAPTER=01-foundations/01-acid-transactions.md
+
+# View word count statistics
+make stats
+```
+
+The output will be in the `build/` directory:
+- `build/system-design-patterns.pdf` - Full PDF book
+- `build/system-design-patterns.epub` - EPUB ebook
+
 ## License
 
 MIT License

@@ -1,0 +1,64 @@
+---
+title: "System Design Patterns"
+subtitle: "A Comprehensive Guide to Building Scalable Distributed Systems"
+author: 
+  - "System Design Patterns Contributors"
+date: "2026"
+lang: en
+description: |
+  A hyper-detailed, framework-agnostic repository of system design patterns, 
+  concepts, and real-world case studies. This book covers everything from 
+  foundational concepts like ACID transactions and CAP theorem to advanced 
+  topics like distributed databases, caching strategies, and LLM systems.
+
+# Book settings
+documentclass: book
+classoption:
+  - 11pt
+  - oneside
+papersize: letter
+geometry:
+  - margin=1in
+  - top=1.25in
+  - bottom=1.25in
+
+# Table of contents
+toc: true
+toc-depth: 3
+numbersections: true
+
+# Code highlighting
+highlight-style: tango
+listings: true
+
+# PDF settings
+colorlinks: true
+linkcolor: NavyBlue
+urlcolor: NavyBlue
+toccolor: NavyBlue
+
+# Headers and footers
+header-includes:
+  - |
+    \usepackage{fancyhdr}
+    \pagestyle{fancy}
+    \fancyhead[L]{\leftmark}
+    \fancyhead[R]{\thepage}
+    \fancyfoot[C]{}
+  - |
+    \usepackage{titlesec}
+    \titleformat{\chapter}[display]
+      {\normalfont\huge\bfseries}{\chaptertitlename\ \thechapter}{20pt}{\Huge}
+  - |
+    \usepackage{tcolorbox}
+    \tcbuselibrary{minted,skins}
+  - |
+    \usepackage{awesomebox}
+
+# Fonts (requires XeLaTeX)
+mainfont: "DejaVu Serif"
+sansfont: "DejaVu Sans"
+monofont: "DejaVu Sans Mono"
+monofontoptions:
+  - Scale=0.85
+---

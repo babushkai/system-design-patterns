@@ -1,0 +1,135 @@
+# Chapter ordering for book generation
+# Each line is a path relative to repository root
+# Comments start with #
+
+# Front matter
+book/front-matter.md
+
+# Part 1: Foundations
+01-foundations/01-acid-transactions.md
+01-foundations/02-isolation-levels.md
+01-foundations/03-cap-theorem.md
+01-foundations/04-consistency-models.md
+01-foundations/05-distributed-time.md
+01-foundations/06-failure-modes.md
+01-foundations/07-network-partitions.md
+01-foundations/08-idempotency.md
+
+# Part 2: Distributed Databases
+02-distributed-databases/01-single-leader-replication.md
+02-distributed-databases/02-multi-leader-replication.md
+02-distributed-databases/03-leaderless-replication.md
+02-distributed-databases/04-conflict-resolution.md
+02-distributed-databases/05-partitioning-strategies.md
+02-distributed-databases/06-secondary-indexes.md
+02-distributed-databases/07-distributed-transactions.md
+02-distributed-databases/08-consensus-algorithms.md
+02-distributed-databases/09-leader-election.md
+
+# Part 3: Storage Engines
+03-storage-engines/01-b-trees.md
+03-storage-engines/02-lsm-trees.md
+03-storage-engines/03-sstables-compaction.md
+03-storage-engines/04-write-ahead-logging.md
+03-storage-engines/05-bloom-filters.md
+03-storage-engines/06-column-storage.md
+03-storage-engines/07-data-encoding.md
+
+# Part 4: Caching
+04-caching/01-cache-strategies.md
+04-caching/02-cache-invalidation.md
+04-caching/03-distributed-caching.md
+04-caching/04-cache-stampede.md
+04-caching/05-multi-tier-caching.md
+04-caching/06-cache-warming.md
+
+# Part 5: Messaging
+05-messaging/01-message-queues.md
+05-messaging/02-pub-sub.md
+05-messaging/03-message-ordering.md
+05-messaging/04-delivery-guarantees.md
+05-messaging/05-event-sourcing.md
+05-messaging/06-cqrs.md
+05-messaging/07-outbox-pattern.md
+05-messaging/08-dead-letter-queues.md
+
+# Part 6: Scaling
+06-scaling/01-load-balancing.md
+06-scaling/02-horizontal-vertical.md
+06-scaling/03-database-sharding.md
+06-scaling/04-cdn-architecture.md
+06-scaling/05-rate-limiting.md
+06-scaling/06-circuit-breakers.md
+06-scaling/07-backpressure.md
+06-scaling/08-auto-scaling.md
+
+# Part 7: Real-Time Systems
+07-real-time/01-polling.md
+07-real-time/02-long-polling.md
+07-real-time/03-server-sent-events.md
+07-real-time/04-websockets.md
+07-real-time/05-webrtc.md
+07-real-time/06-presence-systems.md
+
+# Part 8: Case Studies
+08-case-studies/01-twitter-timeline.md
+08-case-studies/02-instagram-feed.md
+08-case-studies/03-uber-ride-matching.md
+08-case-studies/04-netflix-streaming.md
+08-case-studies/05-slack-messaging.md
+08-case-studies/06-stripe-payments.md
+08-case-studies/07-dropbox-sync.md
+08-case-studies/08-discord-voice.md
+08-case-studies/09-google-search.md
+08-case-studies/10-whatsapp-messaging.md
+
+# Part 9: Whitepapers
+09-whitepapers/01-mapreduce.md
+09-whitepapers/02-dynamo.md
+09-whitepapers/03-bigtable.md
+09-whitepapers/04-spanner.md
+09-whitepapers/05-tao.md
+09-whitepapers/06-kafka.md
+09-whitepapers/07-raft.md
+09-whitepapers/08-chubby.md
+09-whitepapers/09-aurora.md
+09-whitepapers/10-cockroachdb.md
+
+# Part 10: Security
+10-security/01-authentication-fundamentals.md
+10-security/02-oauth2-openid-connect.md
+10-security/03-jwt-tokens.md
+10-security/04-api-security.md
+10-security/05-zero-trust-architecture.md
+10-security/06-encryption.md
+
+# Part 11: Observability
+11-observability/01-distributed-tracing.md
+11-observability/02-metrics-monitoring.md
+11-observability/03-logging.md
+11-observability/04-alerting.md
+
+# Part 12: Service Mesh
+12-service-mesh/01-service-discovery.md
+12-service-mesh/02-api-gateway.md
+12-service-mesh/03-sidecar-pattern.md
+
+# Part 13: Data Pipelines
+13-data-pipelines/01-batch-processing.md
+13-data-pipelines/02-stream-processing.md
+13-data-pipelines/03-lambda-kappa-architecture.md
+
+# Part 14: Search Systems
+14-search-systems/01-inverted-indexes.md
+14-search-systems/02-full-text-search.md
+
+# Part 15: Deployment
+15-deployment/01-deployment-strategies.md
+15-deployment/02-feature-flags.md
+
+# Part 16: LLM Systems
+16-llm-systems/01-agent-fundamentals.md
+16-llm-systems/02-orchestration-patterns.md
+16-llm-systems/03-multi-agent-systems.md
+16-llm-systems/04-rag-patterns.md
+16-llm-systems/05-llm-infrastructure.md
