@@ -603,9 +603,6 @@ jobs:
             name: "System Design Patterns"
             text: "A Comprehensive Guide to Distributed Systems"
             tagline: From fundamentals to production-ready patterns, with real-world case studies and academic whitepapers
-            image:
-              src: /logo.svg
-              alt: Babushkai
             actions:
               - theme: brand
                 text: Get Started
@@ -699,9 +696,6 @@ jobs:
             name: "システム設計パターン"
             text: "分散システムの総合ガイド"
             tagline: 基礎から本番運用パターンまで、実際のケーススタディと学術論文を交えて解説
-            image:
-              src: /logo.svg
-              alt: Babushkai
             actions:
               - theme: brand
                 text: はじめる
