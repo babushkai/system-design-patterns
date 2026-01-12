@@ -27,9 +27,8 @@ toc: true
 toc-depth: 3
 numbersections: true
 
-# Code highlighting
+# Code highlighting (using pandoc's built-in highlighter, not minted)
 highlight-style: tango
-listings: true
 
 # PDF settings
 colorlinks: true
@@ -50,12 +49,18 @@ header-includes:
     \titleformat{\chapter}[display]
       {\normalfont\huge\bfseries}{\chaptertitlename\ \thechapter}{20pt}{\Huge}
   - |
-    \usepackage{tcolorbox}
-    \tcbuselibrary{minted,skins}
+    \usepackage{longtable}
+    \usepackage{booktabs}
   - |
-    \usepackage{awesomebox}
+    \usepackage{graphicx}
+  - |
+    \usepackage{xcolor}
+  - |
+    \definecolor{shadecolor}{RGB}{248,248,248}
+  - |
+    \usepackage{framed}
 
-# Fonts (requires XeLaTeX)
+# Fonts - use standard fonts available on most systems
 mainfont: "DejaVu Serif"
 sansfont: "DejaVu Sans"
 monofont: "DejaVu Sans Mono"
