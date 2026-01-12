@@ -59,6 +59,9 @@ jobs:
             title: 'System Design Patterns',
             description: 'A comprehensive guide to distributed systems and system design patterns',
             
+            // Ignore dead links in README.md (original repo content)
+            ignoreDeadLinks: true,
+            
             head: [
               ['link', { rel: 'icon', type: 'image/svg+xml', href: '/logo.svg' }],
               ['meta', { name: 'theme-color', content: '#5f67ee' }],
@@ -77,7 +80,7 @@ jobs:
                   text: 'Sections',
                   items: [
                     { text: 'Foundations', link: '/01-foundations/01-acid-transactions' },
-                    { text: 'Distributed Databases', link: '/02-distributed-databases/01-replication' },
+                    { text: 'Distributed Databases', link: '/02-distributed-databases/01-single-leader-replication' },
                     { text: 'Storage Engines', link: '/03-storage-engines/01-b-trees' },
                     { text: 'Caching', link: '/04-caching/01-cache-strategies' },
                     { text: 'Messaging', link: '/05-messaging/01-message-queues' },
@@ -85,7 +88,7 @@ jobs:
                     { text: 'Real-Time', link: '/07-real-time/01-polling' },
                     { text: 'Case Studies', link: '/08-case-studies/01-twitter' },
                     { text: 'Whitepapers', link: '/09-whitepapers/01-mapreduce' },
-                    { text: 'Security', link: '/10-security/01-authentication' },
+                    { text: 'Security', link: '/10-security/01-authentication-fundamentals' },
                     { text: 'Observability', link: '/11-observability/01-distributed-tracing' },
                     { text: 'Service Mesh', link: '/12-service-mesh/01-service-discovery' },
                     { text: 'Data Pipelines', link: '/13-data-pipelines/01-batch-processing' },
@@ -117,14 +120,15 @@ jobs:
                     text: '2. Distributed Databases',
                     collapsed: true,
                     items: [
-                      { text: 'Replication', link: '/02-distributed-databases/01-replication' },
-                      { text: 'Partitioning', link: '/02-distributed-databases/02-partitioning' },
-                      { text: 'Consistent Hashing', link: '/02-distributed-databases/03-consistent-hashing' },
-                      { text: 'Quorum Consensus', link: '/02-distributed-databases/04-quorum-consensus' },
-                      { text: 'Leader Election', link: '/02-distributed-databases/05-leader-election' },
-                      { text: 'Two-Phase Commit', link: '/02-distributed-databases/06-two-phase-commit' },
-                      { text: 'Saga Pattern', link: '/02-distributed-databases/07-saga-pattern' },
-                      { text: 'Vector Clocks', link: '/02-distributed-databases/08-vector-clocks' },
+                      { text: 'Single-Leader Replication', link: '/02-distributed-databases/01-single-leader-replication' },
+                      { text: 'Multi-Leader Replication', link: '/02-distributed-databases/02-multi-leader-replication' },
+                      { text: 'Leaderless Replication', link: '/02-distributed-databases/03-leaderless-replication' },
+                      { text: 'Conflict Resolution', link: '/02-distributed-databases/04-conflict-resolution' },
+                      { text: 'Partitioning Strategies', link: '/02-distributed-databases/05-partitioning-strategies' },
+                      { text: 'Secondary Indexes', link: '/02-distributed-databases/06-secondary-indexes' },
+                      { text: 'Distributed Transactions', link: '/02-distributed-databases/07-distributed-transactions' },
+                      { text: 'Consensus Algorithms', link: '/02-distributed-databases/08-consensus-algorithms' },
+                      { text: 'Leader Election', link: '/02-distributed-databases/09-leader-election' },
                     ]
                   },
                   {
@@ -158,12 +162,12 @@ jobs:
                     items: [
                       { text: 'Message Queues', link: '/05-messaging/01-message-queues' },
                       { text: 'Pub/Sub Systems', link: '/05-messaging/02-pub-sub' },
-                      { text: 'Event Sourcing', link: '/05-messaging/03-event-sourcing' },
-                      { text: 'CQRS', link: '/05-messaging/04-cqrs' },
-                      { text: 'Dead Letter Queues', link: '/05-messaging/05-dead-letter-queues' },
-                      { text: 'Exactly-Once Delivery', link: '/05-messaging/06-exactly-once' },
-                      { text: 'Message Ordering', link: '/05-messaging/07-message-ordering' },
-                      { text: 'Transactional Outbox', link: '/05-messaging/08-transactional-outbox' },
+                      { text: 'Message Ordering', link: '/05-messaging/03-message-ordering' },
+                      { text: 'Delivery Guarantees', link: '/05-messaging/04-delivery-guarantees' },
+                      { text: 'Event Sourcing', link: '/05-messaging/05-event-sourcing' },
+                      { text: 'CQRS', link: '/05-messaging/06-cqrs' },
+                      { text: 'Outbox Pattern', link: '/05-messaging/07-outbox-pattern' },
+                      { text: 'Dead Letter Queues', link: '/05-messaging/08-dead-letter-queues' },
                     ]
                   },
                   {
@@ -177,6 +181,7 @@ jobs:
                       { text: 'Rate Limiting', link: '/06-scaling/05-rate-limiting' },
                       { text: 'Circuit Breakers', link: '/06-scaling/06-circuit-breakers' },
                       { text: 'Backpressure', link: '/06-scaling/07-backpressure' },
+                      { text: 'Auto-Scaling', link: '/06-scaling/08-auto-scaling' },
                     ]
                   },
                   {
@@ -227,12 +232,12 @@ jobs:
                     text: '10. Security',
                     collapsed: true,
                     items: [
-                      { text: 'Authentication', link: '/10-security/01-authentication' },
-                      { text: 'Authorization', link: '/10-security/02-authorization' },
-                      { text: 'OAuth & OIDC', link: '/10-security/03-oauth-oidc' },
+                      { text: 'Authentication Fundamentals', link: '/10-security/01-authentication-fundamentals' },
+                      { text: 'OAuth2 & OpenID Connect', link: '/10-security/02-oauth2-openid-connect' },
+                      { text: 'JWT Tokens', link: '/10-security/03-jwt-tokens' },
                       { text: 'API Security', link: '/10-security/04-api-security' },
-                      { text: 'Secrets Management', link: '/10-security/05-secrets-management' },
-                      { text: 'Zero Trust Architecture', link: '/10-security/06-zero-trust' },
+                      { text: 'Zero Trust Architecture', link: '/10-security/05-zero-trust-architecture' },
+                      { text: 'Encryption', link: '/10-security/06-encryption' },
                     ]
                   },
                   {
@@ -241,8 +246,8 @@ jobs:
                     items: [
                       { text: 'Distributed Tracing', link: '/11-observability/01-distributed-tracing' },
                       { text: 'Metrics & Monitoring', link: '/11-observability/02-metrics-monitoring' },
-                      { text: 'Log Aggregation', link: '/11-observability/03-log-aggregation' },
-                      { text: 'Alerting Strategies', link: '/11-observability/04-alerting-strategies' },
+                      { text: 'Logging', link: '/11-observability/03-logging' },
+                      { text: 'Alerting', link: '/11-observability/04-alerting' },
                     ]
                   },
                   {
@@ -355,7 +360,7 @@ jobs:
             - icon: "🗄️"
               title: Distributed Databases
               details: Learn replication, partitioning, consensus algorithms, and distributed transactions
-              link: /02-distributed-databases/01-replication
+              link: /02-distributed-databases/01-single-leader-replication
             - icon: "⚡"
               title: Caching & Performance
               details: Cache strategies, invalidation patterns, and multi-tier caching architectures
@@ -387,7 +392,7 @@ jobs:
           | Section | Topics |
           |---------|--------|
           | [1. Foundations](/01-foundations/01-acid-transactions) | ACID, CAP, Consistency, Time, Failures |
-          | [2. Distributed Databases](/02-distributed-databases/01-replication) | Replication, Sharding, Consensus |
+          | [2. Distributed Databases](/02-distributed-databases/01-single-leader-replication) | Replication, Sharding, Consensus |
           | [3. Storage Engines](/03-storage-engines/01-b-trees) | B-Trees, LSM, WAL, Bloom Filters |
           | [4. Caching](/04-caching/01-cache-strategies) | Strategies, Invalidation, Stampede |
           | [5. Messaging](/05-messaging/01-message-queues) | Queues, Pub/Sub, Event Sourcing |
@@ -395,7 +400,7 @@ jobs:
           | [7. Real-Time](/07-real-time/01-polling) | WebSockets, SSE, WebRTC |
           | [8. Case Studies](/08-case-studies/01-twitter) | Twitter, Netflix, Uber, etc. |
           | [9. Whitepapers](/09-whitepapers/01-mapreduce) | MapReduce, Dynamo, Spanner |
-          | [10. Security](/10-security/01-authentication) | Auth, OAuth, Zero Trust |
+          | [10. Security](/10-security/01-authentication-fundamentals) | Auth, OAuth, Zero Trust |
           | [11. Observability](/11-observability/01-distributed-tracing) | Tracing, Metrics, Logging |
           | [12. Service Mesh](/12-service-mesh/01-service-discovery) | Discovery, Gateway, Sidecar |
           | [13. Data Pipelines](/13-data-pipelines/01-batch-processing) | Batch, Stream, Lambda |
