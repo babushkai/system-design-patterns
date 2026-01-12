@@ -412,68 +412,68 @@ jobs:
             <div class="navigation-column">
               <h2>Quick Navigation</h2>
               <div class="nav-grid">
-                <a href="/01-foundations/01-acid-transactions" class="nav-item">
-                  <img src="/icons/foundations.svg" class="nav-icon" alt="" />
+                <a href="/system-design-patterns/01-foundations/01-acid-transactions" class="nav-item">
+                  <img src="/system-design-patterns/icons/foundations.svg" class="nav-icon" alt="" />
                   <span class="nav-title">Foundations</span>
                 </a>
-                <a href="/02-distributed-databases/01-single-leader-replication" class="nav-item">
-                  <img src="/icons/database.svg" class="nav-icon" alt="" />
+                <a href="/system-design-patterns/02-distributed-databases/01-single-leader-replication" class="nav-item">
+                  <img src="/system-design-patterns/icons/database.svg" class="nav-icon" alt="" />
                   <span class="nav-title">Distributed DBs</span>
                 </a>
-                <a href="/03-storage-engines/01-b-trees" class="nav-item">
-                  <img src="/icons/storage.svg" class="nav-icon" alt="" />
+                <a href="/system-design-patterns/03-storage-engines/01-b-trees" class="nav-item">
+                  <img src="/system-design-patterns/icons/storage.svg" class="nav-icon" alt="" />
                   <span class="nav-title">Storage Engines</span>
                 </a>
-                <a href="/04-caching/01-cache-strategies" class="nav-item">
-                  <img src="/icons/caching.svg" class="nav-icon" alt="" />
+                <a href="/system-design-patterns/04-caching/01-cache-strategies" class="nav-item">
+                  <img src="/system-design-patterns/icons/caching.svg" class="nav-icon" alt="" />
                   <span class="nav-title">Caching</span>
                 </a>
-                <a href="/05-messaging/01-message-queues" class="nav-item">
-                  <img src="/icons/messaging.svg" class="nav-icon" alt="" />
+                <a href="/system-design-patterns/05-messaging/01-message-queues" class="nav-item">
+                  <img src="/system-design-patterns/icons/messaging.svg" class="nav-icon" alt="" />
                   <span class="nav-title">Messaging</span>
                 </a>
-                <a href="/06-scaling/01-load-balancing" class="nav-item">
-                  <img src="/icons/scaling.svg" class="nav-icon" alt="" />
+                <a href="/system-design-patterns/06-scaling/01-load-balancing" class="nav-item">
+                  <img src="/system-design-patterns/icons/scaling.svg" class="nav-icon" alt="" />
                   <span class="nav-title">Scaling</span>
                 </a>
-                <a href="/07-real-time/01-polling" class="nav-item">
-                  <img src="/icons/realtime.svg" class="nav-icon" alt="" />
+                <a href="/system-design-patterns/07-real-time/01-polling" class="nav-item">
+                  <img src="/system-design-patterns/icons/realtime.svg" class="nav-icon" alt="" />
                   <span class="nav-title">Real-Time</span>
                 </a>
-                <a href="/08-case-studies/01-twitter" class="nav-item">
-                  <img src="/icons/casestudies.svg" class="nav-icon" alt="" />
+                <a href="/system-design-patterns/08-case-studies/01-twitter" class="nav-item">
+                  <img src="/system-design-patterns/icons/casestudies.svg" class="nav-icon" alt="" />
                   <span class="nav-title">Case Studies</span>
                 </a>
-                <a href="/09-whitepapers/01-mapreduce" class="nav-item">
-                  <img src="/icons/whitepapers.svg" class="nav-icon" alt="" />
+                <a href="/system-design-patterns/09-whitepapers/01-mapreduce" class="nav-item">
+                  <img src="/system-design-patterns/icons/whitepapers.svg" class="nav-icon" alt="" />
                   <span class="nav-title">Whitepapers</span>
                 </a>
-                <a href="/10-security/01-authentication-fundamentals" class="nav-item">
-                  <img src="/icons/security.svg" class="nav-icon" alt="" />
+                <a href="/system-design-patterns/10-security/01-authentication-fundamentals" class="nav-item">
+                  <img src="/system-design-patterns/icons/security.svg" class="nav-icon" alt="" />
                   <span class="nav-title">Security</span>
                 </a>
-                <a href="/11-observability/01-distributed-tracing" class="nav-item">
-                  <img src="/icons/observability.svg" class="nav-icon" alt="" />
+                <a href="/system-design-patterns/11-observability/01-distributed-tracing" class="nav-item">
+                  <img src="/system-design-patterns/icons/observability.svg" class="nav-icon" alt="" />
                   <span class="nav-title">Observability</span>
                 </a>
-                <a href="/12-service-mesh/01-service-discovery" class="nav-item">
-                  <img src="/icons/servicemesh.svg" class="nav-icon" alt="" />
+                <a href="/system-design-patterns/12-service-mesh/01-service-discovery" class="nav-item">
+                  <img src="/system-design-patterns/icons/servicemesh.svg" class="nav-icon" alt="" />
                   <span class="nav-title">Service Mesh</span>
                 </a>
-                <a href="/13-data-pipelines/01-batch-processing" class="nav-item">
-                  <img src="/icons/datapipelines.svg" class="nav-icon" alt="" />
+                <a href="/system-design-patterns/13-data-pipelines/01-batch-processing" class="nav-item">
+                  <img src="/system-design-patterns/icons/datapipelines.svg" class="nav-icon" alt="" />
                   <span class="nav-title">Data Pipelines</span>
                 </a>
-                <a href="/14-search-systems/01-inverted-indexes" class="nav-item">
-                  <img src="/icons/search.svg" class="nav-icon" alt="" />
+                <a href="/system-design-patterns/14-search-systems/01-inverted-indexes" class="nav-item">
+                  <img src="/system-design-patterns/icons/search.svg" class="nav-icon" alt="" />
                   <span class="nav-title">Search Systems</span>
                 </a>
-                <a href="/15-deployment/01-deployment-strategies" class="nav-item">
-                  <img src="/icons/deployment.svg" class="nav-icon" alt="" />
+                <a href="/system-design-patterns/15-deployment/01-deployment-strategies" class="nav-item">
+                  <img src="/system-design-patterns/icons/deployment.svg" class="nav-icon" alt="" />
                   <span class="nav-title">Deployment</span>
                 </a>
-                <a href="/16-llm-systems/01-agent-fundamentals" class="nav-item">
-                  <img src="/icons/llm.svg" class="nav-icon" alt="" />
+                <a href="/system-design-patterns/16-llm-systems/01-agent-fundamentals" class="nav-item">
+                  <img src="/system-design-patterns/icons/llm.svg" class="nav-icon" alt="" />
                   <span class="nav-title">LLM Systems</span>
                 </a>
               </div>
@@ -484,17 +484,17 @@ jobs:
               <p>This guide covers <strong>80+ patterns</strong> across distributed systems, from foundational concepts to production-ready architectures used by companies like Netflix, Uber, and Stripe.</p>
               <div class="stats">
                 <div class="stat">
-                  <img src="/icons/foundations.svg" class="stat-icon" alt="" />
+                  <img src="/system-design-patterns/icons/foundations.svg" class="stat-icon" alt="" />
                   <span class="stat-num">16</span>
                   <span class="stat-label">Sections</span>
                 </div>
                 <div class="stat">
-                  <img src="/icons/caching.svg" class="stat-icon" alt="" />
+                  <img src="/system-design-patterns/icons/caching.svg" class="stat-icon" alt="" />
                   <span class="stat-num">80+</span>
                   <span class="stat-label">Patterns</span>
                 </div>
                 <div class="stat">
-                  <img src="/icons/casestudies.svg" class="stat-icon" alt="" />
+                  <img src="/system-design-patterns/icons/casestudies.svg" class="stat-icon" alt="" />
                   <span class="stat-num">10</span>
                   <span class="stat-label">Case Studies</span>
                 </div>
@@ -1059,7 +1059,7 @@ jobs:
             display: inline-block;
             width: 16px;
             height: 16px;
-            background: url('/logo.svg') no-repeat center;
+            background: url('/system-design-patterns/logo.svg') no-repeat center;
             background-size: contain;
             margin-right: 0.5rem;
             vertical-align: middle;
