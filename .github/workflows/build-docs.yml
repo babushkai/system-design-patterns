@@ -662,67 +662,67 @@ jobs:
               <h2>Quick Navigation</h2>
               <div class="nav-grid">
                 <a href="/01-foundations/01-acid-transactions" class="nav-item">
-                  <span class="nav-num">01</span>
+                  <img src="/icons/foundations.svg" class="nav-icon" alt="" />
                   <span class="nav-title">Foundations</span>
                 </a>
                 <a href="/02-distributed-databases/01-single-leader-replication" class="nav-item">
-                  <span class="nav-num">02</span>
-                  <span class="nav-title">Distributed Databases</span>
+                  <img src="/icons/database.svg" class="nav-icon" alt="" />
+                  <span class="nav-title">Distributed DBs</span>
                 </a>
                 <a href="/03-storage-engines/01-b-trees" class="nav-item">
-                  <span class="nav-num">03</span>
+                  <img src="/icons/storage.svg" class="nav-icon" alt="" />
                   <span class="nav-title">Storage Engines</span>
                 </a>
                 <a href="/04-caching/01-cache-strategies" class="nav-item">
-                  <span class="nav-num">04</span>
+                  <img src="/icons/caching.svg" class="nav-icon" alt="" />
                   <span class="nav-title">Caching</span>
                 </a>
                 <a href="/05-messaging/01-message-queues" class="nav-item">
-                  <span class="nav-num">05</span>
+                  <img src="/icons/messaging.svg" class="nav-icon" alt="" />
                   <span class="nav-title">Messaging</span>
                 </a>
                 <a href="/06-scaling/01-load-balancing" class="nav-item">
-                  <span class="nav-num">06</span>
+                  <img src="/icons/scaling.svg" class="nav-icon" alt="" />
                   <span class="nav-title">Scaling</span>
                 </a>
                 <a href="/07-real-time/01-polling" class="nav-item">
-                  <span class="nav-num">07</span>
+                  <img src="/icons/realtime.svg" class="nav-icon" alt="" />
                   <span class="nav-title">Real-Time</span>
                 </a>
                 <a href="/08-case-studies/01-twitter" class="nav-item">
-                  <span class="nav-num">08</span>
+                  <img src="/icons/casestudies.svg" class="nav-icon" alt="" />
                   <span class="nav-title">Case Studies</span>
                 </a>
                 <a href="/09-whitepapers/01-mapreduce" class="nav-item">
-                  <span class="nav-num">09</span>
+                  <img src="/icons/whitepapers.svg" class="nav-icon" alt="" />
                   <span class="nav-title">Whitepapers</span>
                 </a>
                 <a href="/10-security/01-authentication-fundamentals" class="nav-item">
-                  <span class="nav-num">10</span>
+                  <img src="/icons/security.svg" class="nav-icon" alt="" />
                   <span class="nav-title">Security</span>
                 </a>
                 <a href="/11-observability/01-distributed-tracing" class="nav-item">
-                  <span class="nav-num">11</span>
+                  <img src="/icons/observability.svg" class="nav-icon" alt="" />
                   <span class="nav-title">Observability</span>
                 </a>
                 <a href="/12-service-mesh/01-service-discovery" class="nav-item">
-                  <span class="nav-num">12</span>
+                  <img src="/icons/servicemesh.svg" class="nav-icon" alt="" />
                   <span class="nav-title">Service Mesh</span>
                 </a>
                 <a href="/13-data-pipelines/01-batch-processing" class="nav-item">
-                  <span class="nav-num">13</span>
+                  <img src="/icons/datapipelines.svg" class="nav-icon" alt="" />
                   <span class="nav-title">Data Pipelines</span>
                 </a>
                 <a href="/14-search-systems/01-inverted-indexes" class="nav-item">
-                  <span class="nav-num">14</span>
+                  <img src="/icons/search.svg" class="nav-icon" alt="" />
                   <span class="nav-title">Search Systems</span>
                 </a>
                 <a href="/15-deployment/01-deployment-strategies" class="nav-item">
-                  <span class="nav-num">15</span>
+                  <img src="/icons/deployment.svg" class="nav-icon" alt="" />
                   <span class="nav-title">Deployment</span>
                 </a>
                 <a href="/16-llm-systems/01-agent-fundamentals" class="nav-item">
-                  <span class="nav-num">16</span>
+                  <img src="/icons/llm.svg" class="nav-icon" alt="" />
                   <span class="nav-title">LLM Systems</span>
                 </a>
               </div>
@@ -733,14 +733,17 @@ jobs:
               <p>This guide covers <strong>80+ patterns</strong> across distributed systems, from foundational concepts to production-ready architectures used by companies like Netflix, Uber, and Stripe.</p>
               <div class="stats">
                 <div class="stat">
+                  <img src="/icons/foundations.svg" class="stat-icon" alt="" />
                   <span class="stat-num">16</span>
                   <span class="stat-label">Sections</span>
                 </div>
                 <div class="stat">
+                  <img src="/icons/caching.svg" class="stat-icon" alt="" />
                   <span class="stat-num">80+</span>
                   <span class="stat-label">Patterns</span>
                 </div>
                 <div class="stat">
+                  <img src="/icons/casestudies.svg" class="stat-icon" alt="" />
                   <span class="stat-num">10</span>
                   <span class="stat-label">Case Studies</span>
                 </div>
@@ -783,12 +786,11 @@ jobs:
           .nav-item:hover {
             background: var(--vp-c-brand-soft);
           }
-          .nav-num {
-            font-size: 0.75rem;
-            font-weight: 600;
-            color: var(--vp-c-brand-1);
+          .nav-icon {
+            width: 24px;
+            height: 24px;
             margin-right: 0.5rem;
-            min-width: 1.5rem;
+            flex-shrink: 0;
           }
           .nav-title {
             font-size: 0.875rem;
@@ -804,6 +806,11 @@ jobs:
           }
           .stat {
             text-align: center;
+          }
+          .stat-icon {
+            width: 32px;
+            height: 32px;
+            margin-bottom: 0.25rem;
           }
           .stat-num {
             display: block;
@@ -887,67 +894,67 @@ jobs:
               <h2>クイックナビゲーション</h2>
               <div class="nav-grid">
                 <a href="/ja/01-foundations/01-acid-transactions" class="nav-item">
-                  <span class="nav-num">01</span>
+                  <img src="/icons/foundations.svg" class="nav-icon" alt="" />
                   <span class="nav-title">基礎</span>
                 </a>
                 <a href="/ja/02-distributed-databases/01-single-leader-replication" class="nav-item">
-                  <span class="nav-num">02</span>
+                  <img src="/icons/database.svg" class="nav-icon" alt="" />
                   <span class="nav-title">分散データベース</span>
                 </a>
                 <a href="/ja/03-storage-engines/01-b-trees" class="nav-item">
-                  <span class="nav-num">03</span>
+                  <img src="/icons/storage.svg" class="nav-icon" alt="" />
                   <span class="nav-title">ストレージエンジン</span>
                 </a>
                 <a href="/ja/04-caching/01-cache-strategies" class="nav-item">
-                  <span class="nav-num">04</span>
+                  <img src="/icons/caching.svg" class="nav-icon" alt="" />
                   <span class="nav-title">キャッシング</span>
                 </a>
                 <a href="/ja/05-messaging/01-message-queues" class="nav-item">
-                  <span class="nav-num">05</span>
+                  <img src="/icons/messaging.svg" class="nav-icon" alt="" />
                   <span class="nav-title">メッセージング</span>
                 </a>
                 <a href="/ja/06-scaling/01-load-balancing" class="nav-item">
-                  <span class="nav-num">06</span>
+                  <img src="/icons/scaling.svg" class="nav-icon" alt="" />
                   <span class="nav-title">スケーリング</span>
                 </a>
                 <a href="/ja/07-real-time/01-polling" class="nav-item">
-                  <span class="nav-num">07</span>
+                  <img src="/icons/realtime.svg" class="nav-icon" alt="" />
                   <span class="nav-title">リアルタイム</span>
                 </a>
                 <a href="/ja/08-case-studies/01-twitter" class="nav-item">
-                  <span class="nav-num">08</span>
+                  <img src="/icons/casestudies.svg" class="nav-icon" alt="" />
                   <span class="nav-title">ケーススタディ</span>
                 </a>
                 <a href="/ja/09-whitepapers/01-mapreduce" class="nav-item">
-                  <span class="nav-num">09</span>
+                  <img src="/icons/whitepapers.svg" class="nav-icon" alt="" />
                   <span class="nav-title">論文</span>
                 </a>
                 <a href="/ja/10-security/01-authentication-fundamentals" class="nav-item">
-                  <span class="nav-num">10</span>
+                  <img src="/icons/security.svg" class="nav-icon" alt="" />
                   <span class="nav-title">セキュリティ</span>
                 </a>
                 <a href="/ja/11-observability/01-distributed-tracing" class="nav-item">
-                  <span class="nav-num">11</span>
+                  <img src="/icons/observability.svg" class="nav-icon" alt="" />
                   <span class="nav-title">オブザーバビリティ</span>
                 </a>
                 <a href="/ja/12-service-mesh/01-service-discovery" class="nav-item">
-                  <span class="nav-num">12</span>
+                  <img src="/icons/servicemesh.svg" class="nav-icon" alt="" />
                   <span class="nav-title">サービスメッシュ</span>
                 </a>
                 <a href="/ja/13-data-pipelines/01-batch-processing" class="nav-item">
-                  <span class="nav-num">13</span>
+                  <img src="/icons/datapipelines.svg" class="nav-icon" alt="" />
                   <span class="nav-title">データパイプライン</span>
                 </a>
                 <a href="/ja/14-search-systems/01-inverted-indexes" class="nav-item">
-                  <span class="nav-num">14</span>
+                  <img src="/icons/search.svg" class="nav-icon" alt="" />
                   <span class="nav-title">検索システム</span>
                 </a>
                 <a href="/ja/15-deployment/01-deployment-strategies" class="nav-item">
-                  <span class="nav-num">15</span>
+                  <img src="/icons/deployment.svg" class="nav-icon" alt="" />
                   <span class="nav-title">デプロイメント</span>
                 </a>
                 <a href="/ja/16-llm-systems/01-agent-fundamentals" class="nav-item">
-                  <span class="nav-num">16</span>
+                  <img src="/icons/llm.svg" class="nav-icon" alt="" />
                   <span class="nav-title">LLMシステム</span>
                 </a>
               </div>
@@ -958,14 +965,17 @@ jobs:
               <p>このガイドでは、Netflix、Uber、Stripeなどの企業で使用されている<strong>80以上のパターン</strong>を、基礎概念から本番運用アーキテクチャまでカバーしています。</p>
               <div class="stats">
                 <div class="stat">
+                  <img src="/icons/foundations.svg" class="stat-icon" alt="" />
                   <span class="stat-num">16</span>
                   <span class="stat-label">セクション</span>
                 </div>
                 <div class="stat">
+                  <img src="/icons/caching.svg" class="stat-icon" alt="" />
                   <span class="stat-num">80+</span>
                   <span class="stat-label">パターン</span>
                 </div>
                 <div class="stat">
+                  <img src="/icons/casestudies.svg" class="stat-icon" alt="" />
                   <span class="stat-num">10</span>
                   <span class="stat-label">ケーススタディ</span>
                 </div>
@@ -1008,12 +1018,11 @@ jobs:
           .nav-item:hover {
             background: var(--vp-c-brand-soft);
           }
-          .nav-num {
-            font-size: 0.75rem;
-            font-weight: 600;
-            color: var(--vp-c-brand-1);
+          .nav-icon {
+            width: 24px;
+            height: 24px;
             margin-right: 0.5rem;
-            min-width: 1.5rem;
+            flex-shrink: 0;
           }
           .nav-title {
             font-size: 0.875rem;
@@ -1029,6 +1038,11 @@ jobs:
           }
           .stat {
             text-align: center;
+          }
+          .stat-icon {
+            width: 32px;
+            height: 32px;
+            margin-bottom: 0.25rem;
           }
           .stat-num {
             display: block;
@@ -1174,6 +1188,119 @@ jobs:
           </svg>
           ICON_LLM
 
+          cat > public/icons/storage.svg << 'ICON_STORAGE'
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+            <!-- B-Tree / LSM Tree representation -->
+            <rect x="18" y="4" width="12" height="8" rx="2" fill="#E91E63"/>
+            <rect x="6" y="18" width="12" height="8" rx="2" fill="#FF4081"/>
+            <rect x="30" y="18" width="12" height="8" rx="2" fill="#FF4081"/>
+            <rect x="2" y="32" width="10" height="8" rx="2" fill="#F8BBD9"/>
+            <rect x="14" y="32" width="10" height="8" rx="2" fill="#F8BBD9"/>
+            <rect x="26" y="32" width="10" height="8" rx="2" fill="#F8BBD9"/>
+            <rect x="38" y="32" width="8" height="8" rx="2" fill="#F8BBD9"/>
+            <path d="M24 12v6M12 18v-2l12-4 12 4v2M7 32v-6l5-2M19 32v-6M31 32v-6M42 32v-6l-5-2" stroke="#E91E63" stroke-width="2"/>
+          </svg>
+          ICON_STORAGE
+
+          cat > public/icons/realtime.svg << 'ICON_REALTIME'
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+            <!-- Lightning bolt / Real-time pulse -->
+            <circle cx="24" cy="24" r="20" fill="none" stroke="#F8BBD9" stroke-width="2"/>
+            <circle cx="24" cy="24" r="14" fill="none" stroke="#FF4081" stroke-width="2"/>
+            <path d="M26 8l-4 14h8l-6 18" fill="#E91E63"/>
+            <path d="M26 8l-4 14h8l-6 18" stroke="#C2185B" stroke-width="1" fill="none"/>
+            <circle cx="8" cy="24" r="3" fill="#E91E63"/>
+            <circle cx="40" cy="24" r="3" fill="#E91E63"/>
+            <path d="M11 24h5M32 24h5" stroke="#E91E63" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          ICON_REALTIME
+
+          cat > public/icons/security.svg << 'ICON_SECURITY'
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+            <!-- Shield with lock -->
+            <path d="M24 4L6 12v12c0 11 8 18 18 22 10-4 18-11 18-22V12L24 4z" fill="#F8BBD9" stroke="#E91E63" stroke-width="2"/>
+            <path d="M24 4L6 12v12c0 11 8 18 18 22" fill="#FF4081"/>
+            <rect x="17" y="20" width="14" height="12" rx="2" fill="#E91E63"/>
+            <circle cx="24" cy="25" r="2" fill="#fff"/>
+            <path d="M24 25v4" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+            <path d="M19 20v-3a5 5 0 0110 0v3" stroke="#E91E63" stroke-width="2" fill="none"/>
+          </svg>
+          ICON_SECURITY
+
+          cat > public/icons/observability.svg << 'ICON_OBSERVABILITY'
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+            <!-- Eye with metrics -->
+            <ellipse cx="24" cy="24" rx="20" ry="12" fill="none" stroke="#E91E63" stroke-width="2"/>
+            <circle cx="24" cy="24" r="8" fill="#FF4081"/>
+            <circle cx="24" cy="24" r="4" fill="#E91E63"/>
+            <circle cx="24" cy="24" r="2" fill="#fff"/>
+            <path d="M4 24c4-8 11-12 20-12s16 4 20 12" stroke="#E91E63" stroke-width="2" fill="none"/>
+            <path d="M4 24c4 8 11 12 20 12s16-4 20-12" stroke="#E91E63" stroke-width="2" fill="none"/>
+            <!-- Metrics lines -->
+            <path d="M6 38l6-4 6 2 6-6 6 4 6-2 6 3" stroke="#FF4081" stroke-width="2" stroke-linecap="round" fill="none"/>
+          </svg>
+          ICON_OBSERVABILITY
+
+          cat > public/icons/servicemesh.svg << 'ICON_SERVICEMESH'
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+            <!-- Interconnected hexagon nodes -->
+            <circle cx="24" cy="8" r="6" fill="#E91E63"/>
+            <circle cx="8" cy="24" r="6" fill="#FF4081"/>
+            <circle cx="40" cy="24" r="6" fill="#FF4081"/>
+            <circle cx="12" cy="40" r="6" fill="#F8BBD9" stroke="#E91E63" stroke-width="2"/>
+            <circle cx="36" cy="40" r="6" fill="#F8BBD9" stroke="#E91E63" stroke-width="2"/>
+            <circle cx="24" cy="28" r="6" fill="#E91E63"/>
+            <!-- Connection lines -->
+            <path d="M24 14v8M14 24h4M30 24h4M18 34l4-4M28 32l4 4M12 34v-4M36 34v-4" stroke="#E91E63" stroke-width="2" stroke-linecap="round"/>
+            <path d="M20 12l-8 8M28 12l8 8" stroke="#FF4081" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          ICON_SERVICEMESH
+
+          cat > public/icons/datapipelines.svg << 'ICON_DATAPIPELINES'
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+            <!-- Data flow pipeline -->
+            <rect x="2" y="18" width="10" height="12" rx="2" fill="#E91E63"/>
+            <rect x="36" y="18" width="10" height="12" rx="2" fill="#E91E63"/>
+            <rect x="19" y="8" width="10" height="10" rx="2" fill="#FF4081"/>
+            <rect x="19" y="30" width="10" height="10" rx="2" fill="#FF4081"/>
+            <!-- Arrows/Flow -->
+            <path d="M12 24h7M29 13h-5l-5 5 5 6h5M29 35h-5l-5-5 5-6h5" stroke="#E91E63" stroke-width="2" fill="none"/>
+            <path d="M29 24h7" stroke="#E91E63" stroke-width="2"/>
+            <polygon points="34,21 34,27 38,24" fill="#E91E63"/>
+            <!-- Processing circles -->
+            <circle cx="24" cy="24" r="4" fill="#F8BBD9" stroke="#E91E63" stroke-width="2"/>
+          </svg>
+          ICON_DATAPIPELINES
+
+          cat > public/icons/search.svg << 'ICON_SEARCH'
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+            <!-- Magnifying glass over document -->
+            <rect x="6" y="4" width="24" height="32" rx="2" fill="#F8BBD9" stroke="#E91E63" stroke-width="2"/>
+            <path d="M12 12h12M12 18h12M12 24h8" stroke="#FF4081" stroke-width="2" stroke-linecap="round"/>
+            <circle cx="32" cy="32" r="10" fill="#fff" stroke="#E91E63" stroke-width="3"/>
+            <circle cx="32" cy="32" r="5" fill="#F8BBD9"/>
+            <path d="M39 39l6 6" stroke="#E91E63" stroke-width="3" stroke-linecap="round"/>
+          </svg>
+          ICON_SEARCH
+
+          cat > public/icons/deployment.svg << 'ICON_DEPLOYMENT'
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+            <!-- Rocket deployment -->
+            <path d="M24 4c-6 6-8 14-8 22h16c0-8-2-16-8-22z" fill="#E91E63"/>
+            <ellipse cx="24" cy="26" rx="8" ry="3" fill="#FF4081"/>
+            <circle cx="24" cy="16" r="4" fill="#F8BBD9"/>
+            <circle cx="24" cy="16" r="2" fill="#E91E63"/>
+            <!-- Rocket fins -->
+            <path d="M16 26l-4 8h6z" fill="#FF4081"/>
+            <path d="M32 26l4 8h-6z" fill="#FF4081"/>
+            <!-- Exhaust flames -->
+            <path d="M20 34l4 10 4-10" fill="#F8BBD9"/>
+            <path d="M22 34l2 6 2-6" fill="#FF4081"/>
+            <!-- Deployment arrow -->
+            <path d="M38 18v8M34 22l4 4 4-4" stroke="#E91E63" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          ICON_DEPLOYMENT
+
           # Generate custom theme CSS to match logo colors
           mkdir -p .vitepress/theme
           cat > .vitepress/theme/index.ts << 'THEME'
@@ -1271,6 +1398,105 @@ jobs:
             height: 0.6em;
             background: #E91E63;
             border-radius: 50% 50% 45% 45%;
+          }
+
+          /* Custom styled tip/warning/info containers */
+          .vp-doc .custom-block.tip {
+            border-color: #E91E63;
+            background-color: rgba(233, 30, 99, 0.08);
+          }
+
+          .vp-doc .custom-block.tip .custom-block-title {
+            color: #E91E63;
+          }
+
+          .vp-doc .custom-block.warning {
+            border-color: #FF4081;
+            background-color: rgba(255, 64, 129, 0.08);
+          }
+
+          .vp-doc .custom-block.warning .custom-block-title {
+            color: #D81B60;
+          }
+
+          .vp-doc .custom-block.info {
+            border-color: #F8BBD9;
+            background-color: rgba(248, 187, 217, 0.15);
+          }
+
+          .vp-doc .custom-block.info .custom-block-title {
+            color: #C2185B;
+          }
+
+          /* Sidebar group icons styling */
+          .VPSidebarItem .icon {
+            margin-right: 0.5rem;
+            width: 18px;
+            height: 18px;
+          }
+
+          /* Code blocks with pink accent */
+          .vp-doc div[class*='language-'] {
+            border-left: 3px solid #E91E63;
+          }
+
+          /* Table header styling */
+          .vp-doc table th {
+            background-color: rgba(233, 30, 99, 0.08);
+            border-bottom: 2px solid #E91E63;
+          }
+
+          /* Link styling */
+          .vp-doc a {
+            color: #E91E63;
+          }
+
+          .vp-doc a:hover {
+            color: #FF4081;
+          }
+
+          /* Scrollbar styling (webkit) */
+          ::-webkit-scrollbar-thumb {
+            background: #E91E63;
+            border-radius: 4px;
+          }
+
+          ::-webkit-scrollbar-thumb:hover {
+            background: #D81B60;
+          }
+
+          /* TL;DR section styling */
+          .vp-doc h2#tl-dr,
+          .vp-doc h2#tldr {
+            color: #E91E63;
+            border-bottom: 2px solid #E91E63;
+            padding-bottom: 0.5rem;
+          }
+
+          /* Feature cards on homepage - add subtle animation */
+          .VPFeature {
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+          }
+
+          .VPFeature:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(233, 30, 99, 0.15);
+          }
+
+          /* Footer branding */
+          .VPFooter .container {
+            position: relative;
+          }
+
+          .VPFooter .message::before {
+            content: '';
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            background: url('/logo.svg') no-repeat center;
+            background-size: contain;
+            margin-right: 0.5rem;
+            vertical-align: middle;
           }
           CUSTOMCSS
 
