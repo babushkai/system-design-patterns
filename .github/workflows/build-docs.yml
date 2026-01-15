@@ -252,6 +252,9 @@ jobs:
                 { text: 'Multi-Agent Systems', link: '/16-llm-systems/03-multi-agent-systems' },
                 { text: 'RAG Patterns', link: '/16-llm-systems/04-rag-patterns' },
                 { text: 'LLM Infrastructure', link: '/16-llm-systems/05-llm-infrastructure' },
+                { text: 'Prompt Engineering', link: '/16-llm-systems/06-prompt-engineering' },
+                { text: 'Fine-Tuning Patterns', link: '/16-llm-systems/07-fine-tuning-patterns' },
+                { text: 'Context Management', link: '/16-llm-systems/08-context-management' },
               ]
             },
             {

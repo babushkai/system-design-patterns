@@ -146,6 +146,9 @@ A hyper-detailed, framework-agnostic repository of system design patterns, conce
 - [Multi-Agent Systems](16-llm-systems/03-multi-agent-systems.md)
 - [RAG Patterns](16-llm-systems/04-rag-patterns.md)
 - [LLM Infrastructure](16-llm-systems/05-llm-infrastructure.md)
+- [Prompt Engineering](16-llm-systems/06-prompt-engineering.md)
+- [Fine-Tuning Patterns](16-llm-systems/07-fine-tuning-patterns.md)
+- [Context Management](16-llm-systems/08-context-management.md)
 
 ### Part 17: GraphQL
 - [GraphQL Fundamentals](17-graphql/01-graphql-fundamentals.md)
