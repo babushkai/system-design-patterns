@@ -218,8 +218,8 @@ jobs:
             "17-graphql/06-federation.md"
           )
           
-          # Collect existing chapters
-          echo "" > build/chapters.txt
+          # Collect existing chapters (no empty lines)
+          > build/chapters.txt
           for chapter in "${CHAPTERS[@]}"; do
             if [ -f "$chapter" ]; then
               echo "$chapter" >> build/chapters.txt
@@ -228,6 +228,9 @@ jobs:
 
       - name: Build PDF
         run: |
+          # Build file list with ../ prefix for paths relative to build/
+          CHAPTER_FILES=$(grep -v '^$' build/chapters.txt | sed 's|^|../|' | tr '\n' ' ')
+          
           cd build
           pandoc \
             --from=markdown \
@@ -241,13 +244,16 @@ jobs:
             --top-level-division=chapter \
             --highlight-style=tango \
             front-matter.md \
-            $(cat chapters.txt | tr '\n' ' ' | sed 's|[^ ]*|../&|g')
+            $CHAPTER_FILES
           
           echo "PDF built successfully!"
           ls -lh system-design-patterns.pdf
 
       - name: Build EPUB
         run: |
+          # Build file list with ../ prefix for paths relative to build/
+          CHAPTER_FILES=$(grep -v '^$' build/chapters.txt | sed 's|^|../|' | tr '\n' ' ')
+          
           cd build
           pandoc \
             --from=markdown \
@@ -259,7 +265,7 @@ jobs:
             --epub-chapter-level=1 \
             --highlight-style=tango \
             front-matter.md \
-            $(cat chapters.txt | tr '\n' ' ' | sed 's|[^ ]*|../&|g')
+            $CHAPTER_FILES
           
           echo "EPUB built successfully!"
           ls -lh system-design-patterns.epub
