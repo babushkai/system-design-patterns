@@ -1,0 +1,283 @@
+name: Build PDF/EPUB Book
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-book:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pandoc texlive-xetex texlive-fonts-recommended texlive-fonts-extra latexmk
+
+      - name: Generate Book Files
+        run: |
+          mkdir -p build
+          
+          # Generate front matter inline
+          cat > build/front-matter.md << 'FRONTMATTER'
+          ---
+          title: System Design Patterns
+          subtitle: A Comprehensive Guide to Distributed Systems
+          author: Babushkai
+          date: $(date +%Y-%m-%d)
+          ---
+
+          # Preface
+
+          This book is a comprehensive guide to system design patterns, covering everything from foundational concepts to advanced distributed systems architectures.
+
+          ## Who This Book Is For
+
+          - Software engineers preparing for system design interviews
+          - Architects designing scalable distributed systems
+          - Engineers seeking deep understanding of infrastructure patterns
+
+          ## How to Use This Book
+
+          The book is organized into logical parts, progressing from fundamentals to advanced topics. Each chapter includes:
+
+          - **TL;DR** - Quick summary of key concepts
+          - **Problem Statement** - Why this pattern exists
+          - **Architecture Diagrams** - Visual representations
+          - **Code Examples** - Practical implementations
+          - **Best Practices** - Production recommendations
+
+          \newpage
+          FRONTMATTER
+
+          # Generate metadata inline
+          cat > build/metadata.yaml << 'METADATA'
+          title: "System Design Patterns"
+          subtitle: "A Comprehensive Guide to Distributed Systems"
+          author: "Babushkai"
+          rights: "MIT License"
+          language: "en-US"
+          documentclass: report
+          papersize: a4
+          fontsize: 11pt
+          geometry:
+            - margin=1in
+          toc: true
+          toc-depth: 2
+          numbersections: true
+          colorlinks: true
+          linkcolor: blue
+          urlcolor: blue
+          header-includes:
+            - \usepackage{fancyhdr}
+            - \pagestyle{fancy}
+            - \fancyhead[L]{\leftmark}
+            - \fancyhead[R]{\thepage}
+            - \fancyfoot[C]{}
+          METADATA
+
+      - name: Collect Chapters
+        run: |
+          # Define chapter order
+          CHAPTERS=(
+            # Part 1: Foundations
+            "01-foundations/01-acid-transactions.md"
+            "01-foundations/02-isolation-levels.md"
+            "01-foundations/03-cap-theorem.md"
+            "01-foundations/04-consistency-models.md"
+            "01-foundations/05-distributed-time.md"
+            "01-foundations/06-failure-modes.md"
+            "01-foundations/07-network-partitions.md"
+            "01-foundations/08-idempotency.md"
+            # Part 2: Distributed Databases
+            "02-distributed-databases/01-single-leader-replication.md"
+            "02-distributed-databases/02-multi-leader-replication.md"
+            "02-distributed-databases/03-leaderless-replication.md"
+            "02-distributed-databases/04-conflict-resolution.md"
+            "02-distributed-databases/05-partitioning-strategies.md"
+            "02-distributed-databases/06-secondary-indexes.md"
+            "02-distributed-databases/07-distributed-transactions.md"
+            "02-distributed-databases/08-consensus-algorithms.md"
+            "02-distributed-databases/09-leader-election.md"
+            # Part 3: Storage Engines
+            "03-storage-engines/01-b-trees.md"
+            "03-storage-engines/02-lsm-trees.md"
+            "03-storage-engines/03-sstables-compaction.md"
+            "03-storage-engines/04-write-ahead-logging.md"
+            "03-storage-engines/05-bloom-filters.md"
+            "03-storage-engines/06-column-storage.md"
+            "03-storage-engines/07-data-encoding.md"
+            # Part 4: Caching
+            "04-caching/01-cache-strategies.md"
+            "04-caching/02-cache-invalidation.md"
+            "04-caching/03-distributed-caching.md"
+            "04-caching/04-cache-stampede.md"
+            "04-caching/05-multi-tier-caching.md"
+            "04-caching/06-cache-warming.md"
+            # Part 5: Messaging
+            "05-messaging/01-message-queues.md"
+            "05-messaging/02-pub-sub.md"
+            "05-messaging/03-message-ordering.md"
+            "05-messaging/04-delivery-guarantees.md"
+            "05-messaging/05-event-sourcing.md"
+            "05-messaging/06-cqrs.md"
+            "05-messaging/07-outbox-pattern.md"
+            "05-messaging/08-dead-letter-queues.md"
+            # Part 6: Scaling
+            "06-scaling/01-load-balancing.md"
+            "06-scaling/02-horizontal-vertical.md"
+            "06-scaling/03-database-sharding.md"
+            "06-scaling/04-cdn-architecture.md"
+            "06-scaling/05-rate-limiting.md"
+            "06-scaling/06-circuit-breakers.md"
+            "06-scaling/07-backpressure.md"
+            "06-scaling/08-auto-scaling.md"
+            # Part 7: Real-Time
+            "07-real-time/01-polling.md"
+            "07-real-time/02-long-polling.md"
+            "07-real-time/03-server-sent-events.md"
+            "07-real-time/04-websockets.md"
+            "07-real-time/05-webrtc.md"
+            "07-real-time/06-presence-systems.md"
+            # Part 8: Case Studies
+            "08-case-studies/01-twitter.md"
+            "08-case-studies/02-instagram.md"
+            "08-case-studies/03-uber.md"
+            "08-case-studies/04-netflix.md"
+            "08-case-studies/05-slack.md"
+            "08-case-studies/06-stripe.md"
+            "08-case-studies/07-dropbox.md"
+            "08-case-studies/08-discord.md"
+            "08-case-studies/09-google-maps.md"
+            "08-case-studies/10-whatsapp.md"
+            # Part 9: Whitepapers
+            "09-whitepapers/01-mapreduce.md"
+            "09-whitepapers/02-dynamo.md"
+            "09-whitepapers/03-bigtable.md"
+            "09-whitepapers/04-spanner.md"
+            "09-whitepapers/05-tao.md"
+            "09-whitepapers/06-kafka.md"
+            "09-whitepapers/07-raft.md"
+            "09-whitepapers/08-chubby.md"
+            "09-whitepapers/09-aurora.md"
+            "09-whitepapers/10-cockroachdb.md"
+            # Part 10: Security
+            "10-security/01-authentication-fundamentals.md"
+            "10-security/02-oauth2-openid-connect.md"
+            "10-security/03-jwt-tokens.md"
+            "10-security/04-api-security.md"
+            "10-security/05-zero-trust-architecture.md"
+            "10-security/06-encryption.md"
+            # Part 11: Observability
+            "11-observability/01-distributed-tracing.md"
+            "11-observability/02-metrics-monitoring.md"
+            "11-observability/03-logging.md"
+            "11-observability/04-alerting.md"
+            # Part 12: Service Mesh
+            "12-service-mesh/01-service-discovery.md"
+            "12-service-mesh/02-api-gateway.md"
+            "12-service-mesh/03-sidecar-pattern.md"
+            # Part 13: Data Pipelines
+            "13-data-pipelines/01-batch-processing.md"
+            "13-data-pipelines/02-stream-processing.md"
+            "13-data-pipelines/03-lambda-kappa-architecture.md"
+            # Part 14: Search Systems
+            "14-search-systems/01-inverted-indexes.md"
+            "14-search-systems/02-full-text-search.md"
+            "14-search-systems/03-vector-search.md"
+            "14-search-systems/04-ranking-algorithms.md"
+            "14-search-systems/05-search-relevance-tuning.md"
+            "14-search-systems/06-typeahead-autocomplete.md"
+            # Part 15: Deployment
+            "15-deployment/01-deployment-strategies.md"
+            "15-deployment/02-feature-flags.md"
+            # Part 16: LLM Systems
+            "16-llm-systems/01-agent-fundamentals.md"
+            "16-llm-systems/02-orchestration-patterns.md"
+            "16-llm-systems/03-multi-agent-systems.md"
+            "16-llm-systems/04-rag-patterns.md"
+            "16-llm-systems/05-llm-infrastructure.md"
+            "16-llm-systems/06-prompt-engineering.md"
+            "16-llm-systems/07-fine-tuning-patterns.md"
+            "16-llm-systems/08-context-management.md"
+            # Part 17: GraphQL
+            "17-graphql/01-graphql-fundamentals.md"
+            "17-graphql/02-schema-design.md"
+            "17-graphql/03-resolvers-data-fetching.md"
+            "17-graphql/04-caching-performance.md"
+            "17-graphql/05-subscriptions-realtime.md"
+            "17-graphql/06-federation.md"
+          )
+          
+          # Collect existing chapters
+          echo "" > build/chapters.txt
+          for chapter in "${CHAPTERS[@]}"; do
+            if [ -f "$chapter" ]; then
+              echo "$chapter" >> build/chapters.txt
+            fi
+          done
+
+      - name: Build PDF
+        run: |
+          cd build
+          pandoc \
+            --from=markdown \
+            --to=pdf \
+            --output=system-design-patterns.pdf \
+            --pdf-engine=xelatex \
+            --metadata-file=metadata.yaml \
+            --toc \
+            --toc-depth=2 \
+            --number-sections \
+            --top-level-division=chapter \
+            --highlight-style=tango \
+            front-matter.md \
+            $(cat chapters.txt | tr '\n' ' ' | sed 's|[^ ]*|../&|g')
+          
+          echo "PDF built successfully!"
+          ls -lh system-design-patterns.pdf
+
+      - name: Build EPUB
+        run: |
+          cd build
+          pandoc \
+            --from=markdown \
+            --to=epub \
+            --output=system-design-patterns.epub \
+            --metadata-file=metadata.yaml \
+            --toc \
+            --toc-depth=2 \
+            --epub-chapter-level=1 \
+            --highlight-style=tango \
+            front-matter.md \
+            $(cat chapters.txt | tr '\n' ' ' | sed 's|[^ ]*|../&|g')
+          
+          echo "EPUB built successfully!"
+          ls -lh system-design-patterns.epub
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: book-files
+          path: |
+            build/system-design-patterns.pdf
+            build/system-design-patterns.epub
+          retention-days: 30
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            build/system-design-patterns.pdf
+            build/system-design-patterns.epub
+          generate_release_notes: true
