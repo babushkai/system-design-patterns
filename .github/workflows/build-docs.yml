@@ -229,6 +229,10 @@ jobs:
               items: [
                 { text: 'Inverted Indexes', link: '/14-search-systems/01-inverted-indexes' },
                 { text: 'Full-Text Search', link: '/14-search-systems/02-full-text-search' },
+                { text: 'Vector Search', link: '/14-search-systems/03-vector-search' },
+                { text: 'Ranking Algorithms', link: '/14-search-systems/04-ranking-algorithms' },
+                { text: 'Search Relevance Tuning', link: '/14-search-systems/05-search-relevance-tuning' },
+                { text: 'Typeahead & Autocomplete', link: '/14-search-systems/06-typeahead-autocomplete' },
               ]
             },
             {
@@ -408,72 +412,76 @@ jobs:
               link: /16-llm-systems/01-agent-fundamentals
           ---
 
+          <script setup>
+          import { withBase } from 'vitepress'
+          </script>
+
           <div class="two-column-section">
             <div class="navigation-column">
               <h2>Quick Navigation</h2>
               <div class="nav-grid">
-                <a href="/system-design-patterns/01-foundations/01-acid-transactions" class="nav-item">
-                  <img src="/system-design-patterns/icons/foundations.svg" class="nav-icon" alt="" />
+                <a :href="withBase('/01-foundations/01-acid-transactions')" class="nav-item">
+                  <img :src="withBase('/icons/foundations.svg')" class="nav-icon" alt="" />
                   <span class="nav-title">Foundations</span>
                 </a>
-                <a href="/system-design-patterns/02-distributed-databases/01-single-leader-replication" class="nav-item">
-                  <img src="/system-design-patterns/icons/database.svg" class="nav-icon" alt="" />
+                <a :href="withBase('/02-distributed-databases/01-single-leader-replication')" class="nav-item">
+                  <img :src="withBase('/icons/database.svg')" class="nav-icon" alt="" />
                   <span class="nav-title">Distributed DBs</span>
                 </a>
-                <a href="/system-design-patterns/03-storage-engines/01-b-trees" class="nav-item">
-                  <img src="/system-design-patterns/icons/storage.svg" class="nav-icon" alt="" />
+                <a :href="withBase('/03-storage-engines/01-b-trees')" class="nav-item">
+                  <img :src="withBase('/icons/storage.svg')" class="nav-icon" alt="" />
                   <span class="nav-title">Storage Engines</span>
                 </a>
-                <a href="/system-design-patterns/04-caching/01-cache-strategies" class="nav-item">
-                  <img src="/system-design-patterns/icons/caching.svg" class="nav-icon" alt="" />
+                <a :href="withBase('/04-caching/01-cache-strategies')" class="nav-item">
+                  <img :src="withBase('/icons/caching.svg')" class="nav-icon" alt="" />
                   <span class="nav-title">Caching</span>
                 </a>
-                <a href="/system-design-patterns/05-messaging/01-message-queues" class="nav-item">
-                  <img src="/system-design-patterns/icons/messaging.svg" class="nav-icon" alt="" />
+                <a :href="withBase('/05-messaging/01-message-queues')" class="nav-item">
+                  <img :src="withBase('/icons/messaging.svg')" class="nav-icon" alt="" />
                   <span class="nav-title">Messaging</span>
                 </a>
-                <a href="/system-design-patterns/06-scaling/01-load-balancing" class="nav-item">
-                  <img src="/system-design-patterns/icons/scaling.svg" class="nav-icon" alt="" />
+                <a :href="withBase('/06-scaling/01-load-balancing')" class="nav-item">
+                  <img :src="withBase('/icons/scaling.svg')" class="nav-icon" alt="" />
                   <span class="nav-title">Scaling</span>
                 </a>
-                <a href="/system-design-patterns/07-real-time/01-polling" class="nav-item">
-                  <img src="/system-design-patterns/icons/realtime.svg" class="nav-icon" alt="" />
+                <a :href="withBase('/07-real-time/01-polling')" class="nav-item">
+                  <img :src="withBase('/icons/realtime.svg')" class="nav-icon" alt="" />
                   <span class="nav-title">Real-Time</span>
                 </a>
-                <a href="/system-design-patterns/08-case-studies/01-twitter" class="nav-item">
-                  <img src="/system-design-patterns/icons/casestudies.svg" class="nav-icon" alt="" />
+                <a :href="withBase('/08-case-studies/01-twitter')" class="nav-item">
+                  <img :src="withBase('/icons/casestudies.svg')" class="nav-icon" alt="" />
                   <span class="nav-title">Case Studies</span>
                 </a>
-                <a href="/system-design-patterns/09-whitepapers/01-mapreduce" class="nav-item">
-                  <img src="/system-design-patterns/icons/whitepapers.svg" class="nav-icon" alt="" />
+                <a :href="withBase('/09-whitepapers/01-mapreduce')" class="nav-item">
+                  <img :src="withBase('/icons/whitepapers.svg')" class="nav-icon" alt="" />
                   <span class="nav-title">Whitepapers</span>
                 </a>
-                <a href="/system-design-patterns/10-security/01-authentication-fundamentals" class="nav-item">
-                  <img src="/system-design-patterns/icons/security.svg" class="nav-icon" alt="" />
+                <a :href="withBase('/10-security/01-authentication-fundamentals')" class="nav-item">
+                  <img :src="withBase('/icons/security.svg')" class="nav-icon" alt="" />
                   <span class="nav-title">Security</span>
                 </a>
-                <a href="/system-design-patterns/11-observability/01-distributed-tracing" class="nav-item">
-                  <img src="/system-design-patterns/icons/observability.svg" class="nav-icon" alt="" />
+                <a :href="withBase('/11-observability/01-distributed-tracing')" class="nav-item">
+                  <img :src="withBase('/icons/observability.svg')" class="nav-icon" alt="" />
                   <span class="nav-title">Observability</span>
                 </a>
-                <a href="/system-design-patterns/12-service-mesh/01-service-discovery" class="nav-item">
-                  <img src="/system-design-patterns/icons/servicemesh.svg" class="nav-icon" alt="" />
+                <a :href="withBase('/12-service-mesh/01-service-discovery')" class="nav-item">
+                  <img :src="withBase('/icons/servicemesh.svg')" class="nav-icon" alt="" />
                   <span class="nav-title">Service Mesh</span>
                 </a>
-                <a href="/system-design-patterns/13-data-pipelines/01-batch-processing" class="nav-item">
-                  <img src="/system-design-patterns/icons/datapipelines.svg" class="nav-icon" alt="" />
+                <a :href="withBase('/13-data-pipelines/01-batch-processing')" class="nav-item">
+                  <img :src="withBase('/icons/datapipelines.svg')" class="nav-icon" alt="" />
                   <span class="nav-title">Data Pipelines</span>
                 </a>
-                <a href="/system-design-patterns/14-search-systems/01-inverted-indexes" class="nav-item">
-                  <img src="/system-design-patterns/icons/search.svg" class="nav-icon" alt="" />
+                <a :href="withBase('/14-search-systems/01-inverted-indexes')" class="nav-item">
+                  <img :src="withBase('/icons/search.svg')" class="nav-icon" alt="" />
                   <span class="nav-title">Search Systems</span>
                 </a>
-                <a href="/system-design-patterns/15-deployment/01-deployment-strategies" class="nav-item">
-                  <img src="/system-design-patterns/icons/deployment.svg" class="nav-icon" alt="" />
+                <a :href="withBase('/15-deployment/01-deployment-strategies')" class="nav-item">
+                  <img :src="withBase('/icons/deployment.svg')" class="nav-icon" alt="" />
                   <span class="nav-title">Deployment</span>
                 </a>
-                <a href="/system-design-patterns/16-llm-systems/01-agent-fundamentals" class="nav-item">
-                  <img src="/system-design-patterns/icons/llm.svg" class="nav-icon" alt="" />
+                <a :href="withBase('/16-llm-systems/01-agent-fundamentals')" class="nav-item">
+                  <img :src="withBase('/icons/llm.svg')" class="nav-icon" alt="" />
                   <span class="nav-title">LLM Systems</span>
                 </a>
               </div>
@@ -484,17 +492,17 @@ jobs:
               <p>This guide covers <strong>80+ patterns</strong> across distributed systems, from foundational concepts to production-ready architectures used by companies like Netflix, Uber, and Stripe.</p>
               <div class="stats">
                 <div class="stat">
-                  <img src="/system-design-patterns/icons/foundations.svg" class="stat-icon" alt="" />
+                  <img :src="withBase('/icons/foundations.svg')" class="stat-icon" alt="" />
                   <span class="stat-num">16</span>
                   <span class="stat-label">Sections</span>
                 </div>
                 <div class="stat">
-                  <img src="/system-design-patterns/icons/caching.svg" class="stat-icon" alt="" />
+                  <img :src="withBase('/icons/caching.svg')" class="stat-icon" alt="" />
                   <span class="stat-num">80+</span>
                   <span class="stat-label">Patterns</span>
                 </div>
                 <div class="stat">
-                  <img src="/system-design-patterns/icons/casestudies.svg" class="stat-icon" alt="" />
+                  <img :src="withBase('/icons/casestudies.svg')" class="stat-icon" alt="" />
                   <span class="stat-num">10</span>
                   <span class="stat-label">Case Studies</span>
                 </div>
