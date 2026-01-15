@@ -131,6 +131,10 @@ A hyper-detailed, framework-agnostic repository of system design patterns, conce
 ### Part 14: Search Systems
 - [Inverted Indexes](14-search-systems/01-inverted-indexes.md)
 - [Full-Text Search](14-search-systems/02-full-text-search.md)
+- [Vector Search](14-search-systems/03-vector-search.md)
+- [Ranking Algorithms](14-search-systems/04-ranking-algorithms.md)
+- [Search Relevance Tuning](14-search-systems/05-search-relevance-tuning.md)
+- [Typeahead and Autocomplete](14-search-systems/06-typeahead-autocomplete.md)
 
 ### Part 15: Deployment
 - [Deployment Strategies](15-deployment/01-deployment-strategies.md)
