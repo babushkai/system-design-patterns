@@ -417,15 +417,20 @@ jobs:
               details: Learn from Twitter, Netflix, Uber, Stripe, Discord, and other tech giants
               link: /08-case-studies/01-twitter
             - icon:
-                src: /icons/whitepapers.svg
-              title: Academic Whitepapers
-              details: Deep dives into MapReduce, Dynamo, Spanner, Kafka, Raft, and more
-              link: /09-whitepapers/01-mapreduce
-            - icon:
                 src: /icons/llm.svg
               title: LLM Systems
-              details: Agent architectures, orchestration patterns, RAG, and multi-agent systems
+              details: Agents, RAG, prompt engineering, fine-tuning, and context management
               link: /16-llm-systems/01-agent-fundamentals
+            - icon:
+                src: /icons/search.svg
+              title: Search Systems
+              details: Vector search, ranking algorithms, relevance tuning, and typeahead
+              link: /14-search-systems/01-inverted-indexes
+            - icon:
+                src: /icons/graphql.svg
+              title: GraphQL
+              details: Schema design, resolvers, DataLoader, subscriptions, and federation
+              link: /17-graphql/01-graphql-fundamentals
           ---
 
           <script setup>
@@ -500,21 +505,25 @@ jobs:
                   <img :src="withBase('/icons/llm.svg')" class="nav-icon" alt="" />
                   <span class="nav-title">LLM Systems</span>
                 </a>
+                <a :href="withBase('/17-graphql/01-graphql-fundamentals')" class="nav-item">
+                  <img :src="withBase('/icons/graphql.svg')" class="nav-icon" alt="" />
+                  <span class="nav-title">GraphQL</span>
+                </a>
               </div>
             </div>
             <div class="about-column">
               <h2>About Babushkai</h2>
               <p>Like the layers of a Matryoshka doll, great systems are built layer by layer - each component nesting perfectly within the next.</p>
-              <p>This guide covers <strong>80+ patterns</strong> across distributed systems, from foundational concepts to production-ready architectures used by companies like Netflix, Uber, and Stripe.</p>
+              <p>This guide covers <strong>100+ patterns</strong> across distributed systems, from foundational concepts to production-ready architectures used by companies like Netflix, Uber, and Stripe.</p>
               <div class="stats">
                 <div class="stat">
                   <img :src="withBase('/icons/foundations.svg')" class="stat-icon" alt="" />
-                  <span class="stat-num">16</span>
+                  <span class="stat-num">17</span>
                   <span class="stat-label">Sections</span>
                 </div>
                 <div class="stat">
                   <img :src="withBase('/icons/caching.svg')" class="stat-icon" alt="" />
-                  <span class="stat-num">80+</span>
+                  <span class="stat-num">100+</span>
                   <span class="stat-label">Patterns</span>
                 </div>
                 <div class="stat">
@@ -522,6 +531,12 @@ jobs:
                   <span class="stat-num">10</span>
                   <span class="stat-label">Case Studies</span>
                 </div>
+              </div>
+              <div class="download-section">
+                <a href="https://github.com/babushkai/system-design-patterns/releases/latest" class="download-btn" target="_blank">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                  Download PDF/EPUB
+                </a>
               </div>
             </div>
           </div>
@@ -596,6 +611,33 @@ jobs:
           .stat-label {
             font-size: 0.875rem;
             color: var(--vp-c-text-2);
+          }
+          .download-section {
+            margin-top: 2rem;
+            padding-top: 1.5rem;
+            border-top: 1px solid var(--vp-c-divider);
+          }
+          .download-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.75rem 1.5rem;
+            background: linear-gradient(135deg, #E91E63 0%, #FF4081 100%);
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 0.9rem;
+            transition: all 0.2s ease;
+            box-shadow: 0 4px 12px rgba(233, 30, 99, 0.3);
+          }
+          .download-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(233, 30, 99, 0.4);
+            color: white;
+          }
+          .download-btn svg {
+            flex-shrink: 0;
           }
           </style>
           HOMEPAGE
@@ -843,6 +885,33 @@ jobs:
             <path d="M38 18v8M34 22l4 4 4-4" stroke="#E91E63" stroke-width="2" stroke-linecap="round"/>
           </svg>
           ICON_DEPLOYMENT
+
+          cat > public/icons/graphql.svg << 'ICON_GRAPHQL'
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+            <!-- GraphQL logo inspired -->
+            <polygon points="24,4 42,14 42,34 24,44 6,34 6,14" fill="none" stroke="#E91E63" stroke-width="2"/>
+            <polygon points="24,10 36,17 36,31 24,38 12,31 12,17" fill="#F8BBD9" stroke="#E91E63" stroke-width="2"/>
+            <circle cx="24" cy="4" r="3" fill="#E91E63"/>
+            <circle cx="42" cy="14" r="3" fill="#FF4081"/>
+            <circle cx="42" cy="34" r="3" fill="#FF4081"/>
+            <circle cx="24" cy="44" r="3" fill="#E91E63"/>
+            <circle cx="6" cy="34" r="3" fill="#FF4081"/>
+            <circle cx="6" cy="14" r="3" fill="#FF4081"/>
+            <circle cx="24" cy="24" r="5" fill="#E91E63"/>
+            <path d="M24 10v8M24 30v8M12 17l8 4M28 27l8 4M12 31l8-4M28 21l8-4" stroke="#E91E63" stroke-width="1.5"/>
+          </svg>
+          ICON_GRAPHQL
+
+          cat > public/icons/whitepapers.svg << 'ICON_WHITEPAPERS_NEW'
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+            <path d="M12 4h18l10 10v30a2 2 0 01-2 2H12a2 2 0 01-2-2V6a2 2 0 012-2z" fill="#F8BBD9" stroke="#E91E63" stroke-width="2"/>
+            <path d="M30 4v10h10" fill="#E91E63"/>
+            <path d="M30 4l10 10" stroke="#E91E63" stroke-width="2"/>
+            <path d="M16 20h16M16 26h16M16 32h12" stroke="#E91E63" stroke-width="2" stroke-linecap="round"/>
+            <circle cx="36" cy="36" r="8" fill="#E91E63"/>
+            <path d="M33 36h6M36 33v6" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          ICON_WHITEPAPERS_NEW
 
           # Generate custom theme CSS to match logo colors
           mkdir -p .vitepress/theme
