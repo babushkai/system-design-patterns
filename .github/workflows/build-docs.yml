@@ -254,6 +254,18 @@ jobs:
                 { text: 'LLM Infrastructure', link: '/16-llm-systems/05-llm-infrastructure' },
               ]
             },
+            {
+              text: '17. GraphQL',
+              collapsed: true,
+              items: [
+                { text: 'GraphQL Fundamentals', link: '/17-graphql/01-graphql-fundamentals' },
+                { text: 'Schema Design', link: '/17-graphql/02-schema-design' },
+                { text: 'Resolvers & Data Fetching', link: '/17-graphql/03-resolvers-data-fetching' },
+                { text: 'Caching & Performance', link: '/17-graphql/04-caching-performance' },
+                { text: 'Subscriptions & Real-Time', link: '/17-graphql/05-subscriptions-realtime' },
+                { text: 'Federation', link: '/17-graphql/06-federation' },
+              ]
+            },
           ]
 
           export default defineConfig({
@@ -301,6 +313,7 @@ jobs:
                         { text: 'Search Systems', link: '/14-search-systems/01-inverted-indexes' },
                         { text: 'Deployment', link: '/15-deployment/01-deployment-strategies' },
                         { text: 'LLM Systems', link: '/16-llm-systems/01-agent-fundamentals' },
+                        { text: 'GraphQL', link: '/17-graphql/01-graphql-fundamentals' },
                       ]
                     },
                     { text: 'GitHub', link: 'https://github.com/babushkai/system-design-patterns' }

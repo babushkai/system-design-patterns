@@ -147,6 +147,14 @@ A hyper-detailed, framework-agnostic repository of system design patterns, conce
 - [RAG Patterns](16-llm-systems/04-rag-patterns.md)
 - [LLM Infrastructure](16-llm-systems/05-llm-infrastructure.md)
 
+### Part 17: GraphQL
+- [GraphQL Fundamentals](17-graphql/01-graphql-fundamentals.md)
+- [Schema Design](17-graphql/02-schema-design.md)
+- [Resolvers and Data Fetching](17-graphql/03-resolvers-data-fetching.md)
+- [Caching and Performance](17-graphql/04-caching-performance.md)
+- [Subscriptions and Real-Time](17-graphql/05-subscriptions-realtime.md)
+- [Federation](17-graphql/06-federation.md)
+
 ## Notation
 
 | Symbol | Meaning |
