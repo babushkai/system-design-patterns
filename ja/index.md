@@ -5,106 +5,103 @@ sidebar: false
 title: システム設計パターン
 ---
 
-<main class="sdp-shell">
-  <section class="sdp-cover" aria-labelledby="sdp-title">
-    <div class="sdp-cover-main">
-      <p class="sdp-kicker">分散システムリファレンス</p>
-      <h1 id="sdp-title">設計判断、障害モード、本番運用のトレードオフ。</h1>
-      <p class="sdp-lede">システムアーキテクチャを設計し、レビューするための高密度なフィールドガイドです。保証から始め、ストレージとメッセージングをたどり、実運用システムと論文で判断を比較します。</p>
-      <div class="sdp-cover-actions" aria-label="主要な導線">
-        <a class="sdp-primary" href="/system-design-patterns/ja/01-foundations/01-acid-transactions">ガイドを始める</a>
-        <a href="/system-design-patterns/ja/08-case-studies/01-twitter">ケーススタディ</a>
-        <a href="https://github.com/babushkai/system-design-patterns/releases/latest" target="_blank">PDF / EPUB</a>
-      </div>
+<main class="atlas">
+  <section class="atlas-hero" aria-labelledby="atlas-title">
+    <div class="atlas-traces" aria-hidden="true">
+      <span class="trace trace-a"></span>
+      <span class="trace trace-b"></span>
+      <span class="trace trace-c"></span>
+      <span class="trace trace-d"></span>
     </div>
-    <aside class="sdp-system-board" aria-label="システムマップ">
-      <div class="sdp-board-header">
-        <span>System map</span>
-        <strong>18セクション</strong>
-      </div>
-      <div class="sdp-node-grid">
-        <a class="sdp-node is-core" href="/system-design-patterns/ja/01-foundations/01-acid-transactions">基礎</a>
-        <a class="sdp-node is-data" href="/system-design-patterns/ja/02-distributed-databases/01-single-leader-replication">レプリケーション</a>
-        <a class="sdp-node is-data" href="/system-design-patterns/ja/03-storage-engines/01-b-trees">ストレージ</a>
-        <a class="sdp-node is-runtime" href="/system-design-patterns/ja/04-caching/01-cache-strategies">キャッシュ</a>
-        <a class="sdp-node is-runtime" href="/system-design-patterns/ja/05-messaging/01-message-queues">メッセージング</a>
-        <a class="sdp-node is-runtime" href="/system-design-patterns/ja/06-scaling/01-load-balancing">スケーリング</a>
-        <a class="sdp-node is-edge" href="/system-design-patterns/ja/07-real-time/01-polling">リアルタイム</a>
-        <a class="sdp-node is-edge" href="/system-design-patterns/ja/10-security/01-authentication-fundamentals">セキュリティ</a>
-        <a class="sdp-node is-edge" href="/system-design-patterns/ja/11-observability/01-distributed-tracing">運用</a>
-      </div>
-      <div class="sdp-board-footer">
-        <span>116記事</span>
-        <span>10ケーススタディ</span>
-        <span>10論文</span>
-      </div>
-    </aside>
-  </section>
-
-  <section class="sdp-lanes" aria-label="学習レーン">
-    <a href="/system-design-patterns/ja/01-foundations/01-acid-transactions">
-      <span>01</span>
-      <strong>保証から考える</strong>
-      <small>ACID、CAP、整合性、クロック、分断、冪等性。</small>
-    </a>
-    <a href="/system-design-patterns/ja/04-caching/01-cache-strategies">
-      <span>02</span>
-      <strong>データ経路を選ぶ</strong>
-      <small>ストレージエンジン、キャッシュ、キュー、ストリーム、インデックス、検索。</small>
-    </a>
-    <a href="/system-design-patterns/ja/06-scaling/01-load-balancing">
-      <span>03</span>
-      <strong>負荷の中で運用する</strong>
-      <small>スケーリング、リアルタイム配信、セキュリティ、オブザーバビリティ、デプロイ。</small>
-    </a>
-    <a href="/system-design-patterns/ja/08-case-studies/01-twitter">
-      <span>04</span>
-      <strong>本番システムで比較する</strong>
-      <small>ケーススタディ、ホワイトペーパー、LLMシステムの現代的な設計パターン。</small>
-    </a>
-  </section>
-
-  <section class="sdp-section-matrix" aria-labelledby="sdp-matrix-title">
-    <div class="sdp-section-heading">
-      <p class="sdp-kicker">判断領域で探す</p>
-      <h2 id="sdp-matrix-title">Architecture map</h2>
+    <div class="atlas-hero-inner">
+      <header class="atlas-copy">
+        <p class="atlas-kicker"><span>分散アーキテクチャ・フィールドブック</span><span>2026 / JP + EN</span></p>
+        <h1 id="atlas-title"><span>システム</span><span>設計</span><span>パターン</span></h1>
+        <p class="atlas-deck">リクエストが、保証、ストレージ、キュー、障害、復旧を通過する経路をたどる。設計レビューと本番判断のための実務リファレンス。</p>
+        <nav class="atlas-actions" aria-label="主要な導線">
+          <a class="atlas-start" href="/system-design-patterns/ja/01-foundations/01-acid-transactions">保証から始める <b>&rarr;</b></a>
+          <a href="/system-design-patterns/ja/08-case-studies/01-twitter">本番事例を読む</a>
+          <a href="https://github.com/babushkai/system-design-patterns/releases/latest" target="_blank">PDF / EPUB</a>
+        </nav>
+      </header>
+      <nav class="atlas-topology" aria-label="システム領域を探索">
+        <p class="atlas-map-title">サブシステムを選択 <strong>Live index / 09 nodes</strong></p>
+        <div class="atlas-map">
+          <span class="atlas-core"><strong>Request</strong><small>flow</small></span>
+          <a class="atlas-node atlas-n1" href="/system-design-patterns/ja/01-foundations/01-acid-transactions"><small>01</small><strong>保証</strong></a>
+          <a class="atlas-node atlas-n2" href="/system-design-patterns/ja/02-distributed-databases/01-single-leader-replication"><small>02</small><strong>複製</strong></a>
+          <a class="atlas-node atlas-n3" href="/system-design-patterns/ja/03-storage-engines/01-b-trees"><small>03</small><strong>永続化</strong></a>
+          <a class="atlas-node atlas-n4" href="/system-design-patterns/ja/04-caching/01-cache-strategies"><small>04</small><strong>キャッシュ</strong></a>
+          <a class="atlas-node atlas-n5" href="/system-design-patterns/ja/05-messaging/01-message-queues"><small>05</small><strong>キュー</strong></a>
+          <a class="atlas-node atlas-n6" href="/system-design-patterns/ja/06-scaling/01-load-balancing"><small>06</small><strong>拡張</strong></a>
+          <a class="atlas-node atlas-n7" href="/system-design-patterns/ja/07-real-time/01-polling"><small>07</small><strong>配信</strong></a>
+          <a class="atlas-node atlas-n8" href="/system-design-patterns/ja/10-security/01-authentication-fundamentals"><small>10</small><strong>保護</strong></a>
+          <a class="atlas-node atlas-n9" href="/system-design-patterns/ja/11-observability/01-distributed-tracing"><small>11</small><strong>観測</strong></a>
+        </div>
+      </nav>
     </div>
-    <div class="sdp-matrix">
-      <a href="/system-design-patterns/ja/01-foundations/01-acid-transactions"><span>01</span><strong>基礎</strong><small>トランザクション、整合性、時間、障害、分断</small></a>
-      <a href="/system-design-patterns/ja/02-distributed-databases/01-single-leader-replication"><span>02</span><strong>分散データベース</strong><small>レプリケーション、シャーディング、インデックス、合意</small></a>
-      <a href="/system-design-patterns/ja/03-storage-engines/01-b-trees"><span>03</span><strong>ストレージエンジン</strong><small>B木、LSM、WAL、エンコーディング、Bloom Filter</small></a>
-      <a href="/system-design-patterns/ja/04-caching/01-cache-strategies"><span>04</span><strong>キャッシュ</strong><small>無効化、スタンピード、ウォーミング、多層キャッシュ</small></a>
-      <a href="/system-design-patterns/ja/05-messaging/01-message-queues"><span>05</span><strong>メッセージング</strong><small>キュー、Pub/Sub、順序、Outbox、DLQ</small></a>
-      <a href="/system-design-patterns/ja/06-scaling/01-load-balancing"><span>06</span><strong>スケーリング</strong><small>ロードバランシング、レート制限、サーキットブレーカー、バックプレッシャー</small></a>
-      <a href="/system-design-patterns/ja/07-real-time/01-polling"><span>07</span><strong>リアルタイム</strong><small>Polling、SSE、WebSocket、WebRTC、プレゼンス</small></a>
-      <a href="/system-design-patterns/ja/08-case-studies/01-twitter"><span>08</span><strong>ケーススタディ</strong><small>Twitter、Uber、Netflix、Slack、Stripe、Discord</small></a>
-      <a href="/system-design-patterns/ja/09-whitepapers/01-mapreduce"><span>09</span><strong>ホワイトペーパー</strong><small>MapReduce、Dynamo、Spanner、Raft、Kafka</small></a>
-      <a href="/system-design-patterns/ja/10-security/01-authentication-fundamentals"><span>10</span><strong>セキュリティ</strong><small>認証、OAuth2、JWT、APIセキュリティ、ゼロトラスト</small></a>
-      <a href="/system-design-patterns/ja/11-observability/01-distributed-tracing"><span>11</span><strong>オブザーバビリティ</strong><small>トレーシング、メトリクス、ログ、アラート、運用</small></a>
-      <a href="/system-design-patterns/ja/12-service-mesh/01-service-discovery"><span>12</span><strong>サービスメッシュ</strong><small>ディスカバリ、ゲートウェイ、サイドカー、トラフィック制御</small></a>
-      <a href="/system-design-patterns/ja/13-data-pipelines/01-batch-processing"><span>13</span><strong>データパイプライン</strong><small>バッチ、ストリーム、Lambda、Kappa</small></a>
-      <a href="/system-design-patterns/ja/14-search-systems/01-inverted-indexes"><span>14</span><strong>検索システム</strong><small>インデックス、関連性、ランキング、オートコンプリート</small></a>
-      <a href="/system-design-patterns/ja/15-deployment/01-deployment-strategies"><span>15</span><strong>デプロイメント</strong><small>戦略、フィーチャーフラグ、ロールアウト</small></a>
-      <a href="/system-design-patterns/ja/16-llm-systems/01-agent-fundamentals"><span>16</span><strong>LLMシステム</strong><small>エージェント、RAG、プロンプト、基盤、コンテキスト</small></a>
-      <a href="/system-design-patterns/ja/17-graphql/01-graphql-fundamentals"><span>17</span><strong>GraphQL</strong><small>スキーマ、リゾルバー、キャッシュ、フェデレーション</small></a>
-      <a href="/system-design-patterns/ja/18-compound-engineering/01-compound-engineering-fundamentals"><span>18</span><strong>コンパウンドエンジニアリング</strong><small>AIネイティブ設計、コーディングエージェント、ワークフロー</small></a>
+    <div class="atlas-metrics" aria-label="リファレンス統計">
+      <p><strong>116</strong><span>記事</span></p>
+      <p><strong>18</strong><span>設計領域</span></p>
+      <p><strong>10</strong><span>本番事例</span></p>
+      <p><strong>10</strong><span>基礎論文</span></p>
     </div>
   </section>
 
-  <section class="sdp-reference-rail" aria-label="参照ショートカット">
-    <a href="/system-design-patterns/ja/09-whitepapers/07-raft"><span>Paper trail</span><strong>Raft、Dynamo、Spanner、Kafka</strong></a>
-    <a href="/system-design-patterns/ja/08-case-studies/04-netflix"><span>Production systems</span><strong>Netflix、Slack、Discord、Stripe</strong></a>
-    <a href="/system-design-patterns/ja/16-llm-systems/04-rag-patterns"><span>Modern systems</span><strong>RAG、エージェント、オーケストレーション</strong></a>
+  <section class="atlas-paths" aria-labelledby="atlas-paths-title">
+    <header class="atlas-heading">
+      <p>Reading routes</p>
+      <h2 id="atlas-paths-title">圧力がシステムを通過する経路をたどる。</h2>
+    </header>
+    <nav class="atlas-route-list">
+      <a href="/system-design-patterns/ja/01-foundations/01-acid-transactions"><span>01 / 保証</span><strong>規模の前に整合性</strong><small>ACID &rarr; CAP &rarr; レプリケーション</small><b>&rarr;</b></a>
+      <a href="/system-design-patterns/ja/04-caching/01-cache-strategies"><span>02 / レイテンシ</span><strong>ホットパス上のデータ</strong><small>ストレージ &rarr; キャッシュ &rarr; 無効化</small><b>&rarr;</b></a>
+      <a href="/system-design-patterns/ja/05-messaging/01-message-queues"><span>03 / スループット</span><strong>負荷下の配信</strong><small>キュー &rarr; 順序 &rarr; バックプレッシャー</small><b>&rarr;</b></a>
+      <a href="/system-design-patterns/ja/08-case-studies/01-twitter"><span>04 / 証拠</span><strong>本番のアーキテクチャ</strong><small>実例 &rarr; 論文 &rarr; トレードオフ</small><b>&rarr;</b></a>
+    </nav>
+  </section>
+
+  <section class="atlas-library" aria-labelledby="atlas-library-title">
+    <header class="atlas-heading atlas-heading-wide">
+      <p>Complete index</p>
+      <h2 id="atlas-library-title">フィールドブックの全領域。</h2>
+    </header>
+    <nav class="atlas-index" aria-label="アーキテクチャ領域">
+      <a href="/system-design-patterns/ja/01-foundations/01-acid-transactions"><span>01</span><strong>基礎</strong><small>保証と障害</small></a>
+      <a href="/system-design-patterns/ja/02-distributed-databases/01-single-leader-replication"><span>02</span><strong>分散データベース</strong><small>複製と合意</small></a>
+      <a href="/system-design-patterns/ja/03-storage-engines/01-b-trees"><span>03</span><strong>ストレージエンジン</strong><small>索引と永続化</small></a>
+      <a href="/system-design-patterns/ja/04-caching/01-cache-strategies"><span>04</span><strong>キャッシュ</strong><small>レイテンシと無効化</small></a>
+      <a href="/system-design-patterns/ja/05-messaging/01-message-queues"><span>05</span><strong>メッセージング</strong><small>配信と順序</small></a>
+      <a href="/system-design-patterns/ja/06-scaling/01-load-balancing"><span>06</span><strong>スケーリング</strong><small>負荷と保護</small></a>
+      <a href="/system-design-patterns/ja/07-real-time/01-polling"><span>07</span><strong>リアルタイム</strong><small>ストリームとプレゼンス</small></a>
+      <a href="/system-design-patterns/ja/08-case-studies/01-twitter"><span>08</span><strong>ケーススタディ</strong><small>本番の証拠</small></a>
+      <a href="/system-design-patterns/ja/09-whitepapers/01-mapreduce"><span>09</span><strong>ホワイトペーパー</strong><small>基礎設計</small></a>
+      <a href="/system-design-patterns/ja/10-security/01-authentication-fundamentals"><span>10</span><strong>セキュリティ</strong><small>信頼と認証</small></a>
+      <a href="/system-design-patterns/ja/11-observability/01-distributed-tracing"><span>11</span><strong>オブザーバビリティ</strong><small>追跡と対応</small></a>
+      <a href="/system-design-patterns/ja/12-service-mesh/01-service-discovery"><span>12</span><strong>サービスメッシュ</strong><small>実行時トラフィック</small></a>
+      <a href="/system-design-patterns/ja/13-data-pipelines/01-batch-processing"><span>13</span><strong>データパイプライン</strong><small>バッチとストリーム</small></a>
+      <a href="/system-design-patterns/ja/14-search-systems/01-inverted-indexes"><span>14</span><strong>検索システム</strong><small>検索と順位付け</small></a>
+      <a href="/system-design-patterns/ja/15-deployment/01-deployment-strategies"><span>15</span><strong>デプロイメント</strong><small>リリースと復旧</small></a>
+      <a href="/system-design-patterns/ja/16-llm-systems/01-agent-fundamentals"><span>16</span><strong>LLMシステム</strong><small>エージェントと文脈</small></a>
+      <a href="/system-design-patterns/ja/17-graphql/01-graphql-fundamentals"><span>17</span><strong>GraphQL</strong><small>スキーマと連携</small></a>
+      <a href="/system-design-patterns/ja/18-compound-engineering/01-compound-engineering-fundamentals"><span>18</span><strong>コンパウンドエンジニアリング</strong><small>AIネイティブワークフロー</small></a>
+    </nav>
+  </section>
+
+  <section class="atlas-evidence" aria-labelledby="atlas-evidence-title">
+    <header>
+      <p>Evidence shelf</p>
+      <h2 id="atlas-evidence-title">運用済みシステムで設計を比較する。</h2>
+    </header>
+    <nav>
+      <a href="/system-design-patterns/ja/09-whitepapers/07-raft"><span>Paper trail</span><strong>Raft、Dynamo、Spanner、Kafka</strong><b>&rarr;</b></a>
+      <a href="/system-design-patterns/ja/08-case-studies/04-netflix"><span>Production systems</span><strong>Netflix、Slack、Discord、Stripe</strong><b>&rarr;</b></a>
+      <a href="/system-design-patterns/ja/16-llm-systems/04-rag-patterns"><span>Modern systems</span><strong>RAG、エージェント、オーケストレーション</strong><b>&rarr;</b></a>
+    </nav>
   </section>
 </main>
 
 <style>
-:root {
-  --sdp-c-data: #2563EB;
-  --sdp-c-stream: #0F766E;
-  --sdp-c-decision: #D97706;
-}
-
 .VPDoc .content,
 .VPDoc .content-container {
   width: 100% !important;
@@ -121,17 +118,12 @@ title: システム設計パターン
   box-sizing: border-box;
   overflow-x: clip;
 }
-.VPDoc .main {
-  width: 100% !important;
-  min-width: 0 !important;
-  padding: 0 !important;
-  box-sizing: border-box;
-  overflow-x: clip;
-}
+.VPDoc .main,
 .VPDoc {
   width: 100% !important;
   min-width: 0 !important;
   padding: 0 !important;
+  box-sizing: border-box;
   overflow-x: clip;
 }
 .vp-doc h1,
@@ -139,271 +131,582 @@ title: システム設計パターン
 .vp-doc p {
   margin: 0;
 }
-.sdp-shell {
-  box-sizing: border-box;
-  min-height: 100vh;
+.atlas {
+  --atlas-bg: #101211;
+  --atlas-ink: #f2f2ed;
+  --atlas-muted: #acb0aa;
+  --atlas-rule: rgba(242, 242, 237, 0.15);
+  --atlas-paper: #f3f3ee;
+  --atlas-black: #111311;
+  --atlas-flare: #fa563c;
+  --atlas-mint: #16c49b;
+  --atlas-blue: #4d7fff;
+  --atlas-yellow: #ffc23c;
   width: 100%;
   margin: -32px 0 0;
-  padding: 72px clamp(20px, 4vw, 64px) 56px;
   overflow-x: clip;
-  color: var(--vp-c-text-1);
-  background:
-    linear-gradient(90deg, color-mix(in srgb, var(--vp-c-brand-1) 10%, transparent) 1px, transparent 1px),
-    linear-gradient(0deg, color-mix(in srgb, var(--vp-c-brand-2) 8%, transparent) 1px, transparent 1px),
-    var(--vp-c-bg);
-  background-size: 44px 44px;
+  background: var(--atlas-bg);
+  color: var(--atlas-ink);
 }
-.sdp-cover {
+.atlas a {
+  color: inherit;
+  text-decoration: none;
+}
+.atlas-hero {
+  position: relative;
+  min-height: clamp(610px, calc(100svh - 116px), 790px);
+  padding: clamp(30px, 4vw, 52px) clamp(20px, 5vw, 72px) 96px;
+  overflow: hidden;
+  background: var(--atlas-bg);
+  border-bottom: 1px solid var(--atlas-rule);
+}
+.atlas-traces {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    repeating-linear-gradient(90deg, transparent 0 79px, rgba(242, 242, 237, 0.045) 79px 80px),
+    repeating-linear-gradient(0deg, transparent 0 79px, rgba(242, 242, 237, 0.045) 79px 80px);
+}
+.trace {
+  position: absolute;
+  display: block;
+  background: var(--atlas-rule);
+}
+.trace::after {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  content: '';
+  background: var(--atlas-flare);
+  animation: atlas-signal 5s linear infinite;
+}
+.trace-a { top: 22%; right: 4%; width: 44%; height: 1px; }
+.trace-a::after { top: -4px; left: 0; }
+.trace-b { top: 13%; right: 32%; width: 1px; height: 63%; }
+.trace-b::after { top: 0; left: -4px; animation-delay: -1.2s; background: var(--atlas-mint); }
+.trace-c { bottom: 18%; right: 8%; width: 38%; height: 1px; }
+.trace-c::after { top: -4px; left: 0; animation-delay: -2.4s; background: var(--atlas-yellow); }
+.trace-d { top: 35%; right: 12%; width: 1px; height: 43%; }
+.trace-d::after { top: 0; left: -4px; animation-delay: -3.1s; background: var(--atlas-blue); }
+@keyframes atlas-signal {
+  0% { transform: translate(0, 0); opacity: 0; }
+  8% { opacity: 1; }
+  92% { opacity: 1; }
+  100% { transform: translate(190px, 0); opacity: 0; }
+}
+.trace-b::after,
+.trace-d::after {
+  animation-name: atlas-signal-vertical;
+}
+@keyframes atlas-signal-vertical {
+  0% { transform: translate(0, 0); opacity: 0; }
+  8% { opacity: 1; }
+  92% { opacity: 1; }
+  100% { transform: translate(0, 190px); opacity: 0; }
+}
+.atlas-hero-inner {
+  position: relative;
+  z-index: 1;
   display: grid;
-  width: 100%;
-  min-width: 0;
-  grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
-  gap: clamp(28px, 5vw, 72px);
-  align-items: stretch;
-  max-width: 1240px;
+  grid-template-columns: minmax(390px, 0.9fr) minmax(450px, 1.05fr);
+  gap: clamp(38px, 5vw, 84px);
+  max-width: 1360px;
   margin: 0 auto;
 }
-.sdp-cover-main {
+.atlas-copy {
+  align-self: center;
   min-width: 0;
-  padding: clamp(28px, 5vw, 64px);
-  border: 1px solid var(--vp-c-divider);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--vp-c-bg) 92%, var(--vp-c-bg-soft));
 }
-.sdp-kicker {
-  color: var(--vp-c-brand-2);
-  font-size: 0.8rem;
-  font-weight: 800;
+.atlas-kicker {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  max-width: 600px;
+  margin-bottom: clamp(26px, 4vw, 42px) !important;
+  color: var(--atlas-mint);
+  font-size: 0.73rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.atlas-copy h1 {
+  margin: 0;
+  color: var(--atlas-ink);
+  font-size: clamp(4.25rem, 7.7vw, 7.2rem);
+  font-weight: 780;
+  line-height: 0.86;
   letter-spacing: 0;
   text-transform: uppercase;
 }
-.sdp-cover h1 {
-  white-space: normal;
-  max-width: 900px;
-  margin-top: 18px;
-  font-size: clamp(2.6rem, 6vw, 6.2rem);
-  line-height: 0.95;
-  letter-spacing: 0;
+.atlas-copy h1 span {
+  display: block;
+  white-space: nowrap;
 }
-.sdp-lede {
-  max-width: 720px;
-  margin-top: 24px !important;
-  color: var(--vp-c-text-2);
-  font-size: clamp(1rem, 1.5vw, 1.22rem);
-  line-height: 1.7;
+.atlas-copy h1 span:nth-child(2) {
+  color: var(--atlas-flare);
 }
-.sdp-cover-actions {
+.atlas-deck {
+  max-width: 510px;
+  margin-top: clamp(26px, 4vw, 36px) !important;
+  color: var(--atlas-muted);
+  font-size: 1.04rem;
+  line-height: 1.65;
+}
+.atlas-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
+  gap: 12px 18px;
+  align-items: center;
   margin-top: 34px;
 }
-.sdp-cover-actions a,
-.sdp-reference-rail a {
-  display: block;
-  padding: 0.82rem 1rem;
-  border: 1px solid var(--vp-c-divider);
-  border-radius: 8px;
-  color: var(--vp-c-text-1);
-  text-decoration: none;
-  background: var(--vp-c-bg);
+.atlas-actions a {
+  color: var(--atlas-muted);
+  font-size: 0.94rem;
+  font-weight: 600;
 }
-.sdp-cover-actions a:hover,
-.sdp-reference-rail a:hover,
-.sdp-lanes a:hover,
-.sdp-matrix a:hover {
-  border-color: var(--vp-c-brand-1);
+.atlas-actions a:hover {
+  color: var(--atlas-ink);
 }
-.sdp-cover-actions .sdp-primary {
-  border-color: var(--vp-c-brand-1);
-  color: #fff;
-  background: var(--vp-c-brand-1);
+.atlas-actions .atlas-start {
+  display: inline-flex;
+  align-items: center;
+  gap: 26px;
+  padding: 17px 20px;
+  border-radius: 4px;
+  color: var(--atlas-black);
+  background: var(--atlas-yellow);
 }
-.sdp-system-board {
+.atlas-actions .atlas-start:hover {
+  color: var(--atlas-black);
+  background: var(--atlas-ink);
+}
+.atlas-actions b,
+.atlas-route-list b,
+.atlas-evidence b {
+  font-size: 1.2rem;
+  font-weight: 400;
+}
+.atlas-topology {
+  align-self: stretch;
+  min-height: 560px;
+}
+.atlas-map-title {
   display: flex;
-  min-width: 0;
-  min-height: 460px;
-  flex-direction: column;
   justify-content: space-between;
-  overflow: hidden;
-  padding: 22px;
-  border: 1px solid var(--vp-c-divider);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--vp-c-bg-soft) 80%, transparent);
-}
-.sdp-board-header,
-.sdp-board-footer {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 12px;
-  color: var(--vp-c-text-2);
-  font-size: 0.85rem;
-}
-.sdp-board-header strong {
-  color: var(--vp-c-text-1);
-}
-.sdp-board-footer {
-  grid-template-columns: repeat(3, 1fr);
-}
-.sdp-node-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-  margin: 28px 0;
-}
-.sdp-node {
-  min-height: 84px;
-  padding: 12px;
-  border: 1px solid var(--vp-c-divider);
-  border-radius: 8px;
-  color: var(--vp-c-text-1);
+  color: var(--atlas-muted);
+  font-size: 0.73rem;
   font-weight: 700;
-  overflow-wrap: anywhere;
-  text-decoration: none;
-  background: var(--vp-c-bg);
-}
-.sdp-node.is-core { border-top: 4px solid var(--vp-c-brand-1); }
-.sdp-node.is-data { border-top: 4px solid var(--sdp-c-data); }
-.sdp-node.is-runtime { border-top: 4px solid var(--sdp-c-stream); }
-.sdp-node.is-edge { border-top: 4px solid var(--sdp-c-decision); }
-.sdp-lanes,
-.sdp-reference-rail {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 1px;
-  max-width: 1240px;
-  margin: 28px auto 0;
-  border: 1px solid var(--vp-c-divider);
-  border-radius: 8px;
-  overflow: hidden;
-  background: var(--vp-c-divider);
-}
-.sdp-lanes a {
-  display: block;
-  min-height: 160px;
-  padding: 20px;
-  background: var(--vp-c-bg);
-  color: var(--vp-c-text-1);
-  text-decoration: none;
-}
-.sdp-lanes span,
-.sdp-matrix span,
-.sdp-reference-rail span {
-  display: block;
-  color: var(--vp-c-brand-2);
-  font-size: 0.75rem;
-  font-weight: 800;
   text-transform: uppercase;
 }
-.sdp-lanes strong,
-.sdp-matrix strong,
-.sdp-reference-rail strong {
-  display: block;
-  margin-top: 10px;
-  font-size: 1.04rem;
+.atlas-map-title strong {
+  color: var(--atlas-yellow);
+  font-weight: inherit;
 }
-.sdp-lanes small,
-.sdp-matrix small {
-  display: block;
-  margin-top: 12px;
-  color: var(--vp-c-text-2);
-  line-height: 1.6;
+.atlas-map {
+  position: relative;
+  height: 530px;
+  margin-top: 18px;
 }
-.sdp-section-matrix {
-  max-width: 1240px;
-  margin: 72px auto 0;
+.atlas-map::before,
+.atlas-map::after {
+  position: absolute;
+  content: '';
+  pointer-events: none;
 }
-.sdp-section-heading {
+.atlas-map::before {
+  inset: 74px 78px 68px 56px;
+  border: 1px solid rgba(22, 196, 155, 0.35);
+}
+.atlas-map::after {
+  top: 48%;
+  left: 48%;
+  width: 300px;
+  height: 300px;
+  border: 1px dashed rgba(250, 86, 60, 0.42);
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+.atlas-core {
+  position: absolute;
+  z-index: 2;
+  top: 48%;
+  left: 48%;
   display: flex;
-  align-items: end;
-  justify-content: space-between;
-  gap: 24px;
-  margin-bottom: 18px;
+  width: 108px;
+  height: 108px;
+  flex-direction: column;
+  justify-content: center;
+  border: 1px solid var(--atlas-flare);
+  color: var(--atlas-ink);
+  text-align: center;
+  background: var(--atlas-black);
+  transform: translate(-50%, -50%);
 }
-.sdp-section-heading h2 {
-  font-size: clamp(2rem, 4vw, 4rem);
-  line-height: 1;
-  letter-spacing: 0;
+.atlas-core strong {
+  color: var(--atlas-flare);
+  font-size: 1.05rem;
 }
-.sdp-matrix {
+.atlas-core small {
+  color: var(--atlas-muted);
+  text-transform: uppercase;
+}
+.atlas-node {
+  position: absolute;
+  z-index: 2;
+  display: block;
+  min-width: 108px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--atlas-blue);
+  background: rgba(16, 18, 17, 0.92);
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.atlas-node:hover {
+  background: #252825;
+  border-color: var(--atlas-yellow);
+}
+.atlas-node small {
+  display: block;
+  color: var(--atlas-muted);
+  font-size: 0.68rem;
+}
+.atlas-node strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.9rem;
+}
+.atlas-n1 { top: 7%; left: 0; border-color: var(--atlas-mint); }
+.atlas-n2 { top: 4%; right: 10%; border-color: var(--atlas-blue); }
+.atlas-n3 { top: 36%; right: 0; border-color: var(--atlas-blue); }
+.atlas-n4 { bottom: 13%; right: 10%; border-color: var(--atlas-yellow); }
+.atlas-n5 { bottom: 4%; left: 33%; border-color: var(--atlas-mint); }
+.atlas-n6 { bottom: 17%; left: 0; border-color: var(--atlas-flare); }
+.atlas-n7 { top: 42%; left: 0; border-color: var(--atlas-mint); }
+.atlas-n8 { top: 20%; left: 35%; border-color: var(--atlas-yellow); }
+.atlas-n9 { top: 62%; right: 2%; border-color: var(--atlas-flare); }
+.atlas-metrics {
+  position: absolute;
+  z-index: 2;
+  right: clamp(20px, 5vw, 72px);
+  bottom: 0;
+  left: clamp(20px, 5vw, 72px);
   display: grid;
-  min-width: 0;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  max-width: 1360px;
+  margin: 0 auto;
+  border-top: 1px solid var(--atlas-rule);
+}
+.atlas-metrics p {
+  display: flex;
+  gap: 14px;
+  align-items: baseline;
+  padding: 19px 0;
+}
+.atlas-metrics p + p {
+  padding-left: clamp(14px, 3vw, 30px);
+  border-left: 1px solid var(--atlas-rule);
+}
+.atlas-metrics strong {
+  color: var(--atlas-yellow);
+  font-size: 1.55rem;
+}
+.atlas-metrics span {
+  color: var(--atlas-muted);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+}
+.atlas-paths,
+.atlas-library,
+.atlas-evidence {
+  padding: clamp(48px, 7vw, 88px) clamp(20px, 5vw, 72px);
+  background: var(--atlas-paper);
+  color: var(--atlas-black);
+}
+.atlas-heading {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 650px);
+  gap: clamp(24px, 4vw, 64px);
+  max-width: 1360px;
+  margin: 0 auto clamp(38px, 5vw, 62px);
+}
+.atlas-heading p,
+.atlas-evidence header p {
+  color: var(--atlas-flare);
+  font-size: 0.76rem;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+.atlas-heading h2,
+.atlas-evidence h2 {
+  font-size: clamp(2.15rem, 4vw, 3.8rem);
+  font-weight: 650;
+  line-height: 1.05;
+}
+.atlas-route-list {
+  display: grid;
+  max-width: 1360px;
+  margin: 0 auto;
+  border-top: 2px solid var(--atlas-black);
+}
+.atlas-route-list a {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.8fr) minmax(220px, 1fr) minmax(220px, 1.1fr) 34px;
+  gap: 24px;
+  align-items: center;
+  min-height: 88px;
+  border-bottom: 1px solid #d0d2ca;
+  transition: background 0.15s ease;
+}
+.atlas-route-list a:hover {
+  background: #e5e7df;
+}
+.atlas-route-list span {
+  color: var(--atlas-flare);
+  font-size: 0.74rem;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+.atlas-route-list strong {
+  font-size: 1.16rem;
+}
+.atlas-route-list small {
+  color: #5d625d;
+  font-size: 0.92rem;
+}
+.atlas-library {
+  border-top: 1px solid #d0d2ca;
+  background: #fafaf7;
+}
+.atlas-index {
+  display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 1px;
-  border: 1px solid var(--vp-c-divider);
-  border-radius: 8px;
-  overflow: hidden;
-  background: var(--vp-c-divider);
+  max-width: 1360px;
+  margin: 0 auto;
+  border-top: 2px solid var(--atlas-black);
 }
-.sdp-matrix a {
-  min-height: 150px;
-  padding: 18px;
-  color: var(--vp-c-text-1);
-  text-decoration: none;
-  background: var(--vp-c-bg);
+.atlas-index a {
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  gap: 0 14px;
+  align-content: center;
+  min-height: 98px;
+  padding-right: 24px;
+  border-bottom: 1px solid #d0d2ca;
 }
-.sdp-reference-rail {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  margin-bottom: 20px;
+.atlas-index a:not(:nth-child(3n + 1)) {
+  padding-left: 24px;
+  border-left: 1px solid #d0d2ca;
 }
-@media (max-width: 1080px) {
-  .sdp-cover {
+.atlas-index a:hover strong {
+  color: var(--atlas-flare);
+}
+.atlas-index span {
+  grid-row: span 2;
+  color: var(--atlas-flare);
+  font-size: 0.8rem;
+  font-weight: 750;
+}
+.atlas-index strong {
+  font-size: 1.03rem;
+}
+.atlas-index small {
+  margin-top: 6px;
+  color: #606560;
+}
+.atlas-evidence {
+  display: grid;
+  grid-template-columns: minmax(240px, 0.75fr) minmax(420px, 1.4fr);
+  gap: clamp(28px, 7vw, 100px);
+  background: var(--atlas-yellow);
+}
+.atlas-evidence nav {
+  border-top: 2px solid var(--atlas-black);
+}
+.atlas-evidence a {
+  display: grid;
+  grid-template-columns: 145px 1fr 30px;
+  gap: 20px;
+  align-items: center;
+  min-height: 76px;
+  border-bottom: 1px solid rgba(17, 19, 17, 0.25);
+}
+.atlas-evidence span {
+  font-size: 0.74rem;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+@media (max-width: 1020px) {
+  .atlas-hero-inner {
     grid-template-columns: 1fr;
   }
-  .sdp-system-board {
-    min-height: auto;
+  .atlas-hero {
+    padding-bottom: 92px;
   }
-  .sdp-lanes {
+  .atlas-topology {
+    min-height: 420px;
+  }
+  .atlas-map {
+    height: 400px;
+    max-width: 650px;
+  }
+  .atlas-index {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-  .sdp-matrix {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .atlas-index a:nth-child(3n + 1) {
+    padding-left: 24px;
+    border-left: 1px solid #d0d2ca;
+  }
+  .atlas-index a:nth-child(2n + 1) {
+    padding-left: 0;
+    border-left: none;
   }
 }
 @media (max-width: 680px) {
-  .sdp-shell {
+  .atlas {
     margin-top: -24px;
-    padding: 32px 16px 40px;
-    background-size: 32px 32px;
   }
-  .sdp-cover-main {
-    padding: 22px;
+  .atlas-hero {
+    min-height: 0;
+    padding: 34px 16px;
   }
-  .sdp-cover h1 {
-    font-size: clamp(1.82rem, 9.4vw, 2.3rem);
-    line-height: 1.02;
-    overflow-wrap: anywhere;
-    word-break: break-word;
+  .atlas-traces {
+    opacity: 0.62;
+    background-size: 48px 48px;
   }
-  .sdp-lede {
-    font-size: 0.98rem;
+  .trace-a,
+  .trace-c {
+    width: 92%;
   }
-  .sdp-cover-actions {
-    flex-direction: column;
-  }
-  .sdp-cover-actions a {
-    text-align: center;
-  }
-  .sdp-node-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .sdp-board-footer,
-  .sdp-board-header,
-  .sdp-lanes,
-  .sdp-matrix,
-  .sdp-reference-rail {
-    grid-template-columns: 1fr;
-  }
-  .sdp-section-heading {
+  .atlas-hero-inner {
     display: block;
   }
-  .sdp-section-heading h2 {
-    margin-top: 10px;
+  .atlas-kicker {
+    margin-bottom: 22px !important;
+    font-size: 0.66rem;
   }
-  .sdp-matrix a,
-  .sdp-lanes a {
-    min-height: auto;
+  .atlas-copy h1 {
+    font-size: clamp(3.05rem, 16.6vw, 3.8rem);
+    line-height: 0.9;
+  }
+  .atlas-deck {
+    max-width: 338px;
+    margin-top: 20px !important;
+    font-size: 0.9rem;
+    line-height: 1.58;
+  }
+  .atlas-actions {
+    gap: 14px 18px;
+    margin-top: 24px;
+  }
+  .atlas-actions .atlas-start {
+    width: 100%;
+    justify-content: space-between;
+    padding: 14px 16px;
+  }
+  .atlas-topology {
+    min-height: 0;
+    margin-top: 36px;
+  }
+  .atlas-map-title {
+    display: none;
+  }
+  .atlas-map {
+    height: 282px;
+    margin: 0;
+  }
+  .atlas-map::before {
+    inset: 42px 38px 30px;
+  }
+  .atlas-map::after {
+    width: 158px;
+    height: 158px;
+  }
+  .atlas-core {
+    width: 76px;
+    height: 76px;
+  }
+  .atlas-core strong {
+    font-size: 0.86rem;
+  }
+  .atlas-node {
+    min-width: 84px;
+    padding: 7px 8px;
+  }
+  .atlas-node strong {
+    font-size: 0.74rem;
+  }
+  .atlas-n1 { top: 4%; left: 0; }
+  .atlas-n2 { top: 4%; right: 0; }
+  .atlas-n3 { top: 43%; right: 0; }
+  .atlas-n4 { bottom: 0; right: 0; }
+  .atlas-n5 { bottom: 0; left: 33%; }
+  .atlas-n6 { bottom: 0; left: 0; }
+  .atlas-n7 { top: 43%; left: 0; }
+  .atlas-n8,
+  .atlas-n9 {
+    display: none;
+  }
+  .atlas-metrics {
+    display: none;
+  }
+  .atlas-paths,
+  .atlas-library,
+  .atlas-evidence {
+    padding: 42px 16px;
+  }
+  .atlas-heading {
+    display: block;
+    margin-bottom: 30px;
+  }
+  .atlas-heading h2,
+  .atlas-evidence h2 {
+    margin-top: 12px;
+    font-size: 2rem;
+  }
+  .atlas-route-list a {
+    grid-template-columns: 1fr 28px;
+    gap: 7px 12px;
+    padding: 17px 0;
+  }
+  .atlas-route-list span,
+  .atlas-route-list strong,
+  .atlas-route-list small {
+    grid-column: 1;
+  }
+  .atlas-route-list b {
+    grid-column: 2;
+    grid-row: 1 / span 3;
+  }
+  .atlas-index {
+    grid-template-columns: 1fr;
+  }
+  .atlas-index a,
+  .atlas-index a:not(:nth-child(3n + 1)),
+  .atlas-index a:nth-child(3n + 1) {
+    min-height: 84px;
+    padding-left: 0;
+    border-left: none;
+  }
+  .atlas-evidence {
+    display: block;
+  }
+  .atlas-evidence nav {
+    margin-top: 28px;
+  }
+  .atlas-evidence a {
+    grid-template-columns: 1fr 28px;
+    gap: 4px 12px;
+    padding: 14px 0;
+  }
+  .atlas-evidence strong {
+    grid-column: 1;
+  }
+  .atlas-evidence b {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .trace::after {
+    animation: none;
   }
 }
 </style>
