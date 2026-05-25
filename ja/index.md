@@ -102,15 +102,15 @@ title: システム設計パターン
 </main>
 
 <style>
-.VPDoc .content,
-.VPDoc .content-container {
+.VPDoc:has(.atlas) .content,
+.VPDoc:has(.atlas) .content-container {
   width: 100% !important;
   min-width: 0 !important;
   max-width: none !important;
   box-sizing: border-box;
   overflow-x: clip;
 }
-.VPDoc .container {
+.VPDoc:has(.atlas) .container {
   width: 100% !important;
   min-width: 0 !important;
   padding: 0 !important;
@@ -118,8 +118,8 @@ title: システム設計パターン
   box-sizing: border-box;
   overflow-x: clip;
 }
-.VPDoc .main,
-.VPDoc {
+.VPDoc:has(.atlas) .main,
+.VPDoc:has(.atlas) {
   width: 100% !important;
   min-width: 0 !important;
   padding: 0 !important;
