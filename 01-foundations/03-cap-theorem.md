@@ -258,25 +258,18 @@ Strong reads cost 2x the RCUs of eventual reads. At DynamoDB scale (millions of 
 
 ### PACELC Decision Matrix
 
-```mermaid
-quadrantChart
-    title PACELC Decision Matrix
-    x-axis "PA (Available during Partition)" --> "PC (Consistent during Partition)"
-    y-axis "EC (Consistent when healthy)" --> "EL (Low latency when healthy)"
-    Cassandra: [0.25, 0.75]
-    DynamoDB: [0.25, 0.65]
-    Redis: [0.25, 0.85]
-    MongoDB w:maj: [0.25, 0.35]
-    Spanner: [0.75, 0.35]
-    CockroachDB: [0.75, 0.25]
-    etcd: [0.75, 0.15]
-    ZooKeeper: [0.75, 0.10]
-```
+PACELC is two decisions, not one score. Read the matrix from left to right:
+first decide what happens during a partition, then decide what you optimize for
+when the network is healthy.
 
-- **PA/EL** = Maximum performance, weakest guarantees. Best for: caching layers, session stores, social feeds.
-- **PC/EC** = Maximum safety, highest latency. Best for: financial ledgers, coordination services, source of truth.
-- **PA/EC** = Available during partition, consistent when healthy (common middle ground). Best for: most application databases (MongoDB, DynamoDB strong reads).
-- **PC/EL** = Rare; hard to be fast normally but consistent during partition. Theoretically possible but practically contradictory.
+| Partition behavior ↓ / Healthy-path tradeoff → | **EL — Low latency when healthy** | **EC — Stronger consistency when healthy** |
+|------------------------------------------------|-----------------------------------|--------------------------------------------|
+| **PA — Stay available during partitions** | **PA/EL**: fastest path, weakest guarantees. Examples: Cassandra at `ONE`, DynamoDB eventual reads, Redis Cluster. Best for caches, session stores, feeds, counters, and browse paths where stale data is acceptable. | **PA/EC**: continue serving during partitions, but coordinate more during normal operation. Examples: MongoDB with majority settings, DynamoDB strong reads on selected paths. Best for application data where stale reads are tolerable during incidents but normal reads should be current. |
+| **PC — Preserve consistency during partitions** | **PC/EL**: rare in practice. It promises fast normal operation while refusing unsafe partitioned operations, which usually collapses into either PA/EL or PC/EC once implementation details are real. Best treated as a warning sign, not a target architecture. | **PC/EC**: strongest guarantees, highest coordination cost. Examples: Spanner, CockroachDB, etcd, ZooKeeper, TiDB. Best for financial ledgers, coordination services, inventory authority, source-of-truth databases, and workflows where accepting stale or conflicting writes is worse than returning an error. |
+
+The common production choices are **PA/EL** for high-volume user-facing paths,
+**PA/EC** for application databases with bounded inconsistency, and **PC/EC**
+for correctness-critical state. **PC/EL** is usually not a stable design goal.
 
 ### How to Evaluate PACELC for Your System
 
