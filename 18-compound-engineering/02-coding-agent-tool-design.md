@@ -64,6 +64,53 @@ graph TB
 
 The transition from completion to agentic is not incremental. It is a phase change. A completion tool cannot "evolve" into an agent — the trust model, execution model, and failure characteristics are architecturally incompatible [1]. Cursor straddles this boundary by offering both Tab (completion) and Agent (agentic) modes, but these are separate subsystems, not a continuum.
 
+### Current Agent Capability Matrix
+
+Modern coding agents are converging around a common runtime shape, even when the product surfaces differ. The practical comparison is not "which model is smarter?" It is: **where does the agent run, what can it touch, how are side effects approved, and how does it verify work?**
+
+| Capability | Local CLI agents | IDE agents | Cloud / app agents | Engineering implication |
+|------------|------------------|------------|--------------------|-------------------------|
+| **Execution location** | Developer machine | Developer machine inside editor | Remote container, managed VM, or app sandbox | Determines access to local secrets, dev tools, and filesystem state |
+| **Code mutation** | Direct file edits in working tree | Editor-mediated diffs | Branch, worktree, or remote checkout | Local agents are fastest; remote agents are easier to isolate |
+| **Shell access** | Usually full shell behind approvals | Often constrained by IDE permissions | Sandbox-controlled shell | Shell is the main trust boundary, not text generation |
+| **Network access** | Local network policy or sandbox rules | IDE/browser policy | Explicit egress policy | Network access enables docs lookup and dependency install, but also exfiltration |
+| **Context files** | `AGENTS.md`, `CLAUDE.md`, project rules | IDE rules, workspace instructions | Repository instructions and task prompt | Teams need one canonical source to avoid rule drift |
+| **MCP / connectors** | Local MCP servers, browser tools, CLIs | IDE integrations and MCP | Hosted connectors, repo/issue integrations | Structured tools beat "ask the agent to run bash" for repeatable workflows |
+| **Subagents** | Parallel child threads or separate sessions | Usually limited or editor-specific | First-class parallel tasks in some platforms | Best for exploration and review; risky for overlapping edits |
+| **Review surface** | Git diff, terminal logs | Inline diff and diagnostics | PR, patch, run log, app review UI | Review quality depends on traceability of tool calls and generated diffs |
+
+**Design rule:** choose the surface by trust boundary. Use local CLI/IDE agents when the task needs the developer's full environment. Use remote or containerized agents when the task installs dependencies, runs unknown code, touches untrusted repositories, or needs parallel execution without corrupting the local workspace.
+
+### Agent Runtime Control Plane
+
+Agentic coding is a control-plane problem: the model proposes actions, but the runtime decides what is allowed, what needs approval, and what evidence proves completion.
+
+```mermaid
+flowchart LR
+    GOAL["User goal"] --> PLAN["Plan"]
+    PLAN --> TOOL["Tool call"]
+    TOOL --> POLICY{"Policy gate"}
+    POLICY -->|"Allowed"| SANDBOX["Sandbox / workspace"]
+    POLICY -->|"Needs approval"| HUMAN["Human or auto-review"]
+    HUMAN -->|"Approved"| SANDBOX
+    HUMAN -->|"Denied"| PLAN
+    SANDBOX --> OBS["Observation"]
+    OBS --> VERIFY{"Verification"}
+    VERIFY -->|"Fail"| PLAN
+    VERIFY -->|"Pass"| DIFF["Diff / PR / handoff"]
+```
+
+| Control | What it protects | Failure if missing |
+|---------|------------------|--------------------|
+| **Filesystem sandbox** | Prevents writes outside the intended workspace | Agent edits config, secrets, or unrelated repositories |
+| **Network policy** | Limits outbound calls and dependency downloads | Prompt-injected docs or packages exfiltrate data |
+| **Approval gate** | Forces review for side effects | Agent pushes, deletes, deploys, or changes DNS without human intent |
+| **Tool trace** | Records why a change happened | Review sees the diff but not the path that produced it |
+| **Verification loop** | Gives the agent an objective stop condition | Agent stops at "looks right" and leaves latent defects |
+| **Rollback path** | Recovers from bad edits | Git history becomes the only safety net, and uncommitted state is fragile |
+
+The important product trend in Codex, Claude Code, Cursor-style agents, and similar tools is not just stronger models. It is the maturation of this control plane: sandboxing, permissions, hooks, MCP/connectors, subagents, browser/computer use, and review surfaces are now first-order design features.
+
 ---
 
 ## Tool Categories for Development Agents
@@ -920,23 +967,25 @@ Some tasks should never be routed to a fast model regardless of cost pressure:
 
 1. **Completion and agent tools are different architectures, not different points on a spectrum.** They have different trust models, execution models, and failure characteristics. Choose based on the task class, not brand preference.
 
-2. **The context window is the agent's bottleneck.** Every token spent on irrelevant file reads, verbose tool outputs, or redundant searches is a token unavailable for reasoning. Treat context like a scarce resource — budget it deliberately.
+2. **The agent runtime is a control plane.** Model quality matters, but the safety and reliability boundary is sandboxing, approval policy, tool traceability, and verification.
 
-3. **Inject context surgically.** Rules files (CLAUDE.md) for conventions, targeted file reads for specific context, test output for bug reports. Never dump the entire codebase.
+3. **The context window is the agent's bottleneck.** Every token spent on irrelevant file reads, verbose tool outputs, or redundant searches is a token unavailable for reasoning. Treat context like a scarce resource — budget it deliberately.
 
-4. **Agent failures are mostly noisy; that is a feature.** Tool errors, test failures, and build errors create a self-correcting loop. The silent failures (context exhaustion, instruction fade) are the dangerous ones.
+4. **Inject context surgically.** Rules files (CLAUDE.md / AGENTS.md) for conventions, targeted file reads for specific context, test output for bug reports. Never dump the entire codebase.
 
-5. **Security is non-negotiable.** An agent with shell access is an untrusted program with user-level privileges. Sandbox it: permission modes for developer workflows, containers for CI/CD, network egress filtering for all environments.
+5. **Agent failures are mostly noisy; that is a feature.** Tool errors, test failures, and build errors create a self-correcting loop. The silent failures (context exhaustion, instruction fade) are the dangerous ones.
 
-6. **Observe everything.** Log tool calls, token usage, latency, and costs. Session replay enables debugging. Cost attribution enables budget management. Audit logs enable incident response.
+6. **Security is non-negotiable.** An agent with shell access is an untrusted program with user-level privileges. Sandbox it: permission modes for developer workflows, containers for CI/CD, network egress filtering for all environments.
 
-7. **Route tasks to the right model tier.** Haiku for boilerplate, Sonnet for features, Opus for architecture and security. Static routing is simple; escalation is robust; hybrid is optimal.
+7. **Observe everything.** Log tool calls, token usage, latency, costs, approval requests, and verification results. Session replay enables debugging. Cost attribution enables budget management. Audit logs enable incident response.
 
-8. **The Edit tool is superior to the Write tool for existing files.** It sends only the diff, costs fewer tokens, has a uniqueness constraint that prevents accidental mutations, and produces a cleaner git history. Reserve Write for new file creation.
+8. **Route tasks to the right model tier.** Fast models for boilerplate, balanced models for features, deep models for architecture and security. Static routing is simple; escalation is robust; hybrid is optimal.
 
-9. **Subagent spawning is powerful but expensive.** Use it for parallelism (independent file analysis) and specialization (security review), not as a substitute for better prompting of a single agent.
+9. **The Edit tool is superior to the Write tool for existing files.** It sends only the diff, costs fewer tokens, has a uniqueness constraint that prevents accidental mutations, and produces a cleaner git history. Reserve Write for new file creation.
 
-10. **The best context injection is a well-structured codebase.** Clear directory layout, consistent naming, comprehensive tests, and up-to-date types help agents as much as they help humans. Good engineering practices compound with agent tooling.
+10. **Subagent spawning is powerful but coordination-heavy.** Use it for parallel exploration, testing, and specialist review. Be conservative when multiple agents write code.
+
+11. **The best context injection is a well-structured codebase.** Clear directory layout, consistent naming, comprehensive tests, and up-to-date types help agents as much as they help humans. Good engineering practices compound with agent tooling.
 
 ---
 
@@ -946,3 +995,8 @@ Some tasks should never be routed to a fast model regardless of cost pressure:
 2. [Anthropic - Effective Harnesses for Long-Running Agents](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents), 2026
 3. [Anthropic - Claude Code: Best Practices for Agentic Coding](https://www.anthropic.com/engineering/claude-code-best-practices), 2025
 4. [Anthropic - API Pricing and Model Comparison](https://www.anthropic.com/pricing), 2026
+5. [OpenAI - Codex Sandbox](https://developers.openai.com/codex/concepts/sandboxing), 2026
+6. [OpenAI - Codex Subagents](https://developers.openai.com/codex/concepts/subagents), 2026
+7. [OpenAI - Custom Instructions with AGENTS.md](https://developers.openai.com/codex/guides/agents-md), 2026
+8. [Anthropic - Claude Code Overview](https://code.claude.com/docs/en/overview), 2026
+9. [Anthropic - Claude Code Best Practices](https://code.claude.com/docs/en/best-practices), 2026

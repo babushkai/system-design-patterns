@@ -294,19 +294,68 @@ git branch -d feature/auth-rate-limit feature/db-migration \
     feature/api-activity feature/activity-tests
 ```
 
-### Latest Parallel Agent Tooling
+### Current Parallel Agent Tooling
 
-The tooling landscape for parallel agent workflows has matured rapidly. Several tools now address the isolation and coordination challenges that previously required manual worktree management.
+The tooling landscape for parallel agent workflows changes quickly. Instead of anchoring the design to one product, evaluate tools by the orchestration capabilities they provide.
 
-**Superset IDE** [2] (launched March 2026): An open-source terminal environment purpose-built for running 10+ parallel AI agents simultaneously. Each agent gets its own thread and worktree, with a unified dashboard showing progress, diffs, and cost across all active sessions. The key innovation is the orchestration layer — the dispatcher can see all agent outputs in one view, approve/reject plans, and trigger merges without switching terminals.
+| Capability | What it does | Why it matters |
+|------------|--------------|----------------|
+| **Worktree management** | Creates isolated directories and branches per agent | Prevents file-level collisions and git index corruption |
+| **Sandboxing** | Runs each agent in a constrained filesystem, network, or container boundary | Prevents dependency installs and shell commands from contaminating other sessions |
+| **Approval policy** | Prompts or blocks side-effecting commands | Keeps pushes, deletes, deploys, and network calls behind human intent |
+| **Subagent spawning** | Runs bounded agents in parallel for exploration, testing, or review | Reduces wall-clock time without polluting the main context |
+| **Diff dashboard** | Shows all agent patches, logs, and test results in one place | Moves the bottleneck from "finding output" to "reviewing output" |
+| **Cost and token tracking** | Attributes spend by task, model, and agent | Lets agent usage be managed like cloud infrastructure |
+| **Connector / MCP support** | Exposes structured tools for GitHub, Linear, browser, docs, deploys | Reduces brittle shell scripting and improves auditability |
+| **Handoff state** | Preserves task summary, decisions, and remaining work | Makes session restarts and agent-to-agent transfers reliable |
 
-**agent-worktree** [3] (GitHub tool): Automates the Git worktree lifecycle for AI coding agents. Instead of manually running `git worktree add`, creating branches, and cleaning up, `agent-worktree` wraps the entire flow: `agent-worktree spawn --task "Add rate limiting" --base main` creates the worktree, branch, and agent session in one command. It also handles cleanup and branch deletion when the agent's PR is merged.
+Examples of this pattern include local CLI agents coordinated with `git worktree`, IDE agents with inline diff review, cloud/app agents with managed sandboxes, and explicit subagent workflows in tools such as Codex and Claude Code [2][3][4]. The product names matter less than whether the runtime gives each agent a bounded task, isolated workspace, observable trace, and concrete verification step.
 
-**Codex App** [4] (OpenAI): A cloud-based multi-agent environment where each agent runs in a sandboxed container with its own filesystem, network namespace, and resource limits. The containers are pre-built with common development toolchains. Useful for teams that need stronger isolation than worktrees provide — particularly when agents install dependencies or run build tools that could conflict.
+**The core insight:** parallelism is not the hard part. Isolation is. Creating N agents is trivial. Ensuring they do not interfere with each other's files, dependencies, git state, approvals, or context windows is the real challenge. Worktrees solve file isolation; sandboxes solve dependency and process isolation; the review and merge phase remains the sequential bottleneck.
 
-**The core insight:** "Parallelism is not the hard part. Isolation is." [5] — Creating N agents is trivial. Ensuring they do not interfere with each other's files, dependencies, or git state is the real challenge. Worktrees solve file isolation, but the review and merge phase — where parallel work becomes sequential — remains the bottleneck that no tool has fully automated.
+**Skills as a cross-tool convention:** reusable task instructions are becoming portable across agent tools. Whether the mechanism is Claude Code skills/commands, Codex skills/plugins, IDE rules, or MCP prompts, the pattern is the same: package repeatable behavior outside the conversation so every agent starts with the same operational knowledge [5][6].
 
-**Skills as a cross-tool convention:** The "skills" pattern [6] — drop a folder of reusable agent capabilities into your project, and the agent auto-discovers them — has been adopted across Claude Code [7], Cursor, VS Code (Copilot), GitHub (Actions agents), and Goose. This convergence means skills written for one tool are increasingly portable. A skill that teaches an agent how to run your test suite works regardless of which agent platform invokes it.
+### Subagent Orchestration Decision Matrix
+
+Subagents are a context-management tool before they are a speed tool. They keep noisy exploration, logs, and partial findings out of the main session. Use them aggressively for read-heavy work and conservatively for write-heavy work.
+
+| Work type | Parallel subagents? | Why | Integration rule |
+|-----------|---------------------|-----|------------------|
+| Codebase exploration | Yes | Each agent can inspect a different subsystem and return a concise summary | Parent keeps decisions; subagents return evidence and file references |
+| Test/log triage | Yes | Failures can be partitioned by suite, service, or stack trace | Parent merges root-cause findings before assigning fixes |
+| Documentation conversion | Yes | File-level tasks are independent | Assign disjoint file lists and run one final build |
+| Security review | Yes, as reviewers | Multiple agents catch different risk classes | Human remains final gate; require severity and file references |
+| Feature implementation | Sometimes | Works only when interfaces and file ownership are clear | Predefine contracts, owners, and merge order |
+| Shared schema or migration work | Usually no | Small conflicts have large blast radius | One owner writes the contract; others consume it |
+| Architecture decisions | No | Requires coherent trade-off judgment | Use agents for options research, not final decision-making |
+| Production deploy / DNS / secrets | No | External side effects need explicit human control | Agent can prepare commands; human approves execution |
+
+The safest pattern is **fan-out / summarize / decide / fan-out**:
+
+```mermaid
+sequenceDiagram
+    participant H as Human / Main Agent
+    participant E1 as Explorer 1
+    participant E2 as Explorer 2
+    participant E3 as Explorer 3
+    participant W1 as Worker 1
+    participant W2 as Worker 2
+
+    H->>E1: Inspect auth subsystem
+    H->>E2: Inspect data model
+    H->>E3: Inspect tests and CI
+    E1-->>H: Summary + file refs
+    E2-->>H: Summary + file refs
+    E3-->>H: Summary + file refs
+    H->>H: Decide architecture and contracts
+    H->>W1: Implement owned slice
+    H->>W2: Implement owned slice
+    W1-->>H: Patch + verification
+    W2-->>H: Patch + verification
+    H->>H: Integrate and run final checks
+```
+
+Do not let subagents recursively become the project manager. The main dispatcher owns task decomposition, acceptance criteria, merge order, and final verification.
 
 ### The Isolation Hierarchy
 
@@ -317,8 +366,8 @@ Not all isolation is equal. The right level depends on the task's risk profile, 
 | **Level 0** | Same directory, same branch | None | None | Free | Single agent, sequential work |
 | **Level 1** | Same repo, different branches | Partial (uncommitted changes conflict) | None | Free | Low-parallelism, careful coordination |
 | **Level 2** | Git worktrees | Full (separate working directories) | Shared (same node_modules, etc.) | Free | Most local parallel workflows |
-| **Level 3** | Container sandboxes (Codex App) | Full | Full (each container has own deps) | $0.01-0.10/session | CI/CD agents, untrusted code |
-| **Level 4** | Cloud VMs | Complete | Complete | $0.50-5.00/session | Maximum isolation, compliance requirements |
+| **Level 3** | Container / app sandboxes | Full | Full (each container has own deps) | Variable | CI/CD agents, dependency installs, untrusted code |
+| **Level 4** | Cloud VMs | Complete | Complete | Variable | Maximum isolation, compliance requirements |
 
 **Level 0** is where most developers start — one agent, one directory. Agents will conflict the moment you try to run two in the same working tree. File locks, partial writes, and git index corruption are common.
 
@@ -930,7 +979,7 @@ git worktree prune
 
 4. **Define interfaces before dispatching agents.** The spec-first coordination pattern — defining shared types and contracts before any agent starts — prevents the most common integration failures.
 
-5. **Match the model to the task.** Use Opus for architecture and complex reasoning, Sonnet for implementation, Haiku for mechanical work. This reduces costs by up to 10× with no quality loss.
+5. **Match the model and runtime to the task.** Use faster/cheaper models for mechanical work, stronger models for architecture and security, local runtimes for environment-specific tasks, and sandboxed/cloud runtimes for risky execution.
 
 6. **Session management is a first-class concern.** Checkpoint summaries, context compression, and handoff prompts maintain quality across context window boundaries. Avoid infinite sessions.
 
@@ -947,10 +996,9 @@ git worktree prune
 ## References
 
 1. [Git — git-worktree Documentation](https://git-scm.com/docs/git-worktree)
-2. [Superset IDE — Open-Source Parallel Agent Terminal](https://supersetide.com/)
-3. [agent-worktree — Git Worktree Automation for AI Agents](https://github.com/nichochar/agent-worktree)
-4. [OpenAI — Codex](https://openai.com/index/introducing-codex/)
-5. [Nx Blog — Using Git Worktrees for Parallel Agent Development](https://nx.dev/blog/using-git-worktrees-for-parallel-agent-development)
-6. [Anthropic — Claude Code Custom Slash Commands](https://docs.anthropic.com/en/docs/claude-code/slash-commands)
-7. [Anthropic — Claude Code Overview](https://docs.anthropic.com/en/docs/claude-code/overview)
-8. [Anthropic — API Pricing](https://www.anthropic.com/pricing)
+2. [OpenAI — Codex Subagents](https://developers.openai.com/codex/concepts/subagents)
+3. [OpenAI — Codex Sandbox](https://developers.openai.com/codex/concepts/sandboxing)
+4. [Anthropic — Claude Code Overview](https://code.claude.com/docs/en/overview)
+5. [Anthropic — Claude Code Best Practices](https://code.claude.com/docs/en/best-practices)
+6. [OpenAI — Custom Instructions with AGENTS.md](https://developers.openai.com/codex/guides/agents-md)
+7. [Nx Blog — Using Git Worktrees for Parallel Agent Development](https://nx.dev/blog/using-git-worktrees-for-parallel-agent-development)
