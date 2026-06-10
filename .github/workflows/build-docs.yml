@@ -286,6 +286,17 @@ jobs:
                 { text: 'Compound Workflows', link: '/18-compound-engineering/06-compound-development-workflows' },
               ]
             },
+            {
+              text: '19. ML Systems',
+              collapsed: true,
+              items: [
+                { text: 'ML System Fundamentals', link: '/19-ml-systems/01-ml-system-fundamentals' },
+                { text: 'Feature Stores', link: '/19-ml-systems/02-feature-stores' },
+                { text: 'Model Serving', link: '/19-ml-systems/03-model-serving' },
+                { text: 'Model Monitoring', link: '/19-ml-systems/04-model-monitoring' },
+                { text: 'Training Pipelines', link: '/19-ml-systems/05-training-pipelines' },
+              ]
+            },
           ]
 
           export default withMermaid({
@@ -341,6 +352,7 @@ jobs:
                         { text: 'LLM Systems', link: '/16-llm-systems/01-agent-fundamentals' },
                         { text: 'GraphQL', link: '/17-graphql/01-graphql-fundamentals' },
                         { text: 'Compound Engineering', link: '/18-compound-engineering/01-compound-engineering-fundamentals' },
+                        { text: 'ML Systems', link: '/19-ml-systems/01-ml-system-fundamentals' },
                       ]
                     },
                     { text: 'GitHub', link: 'https://github.com/babushkai/system-design-patterns' }
@@ -595,6 +607,17 @@ jobs:
                           { text: 'AIエージェント品質エンジニアリング', link: '/ja/18-compound-engineering/05-quality-engineering-with-ai-agents' },
                           { text: 'コンパウンド開発ワークフロー', link: '/ja/18-compound-engineering/06-compound-development-workflows' },
                         ]
+                      },
+                      {
+                        text: '19. MLシステム',
+                        collapsed: true,
+                        items: [
+                          { text: 'MLシステム基礎', link: '/ja/19-ml-systems/01-ml-system-fundamentals' },
+                          { text: 'フィーチャーストア', link: '/ja/19-ml-systems/02-feature-stores' },
+                          { text: 'モデルサービング', link: '/ja/19-ml-systems/03-model-serving' },
+                          { text: 'モデル監視', link: '/ja/19-ml-systems/04-model-monitoring' },
+                          { text: '学習パイプライン', link: '/ja/19-ml-systems/05-training-pipelines' },
+                        ]
                       }
                     ]
                   },
@@ -706,8 +729,8 @@ jobs:
                 </nav>
               </div>
               <div class="atlas-metrics" aria-label="Reference statistics">
-                <p><strong>116</strong><span>documented articles</span></p>
-                <p><strong>18</strong><span>design domains</span></p>
+                <p><strong>121</strong><span>documented articles</span></p>
+                <p><strong>19</strong><span>design domains</span></p>
                 <p><strong>10</strong><span>production studies</span></p>
                 <p><strong>10</strong><span>foundational papers</span></p>
               </div>
@@ -750,6 +773,7 @@ jobs:
                 <a href="/16-llm-systems/01-agent-fundamentals"><span>16</span><strong>LLM Systems</strong><small>Agents and context</small></a>
                 <a href="/17-graphql/01-graphql-fundamentals"><span>17</span><strong>GraphQL</strong><small>Schemas and federation</small></a>
                 <a href="/18-compound-engineering/01-compound-engineering-fundamentals"><span>18</span><strong>Compound Engineering</strong><small>AI-native workflows</small></a>
+                <a href="/19-ml-systems/01-ml-system-fundamentals"><span>19</span><strong>ML Systems</strong><small>Features and serving</small></a>
               </nav>
             </section>
 

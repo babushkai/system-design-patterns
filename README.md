@@ -166,6 +166,13 @@ A hyper-detailed, framework-agnostic repository of system design patterns, conce
 - [Quality Engineering with AI Agents](18-compound-engineering/05-quality-engineering-with-ai-agents.md)
 - [Compound Development Workflows](18-compound-engineering/06-compound-development-workflows.md)
 
+### Part 19: ML Systems
+- [ML System Fundamentals](19-ml-systems/01-ml-system-fundamentals.md)
+- [Feature Stores](19-ml-systems/02-feature-stores.md)
+- [Model Serving](19-ml-systems/03-model-serving.md)
+- [Model Monitoring](19-ml-systems/04-model-monitoring.md)
+- [Training Pipelines](19-ml-systems/05-training-pipelines.md)
+
 ## Notation
 
 | Symbol | Meaning |

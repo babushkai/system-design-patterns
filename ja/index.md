@@ -41,8 +41,8 @@ title: システム設計パターン
       </nav>
     </div>
     <div class="atlas-metrics" aria-label="リファレンス統計">
-      <p><strong>116</strong><span>記事</span></p>
-      <p><strong>18</strong><span>設計領域</span></p>
+      <p><strong>121</strong><span>記事</span></p>
+      <p><strong>19</strong><span>設計領域</span></p>
       <p><strong>10</strong><span>本番事例</span></p>
       <p><strong>10</strong><span>基礎論文</span></p>
     </div>
@@ -85,6 +85,7 @@ title: システム設計パターン
       <a href="/ja/16-llm-systems/01-agent-fundamentals"><span>16</span><strong>LLMシステム</strong><small>エージェントと文脈</small></a>
       <a href="/ja/17-graphql/01-graphql-fundamentals"><span>17</span><strong>GraphQL</strong><small>スキーマと連携</small></a>
       <a href="/ja/18-compound-engineering/01-compound-engineering-fundamentals"><span>18</span><strong>コンパウンドエンジニアリング</strong><small>AIネイティブワークフロー</small></a>
+      <a href="/ja/19-ml-systems/01-ml-system-fundamentals"><span>19</span><strong>MLシステム</strong><small>特徴量とサービング</small></a>
     </nav>
   </section>
 
