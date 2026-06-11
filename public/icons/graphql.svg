@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+  <!-- GraphQL logo inspired -->
+  <polygon points="24,4 42,14 42,34 24,44 6,34 6,14" fill="none" stroke="#2563EB" stroke-width="2"/>
+  <polygon points="24,10 36,17 36,31 24,38 12,31 12,17" fill="#DBEAFE" stroke="#2563EB" stroke-width="2"/>
+  <circle cx="24" cy="4" r="3" fill="#2563EB"/>
+  <circle cx="42" cy="14" r="3" fill="#0F766E"/>
+  <circle cx="42" cy="34" r="3" fill="#0F766E"/>
+  <circle cx="24" cy="44" r="3" fill="#2563EB"/>
+  <circle cx="6" cy="34" r="3" fill="#0F766E"/>
+  <circle cx="6" cy="14" r="3" fill="#0F766E"/>
+  <circle cx="24" cy="24" r="5" fill="#2563EB"/>
+  <path d="M24 10v8M24 30v8M12 17l8 4M28 27l8 4M12 31l8-4M28 21l8-4" stroke="#2563EB" stroke-width="1.5"/>
+</svg>

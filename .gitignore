@@ -1,16 +1,12 @@
 # Dependencies
 node_modules/
 
-# VitePress build output (generated in CI)
-.vitepress/
-/index.md
-public/
+# VitePress build output and cache
+.vitepress/dist/
+.vitepress/cache/
 
-# VitePress cache
+# Local scratch
 *.local
-
-# Build artifacts
-dist/
 
 # Editor directories
 .idea/
@@ -26,17 +22,3 @@ Thumbs.db
 .venv/
 venv/
 __pycache__/
-
-# MkDocs (if testing locally)
-site/
-mkdocs.yml
-
-# Nextra (if testing locally)
-website/
-.next/
-
-# Package manager
-package.json
-package-lock.json
-yarn.lock
-pnpm-lock.yaml

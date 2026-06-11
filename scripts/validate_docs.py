@@ -32,10 +32,10 @@ BOOK_CHAPTER_RE = re.compile(r"""["']((?:ja/)?\d{2}-[^"']+\.md)["']""")
 VITEPRESS_LINK_RE = re.compile(r"""link:\s*["']([^"']+)["']""")
 VITEPRESS_ASSET_RE = re.compile(r"""src:\s*["']?(/(?:icons/[^"'\s]+|logo)\.svg)["']?""")
 VITEPRESS_BASE_RE = re.compile(r"""base:\s*["']([^"']+)["']""")
-GENERATED_ASSET_RE = re.compile(r"""cat > public/([^"'\s]+\.svg)""")
 HTML_ROOT_HREF_RE = re.compile(r"""\shref=["'](/[^"'#?]*)["']""")
+VITEPRESS_CONFIG = Path(".vitepress/config.mts")
 HOMEPAGE_SOURCES = [
-    Path(".github/workflows/build-docs.yml"),
+    Path("index.md"),
     Path("ja/index.md"),
 ]
 
@@ -150,8 +150,8 @@ def validate_article_parity(errors: list[str]) -> int:
 
 def validate_advertised_counts(errors: list[str], expected: int) -> None:
     files = [
+        ROOT / "index.md",
         ROOT / "ja/index.md",
-        ROOT / ".github/workflows/build-docs.yml",
     ]
 
     for path in files:
@@ -193,8 +193,8 @@ def validate_book_workflow_paths(errors: list[str]) -> None:
                 errors.append(f"{rel(path)}:{lineno}: missing chapter path: {match.group(1)}")
 
 
-def validate_vitepress_workflow_links(errors: list[str]) -> None:
-    path = ROOT / ".github/workflows/build-docs.yml"
+def validate_vitepress_config_links(errors: list[str]) -> None:
+    path = ROOT / VITEPRESS_CONFIG
     if not path.exists():
         return
 
@@ -214,13 +214,12 @@ def validate_vitepress_workflow_links(errors: list[str]) -> None:
                 errors.append(f"{rel(path)}:{lineno}: missing VitePress link target: {link}")
 
 
-def validate_generated_assets(errors: list[str]) -> None:
-    workflow = ROOT / ".github/workflows/build-docs.yml"
-    if not workflow.exists():
-        return
-
-    generated = set(GENERATED_ASSET_RE.findall(workflow.read_text(encoding="utf-8")))
-    files = [workflow, ROOT / "ja/index.md"]
+def validate_public_assets(errors: list[str]) -> None:
+    available = {
+        str(path.relative_to(ROOT / "public"))
+        for path in (ROOT / "public").rglob("*.svg")
+    }
+    files = [ROOT / VITEPRESS_CONFIG, *(ROOT / src for src in HOMEPAGE_SOURCES)]
 
     for path in files:
         if not path.exists():
@@ -228,18 +227,18 @@ def validate_generated_assets(errors: list[str]) -> None:
         for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
             for match in VITEPRESS_ASSET_RE.finditer(line):
                 target = match.group(1).lstrip("/")
-                if target not in generated:
-                    errors.append(f"{rel(path)}:{lineno}: missing generated asset: /{target}")
+                if target not in available:
+                    errors.append(f"{rel(path)}:{lineno}: missing public asset: /{target}")
 
 
 def validate_homepage_html_links(errors: list[str]) -> None:
-    workflow = ROOT / ".github/workflows/build-docs.yml"
-    if not workflow.exists():
+    config = ROOT / VITEPRESS_CONFIG
+    if not config.exists():
         return
 
-    base_match = VITEPRESS_BASE_RE.search(workflow.read_text(encoding="utf-8"))
+    base_match = VITEPRESS_BASE_RE.search(config.read_text(encoding="utf-8"))
     if not base_match:
-        errors.append(f"{rel(workflow)}: missing VitePress base setting")
+        errors.append(f"{rel(config)}: missing VitePress base setting")
         return
     site_base = base_match.group(1)
 
@@ -274,8 +273,8 @@ def main() -> int:
     validate_advertised_counts(errors, article_count)
     validate_frontmatter(errors)
     validate_book_workflow_paths(errors)
-    validate_vitepress_workflow_links(errors)
-    validate_generated_assets(errors)
+    validate_vitepress_config_links(errors)
+    validate_public_assets(errors)
     validate_homepage_html_links(errors)
 
     if errors:

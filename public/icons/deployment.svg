@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+  <!-- Rocket deployment -->
+  <path d="M24 4c-6 6-8 14-8 22h16c0-8-2-16-8-22z" fill="#2563EB"/>
+  <ellipse cx="24" cy="26" rx="8" ry="3" fill="#0F766E"/>
+  <circle cx="24" cy="16" r="4" fill="#DBEAFE"/>
+  <circle cx="24" cy="16" r="2" fill="#2563EB"/>
+  <!-- Rocket fins -->
+  <path d="M16 26l-4 8h6z" fill="#0F766E"/>
+  <path d="M32 26l4 8h-6z" fill="#0F766E"/>
+  <!-- Exhaust flames -->
+  <path d="M20 34l4 10 4-10" fill="#DBEAFE"/>
+  <path d="M22 34l2 6 2-6" fill="#0F766E"/>
+  <!-- Deployment arrow -->
+  <path d="M38 18v8M34 22l4 4 4-4" stroke="#2563EB" stroke-width="2" stroke-linecap="round"/>
+</svg>

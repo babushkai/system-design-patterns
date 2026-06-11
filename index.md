@@ -2,7 +2,7 @@
 layout: page
 aside: false
 sidebar: false
-title: システム設計パターン
+title: System Design Patterns
 ---
 
 <main class="atlas">
@@ -15,88 +15,88 @@ title: システム設計パターン
     </div>
     <div class="atlas-hero-inner">
       <header class="atlas-copy">
-        <p class="atlas-kicker"><span>分散アーキテクチャ・フィールドブック</span><span>2026 / JP + EN</span></p>
-        <h1 id="atlas-title"><span>システム</span><span>設計</span><span>パターン</span></h1>
-        <p class="atlas-deck">リクエストが、保証、ストレージ、キュー、障害、復旧を通過する経路をたどる。設計レビューと本番判断のための実務リファレンス。</p>
-        <nav class="atlas-actions" aria-label="主要な導線">
-          <a class="atlas-start" href="/ja/01-foundations/01-acid-transactions">保証から始める <b>&rarr;</b></a>
-          <a href="/ja/08-case-studies/01-twitter">本番事例を読む</a>
+        <p class="atlas-kicker"><span>Distributed architecture fieldbook</span><span>2026 / EN + JP</span></p>
+        <h1 id="atlas-title"><span>System</span><span>Design</span><span>Patterns</span></h1>
+        <p class="atlas-deck">Trace a request through guarantees, storage, queues, failure, and recovery. A working reference for architecture reviews and production decisions.</p>
+        <nav class="atlas-actions" aria-label="Primary paths">
+          <a class="atlas-start" href="/01-foundations/01-acid-transactions">Begin at guarantees <b>&rarr;</b></a>
+          <a href="/08-case-studies/01-twitter">Study production</a>
           <a href="https://github.com/babushkai/system-design-patterns/releases/latest" target="_blank">PDF / EPUB</a>
         </nav>
       </header>
-      <nav class="atlas-topology" aria-label="システム領域を探索">
-        <p class="atlas-map-title">サブシステムを選択 <strong>Live index / 09 nodes</strong></p>
+      <nav class="atlas-topology" aria-label="Explore system domains">
+        <p class="atlas-map-title">Select a subsystem <strong>Live index / 09 nodes</strong></p>
         <div class="atlas-map">
           <span class="atlas-core"><strong>Request</strong><small>flow</small></span>
-          <a class="atlas-node atlas-n1" href="/ja/01-foundations/01-acid-transactions"><small>01</small><strong>保証</strong></a>
-          <a class="atlas-node atlas-n2" href="/ja/02-distributed-databases/01-single-leader-replication"><small>02</small><strong>複製</strong></a>
-          <a class="atlas-node atlas-n3" href="/ja/03-storage-engines/01-b-trees"><small>03</small><strong>永続化</strong></a>
-          <a class="atlas-node atlas-n4" href="/ja/04-caching/01-cache-strategies"><small>04</small><strong>キャッシュ</strong></a>
-          <a class="atlas-node atlas-n5" href="/ja/05-messaging/01-message-queues"><small>05</small><strong>キュー</strong></a>
-          <a class="atlas-node atlas-n6" href="/ja/06-scaling/01-load-balancing"><small>06</small><strong>拡張</strong></a>
-          <a class="atlas-node atlas-n7" href="/ja/07-real-time/01-polling"><small>07</small><strong>配信</strong></a>
-          <a class="atlas-node atlas-n8" href="/ja/10-security/01-authentication-fundamentals"><small>10</small><strong>保護</strong></a>
-          <a class="atlas-node atlas-n9" href="/ja/11-observability/01-distributed-tracing"><small>11</small><strong>観測</strong></a>
+          <a class="atlas-node atlas-n1" href="/01-foundations/01-acid-transactions"><small>01</small><strong>Guarantees</strong></a>
+          <a class="atlas-node atlas-n2" href="/02-distributed-databases/01-single-leader-replication"><small>02</small><strong>Replicate</strong></a>
+          <a class="atlas-node atlas-n3" href="/03-storage-engines/01-b-trees"><small>03</small><strong>Persist</strong></a>
+          <a class="atlas-node atlas-n4" href="/04-caching/01-cache-strategies"><small>04</small><strong>Cache</strong></a>
+          <a class="atlas-node atlas-n5" href="/05-messaging/01-message-queues"><small>05</small><strong>Queue</strong></a>
+          <a class="atlas-node atlas-n6" href="/06-scaling/01-load-balancing"><small>06</small><strong>Scale</strong></a>
+          <a class="atlas-node atlas-n7" href="/07-real-time/01-polling"><small>07</small><strong>Stream</strong></a>
+          <a class="atlas-node atlas-n8" href="/10-security/01-authentication-fundamentals"><small>10</small><strong>Secure</strong></a>
+          <a class="atlas-node atlas-n9" href="/11-observability/01-distributed-tracing"><small>11</small><strong>Observe</strong></a>
         </div>
       </nav>
     </div>
-    <div class="atlas-metrics" aria-label="リファレンス統計">
-      <p><strong>117</strong><span>記事</span></p>
-      <p><strong>18</strong><span>設計領域</span></p>
-      <p><strong>10</strong><span>本番事例</span></p>
-      <p><strong>10</strong><span>基礎論文</span></p>
+    <div class="atlas-metrics" aria-label="Reference statistics">
+      <p><strong>117</strong><span>documented articles</span></p>
+      <p><strong>18</strong><span>design domains</span></p>
+      <p><strong>10</strong><span>production studies</span></p>
+      <p><strong>10</strong><span>foundational papers</span></p>
     </div>
   </section>
 
   <section class="atlas-paths" aria-labelledby="atlas-paths-title">
     <header class="atlas-heading">
       <p>Reading routes</p>
-      <h2 id="atlas-paths-title">圧力がシステムを通過する経路をたどる。</h2>
+      <h2 id="atlas-paths-title">Follow the pressure through the system.</h2>
     </header>
     <nav class="atlas-route-list">
-      <a href="/ja/01-foundations/01-acid-transactions"><span>01 / 保証</span><strong>規模の前に整合性</strong><small>ACID &rarr; CAP &rarr; レプリケーション</small><b>&rarr;</b></a>
-      <a href="/ja/04-caching/01-cache-strategies"><span>02 / レイテンシ</span><strong>ホットパス上のデータ</strong><small>ストレージ &rarr; キャッシュ &rarr; 無効化</small><b>&rarr;</b></a>
-      <a href="/ja/05-messaging/01-message-queues"><span>03 / スループット</span><strong>負荷下の配信</strong><small>キュー &rarr; 順序 &rarr; バックプレッシャー</small><b>&rarr;</b></a>
-      <a href="/ja/08-case-studies/01-twitter"><span>04 / 証拠</span><strong>本番のアーキテクチャ</strong><small>実例 &rarr; 論文 &rarr; トレードオフ</small><b>&rarr;</b></a>
+      <a href="/01-foundations/01-acid-transactions"><span>01 / Guarantees</span><strong>Consistency before scale</strong><small>ACID &rarr; CAP &rarr; replication</small><b>&rarr;</b></a>
+      <a href="/04-caching/01-cache-strategies"><span>02 / Latency</span><strong>Data on the hot path</strong><small>Storage &rarr; cache &rarr; invalidation</small><b>&rarr;</b></a>
+      <a href="/05-messaging/01-message-queues"><span>03 / Throughput</span><strong>Delivery under load</strong><small>Queues &rarr; ordering &rarr; backpressure</small><b>&rarr;</b></a>
+      <a href="/08-case-studies/01-twitter"><span>04 / Evidence</span><strong>Architecture in production</strong><small>Systems &rarr; papers &rarr; trade-offs</small><b>&rarr;</b></a>
     </nav>
   </section>
 
   <section class="atlas-library" aria-labelledby="atlas-library-title">
     <header class="atlas-heading atlas-heading-wide">
       <p>Complete index</p>
-      <h2 id="atlas-library-title">フィールドブックの全領域。</h2>
+      <h2 id="atlas-library-title">Every domain in the fieldbook.</h2>
     </header>
-    <nav class="atlas-index" aria-label="アーキテクチャ領域">
-      <a href="/ja/01-foundations/01-acid-transactions"><span>01</span><strong>基礎</strong><small>保証と障害</small></a>
-      <a href="/ja/02-distributed-databases/01-single-leader-replication"><span>02</span><strong>分散データベース</strong><small>複製と合意</small></a>
-      <a href="/ja/03-storage-engines/01-b-trees"><span>03</span><strong>ストレージエンジン</strong><small>索引と永続化</small></a>
-      <a href="/ja/04-caching/01-cache-strategies"><span>04</span><strong>キャッシュ</strong><small>レイテンシと無効化</small></a>
-      <a href="/ja/05-messaging/01-message-queues"><span>05</span><strong>メッセージング</strong><small>配信と順序</small></a>
-      <a href="/ja/06-scaling/01-load-balancing"><span>06</span><strong>スケーリング</strong><small>負荷と保護</small></a>
-      <a href="/ja/07-real-time/01-polling"><span>07</span><strong>リアルタイム</strong><small>ストリームとプレゼンス</small></a>
-      <a href="/ja/08-case-studies/01-twitter"><span>08</span><strong>ケーススタディ</strong><small>本番の証拠</small></a>
-      <a href="/ja/09-whitepapers/01-mapreduce"><span>09</span><strong>ホワイトペーパー</strong><small>基礎設計</small></a>
-      <a href="/ja/10-security/01-authentication-fundamentals"><span>10</span><strong>セキュリティ</strong><small>信頼と認証</small></a>
-      <a href="/ja/11-observability/01-distributed-tracing"><span>11</span><strong>オブザーバビリティ</strong><small>追跡と対応</small></a>
-      <a href="/ja/12-service-mesh/01-service-discovery"><span>12</span><strong>サービスメッシュ</strong><small>実行時トラフィック</small></a>
-      <a href="/ja/13-data-pipelines/01-batch-processing"><span>13</span><strong>データパイプライン</strong><small>バッチとストリーム</small></a>
-      <a href="/ja/14-search-systems/01-inverted-indexes"><span>14</span><strong>検索システム</strong><small>検索と順位付け</small></a>
-      <a href="/ja/15-deployment/01-deployment-strategies"><span>15</span><strong>デプロイメント</strong><small>リリースと復旧</small></a>
-      <a href="/ja/16-llm-systems/01-agent-fundamentals"><span>16</span><strong>LLMシステム</strong><small>エージェントと文脈</small></a>
-      <a href="/ja/17-graphql/01-graphql-fundamentals"><span>17</span><strong>GraphQL</strong><small>スキーマと連携</small></a>
-      <a href="/ja/18-compound-engineering/01-compound-engineering-fundamentals"><span>18</span><strong>コンパウンドエンジニアリング</strong><small>AIネイティブワークフロー</small></a>
+    <nav class="atlas-index" aria-label="Architecture sections">
+      <a href="/01-foundations/01-acid-transactions"><span>01</span><strong>Foundations</strong><small>Guarantees and failure</small></a>
+      <a href="/02-distributed-databases/01-single-leader-replication"><span>02</span><strong>Distributed Databases</strong><small>Replication and consensus</small></a>
+      <a href="/03-storage-engines/01-b-trees"><span>03</span><strong>Storage Engines</strong><small>Indexes and persistence</small></a>
+      <a href="/04-caching/01-cache-strategies"><span>04</span><strong>Caching</strong><small>Latency and invalidation</small></a>
+      <a href="/05-messaging/01-message-queues"><span>05</span><strong>Messaging</strong><small>Delivery and ordering</small></a>
+      <a href="/06-scaling/01-load-balancing"><span>06</span><strong>Scaling</strong><small>Load and protection</small></a>
+      <a href="/07-real-time/01-polling"><span>07</span><strong>Real-Time</strong><small>Streams and presence</small></a>
+      <a href="/08-case-studies/01-twitter"><span>08</span><strong>Case Studies</strong><small>Production evidence</small></a>
+      <a href="/09-whitepapers/01-mapreduce"><span>09</span><strong>Whitepapers</strong><small>Foundational designs</small></a>
+      <a href="/10-security/01-authentication-fundamentals"><span>10</span><strong>Security</strong><small>Trust and identity</small></a>
+      <a href="/11-observability/01-distributed-tracing"><span>11</span><strong>Observability</strong><small>Trace and response</small></a>
+      <a href="/12-service-mesh/01-service-discovery"><span>12</span><strong>Service Mesh</strong><small>Runtime traffic</small></a>
+      <a href="/13-data-pipelines/01-batch-processing"><span>13</span><strong>Data Pipelines</strong><small>Batch and streams</small></a>
+      <a href="/14-search-systems/01-inverted-indexes"><span>14</span><strong>Search Systems</strong><small>Retrieve and rank</small></a>
+      <a href="/15-deployment/01-deployment-strategies"><span>15</span><strong>Deployment</strong><small>Release and recover</small></a>
+      <a href="/16-llm-systems/01-agent-fundamentals"><span>16</span><strong>LLM Systems</strong><small>Agents and context</small></a>
+      <a href="/17-graphql/01-graphql-fundamentals"><span>17</span><strong>GraphQL</strong><small>Schemas and federation</small></a>
+      <a href="/18-compound-engineering/01-compound-engineering-fundamentals"><span>18</span><strong>Compound Engineering</strong><small>AI-native workflows</small></a>
     </nav>
   </section>
 
   <section class="atlas-evidence" aria-labelledby="atlas-evidence-title">
     <header>
       <p>Evidence shelf</p>
-      <h2 id="atlas-evidence-title">運用済みシステムで設計を比較する。</h2>
+      <h2 id="atlas-evidence-title">Compare ideas against deployed systems.</h2>
     </header>
     <nav>
-      <a href="/ja/09-whitepapers/07-raft"><span>Paper trail</span><strong>Raft、Dynamo、Spanner、Kafka</strong><b>&rarr;</b></a>
-      <a href="/ja/08-case-studies/04-netflix"><span>Production systems</span><strong>Netflix、Slack、Discord、Stripe</strong><b>&rarr;</b></a>
-      <a href="/ja/16-llm-systems/04-rag-patterns"><span>Modern systems</span><strong>RAG、エージェント、オーケストレーション</strong><b>&rarr;</b></a>
+      <a href="/09-whitepapers/07-raft"><span>Paper trail</span><strong>Raft, Dynamo, Spanner, Kafka</strong><b>&rarr;</b></a>
+      <a href="/08-case-studies/04-netflix"><span>Production systems</span><strong>Netflix, Slack, Discord, Stripe</strong><b>&rarr;</b></a>
+      <a href="/16-llm-systems/04-rag-patterns"><span>Modern systems</span><strong>RAG, agents, orchestration</strong><b>&rarr;</b></a>
     </nav>
   </section>
 </main>
@@ -118,12 +118,17 @@ title: システム設計パターン
   box-sizing: border-box;
   overflow-x: clip;
 }
-.VPDoc .main,
-.VPDoc {
+.VPDoc .main {
   width: 100% !important;
   min-width: 0 !important;
   padding: 0 !important;
   box-sizing: border-box;
+  overflow-x: clip;
+}
+.VPDoc {
+  width: 100% !important;
+  min-width: 0 !important;
+  padding: 0 !important;
   overflow-x: clip;
 }
 .vp-doc h1,

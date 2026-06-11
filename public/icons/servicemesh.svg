@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+  <!-- Interconnected hexagon nodes -->
+  <circle cx="24" cy="8" r="6" fill="#2563EB"/>
+  <circle cx="8" cy="24" r="6" fill="#0F766E"/>
+  <circle cx="40" cy="24" r="6" fill="#0F766E"/>
+  <circle cx="12" cy="40" r="6" fill="#DBEAFE" stroke="#2563EB" stroke-width="2"/>
+  <circle cx="36" cy="40" r="6" fill="#DBEAFE" stroke="#2563EB" stroke-width="2"/>
+  <circle cx="24" cy="28" r="6" fill="#2563EB"/>
+  <!-- Connection lines -->
+  <path d="M24 14v8M14 24h4M30 24h4M18 34l4-4M28 32l4 4M12 34v-4M36 34v-4" stroke="#2563EB" stroke-width="2" stroke-linecap="round"/>
+  <path d="M20 12l-8 8M28 12l8 8" stroke="#0F766E" stroke-width="2" stroke-linecap="round"/>
+</svg>

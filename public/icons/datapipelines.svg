@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+  <!-- Data flow pipeline -->
+  <rect x="2" y="18" width="10" height="12" rx="2" fill="#2563EB"/>
+  <rect x="36" y="18" width="10" height="12" rx="2" fill="#2563EB"/>
+  <rect x="19" y="8" width="10" height="10" rx="2" fill="#0F766E"/>
+  <rect x="19" y="30" width="10" height="10" rx="2" fill="#0F766E"/>
+  <!-- Arrows/Flow -->
+  <path d="M12 24h7M29 13h-5l-5 5 5 6h5M29 35h-5l-5-5 5-6h5" stroke="#2563EB" stroke-width="2" fill="none"/>
+  <path d="M29 24h7" stroke="#2563EB" stroke-width="2"/>
+  <polygon points="34,21 34,27 38,24" fill="#2563EB"/>
+  <!-- Processing circles -->
+  <circle cx="24" cy="24" r="4" fill="#DBEAFE" stroke="#2563EB" stroke-width="2"/>
+</svg>

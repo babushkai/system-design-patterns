@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+  <!-- Eye with metrics -->
+  <ellipse cx="24" cy="24" rx="20" ry="12" fill="none" stroke="#2563EB" stroke-width="2"/>
+  <circle cx="24" cy="24" r="8" fill="#0F766E"/>
+  <circle cx="24" cy="24" r="4" fill="#2563EB"/>
+  <circle cx="24" cy="24" r="2" fill="#fff"/>
+  <path d="M4 24c4-8 11-12 20-12s16 4 20 12" stroke="#2563EB" stroke-width="2" fill="none"/>
+  <path d="M4 24c4 8 11 12 20 12s16-4 20-12" stroke="#2563EB" stroke-width="2" fill="none"/>
+  <!-- Metrics lines -->
+  <path d="M6 38l6-4 6 2 6-6 6 4 6-2 6 3" stroke="#0F766E" stroke-width="2" stroke-linecap="round" fill="none"/>
+</svg>

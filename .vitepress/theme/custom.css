@@ -1,0 +1,622 @@
+/* ==========================================================================
+   Blueprint theme — system-design-patterns
+   Dark-first "engineering schematic" identity: deep navy surfaces, cyan
+   signal accents, JetBrains Mono display type, Inter/Noto Sans JP body.
+   Light mode reads as technical paper: cool white, navy ink, teal accents.
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   1. Tokens
+   -------------------------------------------------------------------------- */
+
+:root {
+  /* technical paper (light) */
+  --vp-c-bg: #f7f9fc;
+  --vp-c-bg-alt: #eef2f8;
+  --vp-c-bg-soft: #e9eef6;
+  --vp-c-bg-elv: #ffffff;
+
+  --vp-c-border: #c9d6e6;
+  --vp-c-divider: #dbe3ee;
+  --vp-c-gutter: #dbe3ee;
+
+  --vp-c-text-1: #101c2e;
+  --vp-c-text-2: #41566f;
+  --vp-c-text-3: #64788f;
+
+  --vp-c-brand-1: #0e7490;
+  --vp-c-brand-2: #155e75;
+  --vp-c-brand-3: #0e7490;
+  --vp-c-brand-soft: rgba(14, 116, 144, 0.1);
+
+  --vp-font-family-base: 'Inter', 'Noto Sans JP', ui-sans-serif, system-ui, sans-serif;
+  --vp-font-family-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
+
+  --vp-code-color: #0e7490;
+  --vp-code-bg: rgba(14, 116, 144, 0.08);
+  --vp-code-block-bg: #eef2f9;
+  --vp-code-block-divider-color: #d6e0ee;
+  --vp-code-line-number-color: #93a6bd;
+  --vp-code-line-highlight-color: rgba(14, 116, 144, 0.08);
+  --vp-code-copy-code-bg: #e2e9f3;
+  --vp-code-copy-code-hover-bg: #d8e1ef;
+
+  --vp-button-brand-border: transparent;
+  --vp-button-brand-text: #f5fbff;
+  --vp-button-brand-bg: #0e7490;
+  --vp-button-brand-hover-border: transparent;
+  --vp-button-brand-hover-text: #f5fbff;
+  --vp-button-brand-hover-bg: #155e75;
+  --vp-button-brand-active-border: transparent;
+  --vp-button-brand-active-text: #f5fbff;
+  --vp-button-brand-active-bg: #164e63;
+
+  --vp-custom-block-tip-border: transparent;
+  --vp-custom-block-tip-text: var(--vp-c-text-1);
+  --vp-custom-block-tip-bg: rgba(14, 116, 144, 0.08);
+  --vp-custom-block-tip-code-bg: rgba(14, 116, 144, 0.12);
+  --vp-custom-block-info-border: transparent;
+  --vp-custom-block-info-text: var(--vp-c-text-1);
+  --vp-custom-block-info-bg: rgba(79, 99, 141, 0.1);
+  --vp-custom-block-info-code-bg: rgba(79, 99, 141, 0.14);
+  --vp-custom-block-warning-border: transparent;
+  --vp-custom-block-warning-text: var(--vp-c-text-1);
+  --vp-custom-block-warning-bg: rgba(180, 122, 13, 0.1);
+  --vp-custom-block-warning-code-bg: rgba(180, 122, 13, 0.14);
+  --vp-custom-block-danger-border: transparent;
+  --vp-custom-block-danger-text: var(--vp-c-text-1);
+  --vp-custom-block-danger-bg: rgba(190, 50, 60, 0.08);
+  --vp-custom-block-danger-code-bg: rgba(190, 50, 60, 0.12);
+
+  --vp-nav-bg-color: rgba(247, 249, 252, 0.84);
+  --vp-local-nav-bg-color: rgba(247, 249, 252, 0.84);
+  --vp-sidebar-bg-color: #eef2f8;
+
+  --sdp-rule-accent: rgba(14, 116, 144, 0.45);
+  --sdp-schematic-bg: #f3f7fc;
+  --sdp-schematic-border: #cfdcec;
+}
+
+.dark {
+  /* blueprint navy (dark, site default) */
+  --vp-c-bg: #0b1322;
+  --vp-c-bg-alt: #080e1a;
+  --vp-c-bg-soft: #121c30;
+  --vp-c-bg-elv: #0f1828;
+
+  --vp-c-border: #2a3b5d;
+  --vp-c-divider: #1d2a44;
+  --vp-c-gutter: #080e1a;
+
+  --vp-c-text-1: #e7eef9;
+  --vp-c-text-2: #a9bad3;
+  --vp-c-text-3: #7c8fab;
+
+  --vp-c-brand-1: #5fd9f0;
+  --vp-c-brand-2: #8de7f7;
+  --vp-c-brand-3: #29b6d8;
+  --vp-c-brand-soft: rgba(95, 217, 240, 0.14);
+
+  --vp-code-color: #7ce2f2;
+  --vp-code-bg: rgba(95, 217, 240, 0.1);
+  --vp-code-block-bg: #0a1426;
+  --vp-code-block-divider-color: #1c2b4a;
+  --vp-code-line-number-color: #4d6286;
+  --vp-code-line-highlight-color: rgba(95, 217, 240, 0.07);
+  --vp-code-copy-code-bg: #16223a;
+  --vp-code-copy-code-hover-bg: #1d2c4a;
+
+  --vp-button-brand-border: transparent;
+  --vp-button-brand-text: #06121f;
+  --vp-button-brand-bg: #45cfe9;
+  --vp-button-brand-hover-border: transparent;
+  --vp-button-brand-hover-text: #06121f;
+  --vp-button-brand-hover-bg: #79e0f4;
+  --vp-button-brand-active-border: transparent;
+  --vp-button-brand-active-text: #06121f;
+  --vp-button-brand-active-bg: #29b6d8;
+
+  --vp-custom-block-tip-bg: rgba(95, 217, 240, 0.09);
+  --vp-custom-block-tip-code-bg: rgba(95, 217, 240, 0.13);
+  --vp-custom-block-info-bg: rgba(125, 145, 190, 0.12);
+  --vp-custom-block-info-code-bg: rgba(125, 145, 190, 0.16);
+  --vp-custom-block-warning-bg: rgba(247, 190, 80, 0.1);
+  --vp-custom-block-warning-code-bg: rgba(247, 190, 80, 0.14);
+  --vp-custom-block-danger-bg: rgba(248, 113, 122, 0.1);
+  --vp-custom-block-danger-code-bg: rgba(248, 113, 122, 0.14);
+
+  --vp-nav-bg-color: rgba(8, 14, 26, 0.82);
+  --vp-local-nav-bg-color: rgba(8, 14, 26, 0.82);
+  --vp-sidebar-bg-color: #080e1a;
+
+  --sdp-rule-accent: rgba(95, 217, 240, 0.5);
+  --sdp-schematic-bg: #eaf1f9;
+  --sdp-schematic-border: #2a3b5d;
+}
+
+::selection {
+  background: rgba(95, 217, 240, 0.28);
+}
+
+:focus-visible {
+  outline: 2px solid var(--vp-c-brand-1);
+  outline-offset: 2px;
+}
+
+/* --------------------------------------------------------------------------
+   2. Chrome: nav, sidebar, outline, footer
+   -------------------------------------------------------------------------- */
+
+.VPNavBar {
+  backdrop-filter: saturate(160%) blur(14px);
+  -webkit-backdrop-filter: saturate(160%) blur(14px);
+}
+
+.VPNav {
+  border-bottom: 1px solid var(--vp-c-divider);
+}
+
+.VPNavBarTitle .title {
+  font-family: var(--vp-font-family-mono);
+  font-weight: 700;
+  font-size: 14.5px;
+  letter-spacing: -0.01em;
+}
+
+/* sidebar: schematic index — mono numbered groups, quiet links */
+.VPSidebarItem.level-0 > .item > .text {
+  font-family: var(--vp-font-family-mono);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--vp-c-text-2);
+}
+
+.VPSidebarItem.level-0.is-active > .item > .text,
+.VPSidebarItem.level-0 > .item:hover > .text {
+  color: var(--vp-c-text-1);
+}
+
+.VPSidebar .VPSidebarItem.level-1 .text {
+  font-size: 13.5px;
+}
+
+.VPSidebar a[aria-current='page'] .text,
+.VPSidebarItem .item .link.active .text {
+  color: var(--vp-c-brand-1) !important;
+}
+
+/* right outline: annotation column */
+.VPDocAsideOutline .outline-title {
+  font-family: var(--vp-font-family-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--vp-c-text-3);
+}
+
+.VPDocAsideOutline .outline-title::before {
+  content: '// ';
+  color: var(--vp-c-brand-1);
+}
+
+.VPDocAsideOutline .outline-marker {
+  background-color: var(--vp-c-brand-1);
+}
+
+.VPDocAsideOutline .outline-link {
+  font-size: 12.5px;
+}
+
+.VPFooter {
+  border-top: 1px solid var(--vp-c-divider);
+}
+
+.VPFooter .message,
+.VPFooter .copyright {
+  font-family: var(--vp-font-family-mono);
+  font-size: 12px;
+}
+
+.VPFooter .message::before {
+  content: '';
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  background: url('/logo.svg') no-repeat center;
+  background-size: contain;
+  margin-right: 0.5rem;
+  vertical-align: middle;
+}
+
+/* --------------------------------------------------------------------------
+   3. Article typography
+   -------------------------------------------------------------------------- */
+
+.vp-doc h1,
+.vp-doc h2,
+.vp-doc h3 {
+  font-family: var(--vp-font-family-mono);
+  letter-spacing: -0.02em;
+}
+
+.vp-doc h1 {
+  font-weight: 700;
+  font-size: 30px;
+  line-height: 1.25;
+}
+
+@media (min-width: 768px) {
+  .vp-doc h1 {
+    font-size: 34px;
+  }
+}
+
+.vp-doc p,
+.vp-doc li {
+  line-height: 1.75;
+}
+
+/* section counters: every H2 becomes a numbered schematic section.
+   Scoped to .has-aside so custom pages (home, 404) are untouched. */
+.VPDoc.has-aside .vp-doc {
+  counter-reset: sdp-section;
+}
+
+.VPDoc.has-aside .vp-doc h2 {
+  counter-increment: sdp-section;
+  border-top: 1px solid var(--vp-c-divider);
+  font-weight: 600;
+}
+
+.VPDoc.has-aside .vp-doc h2::before {
+  content: '\00a7' counter(sdp-section, decimal-leading-zero);
+  margin-right: 14px;
+  font-size: 0.62em;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  color: var(--vp-c-brand-1);
+  position: relative;
+  top: -0.12em;
+}
+
+.vp-doc h3 {
+  font-weight: 600;
+}
+
+.vp-doc h4 {
+  font-weight: 600;
+}
+
+/* body links: ink with a cyan signal underline; chrome links stay clean */
+.vp-doc p a,
+.vp-doc li a,
+.vp-doc td a {
+  color: var(--vp-c-text-1);
+  font-weight: 500;
+  text-decoration: underline;
+  text-decoration-color: var(--sdp-rule-accent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  transition: color 0.15s, text-decoration-color 0.15s;
+}
+
+.vp-doc p a:hover,
+.vp-doc li a:hover,
+.vp-doc td a:hover {
+  color: var(--vp-c-brand-1);
+  text-decoration-color: var(--vp-c-brand-1);
+}
+
+.vp-doc blockquote {
+  border-left: 2px solid var(--vp-c-brand-1);
+  background: var(--vp-c-bg-soft);
+  border-radius: 0 6px 6px 0;
+  padding: 8px 18px;
+}
+
+.vp-doc blockquote > p {
+  color: var(--vp-c-text-2);
+  font-style: normal;
+}
+
+.vp-doc hr {
+  border-top: 1px dashed var(--vp-c-border);
+  margin: 36px 0;
+}
+
+/* --------------------------------------------------------------------------
+   4. Code, tables, custom blocks
+   -------------------------------------------------------------------------- */
+
+.vp-doc div[class*='language-'] {
+  border: 1px solid var(--vp-code-block-divider-color);
+  border-left: 2px solid var(--vp-c-brand-3);
+  border-radius: 8px;
+}
+
+.vp-doc [class*='language-'] > span.lang {
+  font-family: var(--vp-font-family-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 11px;
+}
+
+.vp-doc table {
+  font-size: 14px;
+}
+
+.vp-doc th {
+  font-family: var(--vp-font-family-mono);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--vp-c-text-2);
+  background-color: var(--vp-c-bg-soft);
+  border-bottom: 2px solid var(--vp-c-border);
+}
+
+.vp-doc .custom-block {
+  border-radius: 8px;
+  border-left: 2px solid;
+}
+
+.vp-doc .custom-block.tip {
+  border-left-color: var(--vp-c-brand-1);
+}
+
+.vp-doc .custom-block.info {
+  border-left-color: #7d91be;
+}
+
+.vp-doc .custom-block.warning {
+  border-left-color: #d9a13b;
+}
+
+.vp-doc .custom-block.danger {
+  border-left-color: #e5707b;
+}
+
+.vp-doc .custom-block-title {
+  font-family: var(--vp-font-family-mono);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.vp-doc .custom-block-title::before {
+  content: '// ';
+  opacity: 0.7;
+}
+
+.vp-doc .custom-block.tip .custom-block-title {
+  color: var(--vp-c-brand-1);
+}
+
+.vp-doc .custom-block.info .custom-block-title {
+  color: #7d91be;
+}
+
+.vp-doc .custom-block.warning .custom-block-title {
+  color: #d9a13b;
+}
+
+.vp-doc .custom-block.danger .custom-block-title {
+  color: #e5707b;
+}
+
+/* --------------------------------------------------------------------------
+   5. Mermaid: schematics render on paper cards in both modes so the
+      'base'-theme palette stays legible on navy
+   -------------------------------------------------------------------------- */
+
+.mermaid {
+  display: flex;
+  justify-content: center;
+  margin: 1.5rem 0;
+  padding: 1.5rem;
+  background: var(--sdp-schematic-bg);
+  border: 1px solid var(--sdp-schematic-border);
+  border-radius: 10px;
+  overflow-x: auto;
+}
+
+/* --------------------------------------------------------------------------
+   6. Doc footer: pager + meta
+   -------------------------------------------------------------------------- */
+
+.VPDocFooter .pager-link {
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 8px;
+  transition: border-color 0.2s;
+}
+
+.VPDocFooter .pager-link:hover {
+  border-color: var(--vp-c-brand-1);
+}
+
+.VPDocFooter .pager-link .desc {
+  font-family: var(--vp-font-family-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--vp-c-text-3);
+}
+
+.VPDocFooter .last-updated {
+  font-family: var(--vp-font-family-mono);
+  font-size: 12px;
+}
+
+/* --------------------------------------------------------------------------
+   7. Scrollbar
+   -------------------------------------------------------------------------- */
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--vp-c-border);
+  border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--vp-c-brand-3);
+}
+
+/* --------------------------------------------------------------------------
+   8. Google Translate widget
+   -------------------------------------------------------------------------- */
+
+.translate-wrapper {
+  display: flex;
+  align-items: center;
+  margin-right: 8px;
+}
+
+#google_translate_element {
+  display: inline-block;
+}
+
+#google_translate_element select {
+  background: var(--vp-c-bg);
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-family: var(--vp-font-family-mono);
+  color: var(--vp-c-text-1);
+  cursor: pointer;
+  outline: none;
+}
+
+#google_translate_element select:hover {
+  border-color: var(--vp-c-brand-1);
+}
+
+.goog-logo-link,
+.goog-te-gadget > span,
+.goog-te-banner-frame,
+#goog-gt-tt,
+.goog-te-balloon-frame {
+  display: none !important;
+}
+
+.goog-te-gadget {
+  color: transparent !important;
+  font-size: 0 !important;
+}
+
+.goog-te-gadget .goog-te-combo {
+  color: var(--vp-c-text-1) !important;
+  font-size: 12px !important;
+}
+
+body {
+  top: 0 !important;
+}
+
+.skiptranslate {
+  display: none !important;
+}
+
+.goog-te-banner-frame.skiptranslate {
+  display: none !important;
+}
+
+/* --------------------------------------------------------------------------
+   9. 404 page
+   -------------------------------------------------------------------------- */
+
+.not-found {
+  text-align: center;
+  padding: 4rem 2rem;
+}
+
+.not-found-logo {
+  width: 80px;
+  margin-bottom: 2rem;
+}
+
+.not-found h1 {
+  font-family: var(--vp-font-family-mono);
+  font-size: 6rem;
+  font-weight: 700;
+  color: var(--vp-c-brand-1);
+  margin: 0;
+  line-height: 1;
+}
+
+.not-found p {
+  font-size: 1.25rem;
+  color: var(--vp-c-text-2);
+  margin: 1rem 0 2rem;
+}
+
+.not-found-btn {
+  display: inline-flex;
+  padding: 0.75rem 2rem;
+  background: var(--vp-button-brand-bg);
+  color: var(--vp-button-brand-text);
+  border-radius: 8px;
+  text-decoration: none;
+  font-weight: 600;
+  transition: background 0.2s;
+}
+
+.not-found-btn:hover {
+  background: var(--vp-button-brand-hover-bg);
+  color: var(--vp-button-brand-hover-text);
+}
+
+/* --------------------------------------------------------------------------
+   10. Buttons & mobile
+   -------------------------------------------------------------------------- */
+
+.VPButton {
+  border-radius: 8px !important;
+  font-family: var(--vp-font-family-mono);
+}
+
+.VPButton.brand {
+  box-shadow: none;
+}
+
+@media (max-width: 640px) {
+  html,
+  body {
+    overflow-x: hidden;
+  }
+
+  .VPNavBarTitle {
+    min-width: 0;
+  }
+
+  .VPNavBarTitle .title {
+    max-width: 190px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 0.875rem;
+    white-space: nowrap;
+  }
+
+  .VPButton {
+    width: min(100%, 260px);
+    min-width: 0;
+    white-space: normal;
+  }
+
+  .VPDoc.has-aside .vp-doc h2::before {
+    margin-right: 10px;
+  }
+}

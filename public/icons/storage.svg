@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+  <!-- B-Tree / LSM Tree representation -->
+  <rect x="18" y="4" width="12" height="8" rx="2" fill="#2563EB"/>
+  <rect x="6" y="18" width="12" height="8" rx="2" fill="#0F766E"/>
+  <rect x="30" y="18" width="12" height="8" rx="2" fill="#0F766E"/>
+  <rect x="2" y="32" width="10" height="8" rx="2" fill="#DBEAFE"/>
+  <rect x="14" y="32" width="10" height="8" rx="2" fill="#DBEAFE"/>
+  <rect x="26" y="32" width="10" height="8" rx="2" fill="#DBEAFE"/>
+  <rect x="38" y="32" width="8" height="8" rx="2" fill="#DBEAFE"/>
+  <path d="M24 12v6M12 18v-2l12-4 12 4v2M7 32v-6l5-2M19 32v-6M31 32v-6M42 32v-6l-5-2" stroke="#2563EB" stroke-width="2"/>
+</svg>

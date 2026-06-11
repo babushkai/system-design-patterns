@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+  <!-- Lightning bolt / Real-time pulse -->
+  <circle cx="24" cy="24" r="20" fill="none" stroke="#DBEAFE" stroke-width="2"/>
+  <circle cx="24" cy="24" r="14" fill="none" stroke="#0F766E" stroke-width="2"/>
+  <path d="M26 8l-4 14h8l-6 18" fill="#2563EB"/>
+  <path d="M26 8l-4 14h8l-6 18" stroke="#1E40AF" stroke-width="1" fill="none"/>
+  <circle cx="8" cy="24" r="3" fill="#2563EB"/>
+  <circle cx="40" cy="24" r="3" fill="#2563EB"/>
+  <path d="M11 24h5M32 24h5" stroke="#2563EB" stroke-width="2" stroke-linecap="round"/>
+</svg>
