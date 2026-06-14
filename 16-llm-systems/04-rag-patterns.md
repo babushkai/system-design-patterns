@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-RAG enhances LLM responses by retrieving relevant context from external knowledge bases before generation. Key components include document ingestion (chunking, embedding), retrieval (vector search, hybrid search), and generation (context injection, citation). Advanced patterns include iterative retrieval, query transformation, re-ranking, and agentic RAG. Success depends on chunking strategy, embedding model selection, and retrieval quality metrics.
+RAG grounds LLM responses in external knowledge retrieved at query time. The production baseline in 2026 is **hybrid search (BM25 + dense embeddings) fused with RRF, followed by a cross-encoder reranker**, with chunks enriched by contextual metadata at index time. The architectural shift of the agent era: retrieval moved from a fixed *pipeline stage* (retrieve-then-generate, every request) to a *tool the model calls* — agentic retrieval — with the model deciding what to search, evaluating results, and searching again. Long-context models didn't kill RAG; they changed its job from "fit the corpus into the prompt" to "find the right 5K tokens cheaply." Retrieval quality remains the ceiling on the whole system — invest in evals before adding pipeline stages.
 
 ---
 
@@ -19,6 +19,26 @@ graph TD
 
     KC & HA & NS & NP & CL --> SOL["Solution: Retrieve relevant<br/>context at query time"]
 ```
+
+---
+
+## Pipeline RAG vs. Agentic Retrieval vs. Long Context
+
+Three ways to get knowledge into the model, and the decision is economic as much as architectural:
+
+```mermaid
+graph TD
+    Q{"Corpus size &<br/>query pattern?"}
+    Q -->|"corpus fits comfortably,<br/>reused across queries"| LC["LONG CONTEXT + PROMPT CACHE<br/>Load it all once; cached tokens<br/>cost ~10% of fresh.<br/>Simplest, zero retrieval risk."]
+    Q -->|"high-volume, low-latency,<br/>predictable queries"| PIPE["PIPELINE RAG<br/>retrieve → generate, fixed shape.<br/>One retrieval round, cheap and fast.<br/>Quality capped by first retrieval."]
+    Q -->|"complex questions,<br/>agent products"| AGENTIC["AGENTIC RETRIEVAL<br/>Search is a tool; the model<br/>queries, reads, refines, repeats.<br/>Best quality, variable cost."]
+```
+
+- **Long context is a real alternative below ~100K–200K tokens.** With prompt caching, "put the whole manual in the system prompt" is often cheaper and strictly more accurate than retrieval over it — no recall failures, no chunking artifacts. It stops scaling when the corpus churns (cache invalidation) or grows past the window, and recall quality degrades on very long contexts ("lost in the middle" never fully went away).
+- **Pipeline RAG** remains right for high-QPS products (support search, doc Q&A) where one good retrieval round answers most queries and p95 latency is contractual.
+- **Agentic retrieval** is the default for agent products: expose `search` as a tool, let the model decompose the question, run multiple targeted queries, judge whether results suffice, and pull more. It subsumes query expansion, decomposition, and iterative retrieval — the model does those natively now. For code and filesystems specifically, plain `grep`/`glob` tools in an agent loop have largely displaced embedding indexes: exact, always fresh, nothing to maintain.
+
+These compose: an agentic system's search *tool* is internally a hybrid-search-plus-rerank pipeline. The rest of this article builds that tool well.
 
 ---
 
@@ -696,6 +716,54 @@ Format: [3, 1, 5, 2, 4, ...]""",
 
 ## Advanced RAG Patterns
 
+### Contextual Retrieval
+
+Naive chunking destroys context: the chunk *"The company's revenue grew by 3% over the previous quarter"* is unretrievable because nothing says which company or quarter. Contextual retrieval (Anthropic, 2024) fixes this at **index time**: for each chunk, a small LLM generates a 50–100 token situating blurb from the full document, prepended before embedding and BM25 indexing.
+
+```python
+CONTEXTUALIZE = """<document>
+{full_document}
+</document>
+
+Here is the chunk we want to situate within the whole document:
+<chunk>
+{chunk}
+</chunk>
+
+Give a short, succinct context to situate this chunk within the overall
+document for the purposes of improving search retrieval of the chunk.
+Answer only with the succinct context."""
+
+async def contextualize_chunk(doc: str, chunk: str) -> str:
+    # Prompt caching makes this cheap: the full document is a cached
+    # prefix shared across all of its chunks' contextualization calls.
+    ctx = await small_llm(CONTEXTUALIZE.format(full_document=doc, chunk=chunk))
+    return f"{ctx}\n\n{chunk}"        # this enriched text gets embedded AND BM25-indexed
+```
+
+Measured effect: contextual embeddings + contextual BM25 cut top-20 retrieval failure rate by ~49%; adding a reranker brings it to ~67%. The cost is a one-time indexing pass (made cheap by prompt caching, since every chunk of a document shares the document as cached prefix). This is the highest-ROI indexing upgrade available and composes with everything below.
+
+### GraphRAG
+
+Vector retrieval answers "find passages about X." It fails on **global questions** — "what are the recurring failure themes across all incident reports?" — where the answer is distributed across hundreds of documents and no single chunk is relevant. GraphRAG (Microsoft, 2024) handles these at index time: an LLM extracts an entity-relationship graph from the corpus, community-detection clusters it, and an LLM writes a summary per community. Global queries run map-reduce over community summaries; local queries traverse the graph around matched entities.
+
+```mermaid
+graph LR
+    subgraph INDEX["Index time (expensive)"]
+        DOCS["Corpus"] --> EXTRACT["LLM: extract<br/>entities + relations"]
+        EXTRACT --> GRAPH[("Knowledge<br/>graph")]
+        GRAPH --> COMM["Community detection<br/>+ LLM summaries"]
+    end
+    subgraph QUERY["Query time"]
+        GQ["Global query"] --> MR["Map-reduce over<br/>community summaries"]
+        LQ["Local query"] --> TRAV["Graph traversal<br/>around entities"]
+    end
+    COMM -.-> MR
+    GRAPH -.-> TRAV
+```
+
+Use it when sense-making over a corpus is the product (investigations, research synthesis, compliance review). Skip it for ordinary document Q&A — index construction costs one LLM call per chunk plus summarization, and keeping the graph current under document churn is real operational weight.
+
 ### Query Transformation
 
 ```mermaid
@@ -1135,18 +1203,22 @@ graph TD
 
 ### When NOT to Use RAG
 
-- Data changes too frequently (consider live search)
-- Perfect accuracy required (RAG can still hallucinate)
-- Simple factual queries (direct search may suffice)
-- Context window is sufficient for all data
+- Corpus fits in the context window and is reused across queries → long context + prompt caching (cheaper, no recall risk)
+- Searching code or local files from an agent → `grep`/`glob` tools beat embedding indexes (exact, always fresh, zero index maintenance)
+- Data changes faster than you can re-index → live search APIs
+- Structured questions over structured data → text-to-SQL / API queries, not embeddings over serialized rows
+- Perfect recall is contractual (legal discovery, compliance) → RAG is a filter, not a guarantee; pair with exhaustive scans
 
 ---
 
 ## References
 
 - [Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks](https://arxiv.org/abs/2005.11401) - Original RAG paper
+- [Introducing Contextual Retrieval](https://www.anthropic.com/news/contextual-retrieval) - Anthropic; the ~49–67% failure-rate reduction recipe
+- [GraphRAG: From Local to Global](https://arxiv.org/abs/2404.16130) - Microsoft; [project docs](https://microsoft.github.io/graphrag/)
+- [ColBERTv2: Effective and Efficient Retrieval via Late Interaction](https://arxiv.org/abs/2112.01488) - the third retrieval family (token-level matching) worth knowing
+- [Lost in the Middle: How Language Models Use Long Contexts](https://arxiv.org/abs/2307.03172)
 - [HyDE: Precise Zero-Shot Dense Retrieval](https://arxiv.org/abs/2212.10496)
 - [Self-RAG: Learning to Retrieve, Generate, and Critique](https://arxiv.org/abs/2310.11511)
 - [RAGAS: Automated Evaluation of RAG](https://arxiv.org/abs/2309.15217)
-- [LangChain RAG Documentation](https://python.langchain.com/docs/use_cases/question_answering/)
-- [LlamaIndex Documentation](https://docs.llamaindex.ai/)
+- [MTEB: Massive Text Embedding Benchmark](https://huggingface.co/spaces/mteb/leaderboard) - embedding model selection

@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-Production LLM infrastructure encompasses model serving (batching, GPU optimization, model routing), caching (semantic cache, KV cache), evaluation (automated testing, human feedback), cost optimization (model cascading, token management), and guardrails (input/output filtering, rate limiting). Key challenges include managing latency at scale, controlling costs, ensuring reliability, and maintaining safety.
+Production LLM infrastructure spans model serving (continuous batching, PagedAttention, prefix caching, speculative decoding, prefill/decode disaggregation), caching (provider prompt caching first, semantic caching with care), structured outputs via constrained decoding, evaluation, cost optimization (cascades, quantization, batch tiers), and guardrails. The serving layer is dominated by two regimes — compute-bound prefill and memory-bandwidth-bound decode — and almost every optimization in the modern stack (vLLM, SGLang, TensorRT-LLM) is about keeping GPUs busy across that asymmetry. Measure TTFT, inter-token latency, and goodput under SLO, not just requests per second.
 
 ---
 
@@ -260,6 +260,82 @@ class BatchProcessor:
                 await self._send_error(request["id"], str(e))
 ```
 
+### Inside a Modern Inference Engine
+
+LLM inference has two phases with opposite hardware profiles, and nearly every serving optimization exploits that asymmetry:
+
+```mermaid
+graph LR
+    subgraph PREFILL["PREFILL (compute-bound)"]
+        P["Process entire prompt<br/>in parallel<br/>→ determines TTFT"]
+    end
+    subgraph DECODE["DECODE (memory-bandwidth-bound)"]
+        D["One token per step,<br/>re-reads weights + KV cache<br/>→ determines inter-token latency"]
+    end
+    P -->|"KV cache<br/>(the bottleneck resource)"| D
+```
+
+**Continuous batching.** Requests join and leave the batch at *token* granularity instead of waiting for the slowest request in a static batch. This alone is why vLLM/TGI-class engines deliver an order of magnitude more throughput than naive serving — a finished sequence's slot is reused on the very next step.
+
+**PagedAttention.** The KV cache is allocated in fixed-size blocks with an indirection table, like virtual memory pages, instead of one contiguous buffer per request. This eliminates the memory fragmentation that previously capped batch sizes, and enables KV sharing between sequences (e.g., N samples from one prompt share the prompt's blocks).
+
+**Prefix caching (RadixAttention).** Requests that share a prompt prefix — same system prompt, same few-shot block, the entire history of an agent conversation — reuse the prefix's KV blocks instead of recomputing prefill. SGLang organizes the cache as a radix tree to maximize cross-request sharing. For agent and chat workloads, where each turn resends the whole transcript, prefix caching routinely cuts prefill work by 80–95%; it is the self-hosted counterpart of provider-side prompt caching.
+
+**Chunked prefill.** A long prompt's prefill is split into chunks and interleaved with ongoing decode steps, so one user's 100K-token prompt doesn't stall every other user's token stream. This is the standard fix for the prefill-vs-decode interference problem within a single replica.
+
+**Speculative decoding.** A cheap drafter (small model, extra decoding heads as in Medusa/EAGLE, or n-gram lookup) proposes k tokens; the target model verifies them in a single forward pass and accepts the longest correct run. Output is provably identical to normal decoding, but you get 2–3× lower inter-token latency when acceptance rates are high (code and structured text accept well; high-entropy creative text doesn't).
+
+**Disaggregated prefill/decode.** At datacenter scale, prefill and decode run on *separate GPU pools* sized independently, with KV caches streamed between them over NVLink/RDMA (DistServe, Mooncake — the architecture behind Kimi's serving stack). This stops the two phases from fighting over the same SLO: you scale prefill capacity for TTFT and decode capacity for tokens/sec, and a tiered KV store (HBM → DRAM → SSD) serves as a cluster-wide prefix cache.
+
+**Quantization.** FP8 weights+activations are near-lossless on current hardware and roughly double throughput versus BF16; INT4 weight-only (AWQ/GPTQ) halves memory again for latency-tolerant or memory-constrained deployments; KV-cache quantization (FP8) directly raises the achievable batch size, which is usually the binding constraint. Validate on your own evals — quantization loss concentrates in long-tail reasoning, not average-case perplexity.
+
+```python
+# What the knobs look like in practice (vLLM)
+from vllm import LLM
+
+llm = LLM(
+    model="meta-llama/Llama-3.3-70B-Instruct",
+    tensor_parallel_size=4,          # shard weights across 4 GPUs
+    gpu_memory_utilization=0.92,     # rest is headroom for activations
+    enable_prefix_caching=True,      # radix-style KV reuse across requests
+    enable_chunked_prefill=True,     # protect inter-token latency
+    quantization="fp8",              # weights + activations
+    kv_cache_dtype="fp8",            # bigger effective batch
+    speculative_config={             # draft-model speculation
+        "model": "meta-llama/Llama-3.2-1B-Instruct",
+        "num_speculative_tokens": 5,
+    },
+)
+```
+
+**The metrics that matter.** Throughput alone is meaningless for interactive serving. Track **TTFT** (time to first token — prefill + queueing), **TPOT/ITL** (time per output token), and **goodput**: requests per second that *meet their latency SLO*. A configuration that raises raw throughput 30% while pushing p95 TTFT past your SLO has negative value.
+
+### Structured Outputs and Constrained Decoding
+
+Production systems need valid JSON, not "mostly JSON." Modern engines enforce output structure *during decoding*: a grammar compiler (xgrammar, llguidance, Outlines) turns a JSON Schema into a token-level mask, and invalid tokens are simply never sampled. Guaranteed-valid output, near-zero overhead, no retry loops.
+
+```python
+from pydantic import BaseModel
+
+class Triage(BaseModel):
+    severity: str          # "P0" | "P1" | "P2"
+    component: str
+    needs_human: bool
+
+# vLLM / SGLang / OpenAI-compatible servers accept the schema directly
+response = client.chat.completions.create(
+    model="local-llama",
+    messages=[{"role": "user", "content": f"Triage this incident:\n{report}"}],
+    response_format={
+        "type": "json_schema",
+        "json_schema": {"name": "triage", "schema": Triage.model_json_schema(), "strict": True},
+    },
+)
+incident = Triage.model_validate_json(response.choices[0].message.content)
+```
+
+Use schema-constrained outputs for anything a program consumes; keep free text for humans. One caution: a constrained model *will* produce schema-valid garbage rather than express uncertainty — include an explicit `"unknown"`/`needs_human` escape hatch in the schema.
+
 ### Model Routing
 
 ```python
@@ -367,6 +443,19 @@ class ModelCascade:
 
 ## Caching Strategies
 
+### Prompt Caching (Provider-Side) — Use This First
+
+Every major API provider caches the KV state of repeated prompt *prefixes* and bills cached tokens at roughly 10% of the fresh-input price (with cache writes at a small premium on some providers). Unlike semantic caching, this is exact, lossless, and provider-managed — there is no correctness risk, only an engineering requirement: **keep your prefixes byte-stable**.
+
+Rules that make prompt caching work:
+
+- Order context stable→volatile: system prompt and tool schemas first, session data next, the running conversation last.
+- Append-only message history. Editing, reordering, or re-rendering earlier turns invalidates the cache from that point on.
+- No timestamps, UUIDs, or per-request noise in the prefix. Inject volatile data at the end or via tool results.
+- Monitor `cached_tokens` from API usage fields as a first-class metric. For agentic workloads — which resend the full transcript every turn — cache hit rate is typically the largest cost lever in the entire system, far ahead of model choice.
+
+Most providers also offer a **batch tier** (50% discount for asynchronous, hours-latency processing) — route evals, backfills, and non-interactive pipelines there by default.
+
 ### Semantic Cache
 
 ```mermaid
@@ -377,7 +466,9 @@ graph LR
     SIM --> RET["Return Cached Response:<br/>The capital of France<br/>is Paris."]
 ```
 
-Benefits: handles paraphrased queries, reduces API costs significantly, sub-millisecond response for cache hits
+Benefits: handles paraphrased queries, reduces API costs significantly, sub-millisecond response for cache hits.
+
+Caveats — semantic caching trades correctness for cost, so scope it deliberately: similarity ≥ 0.95 does **not** guarantee the same correct answer ("capital of France" vs "capital city of metropolitan France" is fine; "2023 revenue" vs "2024 revenue" is not). Partition the cache by user/tenant and model+parameter hash, keep TTLs short for anything time-sensitive, and restrict it to stateless, high-repetition query traffic — never cache across personalized context, and never use it for agent turns, where conversation state makes every request unique (that's what prompt caching is for).
 
 ```python
 import hashlib
@@ -798,38 +889,43 @@ class ContinuousEval:
 from tiktoken import encoding_for_model
 
 class TokenManager:
-    """Manage token usage and costs."""
-    
-    COSTS = {
-        "gpt-4": {"input": 0.03, "output": 0.06},
-        "gpt-4-turbo": {"input": 0.01, "output": 0.03},
-        "gpt-3.5-turbo": {"input": 0.0005, "output": 0.0015},
-        "claude-3-opus": {"input": 0.015, "output": 0.075},
-        "claude-3-sonnet": {"input": 0.003, "output": 0.015},
-    }
-    
-    def __init__(self):
+    """Manage token usage and costs.
+
+    Never hardcode prices — they change quarterly. Load a pricing table
+    from config, and model all four meters: fresh input, cached input
+    (~10% of fresh), output (often 4-5x input — thinking tokens bill as
+    output), and batch-tier discounts (~50%).
+    """
+
+    def __init__(self, pricing: dict[str, dict[str, float]]):
+        self.pricing = pricing  # per 1M tokens, from config/pricing.yaml
         self.encoders = {}
-    
+
     def count_tokens(self, text: str, model: str) -> int:
         """Count tokens in text."""
         if model not in self.encoders:
             self.encoders[model] = encoding_for_model(model)
         return len(self.encoders[model].encode(text))
-    
+
     def estimate_cost(
-        self, 
-        model: str, 
-        input_tokens: int, 
-        output_tokens: int
+        self,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        cached_tokens: int = 0,
+        batch: bool = False,
     ) -> float:
         """Estimate cost for a request."""
-        costs = self.COSTS.get(model, {"input": 0.01, "output": 0.03})
-        
-        input_cost = (input_tokens / 1000) * costs["input"]
-        output_cost = (output_tokens / 1000) * costs["output"]
-        
-        return input_cost + output_cost
+        p = self.pricing[model]
+        fresh = input_tokens - cached_tokens
+
+        cost = (
+            fresh * p["input"]
+            + cached_tokens * p.get("cached_input", p["input"] * 0.1)
+            + output_tokens * p["output"]
+        ) / 1_000_000
+
+        return cost * 0.5 if batch else cost
     
     def optimize_prompt(self, prompt: str, max_tokens: int) -> str:
         """Trim prompt to fit token budget."""
@@ -1255,10 +1351,12 @@ class LLMMetrics:
 
 ## References
 
-- [vLLM: High-throughput LLM Serving](https://github.com/vllm-project/vllm)
-- [Text Generation Inference (TGI)](https://github.com/huggingface/text-generation-inference)
-- [GPTCache: Semantic Caching](https://github.com/zilliztech/GPTCache)
-- [NeMo Guardrails](https://github.com/NVIDIA/NeMo-Guardrails)
-- [Guardrails AI](https://github.com/guardrails-ai/guardrails)
-- [LangSmith Evaluation](https://docs.smith.langchain.com/)
-- [OpenAI Rate Limits Best Practices](https://platform.openai.com/docs/guides/rate-limits)
+- [vLLM: High-throughput LLM Serving](https://github.com/vllm-project/vllm) / [SGLang](https://github.com/sgl-project/sglang) — the dominant open serving engines
+- [Efficient Memory Management for LLM Serving with PagedAttention](https://arxiv.org/abs/2309.06180) — the vLLM paper
+- [DistServe: Disaggregating Prefill and Decoding](https://arxiv.org/abs/2401.09670) and [Mooncake: KVCache-centric Disaggregated Architecture](https://arxiv.org/abs/2407.00079)
+- [EAGLE: Speculative Sampling Requires Rethinking Feature Uncertainty](https://arxiv.org/abs/2401.15077) and [Medusa](https://arxiv.org/abs/2401.10774) — speculative decoding
+- [XGrammar: Flexible and Efficient Structured Generation](https://github.com/mlc-ai/xgrammar) / [Outlines](https://github.com/dottxt-ai/outlines) — constrained decoding
+- [Anthropic Prompt Caching](https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching) / [OpenAI Prompt Caching](https://platform.openai.com/docs/guides/prompt-caching)
+- [OpenTelemetry GenAI Semantic Conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) — standard trace/metric schema for LLM systems
+- [NeMo Guardrails](https://github.com/NVIDIA/NeMo-Guardrails) / [Guardrails AI](https://github.com/guardrails-ai/guardrails)
+- [LiteLLM](https://github.com/BerriAI/litellm) — multi-provider gateway, routing, budgets

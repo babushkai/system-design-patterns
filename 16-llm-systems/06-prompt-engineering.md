@@ -225,20 +225,22 @@ class GenerationConfig:
 class TokenLimitManager:
     """Manage context window limits."""
     
+    # Representative windows as of early 2026 — frontier models sit at
+    # 200K-1M+ input tokens with 32K-128K output. Query the provider's
+    # model-listing API at startup rather than hardcoding in production.
     MODEL_LIMITS = {
-        "gpt-4": 8192,
-        "gpt-4-32k": 32768,
-        "gpt-4-turbo": 128000,
-        "gpt-4o": 128000,
-        "claude-3-opus": 200000,
-        "claude-3-sonnet": 200000,
-        "llama-3-70b": 8192,
+        "claude-sonnet-4-6": 1_000_000,
+        "claude-opus-4-8": 200_000,
+        "gpt-5.1": 400_000,
+        "gemini-3-pro": 1_000_000,
+        "llama-4-maverick": 1_000_000,
+        "deepseek-v3.2": 128_000,
     }
-    
+
     def __init__(self, model: str, tokenizer):
         self.model = model
         self.tokenizer = tokenizer
-        self.context_limit = self.MODEL_LIMITS.get(model, 4096)
+        self.context_limit = self.MODEL_LIMITS.get(model, 128_000)
     
     def available_tokens(
         self, 

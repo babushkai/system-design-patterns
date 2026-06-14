@@ -4,7 +4,7 @@
 
 ## TL;DR
 
-RAGは、生成前に外部の知識ベースから関連するコンテキストを検索することで、LLMの応答品質を向上させます。主要コンポーネントには、ドキュメント取り込み（チャンキング、エンベディング）、検索（ベクトル検索、ハイブリッド検索）、生成（コンテキスト注入、引用）があります。高度なパターンには、反復的検索、クエリ変換、リランキング、エージェント型RAGがあります。成功の鍵は、チャンキング戦略、エンベディングモデルの選択、および検索品質メトリクスにあります。
+RAGは、クエリ時に取得した外部知識でLLMの応答を接地します。2026年の本番ベースラインは**ハイブリッド検索(BM25+密ベクトル)をRRFで融合し、クロスエンコーダのリランカーを重ねる**構成で、チャンクはインデックス時にコンテキストメタデータで強化します。エージェント時代のアーキテクチャ転換: 検索は固定の*パイプライン段*(毎リクエストでretrieve-then-generate)から、*モデルが呼ぶツール* — エージェント的検索 — へ移りました。モデルが何を検索するか決め、結果を評価し、また検索します。長文コンテキストモデルはRAGを殺しませんでした。その仕事を「コーパスをプロンプトに収める」から「正しい5Kトークンを安価に見つける」へ変えたのです。検索品質はシステム全体の天井であり続けます — パイプライン段を足す前に評価へ投資してください。
 
 ---
 
@@ -21,6 +21,26 @@ graph TD
 
     KC & HA & NS & NP & CL --> SOL["Solution: Retrieve relevant<br/>context at query time"]
 ```
+
+---
+
+## パイプラインRAG vs エージェント的検索 vs 長文コンテキスト
+
+知識をモデルに入れる方法は3つあり、その選択はアーキテクチャと同じくらい経済の問題です:
+
+```mermaid
+graph TD
+    Q{"Corpus size &<br/>query pattern?"}
+    Q -->|"corpus fits comfortably,<br/>reused across queries"| LC["LONG CONTEXT + PROMPT CACHE<br/>Load it all once; cached tokens<br/>cost ~10% of fresh.<br/>Simplest, zero retrieval risk."]
+    Q -->|"high-volume, low-latency,<br/>predictable queries"| PIPE["PIPELINE RAG<br/>retrieve → generate, fixed shape.<br/>One retrieval round, cheap and fast.<br/>Quality capped by first retrieval."]
+    Q -->|"complex questions,<br/>agent products"| AGENTIC["AGENTIC RETRIEVAL<br/>Search is a tool; the model<br/>queries, reads, refines, repeats.<br/>Best quality, variable cost."]
+```
+
+- **約10万〜20万トークン未満では、長文コンテキストは現実的な代替です。** プロンプトキャッシングがあれば、「マニュアル全体をシステムプロンプトに置く」ほうが、その上での検索より安く、しかも厳密に正確なことが多い — 再現率の失敗もチャンキングの瑕疵もありません。コーパスが頻繁に変わる(キャッシュ無効化)かウィンドウを超えるとスケールしなくなり、非常に長いコンテキストでは想起品質が劣化します(「lost in the middle」は完全には消えていません)。
+- **パイプラインRAG**は高QPSのプロダクト(サポート検索、文書Q&A)に正しいままです — 1回の良い検索が大半のクエリに答え、p95レイテンシが契約事項である場面。
+- **エージェント的検索**はエージェントプロダクトのデフォルトです: `search` をツールとして公開し、モデルに質問を分解させ、的を絞った複数クエリを走らせ、結果が足りるか判断させ、さらに引かせます。クエリ拡張・分解・反復検索を包含します — モデルが今やそれらをネイティブにこなすからです。特にコードとファイルシステムでは、エージェントループ内の素の `grep`/`glob` ツールが埋め込みインデックスをほぼ置き換えました: 正確で、常に新鮮で、維持するものがありません。
+
+これらは合成されます: エージェント的システムの検索*ツール*の内部は、ハイブリッド検索+リランクのパイプラインです。この記事の残りはそのツールをうまく作る話です。
 
 ---
 
@@ -698,6 +718,55 @@ Format: [3, 1, 5, 2, 4, ...]""",
 
 ## 高度なRAGパターン
 
+### コンテキスト検索 (Contextual Retrieval)
+
+素朴なチャンキングは文脈を破壊します: 「*同社の売上は前四半期比3%成長した*」というチャンクは、どの会社のどの四半期かをどこにも書いていないため検索不能です。コンテキスト検索(Anthropic、2024)は**インデックス時**にこれを直します: 各チャンクに対し、小型LLMが文書全体から50〜100トークンの位置づけ文を生成し、埋め込みとBM25インデックスの前に前置します。
+
+```python
+CONTEXTUALIZE = """<document>
+{full_document}
+</document>
+
+Here is the chunk we want to situate within the whole document:
+<chunk>
+{chunk}
+</chunk>
+
+Give a short, succinct context to situate this chunk within the overall
+document for the purposes of improving search retrieval of the chunk.
+Answer only with the succinct context."""
+
+async def contextualize_chunk(doc: str, chunk: str) -> str:
+    # Prompt caching makes this cheap: the full document is a cached
+    # prefix shared across all of its chunks' contextualization calls.
+    ctx = await small_llm(CONTEXTUALIZE.format(full_document=doc, chunk=chunk))
+    return f"{ctx}\n\n{chunk}"        # this enriched text gets embedded AND BM25-indexed
+```
+
+測定された効果: コンテキスト埋め込み+コンテキストBM25でトップ20検索の失敗率が約49%減、リランカーを足すと約67%減。コストは一度きりのインデックスパスです(プロンプトキャッシングが安くします — ある文書の全チャンクの文脈付け呼び出しが、その文書をキャッシュ済みプレフィックスとして共有するため)。これは入手可能な最高ROIのインデックス強化であり、以下のすべてと合成できます。
+
+### GraphRAG
+
+ベクトル検索は「Xについての文章を見つける」に答えます。**グローバルな質問** — 「全インシデントレポートを横断する反復的な障害テーマは何か?」 — では破綻します。答えが数百の文書に分散し、単一のチャンクはどれも関連しないからです。GraphRAG(Microsoft、2024)はインデックス時にこれを扱います: LLMがコーパスからエンティティ-関係グラフを抽出し、コミュニティ検出がそれをクラスタリングし、LLMがコミュニティごとの要約を書きます。グローバルクエリはコミュニティ要約上のmap-reduceとして、ローカルクエリは一致エンティティ周辺のグラフ走査として実行されます。
+
+```mermaid
+graph LR
+    subgraph INDEX["Index time (expensive)"]
+        DOCS["Corpus"] --> EXTRACT["LLM: extract<br/>entities + relations"]
+        EXTRACT --> GRAPH[("Knowledge<br/>graph")]
+        GRAPH --> COMM["Community detection<br/>+ LLM summaries"]
+    end
+    subgraph QUERY["Query time"]
+        GQ["Global query"] --> MR["Map-reduce over<br/>community summaries"]
+        LQ["Local query"] --> TRAV["Graph traversal<br/>around entities"]
+    end
+    COMM -.-> MR
+    GRAPH -.-> TRAV
+```
+
+コーパスの意味理解そのものがプロダクトであるとき(調査、リサーチ統合、コンプライアンスレビュー)に使ってください。普通の文書Q&Aには見送りを — インデックス構築はチャンクごとに1回のLLM呼び出し+要約のコストがかかり、文書の更新下でグラフを最新に保つのは現実の運用負担です。
+
+
 ### クエリ変換
 
 ```mermaid
@@ -1137,18 +1206,22 @@ graph TD
 
 ### RAGを使うべきでない場合
 
-- データの変更頻度が高すぎる場合（ライブ検索を検討）
-- 完全な精度が求められる場合（RAGでもハルシネーションの可能性あり）
-- 単純な事実確認クエリの場合（直接検索で十分な可能性あり）
-- コンテキストウィンドウが全データに対して十分な場合
+- コーパスがコンテキストウィンドウに収まり、クエリをまたいで再利用される → 長文コンテキスト+プロンプトキャッシング(より安く、再現率リスクなし)
+- エージェントからコードやローカルファイルを検索する → `grep`/`glob` ツールが埋め込みインデックスに勝つ(正確、常に新鮮、インデックス維持ゼロ)
+- 再インデックスが追いつかない速さでデータが変わる → ライブ検索API
+- 構造化データへの構造化された質問 → 行を直列化した埋め込みではなく、text-to-SQL / APIクエリ
+- 完全な再現率が契約事項(リーガルディスカバリ、コンプライアンス) → RAGはフィルタであって保証ではない。全件スキャンと併用する
 
 ---
 
 ## 参考文献
 
-- [Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks](https://arxiv.org/abs/2005.11401) - 元祖RAG論文
+- [Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks](https://arxiv.org/abs/2005.11401) - RAG原論文
+- [Introducing Contextual Retrieval](https://www.anthropic.com/news/contextual-retrieval) - Anthropic; 失敗率を約49〜67%削減するレシピ
+- [GraphRAG: From Local to Global](https://arxiv.org/abs/2404.16130) - Microsoft; [プロジェクトドキュメント](https://microsoft.github.io/graphrag/)
+- [ColBERTv2: Effective and Efficient Retrieval via Late Interaction](https://arxiv.org/abs/2112.01488) - 知っておくべき第三の検索ファミリー(トークンレベル照合)
+- [Lost in the Middle: How Language Models Use Long Contexts](https://arxiv.org/abs/2307.03172)
 - [HyDE: Precise Zero-Shot Dense Retrieval](https://arxiv.org/abs/2212.10496)
 - [Self-RAG: Learning to Retrieve, Generate, and Critique](https://arxiv.org/abs/2310.11511)
 - [RAGAS: Automated Evaluation of RAG](https://arxiv.org/abs/2309.15217)
-- [LangChain RAG Documentation](https://python.langchain.com/docs/use_cases/question_answering/)
-- [LlamaIndex Documentation](https://docs.llamaindex.ai/)
+- [MTEB: Massive Text Embedding Benchmark](https://huggingface.co/spaces/mteb/leaderboard) - 埋め込みモデルの選定

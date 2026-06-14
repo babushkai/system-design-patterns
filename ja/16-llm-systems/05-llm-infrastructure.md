@@ -4,7 +4,7 @@
 
 ## TL;DR
 
-本番LLMインフラストラクチャは、モデルサービング（バッチ処理、GPU最適化、モデルルーティング）、キャッシング（セマンティックキャッシュ、KVキャッシュ）、評価（自動テスト、人間のフィードバック）、コスト最適化（モデルカスケード、トークン管理）、およびガードレール（入出力フィルタリング、レート制限）を包括します。主な課題には、スケールでのレイテンシ管理、コスト制御、信頼性の確保、安全性の維持があります。
+本番のLLMインフラは、モデルサービング(連続バッチング、PagedAttention、プレフィックスキャッシング、投機的デコーディング、プリフィル/デコード分離)、キャッシング(まずプロバイダのプロンプトキャッシング、セマンティックキャッシングは慎重に)、制約付きデコーディングによる構造化出力、評価、コスト最適化(カスケード、量子化、バッチティア)、そしてガードレールに広がります。サービング層は2つのレジーム — 計算律速のプリフィルとメモリ帯域律速のデコード — に支配されており、モダンスタック(vLLM、SGLang、TensorRT-LLM)のほぼすべての最適化は、その非対称性をまたいでGPUを忙しく保つためのものです。リクエスト/秒だけでなく、TTFT、トークン間レイテンシ、SLO下のグッドプットを測ってください。
 
 ---
 
@@ -262,6 +262,82 @@ class BatchProcessor:
                 await self._send_error(request["id"], str(e))
 ```
 
+### モダンな推論エンジンの内側
+
+LLM推論には正反対のハードウェアプロファイルを持つ2つのフェーズがあり、ほぼすべてのサービング最適化はその非対称性を利用します:
+
+```mermaid
+graph LR
+    subgraph PREFILL["PREFILL (compute-bound)"]
+        P["Process entire prompt<br/>in parallel<br/>→ determines TTFT"]
+    end
+    subgraph DECODE["DECODE (memory-bandwidth-bound)"]
+        D["One token per step,<br/>re-reads weights + KV cache<br/>→ determines inter-token latency"]
+    end
+    P -->|"KV cache<br/>(the bottleneck resource)"| D
+```
+
+**連続バッチング (Continuous batching)。** リクエストは静的バッチの最遅メンバーを待たず、*トークン*粒度でバッチに参加・離脱します。これだけで、vLLM/TGI級のエンジンが素朴なサービングより1桁高いスループットを出します — 完了したシーケンスのスロットは次のステップで即座に再利用されます。
+
+**PagedAttention。** KVキャッシュをリクエストごとの連続バッファではなく、間接テーブル付きの固定サイズブロック(仮想メモリのページのよう)で確保します。バッチサイズの上限となっていたメモリ断片化を消し、シーケンス間のKV共有(1プロンプトからのNサンプルがプロンプトのブロックを共有)を可能にします。
+
+**プレフィックスキャッシング (RadixAttention)。** 同じシステムプロンプト、同じfew-shotブロック、エージェント会話の履歴全体 — プロンプトのプレフィックスを共有するリクエストは、プリフィルを再計算せずプレフィックスのKVブロックを再利用します。SGLangはキャッシュを基数木として組織し、リクエスト横断の共有を最大化します。毎ターン全トランスクリプトを再送するエージェント/チャットのワークロードでは、プレフィックスキャッシングはプリフィル作業を日常的に80〜95%削減します。プロバイダ側プロンプトキャッシングのセルフホスト版です。
+
+**チャンクドプリフィル。** 長いプロンプトのプリフィルをチャンクに割り、進行中のデコードステップと交互配置します。あるユーザーの10万トークンのプロンプトが、他の全ユーザーのトークンストリームを止めないように。単一レプリカ内のプリフィル/デコード干渉の標準的な修正です。
+
+**投機的デコーディング。** 安価なドラフター(小型モデル、Medusa/EAGLE型の追加デコードヘッド、n-gram検索)がkトークンを提案し、ターゲットモデルが1回のフォワードパスで検証して最長の正しい並びを受理します。出力は通常のデコードと証明可能に同一で、受理率が高ければトークン間レイテンシは2〜3倍下がります(コードや構造化テキストはよく受理され、高エントロピーの創作文はされません)。
+
+**プリフィル/デコード分離。** データセンター規模では、プリフィルとデコードは独立にサイズされた*別々のGPUプール*で動き、KVキャッシュはNVLink/RDMA越しにストリームされます(DistServe、Mooncake — Kimiのサービング基盤のアーキテクチャ)。2フェーズが同じSLOを奪い合うのを止めます: TTFTのためにプリフィル容量を、トークン/秒のためにデコード容量をスケールし、階層化KVストア(HBM → DRAM → SSD)がクラスタ全域のプレフィックスキャッシュを兼ねます。
+
+**量子化。** FP8の重み+活性は現行ハードウェアでほぼ無損失で、BF16比でスループットをほぼ倍にします。INT4の重みのみ量子化(AWQ/GPTQ)はメモリをさらに半減させ、レイテンシ耐性のある、あるいはメモリ制約のあるデプロイに向きます。KVキャッシュの量子化(FP8)は達成可能なバッチサイズ — たいてい束縛条件 — を直接引き上げます。自分の評価で検証を — 量子化の損失は平均的なパープレキシティではなく、ロングテールの推論に集中します。
+
+```python
+# What the knobs look like in practice (vLLM)
+from vllm import LLM
+
+llm = LLM(
+    model="meta-llama/Llama-3.3-70B-Instruct",
+    tensor_parallel_size=4,          # shard weights across 4 GPUs
+    gpu_memory_utilization=0.92,     # rest is headroom for activations
+    enable_prefix_caching=True,      # radix-style KV reuse across requests
+    enable_chunked_prefill=True,     # protect inter-token latency
+    quantization="fp8",              # weights + activations
+    kv_cache_dtype="fp8",            # bigger effective batch
+    speculative_config={             # draft-model speculation
+        "model": "meta-llama/Llama-3.2-1B-Instruct",
+        "num_speculative_tokens": 5,
+    },
+)
+```
+
+**重要なメトリクス。** 対話的サービングでは生スループットは無意味です。**TTFT**(最初のトークンまで — プリフィル+キューイング)、**TPOT/ITL**(出力トークンあたり時間)、そして**グッドプット**: *レイテンシSLOを満たす*毎秒リクエスト数を追跡します。生スループットを30%上げてもp95 TTFTがSLOを超える構成は、負の価値です。
+
+### 構造化出力と制約付きデコーディング
+
+本番システムに必要なのは「だいたいJSON」ではなく妥当なJSONです。モダンなエンジンは出力構造を*デコード中に*強制します: 文法コンパイラ(xgrammar、llguidance、Outlines)がJSON Schemaをトークンレベルのマスクに変換し、不正なトークンはそもそもサンプリングされません。妥当性保証、ほぼゼロのオーバーヘッド、リトライループ不要。
+
+```python
+from pydantic import BaseModel
+
+class Triage(BaseModel):
+    severity: str          # "P0" | "P1" | "P2"
+    component: str
+    needs_human: bool
+
+# vLLM / SGLang / OpenAI-compatible servers accept the schema directly
+response = client.chat.completions.create(
+    model="local-llama",
+    messages=[{"role": "user", "content": f"Triage this incident:\n{report}"}],
+    response_format={
+        "type": "json_schema",
+        "json_schema": {"name": "triage", "schema": Triage.model_json_schema(), "strict": True},
+    },
+)
+incident = Triage.model_validate_json(response.choices[0].message.content)
+```
+
+プログラムが消費するものにはスキーマ制約付き出力を、人間向けには自由テキストを。注意点がひとつ: 制約されたモデルは不確実さを表明する代わりに、スキーマ的に妥当なゴミを*必ず*生成します — スキーマに明示的な `"unknown"`/`needs_human` の逃げ道を含めてください。
+
 ### モデルルーティング
 
 ```python
@@ -369,6 +445,19 @@ class ModelCascade:
 
 ## キャッシング戦略
 
+### プロンプトキャッシング(プロバイダ側) — まずこれを使う
+
+すべての主要APIプロバイダは、繰り返されるプロンプト*プレフィックス*のKV状態をキャッシュし、キャッシュ済みトークンを新規入力価格の約10%で課金します(一部プロバイダはキャッシュ書き込みに小さなプレミアム)。セマンティックキャッシングと違い、これは厳密・無損失・プロバイダ管理です — 正しさのリスクはなく、あるのはエンジニアリング要件だけです: **プレフィックスをバイト単位で安定に保つこと**。
+
+プロンプトキャッシングを機能させるルール:
+
+- コンテキストは安定→揮発の順に: システムプロンプトとツールスキーマが先頭、セッションデータが次、進行中の会話が最後。
+- メッセージ履歴は追記のみ。過去ターンの編集・並べ替え・再レンダリングは、その地点以降のキャッシュを無効化します。
+- プレフィックスにタイムスタンプ・UUID・リクエスト単位のノイズを入れない。揮発データは末尾かツール結果で注入。
+- API使用量フィールドの `cached_tokens` を一級メトリクスとして監視。エージェント的ワークロード — 毎ターン全トランスクリプトを再送する — では、キャッシュヒット率がモデル選択を大きく上回る、システム全体最大のコストレバーです。
+
+多くのプロバイダは**バッチティア**(非同期・数時間レイテンシで50%引き)も提供しています — 評価、バックフィル、非対話的なパイプラインはデフォルトでそちらへ。
+
 ### セマンティックキャッシュ
 
 ```mermaid
@@ -379,7 +468,9 @@ graph LR
     SIM --> RET["Return Cached Response:<br/>The capital of France<br/>is Paris."]
 ```
 
-メリット: 言い換えたクエリにも対応、APIコストを大幅に削減、キャッシュヒット時はサブミリ秒のレスポンス
+メリット: 言い換えたクエリにも対応、APIコストを大幅に削減、キャッシュヒット時はサブミリ秒のレスポンス。
+
+注意点 — セマンティックキャッシングは正しさをコストと交換するので、適用範囲を意図して絞ること: 類似度 ≥ 0.95 は同じ正答を**保証しません**(「フランスの首都」と「フランス本土の首都」は良いが、「2023年の売上」と「2024年の売上」は駄目)。キャッシュはユーザー/テナントとモデル+パラメータのハッシュで分割し、時間に敏感なものはTTLを短く、対象はステートレスで反復の多いクエリトラフィックに限定します — パーソナライズされたコンテキストをまたいでキャッシュしてはならず、会話状態が全リクエストを一意にするエージェントのターンにも決して使わないこと(そちらはプロンプトキャッシングの仕事です)。
 
 ```python
 import hashlib
@@ -800,17 +891,16 @@ class ContinuousEval:
 from tiktoken import encoding_for_model
 
 class TokenManager:
-    """Manage token usage and costs."""
+    """Manage token usage and costs.
 
-    COSTS = {
-        "gpt-4": {"input": 0.03, "output": 0.06},
-        "gpt-4-turbo": {"input": 0.01, "output": 0.03},
-        "gpt-3.5-turbo": {"input": 0.0005, "output": 0.0015},
-        "claude-3-opus": {"input": 0.015, "output": 0.075},
-        "claude-3-sonnet": {"input": 0.003, "output": 0.015},
-    }
+    Never hardcode prices — they change quarterly. Load a pricing table
+    from config, and model all four meters: fresh input, cached input
+    (~10% of fresh), output (often 4-5x input — thinking tokens bill as
+    output), and batch-tier discounts (~50%).
+    """
 
-    def __init__(self):
+    def __init__(self, pricing: dict[str, dict[str, float]]):
+        self.pricing = pricing  # per 1M tokens, from config/pricing.yaml
         self.encoders = {}
 
     def count_tokens(self, text: str, model: str) -> int:
@@ -823,15 +913,21 @@ class TokenManager:
         self,
         model: str,
         input_tokens: int,
-        output_tokens: int
+        output_tokens: int,
+        cached_tokens: int = 0,
+        batch: bool = False,
     ) -> float:
         """Estimate cost for a request."""
-        costs = self.COSTS.get(model, {"input": 0.01, "output": 0.03})
+        p = self.pricing[model]
+        fresh = input_tokens - cached_tokens
 
-        input_cost = (input_tokens / 1000) * costs["input"]
-        output_cost = (output_tokens / 1000) * costs["output"]
+        cost = (
+            fresh * p["input"]
+            + cached_tokens * p.get("cached_input", p["input"] * 0.1)
+            + output_tokens * p["output"]
+        ) / 1_000_000
 
-        return input_cost + output_cost
+        return cost * 0.5 if batch else cost
 
     def optimize_prompt(self, prompt: str, max_tokens: int) -> str:
         """Trim prompt to fit token budget."""
@@ -1237,10 +1333,12 @@ class LLMMetrics:
 
 ## 参考文献
 
-- [vLLM: High-throughput LLM Serving](https://github.com/vllm-project/vllm)
-- [Text Generation Inference (TGI)](https://github.com/huggingface/text-generation-inference)
-- [GPTCache: Semantic Caching](https://github.com/zilliztech/GPTCache)
-- [NeMo Guardrails](https://github.com/NVIDIA/NeMo-Guardrails)
-- [Guardrails AI](https://github.com/guardrails-ai/guardrails)
-- [LangSmith Evaluation](https://docs.smith.langchain.com/)
-- [OpenAI Rate Limits Best Practices](https://platform.openai.com/docs/guides/rate-limits)
+- [vLLM: High-throughput LLM Serving](https://github.com/vllm-project/vllm) / [SGLang](https://github.com/sgl-project/sglang) — 支配的なオープンサービングエンジン
+- [Efficient Memory Management for LLM Serving with PagedAttention](https://arxiv.org/abs/2309.06180) — vLLM論文
+- [DistServe: Disaggregating Prefill and Decoding](https://arxiv.org/abs/2401.09670) / [Mooncake: KVCache-centric Disaggregated Architecture](https://arxiv.org/abs/2407.00079)
+- [EAGLE: Speculative Sampling Requires Rethinking Feature Uncertainty](https://arxiv.org/abs/2401.15077) / [Medusa](https://arxiv.org/abs/2401.10774) — 投機的デコーディング
+- [XGrammar: Flexible and Efficient Structured Generation](https://github.com/mlc-ai/xgrammar) / [Outlines](https://github.com/dottxt-ai/outlines) — 制約付きデコーディング
+- [Anthropic Prompt Caching](https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching) / [OpenAI Prompt Caching](https://platform.openai.com/docs/guides/prompt-caching)
+- [OpenTelemetry GenAI Semantic Conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) — LLMシステムの標準トレース/メトリクススキーマ
+- [NeMo Guardrails](https://github.com/NVIDIA/NeMo-Guardrails) / [Guardrails AI](https://github.com/guardrails-ai/guardrails)
+- [LiteLLM](https://github.com/BerriAI/litellm) — マルチプロバイダゲートウェイ、ルーティング、予算

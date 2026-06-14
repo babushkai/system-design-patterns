@@ -650,6 +650,26 @@ x-cdn-backend: 23.215.0.136:443       # Akamai
 
 ---
 
+## HTTP/3 and QUIC at the Edge
+
+HTTP/3 runs over **QUIC** — a UDP-based transport with TLS 1.3 built in — and the CDN edge is exactly where it pays, because the edge terminates the messy last mile where loss and latency live. CDNs speak HTTP/3 to users and ordinary HTTP/2/1.1 to your origin, so enabling it is usually a checkbox plus an `Alt-Svc` advertisement — no origin changes.
+
+| Problem with TCP+TLS | QUIC's answer | Edge impact |
+|---|---|---|
+| TCP handshake then TLS handshake (2-3 RTTs) | Combined transport+crypto handshake: 1 RTT, **0-RTT** on resumption | Faster first byte, biggest on high-RTT mobile |
+| Head-of-line blocking: one lost packet stalls every multiplexed H2 stream | Independent streams — loss in one stream doesn't stall others | Fewer tail-latency spikes on lossy networks |
+| Connection = 4-tuple; dies on network switch | **Connection IDs** — survives Wi-Fi↔cellular migration | Mobile sessions persist without re-handshake |
+| Ossified kernel TCP evolution | Userspace transport, encrypted headers | Faster protocol iteration (CDNs deploy improvements fleet-wide) |
+
+Operational notes worth knowing before flipping it on:
+
+- **Fallback must be graceful:** a minority of networks block/throttle UDP 443; clients race or fall back to H2 via Alt-Svc — monitor your H3 negotiation rate, not just availability.
+- **0-RTT data is replayable** — accept it only for idempotent requests ([Idempotency](../01-foundations/08-idempotency.md)); CDNs enforce this by default, but check before enabling 0-RTT to origin paths.
+- **CPU cost is higher** than kernel TCP (userspace stacks, per-packet crypto) — another reason it belongs at the edge, where it's amortized across tenants, rather than on your origin.
+- Measure the win where it exists: handshake time and TTFB on *lossy/mobile* segments improve markedly; on clean wired paths the delta is small. Slice your RUM data accordingly.
+
+---
+
 ## Performance Metrics
 
 ```nginx

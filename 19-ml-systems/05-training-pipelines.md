@@ -23,6 +23,8 @@ flowchart LR
 
 Each edge should carry metadata: dataset version, code version, feature definitions, parameters, artifact hash, and evaluation report.
 
+A training pipeline is a [batch data pipeline](../13-data-pipelines/01-batch-processing.md) with a model at the end: it wants the same [workflow orchestration](../16-llm-systems/02-orchestration-patterns.md) discipline, [idempotent](../01-foundations/08-idempotency.md) re-runnable steps, and snapshot-based reproducibility that any derived-data system needs.
+
 ---
 
 ## Reproducibility Contract

@@ -4,738 +4,293 @@
 
 ## TL;DR
 
-LLMエージェントは、言語モデルにツール、メモリ、計画能力を組み合わせることで、複雑なタスクを自律的に達成します。単純なチャットボットとは異なり、エージェントは問題について推論し、アクションを実行し、結果を観察し、反復することができます。コアループは「知覚 → 思考 → 行動 → 観察 → 繰り返し」です。
+エージェントとは、環境に対してループの中でツールを使うモデルです。モデルは推論を供給し、その周りに構築する**ハーネス** — ループ、ツール定義、コンテキスト管理、権限、サンドボックス — が、その推論のどれだけが有用な仕事に変わるかを決めます。モダンなエージェントはテキスト解析のプロンプトではなくネイティブなツール呼び出し(型付きJSONスキーマ、並列呼び出し)を使い、コンテキストウィンドウをファイルとコンパクションに裏打ちされた作業記憶として扱い、グラウンドトゥルース(テスト、リンター、スクリーンショット)に対して自分の仕事を検証し、権限でゲートされたサンドボックスの中で動きます。まず環境とフィードバックループを設計してください。モデルは最も交換可能なコンポーネントです。
 
 ---
 
-## エージェントとチャットボットの違いとは？
+## エージェントはチャットボットと何が違うのか?
 
 ```mermaid
 graph LR
-    subgraph CHATBOT["Chatbot"]
+    subgraph CHATBOT["Chatbot / Workflow"]
         UI1["User Input"] --> LLM1["LLM"] --> R1["Response"]
     end
 
     subgraph AGENT["Agent"]
-        UG["User Goal"] --> Plan["Plan"]
-        Plan --> Act["Act<br/>(Tool)"]
-        Act --> Observe["Observe<br/>Results"]
-        Observe -->|Loop until<br/>goal achieved| Plan
+        UG["Goal"] --> M["Model decides<br/>next action"]
+        M -->|tool call| ENV["Environment<br/>(files, shell, APIs, browser)"]
+        ENV -->|tool result| M
+        M -->|no more tool calls| DONE["Final answer"]
 
-        Memory[("Memory")] -.-> Plan
-        Tools["Tools"] -.-> Act
-        Context["Context"] -.-> Plan
+        HARNESS["Harness:<br/>loop, context mgmt,<br/>permissions, sandbox"] -.->|mediates| M
+        HARNESS -.->|mediates| ENV
     end
 ```
 
-### 主な違い
+チャットボットは1つの入力を1つの出力に写像します。**ワークフロー**はあなたが書いたコードパスに沿ってLLM呼び出しを連鎖させます。**エージェント**はモデル自身にプロセスの指揮をとらせます: 直前のツールが返した結果に基づいて次に呼ぶツールを決め、ゴールが達成されるかハーネスが止めるまで続けます。その自律性こそが価値でありリスクです — エージェントは手順を列挙できないタスクを処理し、あなたが列挙しなかった形で失敗もします。
 
-| 観点 | チャットボット | エージェント |
-|--------|---------|-------|
-| インタラクション | 単一ターン | 状態を持つマルチターン |
-| アクション | テキストのみ | ツールとAPI |
-| 計画 | なし | ゴール分解 |
-| メモリ | なしまたは限定的 | 短期 + 長期 |
-| 自律性 | リアクティブ | プロアクティブ |
-| エラー処理 | なし | リトライ、代替パス |
+| 観点 | チャットボット | ワークフロー | エージェント |
+|--------|---------|----------|-------|
+| 制御フロー | なし | あなたのコード | モデル |
+| アクション | テキストのみ | 事前定義されたLLM呼び出し | 実行時に選ばれるツール |
+| ステップ | 1 | 固定 | オープンエンド。ハーネスが上限 |
+| 失敗モード | 悪い回答 | 悪いステップ出力 | ステップをまたいで複利するドリフト |
+| コストプロファイル | 予測可能 | 予測可能 | 可変 — ハーネスで予算化 |
+| 適するもの | Q&A | 分解可能な既知のタスク | 検証可能な結果を持つオープンエンドのタスク |
 
----
+問題を解く最も単純な形から始めてください。本番の「エージェント」システムの大半はワークフローであり、それでよいのです — 分類は[オーケストレーションパターン](./02-orchestration-patterns.md)を参照。
 
-## エージェントアーキテクチャ
-
-### コアコンポーネント
+## 3つのコンポーネント
 
 ```mermaid
 graph TD
-    BRAIN["BRAIN (LLM)<br/>Reasoning, NLU,<br/>Decision making,<br/>Tool selection"]
+    MODEL["MODEL<br/>Reasoning, tool selection,<br/>extended thinking"]
+    HARNESS["HARNESS<br/>Loop, system prompt, tool schemas,<br/>context lifecycle, permissions,<br/>checkpointing, telemetry"]
+    ENVIRONMENT["ENVIRONMENT<br/>Filesystem, shell, APIs,<br/>browser, sandbox boundary"]
 
-    BRAIN --> MEMORY[("MEMORY<br/>Working, Short-term,<br/>Long-term, Episodic")]
-    BRAIN --> TOOLS["TOOLS<br/>Search, Code exec,<br/>APIs, Browser"]
-    BRAIN --> PLANNING["PLANNING<br/>Goal decomposition,<br/>Task ordering,<br/>Backtracking, Re-planning"]
+    HARNESS --> MODEL
+    HARNESS --> ENVIRONMENT
+    MODEL <-.->|tool calls / results| ENVIRONMENT
 ```
 
-### 基本エージェントループ
+- **モデル。** フロンティアモデルはエージェント的なツール使用のために特別にポストトレーニングされています: 推論とツール呼び出しをネイティブに交互配置し、エラーから回復し、数時間のタスクを持続します。モデル間の能力差は重要ですが、凡庸なハーネスはフロンティアモデルを浪費します — 公開コーディングベンチマークは常に*モデル+ハーネス*のペアを報告し、モデル単体を報告することはありません。
+- **ハーネス。** モデルと世界の間のすべて。エンジニアリングの労力の大半がここに注がれます。完全な扱いは[ハーネスエンジニアリング](./09-harness-engineering.md)を参照。
+- **環境。** エージェントが観測し変更できるもの。環境が豊かで検査可能なほど(本物のシェル、本物のファイルシステム、本物のテストスイート)、エージェントのフィードバックループは良くなります。進捗が*観測可能*になるよう環境を設計してください — テストを実行できるエージェントは、変更がうまくいったかを推測する必要がありません。
+
+---
+
+## エージェントループ
+
+2023年式のパターン — モデルに `Thought: / Action: / Action Input:` のテキストを出力させて正規表現で解析する — は時代遅れです。すべての主要APIは**ネイティブなツール呼び出し**を公開しています: ツールをJSON Schemaとして宣言し、モデルは型付きのツール呼び出しブロックを返し、結果は構造化メッセージとして返します。解析なし、フォーマットのずれなし、並列呼び出しは無料です。
 
 ```python
-from typing import List, Dict, Any
-from abc import ABC, abstractmethod
+import anthropic
 
-class Tool(ABC):
-    name: str
-    description: str
+client = anthropic.Anthropic()
 
-    @abstractmethod
-    def execute(self, **kwargs) -> str:
-        pass
+TOOLS = [
+    {
+        "name": "bash",
+        "description": "Run a shell command in the project sandbox. "
+                       "Returns stdout and stderr, truncated to 50KB.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string", "description": "Command to execute"},
+            },
+            "required": ["command"],
+        },
+    },
+    {
+        "name": "edit_file",
+        "description": "Replace an exact string in a file. Fails if the string "
+                       "is not found or matches more than once.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "old": {"type": "string"},
+                "new": {"type": "string"},
+            },
+            "required": ["path", "old", "new"],
+        },
+    },
+]
 
-class Agent:
-    def __init__(self, llm, tools: List[Tool], max_iterations: int = 10):
-        self.llm = llm
-        self.tools = {tool.name: tool for tool in tools}
-        self.max_iterations = max_iterations
-        self.memory = []
+def agent_loop(task: str, max_turns: int = 50) -> str:
+    messages = [{"role": "user", "content": task}]
 
-    def run(self, goal: str) -> str:
-        """Main agent loop"""
-        self.memory.append({"role": "user", "content": goal})
+    for _ in range(max_turns):
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=8192,
+            system=SYSTEM_PROMPT,          # stable across turns: prompt-cache friendly
+            tools=TOOLS,
+            messages=messages,
+        )
 
-        for i in range(self.max_iterations):
-            # Think: Decide what to do next
-            thought, action = self.think()
+        if response.stop_reason != "tool_use":
+            return next(b.text for b in response.content if b.type == "text")
 
-            if action is None:
-                # Agent decided to give final answer
-                return thought
+        # Append the assistant turn verbatim, then execute every tool call
+        # in it (the model may request several in parallel).
+        messages.append({"role": "assistant", "content": response.content})
+        results = [
+            {
+                "type": "tool_result",
+                "tool_use_id": block.id,
+                "content": execute_tool(block.name, block.input),
+            }
+            for block in response.content
+            if block.type == "tool_use"
+        ]
+        messages.append({"role": "user", "content": results})
 
-            # Act: Execute the chosen tool
-            tool_name, tool_input = action
-            observation = self.act(tool_name, tool_input)
-
-            # Observe: Record the result
-            self.observe(thought, tool_name, tool_input, observation)
-
-        return "Max iterations reached without completing goal"
-
-    def think(self) -> tuple[str, tuple | None]:
-        """Use LLM to decide next action"""
-        prompt = self.build_prompt()
-        response = self.llm.generate(prompt)
-
-        # Parse response for thought and action
-        thought = self.extract_thought(response)
-        action = self.extract_action(response)
-
-        return thought, action
-
-    def act(self, tool_name: str, tool_input: dict) -> str:
-        """Execute the selected tool"""
-        if tool_name not in self.tools:
-            return f"Error: Unknown tool '{tool_name}'"
-
-        try:
-            result = self.tools[tool_name].execute(**tool_input)
-            return result
-        except Exception as e:
-            return f"Error executing {tool_name}: {str(e)}"
-
-    def observe(self, thought: str, tool_name: str,
-                tool_input: dict, observation: str):
-        """Record the step in memory"""
-        self.memory.append({
-            "thought": thought,
-            "action": tool_name,
-            "action_input": tool_input,
-            "observation": observation
-        })
-
-    def build_prompt(self) -> str:
-        """Build prompt with tools, memory, and instructions"""
-        tool_descriptions = "\n".join([
-            f"- {name}: {tool.description}"
-            for name, tool in self.tools.items()
-        ])
-
-        history = self.format_memory()
-
-        return f"""You are an AI agent that can use tools to accomplish goals.
-
-Available tools:
-{tool_descriptions}
-
-Previous steps:
-{history}
-
-Respond with:
-Thought: <your reasoning>
-Action: <tool_name>
-Action Input: <input as JSON>
-
-Or if you have the final answer:
-Thought: <your reasoning>
-Final Answer: <your answer>
-"""
+    raise RuntimeError("max_turns exceeded — task did not converge")
 ```
+
+OpenAI版は `tools=[{"type": "function", ...}]` とレスポンスの `tool_calls` を使いますが、ループの形は同一です。レガシーの `functions` / `function_call` パラメータは非推奨です。
+
+本番版がこの骨格の上に足すもの:
+
+1. `execute_tool` の前の**権限ゲート** — アクションを読み取り/書き込み/不可逆に分類し、最後のクラスには承認を要求する。
+2. **トークン予算の管理** — 毎ターンのコンテキスト使用量を追跡し、溢れる前にコンパクションを発動する([コンテキスト管理](./08-context-management.md)参照)。
+3. **チェックポイント** — `messages` を永続化し、クラッシュや中断した実行が最初からではなく途中から再開できるように。
+4. **テレメトリ** — 各ターンをトレースのスパンとして記録: ツール名、レイテンシ、トークン、キャッシュヒット率。
+5. **ストリーミングと割り込み** — 部分的な出力を表示し、人間が実行中に舵を切れるように。
+
+### 拡張思考
+
+推論対応モデルは行動の前に内部の思考トークンを出力でき、ツール呼び出しの間に思考を*交互配置*できます — 結果について熟考してから次のアクションを選べます。これがプロンプトレベルの推論の足場(Chain-of-Thought、Tree-of-Thought)の大半を置き換えました。プロンプトの小細工ではなく思考予算パラメータで制御します。検証が難しくステップが不可逆な場面に予算を使い、機械的なツール使用の列では低く保ちます。
 
 ---
 
 ## ツール
 
-### ツール定義
+ツールはエージェントにとっての世界へのAPIです。ツール設計は型システム付きのプロンプトエンジニアリングです — モデルはあなたのスキーマと説明文を新人がドキュメントを読むように読み、曖昧さは実際のトークンと誤った呼び出しのコストになります。
 
-```python
-from pydantic import BaseModel, Field
-from typing import Optional
-import json
+### 設計原則
 
-class ToolParameter(BaseModel):
-    name: str
-    type: str
-    description: str
-    required: bool = True
+1. **少数の直交するツールが、多数の重複するツールに勝つ。** すべてのツールは毎ターン、モデルの注意を奪い合います。2つのツールで同じことができるなら、モデルは時々悪い方を選びます。統合してください(5つのログツールではなく `search_logs(filters)`)。
+2. **説明文はマイクロプロンプトである。** ツールが何をするか、隣のツールよりいつ使うべきか、何を返すか、失敗モードを記述します。上の `edit_file` の説明は、2つのよくある失敗ケースを*避ける方法*をモデルに伝えています。
+3. **トークン効率の良い出力。** モデルが次のステップを決めるのに必要なものを返す — 切り詰め、ページネーション、要約。200KBのJSONをコンテキストに流し込むツールは、エラーを返すツールより害があります。
+4. **教えるエラー。** `"File not found: src/uesr.py — did you mean src/user.py?"` はモデルに1ターンで自己修正させます。裸のスタックトレースはしばしば3ターンかかります。
+5. 可能な限り**冪等でリトライ安全に** — ループは*必ず*リトライします。
 
-class Tool:
-    def __init__(
-        self,
-        name: str,
-        description: str,
-        parameters: List[ToolParameter],
-        function: callable
-    ):
-        self.name = name
-        self.description = description
-        self.parameters = parameters
-        self.function = function
+### 汎用ツール vs 構造化ツール
 
-    def to_openai_function(self) -> dict:
-        """Convert to OpenAI function calling format"""
-        return {
-            "name": self.name,
-            "description": self.description,
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    p.name: {"type": p.type, "description": p.description}
-                    for p in self.parameters
-                },
-                "required": [p.name for p in self.parameters if p.required]
-            }
-        }
+実務で最もレバレッジの高いツールは汎用のものです: **シェル、ファイルの読み書き編集、コード実行**。bashツールは何百もの特化ツールを包含し、スクリプトを書くことは10回のツール呼び出しを連鎖させるよりトークン効率が良いことが多い — 「ツール使用としてのコード実行」パターンでは、エージェントは各呼び出しをコンテキストウィンドウに通す代わりに、ループでAPIを呼ぶ*プログラムを書きます*。型とガードレールが重要な場所には構造化ツールを足します: 決済、チケット更新、あらゆる不可逆な操作。
 
-    def execute(self, **kwargs) -> str:
-        return self.function(**kwargs)
+### MCP: 統合の標準
 
-# Example tools
-search_tool = Tool(
-    name="web_search",
-    description="Search the web for current information",
-    parameters=[
-        ToolParameter(name="query", type="string", description="Search query")
-    ],
-    function=lambda query: search_api.search(query)
-)
-
-calculator_tool = Tool(
-    name="calculator",
-    description="Perform mathematical calculations",
-    parameters=[
-        ToolParameter(name="expression", type="string", description="Math expression to evaluate")
-    ],
-    function=lambda expression: str(eval(expression))  # In production, use safe eval
-)
-
-code_executor_tool = Tool(
-    name="python_repl",
-    description="Execute Python code and return the result",
-    parameters=[
-        ToolParameter(name="code", type="string", description="Python code to execute")
-    ],
-    function=lambda code: execute_python_safely(code)
-)
-```
-
-### OpenAIでのツール呼び出し
-
-```python
-import openai
-import json
-
-class OpenAIAgent:
-    def __init__(self, tools: List[Tool]):
-        self.client = openai.OpenAI()
-        self.tools = {t.name: t for t in tools}
-        self.functions = [t.to_openai_function() for t in tools]
-
-    def run(self, messages: List[dict]) -> str:
-        while True:
-            response = self.client.chat.completions.create(
-                model="gpt-4",
-                messages=messages,
-                functions=self.functions,
-                function_call="auto"  # Let model decide
-            )
-
-            message = response.choices[0].message
-
-            # Check if model wants to call a function
-            if message.function_call:
-                function_name = message.function_call.name
-                function_args = json.loads(message.function_call.arguments)
-
-                # Execute the tool
-                tool_result = self.tools[function_name].execute(**function_args)
-
-                # Add assistant message and function result to conversation
-                messages.append({
-                    "role": "assistant",
-                    "content": None,
-                    "function_call": {
-                        "name": function_name,
-                        "arguments": message.function_call.arguments
-                    }
-                })
-                messages.append({
-                    "role": "function",
-                    "name": function_name,
-                    "content": tool_result
-                })
-            else:
-                # Model gave final response
-                return message.content
-```
-
-### ツールカテゴリ
+Model Context Protocol (MCP)は、ツール・リソース・プロンプトをエージェントに公開する方法を標準化します — MCPサーバーがシステム(GitHub、Postgres、Slack、ブラウザ)を一度ラップすれば、MCP対応のどのハーネスからも使えます。MCPサーバーはサードパーティ依存として扱ってください: 公開内容をレビューし、バージョンを固定し、接続した全サーバーのツール説明があなたのプロンプトに入ることを忘れずに(カタログが大きいときは遅延ロード/ツール検索を)。詳細は[コーディングエージェントのツール設計](../18-compound-engineering/02-coding-agent-tool-design.md)。
 
 ```mermaid
-graph TD
-    TT["TOOL TAXONOMY"]
-    TT --> IR["INFORMATION RETRIEVAL<br/>Web search, DB query,<br/>Document search,<br/>Knowledge base, API calls"]
-    TT --> COMP["COMPUTATION<br/>Calculator, Code interpreter,<br/>Data analysis,<br/>Scientific computing"]
-    TT --> INT["INTERACTION<br/>Browser automation,<br/>Email sending,<br/>File operations,<br/>System commands"]
-    TT --> CC["CONTENT CREATION<br/>Text generation,<br/>Image generation,<br/>Code generation,<br/>Document formatting"]
-    TT --> MS["MEMORY & STATE<br/>Save/recall from memory,<br/>Update context,<br/>Manage state"]
-    TT --> SP["SPECIALIZED<br/>Domain-specific APIs,<br/>Enterprise connectors,<br/>Custom tools"]
+graph LR
+    AGENT["Agent harness"] -->|MCP client| S1["MCP server: GitHub"]
+    AGENT -->|MCP client| S2["MCP server: Postgres"]
+    AGENT -->|MCP client| S3["MCP server: internal APIs"]
+    AGENT -->|built-in| T1["bash / files / code exec"]
 ```
 
 ---
 
-## メモリシステム
+## メモリとコンテキスト
 
-### メモリの種類
+コンテキストウィンドウはエージェントの作業記憶であり、システムで最も希少な資源です。2つの知見がすべてを形づくります: 実効的な注意はコンテキストが埋まるにつれ劣化し(「コンテキスト腐敗」 — モデルは長いコンテキストの中央を端より思い出せない)、推論コストは再送するすべてのトークンに比例します。したがって長時間のエージェントは、最大のコンテキストではなく**コンテキスト衛生**の上に築かれます。
+
+| 層 | 機構 | 生存範囲 |
+|-------|-----------|----------|
+| 作業記憶 | メッセージリストそのもの | 1実行、コンパクションまで |
+| コンパクション要約 | モデルがトランスクリプトを要約し、要約+直近ターンでループ再開 | コンテキスト溢れ |
+| ファイルベースのメモリ | エージェントがメモ・計画・TODOをディスクに書き(`NOTES.md`、スクラッチ)、読み直す | セッション — そして次のセッション |
+| プロジェクトメモリ | 毎セッション読み込まれるキュレーション済み指示ファイル(`CLAUDE.md`型) | プロジェクト |
+| 検索 | コーパスや過去エピソードへの検索ツール | それ以外すべて |
+
+実務のデフォルト:
+
+- **コンパクション**は意思決定、制約、ファイルパス、学んだ落とし穴を保存し、生のツール出力を捨てます。溢れたときではなく、しきい値(例: ウィンドウの80%)で発動します。
+- **ファイルシステムはエージェントの外部メモリです。** 自分の `plan.md` を維持して項目にチェックを付けるエージェントは、コンパクションと中断からほぼ無償で回復します。
+- **ジャストインタイムの検索がプリロードに勝ちます。** 関連しそうなものすべてをプロンプトに詰めるのではなく、検索ツール(`grep`、セマンティック検索)を与えて必要なものを引かせます。[エージェントコンテキストエンジニアリング](../18-compound-engineering/03-agent-context-engineering.md)参照。
+- ベクトルストアの「エージェントメモリ」(全メッセージを埋め込み、類似度で検索)が最初の正解であることは稀です — エージェントが意図して書き、読むファイルのほうがデバッグ可能で忠実です。
+
+---
+
+## 検証: ループの重要な半分
+
+エージェントが輝くのは、**答えの確認が生成より安い**タスクです — テストスイートのあるコード、不変条件のあるデータ変換、スクリーンショットできるUI変更。ハーネスはグラウンドトゥルースを利用可能にすべきです:
 
 ```mermaid
-graph TD
-    WM["WORKING MEMORY<br/>Current context window<br/>Limited by LLM context length<br/>Most relevant for current task"]
-
-    WM --> ST["SHORT-TERM<br/>Recent messages<br/>Current session<br/>Task progress<br/>Storage: In-memory"]
-    WM --> LT[("LONG-TERM<br/>User preferences<br/>Past learnings<br/>Knowledge base<br/>Episodic memory<br/>Storage: Vector DB")]
+graph LR
+    ACT["Act<br/>(edit code)"] --> VERIFY["Verify<br/>(run tests, typecheck, lint)"]
+    VERIFY -->|fail, with errors| ACT
+    VERIFY -->|pass| DONE["Done — claim with evidence"]
 ```
 
-### メモリの実装
+- モデルの自己採点より**客観的な検証器**(終了コード、差分、ピクセル比較)を。グラウンドトゥルースなしの自己評価は成功率を水増しします。
+- 検証は*安価で増分的*に: 編集のたびに走らせられる高速で的を絞ったテストは、一度しか走らせない20分のスイートに勝ります。
+- プログラム的なオラクルのないタスクには、ルーブリック式のLLM-as-judgeを弱い信号として使い、確信の低い結果は人間へルーティングします。
+- 検証信号がまったくないタスクは自律に不向きです — 人間をループに残してください。
+
+これは信頼性の正直な枠組みでもあります: ステップごとの成功率は複利します。ステップ成功率98%のエージェントは30ステップのタスクを約55%しか完遂しません。検証ステップこそが複利を止める方法です — 静かなドリフトを、可視で回復可能なエラーに変換します。
+
+---
+
+## セキュリティとサンドボックス
+
+エージェントとは、信頼できないコードの実行問題+混乱した代理人(confused deputy)問題です。セキュリティ境界はモデルではなくハーネスです。
+
+- **環境をサンドボックスする。** ツール実行は使い捨てのコンテナかVMの中で: プロジェクトディレクトリは読み書きマウント、それ以外は読み取り専用か不可視。ネットワークegressはallowlist経由。シークレットはツールごとに注入し、コンテキストには決して置かない。
+- **アクションを分類しゲートする。** 読み取りは自動承認。ワークスペース内の書き込みは自動承認かレビュー用にバッチ。不可逆あるいは外向きのもの(push、デプロイ、メール送信、支出)は、緩和できる評価上の証拠が得られるまで明示的な承認を要求する。
+- **プロンプトインジェクションを前提とする。** エージェントが読むあらゆる信頼できないコンテンツ — Webページ、Issue、メール、ツール出力 — は指示を含みうる。パターンマッチのフィルタはこれを解決しません。構造的な防御は*致命的トライアングル*の回避です: (1)信頼できない入力を読み、(2)機密データにアクセスでき、(3)外部と通信できるエージェントは、設計からして持ち出し可能です。少なくとも1本の脚を取り除くかゲートすること。
+- **来歴が重要。** プロンプト内でツール結果を指示ではなくデータとしてマークする。「Issueのコメントがそうしろと言った」はモデルのバグではなく、あなたのハーネスのバグです。
 
 ```python
-from datetime import datetime
-from typing import List, Optional
-import numpy as np
+IRREVERSIBLE = {"deploy", "send_email", "git_push", "payment"}
 
-class MemoryItem:
-    def __init__(
-        self,
-        content: str,
-        metadata: dict = None,
-        importance: float = 0.5,
-        timestamp: datetime = None
-    ):
-        self.content = content
-        self.metadata = metadata or {}
-        self.importance = importance
-        self.timestamp = timestamp or datetime.now()
-        self.access_count = 0
-        self.last_accessed = self.timestamp
-        self.embedding: Optional[np.ndarray] = None
-
-class AgentMemory:
-    def __init__(
-        self,
-        embedding_model,
-        vector_store,
-        max_working_memory: int = 10
-    ):
-        self.embedding_model = embedding_model
-        self.vector_store = vector_store
-        self.working_memory: List[MemoryItem] = []
-        self.max_working_memory = max_working_memory
-
-    def add(self, content: str, importance: float = 0.5, metadata: dict = None):
-        """Add item to memory"""
-        item = MemoryItem(content, metadata, importance)
-        item.embedding = self.embedding_model.embed(content)
-
-        # Add to working memory
-        self.working_memory.append(item)
-        if len(self.working_memory) > self.max_working_memory:
-            # Move oldest to long-term storage
-            self._consolidate()
-
-        # Also store in vector DB for long-term
-        self.vector_store.add(
-            embedding=item.embedding,
-            content=content,
-            metadata={
-                **metadata,
-                "importance": importance,
-                "timestamp": item.timestamp.isoformat()
-            }
-        )
-
-    def retrieve(self, query: str, k: int = 5) -> List[MemoryItem]:
-        """Retrieve relevant memories"""
-        query_embedding = self.embedding_model.embed(query)
-
-        # Search vector store
-        results = self.vector_store.search(query_embedding, k=k)
-
-        # Combine with recency scoring
-        scored_results = []
-        for result in results:
-            recency_score = self._calculate_recency(result.timestamp)
-            combined_score = (
-                0.7 * result.similarity +
-                0.2 * recency_score +
-                0.1 * result.importance
-            )
-            scored_results.append((result, combined_score))
-
-        # Sort by combined score
-        scored_results.sort(key=lambda x: x[1], reverse=True)
-
-        return [r[0] for r in scored_results[:k]]
-
-    def _calculate_recency(self, timestamp: datetime) -> float:
-        """Exponential decay based on time"""
-        hours_ago = (datetime.now() - timestamp).total_seconds() / 3600
-        decay_rate = 0.99
-        return decay_rate ** hours_ago
-
-    def _consolidate(self):
-        """Move old working memory to long-term storage"""
-        # Remove least important items
-        self.working_memory.sort(key=lambda x: x.importance, reverse=True)
-        self.working_memory = self.working_memory[:self.max_working_memory]
-
-    def get_context(self, query: str, max_tokens: int = 2000) -> str:
-        """Build context string from relevant memories"""
-        memories = self.retrieve(query, k=10)
-
-        context_parts = []
-        total_tokens = 0
-
-        for memory in memories:
-            # Rough token estimate
-            tokens = len(memory.content.split()) * 1.3
-            if total_tokens + tokens > max_tokens:
-                break
-            context_parts.append(memory.content)
-            total_tokens += tokens
-
-        return "\n\n".join(context_parts)
-```
-
-### 会話バッファメモリ
-
-```python
-class ConversationMemory:
-    """Simple sliding window conversation memory"""
-
-    def __init__(self, max_messages: int = 20):
-        self.messages: List[dict] = []
-        self.max_messages = max_messages
-
-    def add_message(self, role: str, content: str):
-        self.messages.append({"role": role, "content": content})
-
-        # Trim if exceeds max
-        if len(self.messages) > self.max_messages:
-            # Keep system message if present
-            if self.messages[0]["role"] == "system":
-                self.messages = [self.messages[0]] + self.messages[-self.max_messages+1:]
-            else:
-                self.messages = self.messages[-self.max_messages:]
-
-    def get_messages(self) -> List[dict]:
-        return self.messages.copy()
-
-    def clear(self):
-        # Keep system message if present
-        if self.messages and self.messages[0]["role"] == "system":
-            self.messages = [self.messages[0]]
-        else:
-            self.messages = []
-
-class SummaryMemory:
-    """Summarize old conversations to save context"""
-
-    def __init__(self, llm, max_messages: int = 10):
-        self.llm = llm
-        self.max_messages = max_messages
-        self.messages: List[dict] = []
-        self.summary: str = ""
-
-    def add_message(self, role: str, content: str):
-        self.messages.append({"role": role, "content": content})
-
-        if len(self.messages) > self.max_messages:
-            self._summarize_old_messages()
-
-    def _summarize_old_messages(self):
-        # Take oldest messages to summarize
-        to_summarize = self.messages[:self.max_messages // 2]
-        self.messages = self.messages[self.max_messages // 2:]
-
-        # Generate summary
-        conversation_text = "\n".join([
-            f"{m['role']}: {m['content']}" for m in to_summarize
-        ])
-
-        new_summary = self.llm.generate(f"""
-Summarize this conversation, preserving key facts and decisions:
-
-Previous summary: {self.summary}
-
-New messages:
-{conversation_text}
-
-Updated summary:""")
-
-        self.summary = new_summary
-
-    def get_context(self) -> str:
-        messages_text = "\n".join([
-            f"{m['role']}: {m['content']}" for m in self.messages
-        ])
-
-        if self.summary:
-            return f"Previous context summary:\n{self.summary}\n\nRecent messages:\n{messages_text}"
-        return messages_text
+async def execute_gated(tool: str, args: dict, policy: Policy) -> str:
+    action_class = classify(tool, args)          # read | write | irreversible
+    if action_class == "irreversible" and not policy.pre_approved(tool, args):
+        approval = await request_human_approval(tool, args)
+        if not approval.granted:
+            return f"Denied by operator: {approval.reason}"   # the model adapts
+    return await sandbox.run(tool, args)
 ```
 
 ---
 
-## エージェント向けプロンプトエンジニアリング
+## エージェントの評価
 
-### システムプロンプト構造
-
-```python
-AGENT_SYSTEM_PROMPT = """You are an AI assistant that helps users by breaking down tasks and using tools.
-
-## Your Capabilities
-- You can search the web for current information
-- You can execute Python code for calculations and data processing
-- You can read and write files
-- You can interact with APIs
-
-## How to Approach Tasks
-1. Understand the user's goal completely before acting
-2. Break complex tasks into smaller steps
-3. Use the most appropriate tool for each step
-4. Verify results before proceeding
-5. Ask for clarification if the request is ambiguous
-
-## Available Tools
-{tool_descriptions}
-
-## Response Format
-Think step by step. For each step:
-
-Thought: Explain your reasoning for what to do next
-Action: tool_name
-Action Input: {{"param": "value"}}
-
-After receiving tool output:
-Observation: [tool output will appear here]
-
-Continue until you can provide a final answer:
-Thought: I now have enough information to answer
-Final Answer: [your complete response]
-
-## Important Guidelines
-- Always verify information before presenting it as fact
-- If a tool fails, try an alternative approach
-- Be concise but thorough in your final answers
-- Cite sources when providing factual information
-"""
-```
-
-### Few-Shotの例
-
-```python
-FEW_SHOT_EXAMPLES = """
-## Example 1: Simple Calculation
-
-User: What is 15% of 847?
-
-Thought: I need to calculate 15% of 847. I'll use the calculator tool.
-Action: calculator
-Action Input: {"expression": "847 * 0.15"}
-
-Observation: 127.05
-
-Thought: I have the answer.
-Final Answer: 15% of 847 is 127.05
-
-## Example 2: Multi-Step Research
-
-User: What's the current stock price of Apple and how does it compare to last year?
-
-Thought: I need to find the current stock price of Apple first.
-Action: web_search
-Action Input: {"query": "Apple AAPL stock price today"}
-
-Observation: Apple (AAPL) is currently trading at $178.50...
-
-Thought: Now I need to find the price from a year ago to compare.
-Action: web_search
-Action Input: {"query": "Apple AAPL stock price one year ago"}
-
-Observation: One year ago, AAPL was trading at approximately $142.30...
-
-Thought: Now I can calculate the change and provide a comparison.
-Action: calculator
-Action Input: {"expression": "((178.50 - 142.30) / 142.30) * 100"}
-
-Observation: 25.44
-
-Thought: I now have all the information needed.
-Final Answer: Apple (AAPL) is currently trading at $178.50. Compared to one year ago ($142.30), the stock has increased by approximately 25.4%.
-"""
-```
-
----
-
-## エラー処理とリカバリ
-
-```python
-class RobustAgent:
-    def __init__(self, llm, tools, max_retries: int = 3):
-        self.llm = llm
-        self.tools = tools
-        self.max_retries = max_retries
-
-    def execute_with_retry(self, tool_name: str, tool_input: dict) -> str:
-        """Execute tool with retry logic"""
-        errors = []
-
-        for attempt in range(self.max_retries):
-            try:
-                result = self.tools[tool_name].execute(**tool_input)
-                return result
-            except Exception as e:
-                errors.append(f"Attempt {attempt + 1}: {str(e)}")
-
-                if attempt < self.max_retries - 1:
-                    # Ask LLM to fix the input
-                    fixed_input = self.fix_tool_input(
-                        tool_name, tool_input, str(e)
-                    )
-                    if fixed_input:
-                        tool_input = fixed_input
-
-        return f"Tool execution failed after {self.max_retries} attempts:\n" + \
-               "\n".join(errors)
-
-    def fix_tool_input(self, tool_name: str, tool_input: dict, error: str) -> dict:
-        """Ask LLM to fix tool input based on error"""
-        prompt = f"""The tool '{tool_name}' failed with this input:
-{tool_input}
-
-Error: {error}
-
-Please provide corrected input as JSON, or respond "CANNOT_FIX" if the error cannot be fixed by changing the input.
-"""
-        response = self.llm.generate(prompt)
-
-        if "CANNOT_FIX" in response:
-            return None
-
-        try:
-            return json.loads(response)
-        except:
-            return None
-
-    def handle_stuck_state(self, memory: List[dict]) -> str:
-        """Detect and handle when agent is stuck in a loop"""
-        if len(memory) < 3:
-            return None
-
-        # Check for repeated actions
-        recent_actions = [m.get("action") for m in memory[-3:]]
-        if len(set(recent_actions)) == 1:
-            return self.generate_alternative_approach(memory)
-
-        return None
-
-    def generate_alternative_approach(self, memory: List[dict]) -> str:
-        """Generate alternative approach when stuck"""
-        prompt = f"""The agent appears to be stuck, repeating the same action.
-
-Previous steps:
-{self.format_memory(memory)}
-
-Please suggest an alternative approach to achieve the goal.
-"""
-        return self.llm.generate(prompt)
-```
+測れないハーネスは改善できません。公開ベンチマークは期待値を較正します — SWE-bench Verified(実GitHubイシュー)、Terminal-Bench(ターミナルタスク)、τ-bench(ポリシー制約+模擬ユーザー下のツール使用)、OSWorld(コンピュータ操作)、GAIA(ツール拡張推論) — しかしあなたのプロダクトには独自の評価セットが必要です: プログラム的な採点器を備えた50〜200の実タスクを、ハーネスのあらゆる変更で実行する。モデルレベルのスコアだけでなく、*タスク成功率*、*解決タスクあたりコスト*、*完了までのターン数*、*危険アクション率*を追跡してください。エージェントではpass@kとpass^kの違いが重要です: 8回に1回解けるタスクと8回中8回解けるタスクは、まったく別のプロダクトです。
 
 ---
 
 ## ベストプラクティス
 
-### 設計原則
-
 ```
-1. 単一責任ツール
-   悪い例:  do_everything(task)
-   良い例: search(query), calculate(expr), write_file(path, content)
+1. SIMPLEST THING FIRST
+   Single call → workflow → agent. Earn each step up in autonomy
+   with evidence the simpler form fails.
 
-2. 明確なツール説明
-   悪い例:  "Searches stuff"
-   良い例: "Search the web and return top 5 results with titles and snippets"
+2. DESIGN THE ENVIRONMENT, NOT JUST THE PROMPT
+   Fast tests, clear errors, inspectable state. Agents are only as
+   good as their feedback loops.
 
-3. グレースフルデグラデーション
-   - ツール障害を優雅に処理する
-   - 可能な場合は部分的な結果を提供する
-   - ユーザーに制限を説明する
+3. SMALL ORTHOGONAL TOOL SURFACE
+   Bash + files + code execution, plus structured tools for the
+   irreversible stuff. Consolidate aggressively.
 
-4. 制限付き反復
-   - 最大反復回数を設定する
-   - ループやスタック状態を検出する
-   - 長時間実行操作にタイムアウトを設定する
+4. CONTEXT HYGIENE OVER CONTEXT SIZE
+   Stable prompt prefix (cache), just-in-time retrieval, compaction,
+   files as memory.
 
-5. 観測可能な実行
-   - すべての思考とアクションをログに記録する
-   - トークン使用量を追跡する
-   - 実行トレースを記録する
-```
+5. VERIFY WITH GROUND TRUTH
+   Tests, typecheckers, screenshots. The model claims; the harness
+   confirms.
 
-### セキュリティの考慮事項
+6. SANDBOX BY DEFAULT, GATE THE IRREVERSIBLE
+   Containerized execution, egress allowlists, approval for
+   outward-facing actions. Avoid the lethal trifecta.
 
-```python
-class SecureAgent:
-    """Agent with security constraints"""
+7. BOUND EVERYTHING
+   Max turns, token budgets, wall-clock timeouts, spend limits.
+   Autonomy without budgets is an incident report.
 
-    DANGEROUS_PATTERNS = [
-        r"rm\s+-rf",
-        r"DROP\s+TABLE",
-        r"DELETE\s+FROM",
-        r"eval\s*\(",
-        r"exec\s*\(",
-    ]
-
-    def validate_tool_input(self, tool_name: str, tool_input: dict) -> bool:
-        """Check for dangerous operations"""
-        input_str = json.dumps(tool_input)
-
-        for pattern in self.DANGEROUS_PATTERNS:
-            if re.search(pattern, input_str, re.IGNORECASE):
-                raise SecurityError(f"Dangerous pattern detected: {pattern}")
-
-        return True
-
-    def sandbox_code_execution(self, code: str) -> str:
-        """Execute code in sandboxed environment"""
-        # Use restricted execution environment
-        # - No file system access
-        # - No network access
-        # - Limited CPU/memory
-        # - Timeout
-        pass
+8. INSTRUMENT EVERY TURN
+   Traces with tokens, tools, cache hits, interventions. Evals on
+   every harness change.
 ```
 
 ---
 
 ## 参考文献
 
-- [ReAct: Synergizing Reasoning and Acting in Language Models](https://arxiv.org/abs/2210.03629)
-- [LangChain Documentation](https://python.langchain.com/)
-- [OpenAI Function Calling](https://platform.openai.com/docs/guides/function-calling)
-- [Agents Survey Paper](https://arxiv.org/abs/2309.07864)
-- [AutoGPT](https://github.com/Significant-Gravitas/AutoGPT)
+- [Building Effective Agents](https://www.anthropic.com/research/building-effective-agents) — Anthropicのワークフロー/エージェント分類
+- [Effective Context Engineering for AI Agents](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents) — Anthropic
+- [Writing Effective Tools for Agents](https://www.anthropic.com/engineering/writing-tools-for-agents) — Anthropic
+- [Code Execution with MCP](https://www.anthropic.com/engineering/code-execution-with-mcp) — 連鎖ツール呼び出しの代わりのスクリプト
+- [Model Context Protocol](https://modelcontextprotocol.io/) — 仕様とSDK
+- [The Lethal Trifecta for AI Agents](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/) — Simon Willison
+- [SWE-bench](https://www.swebench.com/) / [τ-bench](https://arxiv.org/abs/2406.12045) / [GAIA](https://arxiv.org/abs/2311.12983) — エージェントベンチマーク
+- [Context Rot: How Increasing Input Tokens Impacts LLM Performance](https://research.trychroma.com/context-rot) — Chromaの研究
+- [ReAct: Synergizing Reasoning and Acting in Language Models](https://arxiv.org/abs/2210.03629) — ネイティブツール呼び出しが製品化した2022年のパターン

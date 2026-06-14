@@ -193,6 +193,37 @@ Code:    847293      159462      738291
 
 ---
 
+## Passkeys (WebAuthn / FIDO2)
+
+Passkeys are the modern default for new authentication systems: public-key credentials bound to your origin, unlocked by the device's biometric/PIN, and **phishing-resistant by construction** — there is no shared secret to steal (the server stores only a public key) and the browser will not exercise a credential for the wrong origin, which kills lookalike-domain phishing and credential stuffing in one move.
+
+```mermaid
+sequenceDiagram
+    participant U as User (device + biometric)
+    participant B as Browser
+    participant S as Server
+
+    Note over U,S: Registration
+    S->>B: challenge + rp.id (your domain) + user info
+    B->>U: create credential? (Face ID / PIN)
+    U->>B: keypair generated in authenticator
+    B->>S: public key + credential ID (+ optional attestation)
+    Note over U,S: Login
+    S->>B: challenge
+    B->>U: user verification (biometric)
+    U->>B: signature over challenge + origin + flags
+    B->>S: assertion — verify signature, origin, counter
+```
+
+Design decisions that matter in production:
+
+- **Synced vs device-bound.** Consumer passkeys sync via platform keychains (iCloud Keychain, Google Password Manager) — recovery rides the platform account, which is what makes passwordless viable for consumers. Device-bound keys (security keys, enterprise policies) trade that convenience for stricter provenance; choose per audience, and only request **attestation** when you genuinely need to verify authenticator models (enterprise/regulated) — for consumer flows, skip it.
+- **Discoverable credentials** enable username-less login (the authenticator lists matching accounts); pair with `autocomplete="webauthn"` conditional UI so the browser offers passkeys inline in the username field.
+- **Server-side checks are few but mandatory:** verify the signature against the stored public key, the `origin`/`rpId`, the challenge freshness (single-use, short TTL), the user-verification flag if you require it, and store the signature counter where provided.
+- **Rollout reality:** ship passkeys *alongside* passwords first (register on next successful login; prompt upgrade), instrument adoption, and treat account recovery as the real attack surface — a passkey-protected account that falls back to email-reset is only as strong as the reset flow. Keep [MFA](#multi-factor-authentication-mfa) for the password population during the transition; passkeys subsume the second factor (possession + biometric in one ceremony).
+
+---
+
 ## Brute Force Protection
 
 ### Rate Limiting

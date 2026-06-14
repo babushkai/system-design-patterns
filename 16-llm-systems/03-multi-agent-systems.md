@@ -2,7 +2,30 @@
 
 ## TL;DR
 
-Multi-agent systems coordinate multiple specialized LLM agents to solve complex tasks that exceed single-agent capabilities. Key patterns include hierarchical orchestration (supervisor agents), peer-to-peer collaboration, debate/adversarial systems, and assembly line pipelines. Success depends on clear role definitions, structured communication protocols, state management, and conflict resolution strategies.
+Multi-agent systems coordinate multiple LLM agents on tasks that exceed one context window or one line of investigation. The pattern that won in production is **orchestrator–workers**: a lead agent decomposes the task and spawns parallel subagents whose findings return compressed, while the orchestrator owns all writes. The decision rule is read-vs-write: parallelize *reading* (research, search, audit) freely; keep *writing* (code, documents, decisions) single-threaded, because context cannot be cheaply shared and conflicting partial views produce incoherent output. Expect multi-agent runs to cost an order of magnitude more tokens than chat — justified only when task value is high and the work genuinely parallelizes. Peer-to-peer, debate, and blackboard architectures remain useful as *evaluation* and research structures, not as production defaults.
+
+---
+
+## When Multi-Agent Actually Wins (and When It Doesn't)
+
+Two influential, opposing field reports frame the design space:
+
+- **Anthropic's research system** (orchestrator + parallel search subagents) beat a single-agent baseline by ~90% on breadth-first research queries — but consumed ~15× the tokens of a chat interaction. The economics only close when task value is high and the work is parallelizable reading.
+- **Cognition's "Don't Build Multi-Agents"** argues most multi-agent failures are context failures: each agent sees a slice, makes locally-reasonable but globally-conflicting decisions, and no message protocol fully transmits the unwritten context behind a decision. Their conclusion: prefer one continuous agent with full context — use compaction for length, not delegation.
+
+Both are right, about different workloads:
+
+| Workload | Verdict | Why |
+|---|---|---|
+| Breadth-first research, multi-source search | **Parallelize** | Subtasks independent; results merge by summarization; errors don't compound across branches |
+| Large-scale audit/review (security pass over 200 files) | **Parallelize** | Read-only; findings are a union |
+| Writing code in one repo | **Single agent** (+ read-only subagents) | Write-write conflicts in semantics, not just git; shared context is the product |
+| One document, one decision, one design | **Single agent** | Decomposition costs more context than it saves |
+| Independent deliverables (3 services, 3 repos) | **Parallel single agents** | Not really multi-agent — partition by ownership, integrate via contracts |
+
+The synthesis used by current coding and research harnesses: **one orchestrator owns the goal, the plan, and every write; subagents are context firewalls for expensive reads**, returning ≤2K-token distillations instead of transcripts. Subagent value is context isolation first, wall-clock parallelism second — see [Harness Engineering](./09-harness-engineering.md).
+
+Cost model to internalize: every agent re-reads its own growing transcript, so N agents ≠ N× one agent's cost — coordination overhead, duplicated context, and synthesis turns push real-world multiples to 10–20× single-agent token spend. Budget at design time, not after the invoice.
 
 ---
 
@@ -551,6 +574,15 @@ class ArchitectureAgent(PipelineStage):
 ---
 
 ## Communication Protocols
+
+### Interoperability Standards
+
+Two protocols cover the integration surface, and they're complementary, not competing:
+
+- **MCP (Model Context Protocol)** — connects an agent to *tools and context*: one server wraps a system (GitHub, Postgres, a browser), any MCP-capable agent uses it. Vertical integration: agent ↔ capabilities.
+- **A2A (Agent2Agent)** — connects *agents to agents* across vendors and frameworks: capability discovery via Agent Cards, task lifecycle management, opaque execution (agents collaborate without exposing internals). Horizontal integration: agent ↔ agent, now under the Linux Foundation.
+
+Inside a single product, you rarely need either between your own agents — a function call and a shared data structure beat a network protocol. Reach for A2A at organizational boundaries (another team's agent, another vendor's), the same way you'd reach for an API contract instead of a shared database. And regardless of transport, the hard problem remains semantic: a subagent that receives `task description` without the orchestrator's constraints and rejected-alternatives will make locally-sensible, globally-wrong choices. Pass decisions *and the reasons for them*.
 
 ### Structured Message Format
 
@@ -1135,9 +1167,11 @@ class SoftwareDevTeam:
 
 ## References
 
+- [How We Built Our Multi-Agent Research System](https://www.anthropic.com/engineering/built-multi-agent-research-system) - Anthropic; orchestrator–workers in production, with the token economics
+- [Don't Build Multi-Agents](https://cognition.ai/blog/dont-build-multi-agents) - Cognition; the context-sharing counterargument
+- [Agent2Agent (A2A) Protocol](https://a2a-protocol.org/) - cross-vendor agent interop, Linux Foundation
+- [Model Context Protocol](https://modelcontextprotocol.io/) - agent ↔ tools/context standard
 - [AutoGen: Enabling Next-Gen LLM Applications](https://arxiv.org/abs/2308.08155) - Microsoft Research
-- [CAMEL: Communicative Agents for Mind Exploration](https://arxiv.org/abs/2303.17760)
 - [MetaGPT: Multi-Agent Framework](https://arxiv.org/abs/2308.00352)
 - [Multi-Agent Debate Improves LLM Reasoning](https://arxiv.org/abs/2305.14325)
-- [LangGraph Documentation](https://langchain-ai.github.io/langgraph/)
-- [CrewAI Framework](https://github.com/joaomdmoura/crewAI)
+- [LangGraph Documentation](https://langchain-ai.github.io/langgraph/) / [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/) - orchestration frameworks

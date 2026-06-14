@@ -293,9 +293,9 @@ class TrainingDataRequirements:
         }
         
         capability_multiplier = {
-            "high": 0.5,        # GPT-4 class models
-            "medium": 1.0,      # GPT-3.5, Llama-70B class
-            "low": 2.0,         # Smaller models, 7B-13B
+            "high": 0.5,        # Frontier-class base models
+            "medium": 1.0,      # Strong open models, ~70B class
+            "low": 2.0,         # Small models, 1B-14B
         }
         
         base = 1000
@@ -1642,7 +1642,7 @@ class FineTuningConfig:
     """Complete fine-tuning configuration."""
     
     # Model
-    model_name: str = "meta-llama/Llama-2-7b-hf"
+    model_name: str = "Qwen/Qwen3-8B"  # or meta-llama/Llama-3.1-8B-Instruct
     use_flash_attention: bool = True
     
     # LoRA/PEFT
@@ -2873,6 +2873,31 @@ class RLHFTrainer:
         return reward
 ```
 
+### GRPO and RLVR: The Current RL Recipe
+
+PPO-based RLHF has largely been superseded for capability training by two ideas that arrived together with reasoning models:
+
+- **RLVR (Reinforcement Learning from Verifiable Rewards).** Instead of a learned reward model (expensive to train, easy to reward-hack), reward comes from a *programmatic verifier*: the unit tests pass, the math answer matches, the JSON validates, the agent's task completes. Anywhere you can write a checker, you can mint unlimited clean reward signal — this is the engine behind reasoning models (DeepSeek-R1 most explicitly) and agentic RL, where models are trained *inside tool-use harnesses* against task-completion rewards.
+- **GRPO (Group Relative Policy Optimization).** A PPO simplification that drops the value/critic model entirely: sample a group of N responses per prompt, score each, and use the group's normalized mean as the baseline (advantage = your score relative to your siblings). Half the memory of PPO, far simpler to operate, and the default in open post-training stacks (TRL `GRPOTrainer`, verl, OpenRLHF).
+
+```python
+from trl import GRPOConfig, GRPOTrainer
+
+def reward_tests_pass(completions: list[str], **kwargs) -> list[float]:
+    """Verifiable reward: run the generated patch against the test suite."""
+    return [run_test_suite(extract_patch(c)) for c in completions]  # 1.0 / 0.0
+
+trainer = GRPOTrainer(
+    model="Qwen/Qwen3-8B",
+    reward_funcs=[reward_tests_pass],          # no reward model, no critic
+    args=GRPOConfig(num_generations=8),        # the "group" — sibling baseline
+    train_dataset=coding_tasks,
+)
+trainer.train()
+```
+
+Decision rule: preference data + DPO for style/format/tone alignment; GRPO + verifiable rewards for capability on checkable tasks; PPO-style RLHF with a learned reward model only when the quality signal is genuinely subjective *and* you have the labeling budget. And before any RL: distillation from a frontier model (generate traces, filter by verifier, SFT on the survivors) remains the highest-ROI first step — it's RLVR's benefit at SFT's cost.
+
 ---
 
 ## Best Practices Checklist
@@ -2926,8 +2951,9 @@ class RLHFTrainer:
 - [Scaling Down to Scale Up: A Guide to Parameter-Efficient Fine-Tuning](https://arxiv.org/abs/2303.15647)
 - [Training language models to follow instructions with human feedback](https://arxiv.org/abs/2203.02155) - InstructGPT
 - [Direct Preference Optimization](https://arxiv.org/abs/2305.18290) - DPO
-- [The Llama 2 Technical Report](https://arxiv.org/abs/2307.09288)
-- [PEFT Library Documentation](https://huggingface.co/docs/peft)
+- [DeepSeekMath: GRPO](https://arxiv.org/abs/2402.03300) and [DeepSeek-R1: RL with verifiable rewards at scale](https://arxiv.org/abs/2501.12948)
+- [Tülu 3: Pushing Frontiers in Open Language Model Post-Training](https://arxiv.org/abs/2411.15124) - the RLVR recipe, documented end-to-end
+- [TRL Library Documentation](https://huggingface.co/docs/trl) / [PEFT Library Documentation](https://huggingface.co/docs/peft)
 - [TRL: Transformer Reinforcement Learning](https://huggingface.co/docs/trl)
 - [Axolotl Fine-tuning Framework](https://github.com/OpenAccess-AI-Collective/axolotl)
 - [LLM Fine-tuning Best Practices - OpenAI](https://platform.openai.com/docs/guides/fine-tuning)

@@ -59,6 +59,8 @@ The same feature contract should drive both materialization paths. The storage e
 | Online store | Low-latency lookups | Redis, DynamoDB, Cassandra, RocksDB | Staleness, hot keys |
 | Metadata store | Discovery and lineage | Catalog DB, registry service | Undocumented ownership |
 
+The online store is a [low-latency cache](../04-caching/01-cache-strategies.md) keyed by entity; hot entities create the same [hot-key/partitioning](../02-distributed-databases/05-partitioning-strategies.md) problems as any read-heavy store, and the materialization path that keeps it fresh is typically a [change-data-capture](../13-data-pipelines/04-change-data-capture.md) stream off the source events.
+
 ---
 
 ## Point-in-Time Correctness
@@ -91,7 +93,7 @@ Correct dataset construction needs:
 
 ## Feature Freshness
 
-Feature freshness is a service-level objective. A fraud model might need second-level freshness; a churn model might tolerate daily updates.
+Feature freshness is a service-level objective ([SLOs & Error Budgets](../11-observability/05-slos-error-budgets.md)). A fraud model might need second-level freshness; a churn model might tolerate daily updates.
 
 | Feature type | Freshness need | Example |
 |---|---|---|

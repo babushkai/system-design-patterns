@@ -30,6 +30,8 @@ flowchart LR
 
 The feedback loop is the difference. A recommender changes what users see, which changes what they click, which changes future training data. A fraud model blocks transactions, which changes the observed label distribution. A ranking model shifts traffic toward items it already believes are good.
 
+> This section covers classic predictive ML (tabular, ranking, vision, fraud). For LLM-based systems — agents, RAG, inference serving, evaluation — see [LLM Systems](../16-llm-systems/01-agent-fundamentals.md); the lifecycle discipline here (versioning, monitoring, rollback) applies to both, while the serving economics diverge sharply ([LLM Infrastructure](../16-llm-systems/05-llm-infrastructure.md)).
+
 ---
 
 ## Production ML Components

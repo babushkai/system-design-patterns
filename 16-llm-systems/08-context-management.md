@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-Context management is the art of efficiently utilizing the limited context window of LLMs to maximize response quality while controlling costs. Key strategies include understanding token economics (input/output allocation, cost implications), handling long contexts (lost-in-the-middle problem, needle-in-haystack testing), compression techniques (summarization, LLMLingua, selective context), sliding window patterns (rolling summaries, hierarchical context), memory systems (short-term, long-term, episodic, semantic, working memory), and production optimizations (KV caching, prefix caching, context pre-computation). The choice between long context and RAG depends on update frequency, precision requirements, and cost constraints.
+Context management is the art of efficiently utilizing the limited context window of LLMs to maximize response quality while controlling costs. Key strategies include understanding token economics (input/output allocation, cost implications), handling long contexts (lost-in-the-middle problem, needle-in-haystack testing), compression techniques (summarization, LLMLingua, selective context), sliding window patterns (rolling summaries, hierarchical context), memory systems (short-term, long-term, episodic, semantic, working memory), and production optimizations (KV caching, prefix caching, context pre-computation). The choice between long context and RAG depends on update frequency, precision requirements, and cost constraints. For agentic workloads specifically — where the whole transcript is resent every turn — the binding rules are cache discipline (stable prefixes, append-only history), threshold-triggered compaction, and the filesystem as memory; see [Harness Engineering](./09-harness-engineering.md) for how these wire into the agent loop.
 
 ---
 
@@ -68,49 +68,45 @@ class ModelContextConfig:
     output_cost_per_1k: float
     supports_system_prompt: bool = True
     
-# Model configurations (as of 2024)
+# Representative configurations as of early 2026. Frontier windows are
+# 200K-1M+ input with 32K-128K output; prices move quarterly, so load
+# them from config in production — and model cached-input pricing
+# (~10% of fresh input), which dominates agentic workload economics.
 MODEL_CONFIGS = {
-    "gpt-4-turbo": ModelContextConfig(
-        model_name="gpt-4-turbo",
-        max_context_tokens=128000,
-        max_output_tokens=4096,
-        input_cost_per_1k=0.01,
-        output_cost_per_1k=0.03,
-    ),
-    "gpt-4o": ModelContextConfig(
-        model_name="gpt-4o",
-        max_context_tokens=128000,
-        max_output_tokens=16384,
-        input_cost_per_1k=0.005,
-        output_cost_per_1k=0.015,
-    ),
-    "claude-3-opus": ModelContextConfig(
-        model_name="claude-3-opus",
-        max_context_tokens=200000,
-        max_output_tokens=4096,
-        input_cost_per_1k=0.015,
-        output_cost_per_1k=0.075,
-    ),
-    "claude-3.5-sonnet": ModelContextConfig(
-        model_name="claude-3.5-sonnet",
-        max_context_tokens=200000,
-        max_output_tokens=8192,
+    "claude-sonnet-4-6": ModelContextConfig(
+        model_name="claude-sonnet-4-6",
+        max_context_tokens=1_000_000,
+        max_output_tokens=64_000,
         input_cost_per_1k=0.003,
         output_cost_per_1k=0.015,
     ),
-    "gemini-1.5-pro": ModelContextConfig(
-        model_name="gemini-1.5-pro",
-        max_context_tokens=1000000,  # 1M tokens
-        max_output_tokens=8192,
-        input_cost_per_1k=0.00125,
-        output_cost_per_1k=0.005,
+    "claude-opus-4-8": ModelContextConfig(
+        model_name="claude-opus-4-8",
+        max_context_tokens=200_000,
+        max_output_tokens=32_000,
+        input_cost_per_1k=0.005,
+        output_cost_per_1k=0.025,
     ),
-    "llama-3-70b": ModelContextConfig(
-        model_name="llama-3-70b",
-        max_context_tokens=8192,
-        max_output_tokens=4096,
-        input_cost_per_1k=0.0008,
-        output_cost_per_1k=0.0008,
+    "gpt-5.1": ModelContextConfig(
+        model_name="gpt-5.1",
+        max_context_tokens=400_000,
+        max_output_tokens=128_000,
+        input_cost_per_1k=0.00125,
+        output_cost_per_1k=0.010,
+    ),
+    "gemini-3-pro": ModelContextConfig(
+        model_name="gemini-3-pro",
+        max_context_tokens=1_000_000,
+        max_output_tokens=64_000,
+        input_cost_per_1k=0.002,
+        output_cost_per_1k=0.012,
+    ),
+    "llama-4-maverick": ModelContextConfig(
+        model_name="llama-4-maverick",  # self-hosted: cost = your GPUs
+        max_context_tokens=1_000_000,
+        max_output_tokens=16_384,
+        input_cost_per_1k=0.0,
+        output_cost_per_1k=0.0,
     ),
 }
 

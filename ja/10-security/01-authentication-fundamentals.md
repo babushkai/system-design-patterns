@@ -195,6 +195,37 @@ Code:    847293      159462      738291
 
 ---
 
+## パスキー (WebAuthn / FIDO2)
+
+パスキーは新しい認証システムの現代的なデフォルトです: オリジンに束縛された公開鍵クレデンシャルを、デバイスの生体認証/PINで解錠します。**構造的にフィッシング耐性があります** — 盗める共有シークレットが存在せず(サーバーは公開鍵のみ保存)、ブラウザは間違ったオリジンに対してクレデンシャルを行使しないため、偽ドメインのフィッシングとクレデンシャルスタッフィングを一手で殺します。
+
+```mermaid
+sequenceDiagram
+    participant U as User (device + biometric)
+    participant B as Browser
+    participant S as Server
+
+    Note over U,S: Registration
+    S->>B: challenge + rp.id (your domain) + user info
+    B->>U: create credential? (Face ID / PIN)
+    U->>B: keypair generated in authenticator
+    B->>S: public key + credential ID (+ optional attestation)
+    Note over U,S: Login
+    S->>B: challenge
+    B->>U: user verification (biometric)
+    U->>B: signature over challenge + origin + flags
+    B->>S: assertion — verify signature, origin, counter
+```
+
+本番で重要になる設計判断:
+
+- **同期型 vs デバイス束縛型。** コンシューマ向けパスキーはプラットフォームのキーチェーン(iCloudキーチェーン、Googleパスワードマネージャー)で同期されます — リカバリはプラットフォームアカウントに乗り、それがコンシューマでパスワードレスを成立させるものです。デバイス束縛キー(セキュリティキー、エンタープライズポリシー)はその利便性とより厳格な来歴を交換します。対象ごとに選び、**アテステーション**は認証器のモデル検証が本当に必要なとき(エンタープライズ/規制業種)だけ要求すること — コンシューマフローでは省略します。
+- **Discoverableクレデンシャル**はユーザー名なしログインを可能にします(認証器が一致するアカウントを列挙)。`autocomplete="webauthn"` のconditional UIと組み合わせ、ユーザー名欄にパスキーをインライン提示します。
+- **サーバー側の検査は少ないが必須:** 保存済み公開鍵での署名検証、`origin`/`rpId`、チャレンジの新鮮さ(単回使用、短TTL)、要求するならuser-verificationフラグ、提供される場合は署名カウンタの保存。
+- **ロールアウトの現実:** まずパスワードと*並走*でパスキーを出荷し(ログイン成功時に登録を促す)、採用率を計測し、アカウントリカバリこそ本当の攻撃面として扱うこと — メールリセットにフォールバックするパスキー保護アカウントは、リセットフローの強度しかありません。移行期間中、パスワード利用者には[MFA](#多要素認証mfa)を維持します。パスキーは第二要素を包含します(所持+生体認証がひとつの儀式に)。
+
+---
+
 ## ブルートフォース対策
 
 ### レート制限

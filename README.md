@@ -23,6 +23,8 @@ A hyper-detailed, framework-agnostic repository of system design patterns, conce
 - [Failure Modes](01-foundations/06-failure-modes.md)
 - [Network Partitions](01-foundations/07-network-partitions.md)
 - [Idempotency](01-foundations/08-idempotency.md)
+- [Distributed Locks](01-foundations/09-distributed-locks.md)
+- [Capacity Planning and Estimation](01-foundations/10-capacity-planning.md)
 
 ### Part 2: Distributed Databases
 - [Single-Leader Replication](02-distributed-databases/01-single-leader-replication.md)
@@ -34,6 +36,7 @@ A hyper-detailed, framework-agnostic repository of system design patterns, conce
 - [Distributed Transactions](02-distributed-databases/07-distributed-transactions.md)
 - [Consensus Algorithms](02-distributed-databases/08-consensus-algorithms.md)
 - [Leader Election](02-distributed-databases/09-leader-election.md)
+- [Data Modeling for Access Patterns](02-distributed-databases/10-data-modeling.md)
 
 ### Part 3: Storage Engines
 - [B-Trees](03-storage-engines/01-b-trees.md)
@@ -43,6 +46,7 @@ A hyper-detailed, framework-agnostic repository of system design patterns, conce
 - [Bloom Filters](03-storage-engines/05-bloom-filters.md)
 - [Column-Oriented Storage](03-storage-engines/06-column-storage.md)
 - [Data Encoding](03-storage-engines/07-data-encoding.md)
+- [Object Storage Internals](03-storage-engines/08-object-storage.md)
 
 ### Part 4: Caching
 - [Cache Strategies](04-caching/01-cache-strategies.md)
@@ -61,6 +65,7 @@ A hyper-detailed, framework-agnostic repository of system design patterns, conce
 - [CQRS](05-messaging/06-cqrs.md)
 - [Outbox Pattern](05-messaging/07-outbox-pattern.md)
 - [Dead Letter Queues](05-messaging/08-dead-letter-queues.md)
+- [Saga Pattern](05-messaging/09-saga-pattern.md)
 
 ### Part 6: Scaling
 - [Load Balancing](06-scaling/01-load-balancing.md)
@@ -71,6 +76,11 @@ A hyper-detailed, framework-agnostic repository of system design patterns, conce
 - [Circuit Breakers](06-scaling/06-circuit-breakers.md)
 - [Backpressure](06-scaling/07-backpressure.md)
 - [Auto-Scaling](06-scaling/08-auto-scaling.md)
+- [Multi-Region Architecture](06-scaling/09-multi-region-architecture.md)
+- [Retries, Timeouts, and Hedging](06-scaling/10-retries-timeouts-hedging.md)
+- [Cell-Based Architecture and Shuffle Sharding](06-scaling/11-cell-based-architecture.md)
+- [Multi-Tenancy Patterns](06-scaling/12-multi-tenancy.md)
+- [DNS and Connection Management](06-scaling/13-dns-and-connection-management.md)
 
 ### Part 7: Real-Time Systems
 - [Polling](07-real-time/01-polling.md)
@@ -79,6 +89,7 @@ A hyper-detailed, framework-agnostic repository of system design patterns, conce
 - [WebSockets](07-real-time/04-websockets.md)
 - [WebRTC](07-real-time/05-webrtc.md)
 - [Presence Systems](07-real-time/06-presence.md)
+- [CRDTs and Collaborative Editing](07-real-time/07-crdts-collaborative-editing.md)
 
 ### Part 8: Case Studies
 - [Twitter Timeline](08-case-studies/01-twitter.md)
@@ -91,6 +102,9 @@ A hyper-detailed, framework-agnostic repository of system design patterns, conce
 - [Discord Voice](08-case-studies/08-discord.md)
 - [Google Maps](08-case-studies/09-google-maps.md)
 - [WhatsApp Messaging](08-case-studies/10-whatsapp.md)
+- [Figma](08-case-studies/11-figma.md)
+- [Cloudflare](08-case-studies/12-cloudflare.md)
+- [LLM Inference Platforms](08-case-studies/13-llm-inference-platforms.md)
 
 ### Part 9: Whitepapers
 - [MapReduce](09-whitepapers/01-mapreduce.md) (2004)
@@ -103,6 +117,11 @@ A hyper-detailed, framework-agnostic repository of system design patterns, conce
 - [Chubby](09-whitepapers/08-chubby.md) (2006)
 - [Aurora](09-whitepapers/09-aurora.md) (2017)
 - [CockroachDB](09-whitepapers/10-cockroachdb.md) (2020)
+- [Zanzibar](09-whitepapers/11-zanzibar.md) (2019)
+- [Monarch](09-whitepapers/12-monarch.md) (2020)
+- [FoundationDB](09-whitepapers/13-foundationdb.md) (2021)
+- [DynamoDB](09-whitepapers/14-dynamodb-2022.md) (2022)
+- [Attention Is All You Need](09-whitepapers/15-attention-transformers.md) (2017)
 
 ### Part 10: Security
 - [Authentication Fundamentals](10-security/01-authentication-fundamentals.md)
@@ -111,22 +130,29 @@ A hyper-detailed, framework-agnostic repository of system design patterns, conce
 - [API Security](10-security/04-api-security.md)
 - [Zero Trust Architecture](10-security/05-zero-trust-architecture.md)
 - [Encryption Patterns](10-security/06-encryption.md)
+- [Authorization at Scale](10-security/07-authorization-patterns.md)
 
 ### Part 11: Observability
 - [Distributed Tracing](11-observability/01-distributed-tracing.md)
 - [Metrics and Monitoring](11-observability/02-metrics-monitoring.md)
 - [Logging](11-observability/03-logging.md)
 - [Alerting](11-observability/04-alerting.md)
+- [SLOs and Error Budgets](11-observability/05-slos-error-budgets.md)
+- [FinOps and Cost Engineering](11-observability/06-finops-cost-engineering.md)
+- [Incident Management and Postmortems](11-observability/07-incident-management.md)
 
 ### Part 12: Service Mesh
 - [Service Discovery](12-service-mesh/01-service-discovery.md)
 - [API Gateway](12-service-mesh/02-api-gateway.md)
 - [Sidecar Pattern](12-service-mesh/03-sidecar-pattern.md)
+- [API Design Patterns](12-service-mesh/04-api-design-patterns.md)
 
 ### Part 13: Data Pipelines
 - [Batch Processing](13-data-pipelines/01-batch-processing.md)
 - [Stream Processing](13-data-pipelines/02-stream-processing.md)
 - [Lambda and Kappa Architecture](13-data-pipelines/03-lambda-kappa-architecture.md)
+- [Change Data Capture](13-data-pipelines/04-change-data-capture.md)
+- [Lakehouse and Open Table Formats](13-data-pipelines/05-lakehouse-table-formats.md)
 
 ### Part 14: Search Systems
 - [Inverted Indexes](14-search-systems/01-inverted-indexes.md)
@@ -139,6 +165,10 @@ A hyper-detailed, framework-agnostic repository of system design patterns, conce
 ### Part 15: Deployment
 - [Deployment Strategies](15-deployment/01-deployment-strategies.md)
 - [Feature Flags](15-deployment/02-feature-flags.md)
+- [Database Schema Migrations](15-deployment/03-database-migrations.md)
+- [CI/CD and GitOps](15-deployment/04-cicd-gitops.md)
+- [Disaster Recovery](15-deployment/05-disaster-recovery.md)
+- [Migration Strategies](15-deployment/06-migration-strategies.md)
 
 ### Part 16: LLM Systems
 - [Agent Fundamentals](16-llm-systems/01-agent-fundamentals.md)
@@ -149,6 +179,8 @@ A hyper-detailed, framework-agnostic repository of system design patterns, conce
 - [Prompt Engineering](16-llm-systems/06-prompt-engineering.md)
 - [Fine-Tuning Patterns](16-llm-systems/07-fine-tuning-patterns.md)
 - [Context Management](16-llm-systems/08-context-management.md)
+- [Harness Engineering](16-llm-systems/09-harness-engineering.md)
+- [LLM Evaluation and Observability](16-llm-systems/10-llm-evaluation.md)
 
 ### Part 17: GraphQL
 - [GraphQL Fundamentals](17-graphql/01-graphql-fundamentals.md)

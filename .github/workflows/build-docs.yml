@@ -74,6 +74,8 @@ jobs:
                 { text: 'Failure Modes', link: '/01-foundations/06-failure-modes' },
                 { text: 'Network Partitions', link: '/01-foundations/07-network-partitions' },
                 { text: 'Idempotency', link: '/01-foundations/08-idempotency' },
+                { text: 'Distributed Locks', link: '/01-foundations/09-distributed-locks' },
+                { text: 'Capacity Planning & Estimation', link: '/01-foundations/10-capacity-planning' },
               ]
             },
             {
@@ -89,6 +91,7 @@ jobs:
                 { text: 'Distributed Transactions', link: '/02-distributed-databases/07-distributed-transactions' },
                 { text: 'Consensus Algorithms', link: '/02-distributed-databases/08-consensus-algorithms' },
                 { text: 'Leader Election', link: '/02-distributed-databases/09-leader-election' },
+                { text: 'Data Modeling', link: '/02-distributed-databases/10-data-modeling' },
               ]
             },
             {
@@ -102,6 +105,7 @@ jobs:
                 { text: 'Bloom Filters', link: '/03-storage-engines/05-bloom-filters' },
                 { text: 'Column Storage', link: '/03-storage-engines/06-column-storage' },
                 { text: 'Data Encoding', link: '/03-storage-engines/07-data-encoding' },
+                { text: 'Object Storage', link: '/03-storage-engines/08-object-storage' },
               ]
             },
             {
@@ -128,6 +132,7 @@ jobs:
                 { text: 'CQRS', link: '/05-messaging/06-cqrs' },
                 { text: 'Outbox Pattern', link: '/05-messaging/07-outbox-pattern' },
                 { text: 'Dead Letter Queues', link: '/05-messaging/08-dead-letter-queues' },
+                { text: 'Saga Pattern', link: '/05-messaging/09-saga-pattern' },
               ]
             },
             {
@@ -142,6 +147,11 @@ jobs:
                 { text: 'Circuit Breakers', link: '/06-scaling/06-circuit-breakers' },
                 { text: 'Backpressure', link: '/06-scaling/07-backpressure' },
                 { text: 'Auto-Scaling', link: '/06-scaling/08-auto-scaling' },
+                { text: 'Multi-Region Architecture', link: '/06-scaling/09-multi-region-architecture' },
+                { text: 'Retries & Hedging', link: '/06-scaling/10-retries-timeouts-hedging' },
+                { text: 'Cell-Based Architecture', link: '/06-scaling/11-cell-based-architecture' },
+                { text: 'Multi-Tenancy', link: '/06-scaling/12-multi-tenancy' },
+                { text: 'DNS & Connections', link: '/06-scaling/13-dns-and-connection-management' },
               ]
             },
             {
@@ -154,6 +164,7 @@ jobs:
                 { text: 'WebSockets', link: '/07-real-time/04-websockets' },
                 { text: 'WebRTC', link: '/07-real-time/05-webrtc' },
                 { text: 'Presence', link: '/07-real-time/06-presence' },
+                { text: 'CRDTs & Collaboration', link: '/07-real-time/07-crdts-collaborative-editing' },
               ]
             },
             {
@@ -170,6 +181,9 @@ jobs:
                 { text: 'Discord', link: '/08-case-studies/08-discord' },
                 { text: 'Google Maps', link: '/08-case-studies/09-google-maps' },
                 { text: 'WhatsApp', link: '/08-case-studies/10-whatsapp' },
+                { text: 'Figma', link: '/08-case-studies/11-figma' },
+                { text: 'Cloudflare', link: '/08-case-studies/12-cloudflare' },
+                { text: 'LLM Inference Platforms', link: '/08-case-studies/13-llm-inference-platforms' },
               ]
             },
             {
@@ -186,6 +200,11 @@ jobs:
                 { text: 'Chubby', link: '/09-whitepapers/08-chubby' },
                 { text: 'Aurora', link: '/09-whitepapers/09-aurora' },
                 { text: 'CockroachDB', link: '/09-whitepapers/10-cockroachdb' },
+                { text: 'Zanzibar', link: '/09-whitepapers/11-zanzibar' },
+                { text: 'Monarch', link: '/09-whitepapers/12-monarch' },
+                { text: 'FoundationDB', link: '/09-whitepapers/13-foundationdb' },
+                { text: 'DynamoDB (2022)', link: '/09-whitepapers/14-dynamodb-2022' },
+                { text: 'The Transformer', link: '/09-whitepapers/15-attention-transformers' },
               ]
             },
             {
@@ -198,6 +217,7 @@ jobs:
                 { text: 'API Security', link: '/10-security/04-api-security' },
                 { text: 'Zero Trust Architecture', link: '/10-security/05-zero-trust-architecture' },
                 { text: 'Encryption', link: '/10-security/06-encryption' },
+                { text: 'Authorization Patterns', link: '/10-security/07-authorization-patterns' },
               ]
             },
             {
@@ -208,6 +228,9 @@ jobs:
                 { text: 'Metrics & Monitoring', link: '/11-observability/02-metrics-monitoring' },
                 { text: 'Logging', link: '/11-observability/03-logging' },
                 { text: 'Alerting', link: '/11-observability/04-alerting' },
+                { text: 'SLOs & Error Budgets', link: '/11-observability/05-slos-error-budgets' },
+                { text: 'FinOps & Cost', link: '/11-observability/06-finops-cost-engineering' },
+                { text: 'Incident Management', link: '/11-observability/07-incident-management' },
               ]
             },
             {
@@ -217,6 +240,7 @@ jobs:
                 { text: 'Service Discovery', link: '/12-service-mesh/01-service-discovery' },
                 { text: 'API Gateway', link: '/12-service-mesh/02-api-gateway' },
                 { text: 'Sidecar Pattern', link: '/12-service-mesh/03-sidecar-pattern' },
+                { text: 'API Design Patterns', link: '/12-service-mesh/04-api-design-patterns' },
               ]
             },
             {
@@ -226,6 +250,8 @@ jobs:
                 { text: 'Batch Processing', link: '/13-data-pipelines/01-batch-processing' },
                 { text: 'Stream Processing', link: '/13-data-pipelines/02-stream-processing' },
                 { text: 'Lambda & Kappa Architecture', link: '/13-data-pipelines/03-lambda-kappa-architecture' },
+                { text: 'Change Data Capture', link: '/13-data-pipelines/04-change-data-capture' },
+                { text: 'Lakehouse & Table Formats', link: '/13-data-pipelines/05-lakehouse-table-formats' },
               ]
             },
             {
@@ -246,6 +272,10 @@ jobs:
               items: [
                 { text: 'Deployment Strategies', link: '/15-deployment/01-deployment-strategies' },
                 { text: 'Feature Flags', link: '/15-deployment/02-feature-flags' },
+                { text: 'Database Migrations', link: '/15-deployment/03-database-migrations' },
+                { text: 'CI/CD & GitOps', link: '/15-deployment/04-cicd-gitops' },
+                { text: 'Disaster Recovery', link: '/15-deployment/05-disaster-recovery' },
+                { text: 'Migration Strategies', link: '/15-deployment/06-migration-strategies' },
               ]
             },
             {
@@ -260,6 +290,8 @@ jobs:
                 { text: 'Prompt Engineering', link: '/16-llm-systems/06-prompt-engineering' },
                 { text: 'Fine-Tuning Patterns', link: '/16-llm-systems/07-fine-tuning-patterns' },
                 { text: 'Context Management', link: '/16-llm-systems/08-context-management' },
+                { text: 'Harness Engineering', link: '/16-llm-systems/09-harness-engineering' },
+                { text: 'LLM Evaluation', link: '/16-llm-systems/10-llm-evaluation' },
               ]
             },
             {
@@ -352,7 +384,6 @@ jobs:
                         { text: 'LLM Systems', link: '/16-llm-systems/01-agent-fundamentals' },
                         { text: 'GraphQL', link: '/17-graphql/01-graphql-fundamentals' },
                         { text: 'Compound Engineering', link: '/18-compound-engineering/01-compound-engineering-fundamentals' },
-                        { text: 'ML Systems', link: '/19-ml-systems/01-ml-system-fundamentals' },
                       ]
                     },
                     { text: 'GitHub', link: 'https://github.com/babushkai/system-design-patterns' }
@@ -396,6 +427,8 @@ jobs:
                           { text: '障害モード', link: '/ja/01-foundations/06-failure-modes' },
                           { text: 'ネットワーク分断', link: '/ja/01-foundations/07-network-partitions' },
                           { text: '冪等性', link: '/ja/01-foundations/08-idempotency' },
+                          { text: '分散ロック', link: '/ja/01-foundations/09-distributed-locks' },
+                          { text: 'キャパシティプランニング', link: '/ja/01-foundations/10-capacity-planning' },
                         ]
                       },
                       {
@@ -411,6 +444,7 @@ jobs:
                           { text: '分散トランザクション', link: '/ja/02-distributed-databases/07-distributed-transactions' },
                           { text: 'コンセンサスアルゴリズム', link: '/ja/02-distributed-databases/08-consensus-algorithms' },
                           { text: 'リーダー選出', link: '/ja/02-distributed-databases/09-leader-election' },
+                          { text: 'データモデリング', link: '/ja/02-distributed-databases/10-data-modeling' },
                         ]
                       },
                       {
@@ -424,6 +458,7 @@ jobs:
                           { text: 'ブルームフィルタ', link: '/ja/03-storage-engines/05-bloom-filters' },
                           { text: 'カラムストレージ', link: '/ja/03-storage-engines/06-column-storage' },
                           { text: 'データエンコーディング', link: '/ja/03-storage-engines/07-data-encoding' },
+                          { text: 'オブジェクトストレージ', link: '/ja/03-storage-engines/08-object-storage' },
                         ]
                       },
                       {
@@ -450,6 +485,7 @@ jobs:
                           { text: 'CQRS', link: '/ja/05-messaging/06-cqrs' },
                           { text: 'Outboxパターン', link: '/ja/05-messaging/07-outbox-pattern' },
                           { text: 'デッドレターキュー', link: '/ja/05-messaging/08-dead-letter-queues' },
+                          { text: 'Sagaパターン', link: '/ja/05-messaging/09-saga-pattern' },
                         ]
                       },
                       {
@@ -464,6 +500,11 @@ jobs:
                           { text: 'サーキットブレーカー', link: '/ja/06-scaling/06-circuit-breakers' },
                           { text: 'バックプレッシャー', link: '/ja/06-scaling/07-backpressure' },
                           { text: 'オートスケーリング', link: '/ja/06-scaling/08-auto-scaling' },
+                          { text: 'マルチリージョン', link: '/ja/06-scaling/09-multi-region-architecture' },
+                          { text: 'リトライとヘッジング', link: '/ja/06-scaling/10-retries-timeouts-hedging' },
+                          { text: 'セルベースアーキテクチャ', link: '/ja/06-scaling/11-cell-based-architecture' },
+                          { text: 'マルチテナンシー', link: '/ja/06-scaling/12-multi-tenancy' },
+                          { text: 'DNSとコネクション管理', link: '/ja/06-scaling/13-dns-and-connection-management' },
                         ]
                       },
                       {
@@ -476,6 +517,7 @@ jobs:
                           { text: 'WebSocket', link: '/ja/07-real-time/04-websockets' },
                           { text: 'WebRTC', link: '/ja/07-real-time/05-webrtc' },
                           { text: 'プレゼンス', link: '/ja/07-real-time/06-presence' },
+                          { text: 'CRDTと共同編集', link: '/ja/07-real-time/07-crdts-collaborative-editing' },
                         ]
                       },
                       {
@@ -492,6 +534,9 @@ jobs:
                           { text: 'Discord', link: '/ja/08-case-studies/08-discord' },
                           { text: 'Google Maps', link: '/ja/08-case-studies/09-google-maps' },
                           { text: 'WhatsApp', link: '/ja/08-case-studies/10-whatsapp' },
+                          { text: 'Figma', link: '/ja/08-case-studies/11-figma' },
+                          { text: 'Cloudflare', link: '/ja/08-case-studies/12-cloudflare' },
+                          { text: 'LLM推論基盤', link: '/ja/08-case-studies/13-llm-inference-platforms' },
                         ]
                       },
                       {
@@ -508,6 +553,11 @@ jobs:
                           { text: 'Chubby', link: '/ja/09-whitepapers/08-chubby' },
                           { text: 'Aurora', link: '/ja/09-whitepapers/09-aurora' },
                           { text: 'CockroachDB', link: '/ja/09-whitepapers/10-cockroachdb' },
+                          { text: 'Zanzibar', link: '/ja/09-whitepapers/11-zanzibar' },
+                          { text: 'Monarch', link: '/ja/09-whitepapers/12-monarch' },
+                          { text: 'FoundationDB', link: '/ja/09-whitepapers/13-foundationdb' },
+                          { text: 'DynamoDB (2022)', link: '/ja/09-whitepapers/14-dynamodb-2022' },
+                          { text: 'Transformer', link: '/ja/09-whitepapers/15-attention-transformers' },
                         ]
                       },
                       {
@@ -520,6 +570,7 @@ jobs:
                           { text: 'APIセキュリティ', link: '/ja/10-security/04-api-security' },
                           { text: 'ゼロトラストアーキテクチャ', link: '/ja/10-security/05-zero-trust-architecture' },
                           { text: '暗号化', link: '/ja/10-security/06-encryption' },
+                          { text: '認可パターン', link: '/ja/10-security/07-authorization-patterns' },
                         ]
                       },
                       {
@@ -530,6 +581,9 @@ jobs:
                           { text: 'メトリクスとモニタリング', link: '/ja/11-observability/02-metrics-monitoring' },
                           { text: 'ロギング', link: '/ja/11-observability/03-logging' },
                           { text: 'アラート', link: '/ja/11-observability/04-alerting' },
+                          { text: 'SLOとエラーバジェット', link: '/ja/11-observability/05-slos-error-budgets' },
+                          { text: 'FinOpsとコスト工学', link: '/ja/11-observability/06-finops-cost-engineering' },
+                          { text: 'インシデント管理', link: '/ja/11-observability/07-incident-management' },
                         ]
                       },
                       {
@@ -539,6 +593,7 @@ jobs:
                           { text: 'サービスディスカバリ', link: '/ja/12-service-mesh/01-service-discovery' },
                           { text: 'APIゲートウェイ', link: '/ja/12-service-mesh/02-api-gateway' },
                           { text: 'サイドカーパターン', link: '/ja/12-service-mesh/03-sidecar-pattern' },
+                          { text: 'API設計パターン', link: '/ja/12-service-mesh/04-api-design-patterns' },
                         ]
                       },
                       {
@@ -548,6 +603,8 @@ jobs:
                           { text: 'バッチ処理', link: '/ja/13-data-pipelines/01-batch-processing' },
                           { text: 'ストリーム処理', link: '/ja/13-data-pipelines/02-stream-processing' },
                           { text: 'Lambda/Kappaアーキテクチャ', link: '/ja/13-data-pipelines/03-lambda-kappa-architecture' },
+                          { text: 'チェンジデータキャプチャ', link: '/ja/13-data-pipelines/04-change-data-capture' },
+                          { text: 'レイクハウス', link: '/ja/13-data-pipelines/05-lakehouse-table-formats' },
                         ]
                       },
                       {
@@ -568,6 +625,10 @@ jobs:
                         items: [
                           { text: 'デプロイメント戦略', link: '/ja/15-deployment/01-deployment-strategies' },
                           { text: 'フィーチャーフラグ', link: '/ja/15-deployment/02-feature-flags' },
+                          { text: 'DBマイグレーション', link: '/ja/15-deployment/03-database-migrations' },
+                          { text: 'CI/CDとGitOps', link: '/ja/15-deployment/04-cicd-gitops' },
+                          { text: 'ディザスタリカバリ', link: '/ja/15-deployment/05-disaster-recovery' },
+                          { text: 'マイグレーション戦略', link: '/ja/15-deployment/06-migration-strategies' },
                         ]
                       },
                       {
@@ -582,6 +643,8 @@ jobs:
                           { text: 'プロンプトエンジニアリング', link: '/ja/16-llm-systems/06-prompt-engineering' },
                           { text: 'ファインチューニング', link: '/ja/16-llm-systems/07-fine-tuning-patterns' },
                           { text: 'コンテキスト管理', link: '/ja/16-llm-systems/08-context-management' },
+                          { text: 'ハーネスエンジニアリング', link: '/ja/16-llm-systems/09-harness-engineering' },
+                          { text: 'LLM評価', link: '/ja/16-llm-systems/10-llm-evaluation' },
                         ]
                       },
                       {
@@ -615,8 +678,8 @@ jobs:
                           { text: 'MLシステム基礎', link: '/ja/19-ml-systems/01-ml-system-fundamentals' },
                           { text: 'フィーチャーストア', link: '/ja/19-ml-systems/02-feature-stores' },
                           { text: 'モデルサービング', link: '/ja/19-ml-systems/03-model-serving' },
-                          { text: 'モデル監視', link: '/ja/19-ml-systems/04-model-monitoring' },
-                          { text: '学習パイプライン', link: '/ja/19-ml-systems/05-training-pipelines' },
+                          { text: 'モデルモニタリング', link: '/ja/19-ml-systems/04-model-monitoring' },
+                          { text: 'トレーニングパイプライン', link: '/ja/19-ml-systems/05-training-pipelines' },
                         ]
                       }
                     ]
@@ -729,10 +792,10 @@ jobs:
                 </nav>
               </div>
               <div class="atlas-metrics" aria-label="Reference statistics">
-                <p><strong>121</strong><span>documented articles</span></p>
+                <p><strong>153</strong><span>documented articles</span></p>
                 <p><strong>19</strong><span>design domains</span></p>
-                <p><strong>10</strong><span>production studies</span></p>
-                <p><strong>10</strong><span>foundational papers</span></p>
+                <p><strong>13</strong><span>production studies</span></p>
+                <p><strong>15</strong><span>foundational papers</span></p>
               </div>
             </section>
 
@@ -773,7 +836,7 @@ jobs:
                 <a href="/16-llm-systems/01-agent-fundamentals"><span>16</span><strong>LLM Systems</strong><small>Agents and context</small></a>
                 <a href="/17-graphql/01-graphql-fundamentals"><span>17</span><strong>GraphQL</strong><small>Schemas and federation</small></a>
                 <a href="/18-compound-engineering/01-compound-engineering-fundamentals"><span>18</span><strong>Compound Engineering</strong><small>AI-native workflows</small></a>
-                <a href="/19-ml-systems/01-ml-system-fundamentals"><span>19</span><strong>ML Systems</strong><small>Features and serving</small></a>
+                <a href="/19-ml-systems/01-ml-system-fundamentals"><span>19</span><strong>ML Systems</strong><small>Features, serving, drift</small></a>
               </nav>
             </section>
 

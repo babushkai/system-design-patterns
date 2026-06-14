@@ -4,6 +4,8 @@
 
 Model monitoring detects whether a model is still useful, not just whether the prediction service is up. Monitor four layers: data quality, feature and prediction drift, model quality, and business impact. The hardest part is label delay: the real outcome may arrive hours, days, or months after the prediction.
 
+> This is the model-quality complement to infrastructure observability: pair it with [Metrics & Monitoring](../11-observability/02-metrics-monitoring.md) and [Alerting](../11-observability/04-alerting.md), express degradation budgets as [SLOs & Error Budgets](../11-observability/05-slos-error-budgets.md), and wire the action path into [Incident Management](../11-observability/07-incident-management.md). For LLM output quality specifically, see [LLM Evaluation](../16-llm-systems/10-llm-evaluation.md).
+
 ---
 
 ## Why Service Monitoring Is Not Enough
@@ -150,7 +152,7 @@ Mitigation: monitor production prediction logs and compare them with training ba
 
 Drift metrics are noisy and constantly fire.
 
-Mitigation: tune thresholds by actionability, use burn-rate style alerts for severe degradation, and route low-confidence alerts to review queues.
+Mitigation: tune thresholds by actionability, use [burn-rate style alerts](../11-observability/05-slos-error-budgets.md) for severe degradation, and route low-confidence alerts to review queues.
 
 ---
 

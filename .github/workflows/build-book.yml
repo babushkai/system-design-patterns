@@ -102,6 +102,8 @@ jobs:
             "01-foundations/06-failure-modes.md"
             "01-foundations/07-network-partitions.md"
             "01-foundations/08-idempotency.md"
+            "01-foundations/09-distributed-locks.md"
+            "01-foundations/10-capacity-planning.md"
             # Part 2: Distributed Databases
             "02-distributed-databases/01-single-leader-replication.md"
             "02-distributed-databases/02-multi-leader-replication.md"
@@ -112,6 +114,7 @@ jobs:
             "02-distributed-databases/07-distributed-transactions.md"
             "02-distributed-databases/08-consensus-algorithms.md"
             "02-distributed-databases/09-leader-election.md"
+            "02-distributed-databases/10-data-modeling.md"
             # Part 3: Storage Engines
             "03-storage-engines/01-b-trees.md"
             "03-storage-engines/02-lsm-trees.md"
@@ -120,6 +123,7 @@ jobs:
             "03-storage-engines/05-bloom-filters.md"
             "03-storage-engines/06-column-storage.md"
             "03-storage-engines/07-data-encoding.md"
+            "03-storage-engines/08-object-storage.md"
             # Part 4: Caching
             "04-caching/01-cache-strategies.md"
             "04-caching/02-cache-invalidation.md"
@@ -136,6 +140,7 @@ jobs:
             "05-messaging/06-cqrs.md"
             "05-messaging/07-outbox-pattern.md"
             "05-messaging/08-dead-letter-queues.md"
+            "05-messaging/09-saga-pattern.md"
             # Part 6: Scaling
             "06-scaling/01-load-balancing.md"
             "06-scaling/02-horizontal-vertical.md"
@@ -145,6 +150,11 @@ jobs:
             "06-scaling/06-circuit-breakers.md"
             "06-scaling/07-backpressure.md"
             "06-scaling/08-auto-scaling.md"
+            "06-scaling/09-multi-region-architecture.md"
+            "06-scaling/10-retries-timeouts-hedging.md"
+            "06-scaling/11-cell-based-architecture.md"
+            "06-scaling/12-multi-tenancy.md"
+            "06-scaling/13-dns-and-connection-management.md"
             # Part 7: Real-Time
             "07-real-time/01-polling.md"
             "07-real-time/02-long-polling.md"
@@ -152,6 +162,7 @@ jobs:
             "07-real-time/04-websockets.md"
             "07-real-time/05-webrtc.md"
             "07-real-time/06-presence.md"
+            "07-real-time/07-crdts-collaborative-editing.md"
             # Part 8: Case Studies
             "08-case-studies/01-twitter.md"
             "08-case-studies/02-instagram.md"
@@ -163,6 +174,9 @@ jobs:
             "08-case-studies/08-discord.md"
             "08-case-studies/09-google-maps.md"
             "08-case-studies/10-whatsapp.md"
+            "08-case-studies/11-figma.md"
+            "08-case-studies/12-cloudflare.md"
+            "08-case-studies/13-llm-inference-platforms.md"
             # Part 9: Whitepapers
             "09-whitepapers/01-mapreduce.md"
             "09-whitepapers/02-dynamo.md"
@@ -174,6 +188,11 @@ jobs:
             "09-whitepapers/08-chubby.md"
             "09-whitepapers/09-aurora.md"
             "09-whitepapers/10-cockroachdb.md"
+            "09-whitepapers/11-zanzibar.md"
+            "09-whitepapers/12-monarch.md"
+            "09-whitepapers/13-foundationdb.md"
+            "09-whitepapers/14-dynamodb-2022.md"
+            "09-whitepapers/15-attention-transformers.md"
             # Part 10: Security
             "10-security/01-authentication-fundamentals.md"
             "10-security/02-oauth2-openid-connect.md"
@@ -181,19 +200,26 @@ jobs:
             "10-security/04-api-security.md"
             "10-security/05-zero-trust-architecture.md"
             "10-security/06-encryption.md"
+            "10-security/07-authorization-patterns.md"
             # Part 11: Observability
             "11-observability/01-distributed-tracing.md"
             "11-observability/02-metrics-monitoring.md"
             "11-observability/03-logging.md"
             "11-observability/04-alerting.md"
+            "11-observability/05-slos-error-budgets.md"
+            "11-observability/06-finops-cost-engineering.md"
+            "11-observability/07-incident-management.md"
             # Part 12: Service Mesh
             "12-service-mesh/01-service-discovery.md"
             "12-service-mesh/02-api-gateway.md"
             "12-service-mesh/03-sidecar-pattern.md"
+            "12-service-mesh/04-api-design-patterns.md"
             # Part 13: Data Pipelines
             "13-data-pipelines/01-batch-processing.md"
             "13-data-pipelines/02-stream-processing.md"
             "13-data-pipelines/03-lambda-kappa-architecture.md"
+            "13-data-pipelines/04-change-data-capture.md"
+            "13-data-pipelines/05-lakehouse-table-formats.md"
             # Part 14: Search Systems
             "14-search-systems/01-inverted-indexes.md"
             "14-search-systems/02-full-text-search.md"
@@ -204,6 +230,10 @@ jobs:
             # Part 15: Deployment
             "15-deployment/01-deployment-strategies.md"
             "15-deployment/02-feature-flags.md"
+            "15-deployment/03-database-migrations.md"
+            "15-deployment/04-cicd-gitops.md"
+            "15-deployment/05-disaster-recovery.md"
+            "15-deployment/06-migration-strategies.md"
             # Part 16: LLM Systems
             "16-llm-systems/01-agent-fundamentals.md"
             "16-llm-systems/02-orchestration-patterns.md"
@@ -213,6 +243,8 @@ jobs:
             "16-llm-systems/06-prompt-engineering.md"
             "16-llm-systems/07-fine-tuning-patterns.md"
             "16-llm-systems/08-context-management.md"
+            "16-llm-systems/09-harness-engineering.md"
+            "16-llm-systems/10-llm-evaluation.md"
             # Part 17: GraphQL
             "17-graphql/01-graphql-fundamentals.md"
             "17-graphql/02-schema-design.md"
