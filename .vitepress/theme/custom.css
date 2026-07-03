@@ -1,4 +1,8 @@
-/* Documentation interface theme */
+/* Documentation interface theme — editorial fieldbook styling.
+   Single accent (--vp-c-brand-1); everything else derives from
+   VitePress --vp-c-* tokens so both light and dark modes adapt. */
+
+/* ---------- Tokens ---------- */
 :root {
   --vp-font-family-base: 'Inter', sans-serif;
   --vp-font-family-mono: 'JetBrains Mono', monospace;
@@ -7,20 +11,16 @@
   --vp-c-brand-2: #0F766E;
   --vp-c-brand-3: #D97706;
   --vp-c-brand-soft: rgba(37, 99, 235, 0.12);
-  --sdp-c-ink: #111827;
-  --sdp-c-data: #2563EB;
-  --sdp-c-stream: #0F766E;
-  --sdp-c-decision: #D97706;
 
   --vp-button-brand-border: #2563EB;
   --vp-button-brand-text: #fff;
   --vp-button-brand-bg: #2563EB;
-  --vp-button-brand-hover-border: #0F766E;
+  --vp-button-brand-hover-border: #1D4ED8;
   --vp-button-brand-hover-text: #fff;
-  --vp-button-brand-hover-bg: #0F766E;
-  --vp-button-brand-active-border: #1D4ED8;
+  --vp-button-brand-hover-bg: #1D4ED8;
+  --vp-button-brand-active-border: #1E40AF;
   --vp-button-brand-active-text: #fff;
-  --vp-button-brand-active-bg: #1D4ED8;
+  --vp-button-brand-active-bg: #1E40AF;
 }
 
 .dark {
@@ -28,17 +28,13 @@
   --vp-c-brand-2: #2DD4BF;
   --vp-c-brand-3: #FBBF24;
   --vp-c-brand-soft: rgba(96, 165, 250, 0.16);
-  --sdp-c-ink: #F8FAFC;
-  --sdp-c-data: #60A5FA;
-  --sdp-c-stream: #2DD4BF;
-  --sdp-c-decision: #FBBF24;
 
   --vp-button-brand-border: #60A5FA;
   --vp-button-brand-text: #fff;
   --vp-button-brand-bg: #2563EB;
-  --vp-button-brand-hover-border: #0F766E;
+  --vp-button-brand-hover-border: #3B82F6;
   --vp-button-brand-hover-text: #fff;
-  --vp-button-brand-hover-bg: #0F766E;
+  --vp-button-brand-hover-bg: #3B82F6;
 }
 
 .VPButton {
@@ -49,77 +45,187 @@
   box-shadow: none;
 }
 
-/* Custom styled tip/warning/info containers */
-.vp-doc .custom-block.tip {
-  border-color: var(--vp-c-brand-1);
-  background-color: var(--vp-c-brand-soft);
+/* ---------- Doc typography ---------- */
+.vp-doc h1 {
+  font-size: clamp(1.9rem, 3.5vw, 2.35rem);
+  font-weight: 700;
+  line-height: 1.15;
+  text-wrap: balance;
+}
+
+.vp-doc h1:lang(en) {
+  letter-spacing: -0.02em;
+}
+
+.vp-doc h2 {
+  margin-top: 3.5rem;
+  padding-top: 1.75rem;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.vp-doc h2:lang(en) {
+  letter-spacing: -0.015em;
+}
+
+.vp-doc h3 {
+  font-weight: 600;
+}
+
+.vp-doc p,
+.vp-doc li {
+  line-height: 1.75;
+}
+
+.vp-doc blockquote {
+  border-left: 2px solid var(--vp-c-divider);
+  background: transparent;
+  color: var(--vp-c-text-2);
+}
+
+/* TL;DR heading as a small-caps eyebrow */
+.vp-doc h2#tl-dr,
+.vp-doc h2#tldr {
+  border-bottom: none;
+  padding-bottom: 0;
+  color: var(--vp-c-text-2);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+/* ---------- Links + focus ---------- */
+.vp-doc a {
+  color: var(--vp-c-brand-1);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--vp-c-brand-1);
+  text-decoration-color: color-mix(in srgb, var(--vp-c-brand-1) 40%, transparent);
+  transition: text-decoration-color 0.15s ease;
+}
+
+.vp-doc a:hover {
+  color: var(--vp-c-brand-1);
+  text-decoration-color: currentColor;
+}
+
+.vp-doc a:focus-visible,
+.VPSidebar a:focus-visible,
+.pager-link:focus-visible {
+  border-radius: 2px;
+  outline: 2px solid var(--vp-c-brand-1);
+  outline-offset: 2px;
+}
+
+/* ---------- Tables ---------- */
+.vp-doc tr {
+  border-top: none;
+  background-color: transparent;
+}
+
+.vp-doc tr:nth-child(2n) {
+  background-color: transparent;
+}
+
+.vp-doc table th {
+  border: none;
+  border-bottom: 1px solid var(--vp-c-divider);
+  background-color: transparent;
+  color: var(--vp-c-text-2);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.vp-doc table td {
+  border: none;
+  border-bottom: 1px solid var(--vp-c-divider);
+}
+
+.vp-doc tr:hover td {
+  background-color: var(--vp-c-bg-soft);
+}
+
+/* ---------- Code blocks ---------- */
+.vp-doc div[class*='language-'] {
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 8px;
+}
+
+/* ---------- Custom blocks (tip/warning/info/danger) ---------- */
+.vp-doc .custom-block.tip,
+.vp-doc .custom-block.warning,
+.vp-doc .custom-block.info,
+.vp-doc .custom-block.danger {
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 8px;
+  background-color: var(--vp-c-bg-soft);
+}
+
+.vp-doc .custom-block .custom-block-title {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
 }
 
 .vp-doc .custom-block.tip .custom-block-title {
   color: var(--vp-c-brand-1);
 }
 
-.vp-doc .custom-block.warning {
-  border-color: var(--vp-c-brand-2);
-  background-color: var(--vp-c-brand-soft);
-}
-
 .vp-doc .custom-block.warning .custom-block-title {
-  color: var(--vp-c-brand-2);
+  color: var(--vp-c-warning-1);
 }
 
-.vp-doc .custom-block.info {
-  border-color: var(--vp-c-brand-3);
-  background-color: var(--vp-c-brand-soft);
+.vp-doc .custom-block.danger .custom-block-title {
+  color: var(--vp-c-danger-1);
 }
 
 .vp-doc .custom-block.info .custom-block-title {
-  color: var(--vp-c-brand-3);
+  color: var(--vp-c-text-2);
 }
 
-/* Sidebar group icons styling */
+/* ---------- Theme chrome (VitePress internals: audit on version bumps) ---------- */
+.VPNav {
+  border-bottom: 1px solid var(--vp-c-divider) !important;
+}
+
 .VPSidebarItem .icon {
   margin-right: 0.5rem;
   width: 18px;
   height: 18px;
 }
 
-/* Code blocks with a restrained accent */
-.vp-doc div[class*='language-'] {
-  border-left: 2px solid var(--vp-c-brand-1);
+.VPSidebarItem.level-0 > .item > .text {
+  color: var(--vp-c-text-2);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
 }
 
-/* Table header styling */
-.vp-doc table th {
-  background-color: var(--vp-c-bg-soft);
-  border-bottom: 2px solid var(--vp-c-divider);
+.VPDocAsideOutline .outline-title {
+  color: var(--vp-c-text-2);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
 }
 
-/* Link styling */
-.vp-doc a {
-  color: var(--vp-c-brand-1);
+.pager-link .desc {
+  color: var(--vp-c-text-3);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
 }
 
-.vp-doc a:hover {
-  color: var(--vp-c-brand-2);
-}
-
-/* Scrollbar styling (webkit) */
-::-webkit-scrollbar-thumb {
-  background: var(--vp-c-brand-1);
-  border-radius: 4px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: var(--vp-c-brand-2);
-}
-
-/* TL;DR section styling */
-.vp-doc h2#tl-dr,
-.vp-doc h2#tldr {
-  color: var(--vp-c-brand-1);
-  border-bottom: 2px solid var(--vp-c-divider);
-  padding-bottom: 0.5rem;
+.pager-link .title {
+  color: var(--vp-c-text-1);
+  font-weight: 600;
 }
 
 /* Footer branding */
@@ -138,12 +244,13 @@
   vertical-align: middle;
 }
 
-/* Nav accent border */
-.VPNav {
-  border-bottom: 1px solid var(--vp-c-divider) !important;
+.VPFooter .message,
+.VPFooter .copyright {
+  color: var(--vp-c-text-3);
+  font-size: 0.8rem;
 }
 
-/* 404 page */
+/* ---------- 404 page ---------- */
 .not-found {
   text-align: center;
   padding: 4rem 2rem;
@@ -153,10 +260,12 @@
   margin-bottom: 2rem;
 }
 .not-found h1 {
-  font-size: 6rem;
-  font-weight: 700;
-  color: var(--vp-c-brand-1);
   margin: 0;
+  color: var(--vp-c-text-1);
+  font-family: var(--sdp-font-display);
+  font-size: 6rem;
+  font-style: italic;
+  font-weight: 500;
   line-height: 1;
 }
 .not-found p {
@@ -169,17 +278,18 @@
   padding: 0.75rem 2rem;
   background: var(--vp-c-brand-1);
   color: white;
-  border-radius: 8px;
+  border-radius: 999px;
   text-decoration: none;
   font-weight: 600;
   transition: background 0.2s;
 }
 .not-found-btn:hover {
-  background: var(--vp-c-brand-2);
+  background: var(--vp-c-brand-1);
+  background: color-mix(in srgb, var(--vp-c-brand-1) 85%, black);
   color: white;
 }
 
-/* Mermaid diagram container */
+/* ---------- Mermaid diagram container ---------- */
 .mermaid {
   display: flex;
   justify-content: center;
@@ -191,6 +301,36 @@
   overflow-x: auto;
 }
 
+/* ---------- Scrollbar (webkit) ---------- */
+::-webkit-scrollbar-thumb {
+  background: var(--vp-c-text-3);
+  background: color-mix(in srgb, var(--vp-c-text-3) 50%, transparent);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--vp-c-text-3);
+}
+
+/* ---------- JA locale ---------- */
+.vp-doc h1:lang(ja),
+.vp-doc h2:lang(ja),
+.vp-doc h3:lang(ja),
+.vp-doc h4:lang(ja) {
+  letter-spacing: 0;
+}
+
+.vp-doc p:lang(ja),
+.vp-doc li:lang(ja) {
+  line-height: 1.9;
+}
+
+.vp-doc em:lang(ja) {
+  font-style: normal;
+  font-weight: 600;
+}
+
+/* ---------- Mobile ---------- */
 @media (max-width: 640px) {
   html,
   body {
