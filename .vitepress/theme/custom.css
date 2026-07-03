@@ -58,8 +58,6 @@
 }
 
 .vp-doc h2 {
-  margin-top: 3.5rem;
-  padding-top: 1.75rem;
   font-weight: 600;
   line-height: 1.25;
 }
@@ -70,11 +68,6 @@
 
 .vp-doc h3 {
   font-weight: 600;
-}
-
-.vp-doc p,
-.vp-doc li {
-  line-height: 1.75;
 }
 
 .vp-doc blockquote {
@@ -318,11 +311,6 @@
 .vp-doc h3:lang(ja),
 .vp-doc h4:lang(ja) {
   letter-spacing: 0;
-}
-
-.vp-doc p:lang(ja),
-.vp-doc li:lang(ja) {
-  line-height: 1.9;
 }
 
 .vp-doc em:lang(ja) {
