@@ -222,21 +222,6 @@
 }
 
 /* Footer branding */
-.VPFooter .container {
-  position: relative;
-}
-
-.VPFooter .message::before {
-  content: '';
-  display: inline-block;
-  width: 16px;
-  height: 16px;
-  background: url('/logo.svg') no-repeat center;
-  background-size: contain;
-  margin-right: 0.5rem;
-  vertical-align: middle;
-}
-
 .VPFooter .message,
 .VPFooter .copyright {
   color: var(--vp-c-text-3);
@@ -247,10 +232,6 @@
 .not-found {
   text-align: center;
   padding: 4rem 2rem;
-}
-.not-found-logo {
-  width: 80px;
-  margin-bottom: 2rem;
 }
 .not-found h1 {
   margin: 0;

@@ -301,13 +301,10 @@ export default withMermaid({
     ['link', { rel: 'preconnect', href: 'https://fonts.googleapis.com' }],
     ['link', { rel: 'preconnect', href: 'https://fonts.gstatic.com', crossorigin: '' }],
     ['link', { rel: 'stylesheet', href: 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Noto+Sans+JP:wght@400;500;700&family=Newsreader:ital,opsz,wght@1,6..72,400..600&display=swap' }],
-    // favicon is served from the custom domain root
-    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/logo.svg' }],
     ['meta', { name: 'theme-color', content: '#0f172a' }],
     ['meta', { property: 'og:type', content: 'website' }],
     ['meta', { property: 'og:title', content: 'System Design Patterns' }],
     ['meta', { property: 'og:description', content: 'An architecture fieldbook for reliable distributed, data, ML, and AI systems.' }],
-    ['meta', { property: 'og:image', content: 'https://design.babushkai.com/logo.svg' }],
     ['meta', { name: 'twitter:card', content: 'summary' }],
   ],
 
@@ -673,7 +670,6 @@ export default withMermaid({
   },
 
   themeConfig: {
-    logo: '/logo.svg',
     siteTitle: 'System Design Patterns',
 
     socialLinks: [
