@@ -264,6 +264,15 @@
 }
 
 /* ---------- Mermaid diagram container ---------- */
+/* theme-base colors every span white for node labels; edge labels sit on a
+   light pill and need dark text. Light mode only — the plugin re-renders
+   with mermaid's dark theme in dark mode, which handles its own labels. */
+html:not(.dark) .mermaid .edgeLabel,
+html:not(.dark) .mermaid .edgeLabel span,
+html:not(.dark) .mermaid .edgeLabel p {
+  color: #3C3C43 !important;
+}
+
 .mermaid {
   display: flex;
   justify-content: center;
