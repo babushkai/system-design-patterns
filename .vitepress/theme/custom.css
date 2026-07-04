@@ -263,14 +263,84 @@
   color: white;
 }
 
-/* ---------- Mermaid diagram container ---------- */
-/* theme-base colors every span white for node labels; edge labels sit on a
-   light pill and need dark text. Light mode only — the plugin re-renders
-   with mermaid's dark theme in dark mode, which handles its own labels. */
-html:not(.dark) .mermaid .edgeLabel,
-html:not(.dark) .mermaid .edgeLabel span,
-html:not(.dark) .mermaid .edgeLabel p {
-  color: #3C3C43 !important;
+/* ---------- Mermaid diagrams ---------- */
+/* Editorial monochrome restyle driven by theme tokens, so diagrams stay
+   readable in both modes. The plugin force-renders mermaid's own dark theme
+   under html.dark, so SVG theme variables can't follow the toggle — these
+   overrides can, and need !important to outrank mermaid's generated
+   per-diagram #id styles. Covers flowchart/graph and sequenceDiagram. */
+.mermaid svg .node rect,
+.mermaid svg .node circle,
+.mermaid svg .node ellipse,
+.mermaid svg .node polygon,
+.mermaid svg .node path {
+  fill: var(--vp-c-bg) !important;
+  stroke: var(--vp-c-text-3) !important;
+  stroke-width: 1px !important;
+}
+.mermaid svg .nodeLabel,
+.mermaid svg .nodeLabel p,
+.mermaid svg .cluster-label .nodeLabel {
+  color: var(--vp-c-text-1) !important;
+}
+.mermaid svg .cluster rect {
+  fill: var(--vp-c-bg-soft) !important;
+  stroke: var(--vp-c-divider) !important;
+}
+.mermaid svg .edgePaths path,
+.mermaid svg .flowchart-link {
+  stroke: var(--vp-c-text-3) !important;
+}
+.mermaid svg .marker,
+.mermaid svg marker path {
+  fill: var(--vp-c-text-3) !important;
+  stroke: var(--vp-c-text-3) !important;
+}
+.mermaid svg .edgeLabel,
+.mermaid svg .edgeLabel p,
+.mermaid svg .edgeLabel span {
+  color: var(--vp-c-text-2) !important;
+  background-color: var(--vp-c-bg) !important;
+}
+.mermaid svg .edgeLabel rect,
+.mermaid svg .labelBkg {
+  fill: var(--vp-c-bg) !important;
+  background-color: var(--vp-c-bg) !important;
+  opacity: 1 !important;
+}
+.mermaid svg .actor {
+  fill: var(--vp-c-bg) !important;
+  stroke: var(--vp-c-text-3) !important;
+}
+.mermaid svg text.actor > tspan,
+.mermaid svg .messageText,
+.mermaid svg .loopText,
+.mermaid svg .loopText > tspan,
+.mermaid svg .noteText > tspan,
+.mermaid svg .labelText,
+.mermaid svg .labelText > tspan {
+  fill: var(--vp-c-text-1) !important;
+  stroke: none !important;
+}
+.mermaid svg .messageLine0,
+.mermaid svg .messageLine1,
+.mermaid svg .actor-line,
+.mermaid svg .loopLine {
+  stroke: var(--vp-c-text-3) !important;
+}
+.mermaid svg .note {
+  fill: var(--vp-c-bg-soft) !important;
+  stroke: var(--vp-c-divider) !important;
+}
+.mermaid svg .labelBox {
+  fill: var(--vp-c-bg-soft) !important;
+  stroke: var(--vp-c-divider) !important;
+}
+.mermaid svg .activation0,
+.mermaid svg .activation1,
+.mermaid svg .activation2 {
+  fill: var(--vp-c-bg-soft) !important;
+  stroke: var(--vp-c-text-3) !important;
 }
 
 .mermaid {
