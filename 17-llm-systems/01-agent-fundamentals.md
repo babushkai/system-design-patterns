@@ -2,7 +2,9 @@
 
 ## TL;DR
 
-An agent is a model using tools in a loop against an environment. The model supplies reasoning; the **harness** — the loop, tool definitions, context management, permissions, and sandbox you build around it — determines how much of that reasoning turns into useful work. Modern agents use native tool calling (typed JSON schemas, parallel calls) rather than text-parsed prompts, treat the context window as working memory backed by files and compaction, verify their own work against ground truth (tests, linters, screenshots), and run inside permission-gated sandboxes. Design the environment and the feedback loops first; the model is the most replaceable component.
+An agent is a model-directed feedback controller: it observes a partial view of an environment, proposes an action, receives a delayed and possibly lossy observation, and repeats until an externally defined completion condition holds. The model supplies adaptive policy; the harness owns state, authority, budgets, execution, and evidence. The environment determines what is observable, reversible, and verifiable.
+
+The central design question is therefore not “which agent framework?” It is whether the task exposes a feedback signal strong enough to correct model error before the permitted actions cause unacceptable loss. Use a deterministic workflow when control flow is knowable; introduce agency only for decisions that genuinely depend on observations made at runtime.
 
 ---
 
@@ -18,10 +20,13 @@ graph LR
         UG["Goal"] --> M["Model decides<br/>next action"]
         M -->|tool call| ENV["Environment<br/>(files, shell, APIs, browser)"]
         ENV -->|tool result| M
-        M -->|no more tool calls| DONE["Final answer"]
+        M -->|completion proposal| V{"Evidence contract<br/>satisfied?"}
+        V -->|yes| DONE["Verified final answer"]
+        V -->|no, observation| M
 
         HARNESS["Harness:<br/>loop, context mgmt,<br/>permissions, sandbox"] -.->|mediates| M
         HARNESS -.->|mediates| ENV
+        HARNESS -.->|owns| V
     end
 ```
 
@@ -33,10 +38,10 @@ A chatbot maps one input to one output. A **workflow** chains LLM calls along a 
 | Actions | Text only | Predefined LLM calls | Tools chosen at runtime |
 | Steps | 1 | Fixed | Open-ended, bounded by harness |
 | Failure mode | Bad answer | Bad step output | Compounding drift across steps |
-| Cost profile | Predictable | Predictable | Variable — budget in the harness |
+| Cost profile | One admitted call | Sum of known branches and retries | Input-dependent; bounded by admission |
 | Right for | Q&A | Decomposable, known tasks | Open-ended tasks with verifiable outcomes |
 
-Start with the simplest form that solves the problem. Most production "agent" systems are workflows, and should be — see [Orchestration Patterns](./02-orchestration-patterns.md) for the taxonomy.
+Start with the least adaptive form that reaches the workload. A workflow preserves explicit control when branches are enumerable; an agent earns authority only where observations reveal useful branches that could not be encoded economically. See [Orchestration Patterns](./02-orchestration-patterns.md) for the taxonomy and composition rules.
 
 ## The Three Components
 
@@ -51,101 +56,37 @@ graph TD
     MODEL <-.->|tool calls / results| ENVIRONMENT
 ```
 
-- **Model.** Frontier models are post-trained specifically for agentic tool use: they natively interleave reasoning with tool calls, recover from errors, and sustain multi-hour tasks. Capability differences between models matter, but a mediocre harness wastes a frontier model — public coding benchmarks always report a *model + harness* pair, never a model alone.
+- **Model.** The model implements a probabilistic policy over proposed actions and final responses. Its useful capability depends on the tool protocol, context, feedback latency, and verifier; model-only benchmark results do not determine system performance.
 - **Harness.** Everything between the model and the world. This is where most engineering effort goes; see [Harness Engineering](./09-harness-engineering.md) for the full treatment.
-- **Environment.** What the agent can observe and change. The richer and more inspectable the environment (a real shell, a real filesystem, real test suites), the better the agent's feedback loops. Design environments so that progress is *observable* — an agent that can run the tests doesn't need to guess whether its change worked.
+- **Environment.** What the agent can observe and change. Capability comes from task-relevant observations and effects, not raw tool breadth. A shell or filesystem helps only when its state is scoped, versioned, and connected to an independent success signal; otherwise it increases blast radius without closing the feedback loop.
 
 ---
 
 ## The Agent Loop
 
-The 2023-era pattern — prompt the model to emit `Thought: / Action: / Action Input:` text and parse it with regexes — is obsolete. Every major API exposes **native tool calling**: you declare tools as JSON Schema, the model returns typed tool-call blocks, and you return results as structured messages. No parsing, no format drift, parallel calls for free.
+The abstract loop has four boundaries:
 
-```python
-import anthropic
-
-client = anthropic.Anthropic()
-
-TOOLS = [
-    {
-        "name": "bash",
-        "description": "Run a shell command in the project sandbox. "
-                       "Returns stdout and stderr, truncated to 50KB.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "command": {"type": "string", "description": "Command to execute"},
-            },
-            "required": ["command"],
-        },
-    },
-    {
-        "name": "edit_file",
-        "description": "Replace an exact string in a file. Fails if the string "
-                       "is not found or matches more than once.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "path": {"type": "string"},
-                "old": {"type": "string"},
-                "new": {"type": "string"},
-            },
-            "required": ["path", "old", "new"],
-        },
-    },
-]
-
-def agent_loop(task: str, max_turns: int = 50) -> str:
-    messages = [{"role": "user", "content": task}]
-
-    for _ in range(max_turns):
-        response = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=8192,
-            system=SYSTEM_PROMPT,          # stable across turns: prompt-cache friendly
-            tools=TOOLS,
-            messages=messages,
-        )
-
-        if response.stop_reason != "tool_use":
-            return next(b.text for b in response.content if b.type == "text")
-
-        # Append the assistant turn verbatim, then execute every tool call
-        # in it (the model may request several in parallel).
-        messages.append({"role": "assistant", "content": response.content})
-        results = [
-            {
-                "type": "tool_result",
-                "tool_use_id": block.id,
-                "content": execute_tool(block.name, block.input),
-            }
-            for block in response.content
-            if block.type == "tool_use"
-        ]
-        messages.append({"role": "user", "content": results})
-
-    raise RuntimeError("max_turns exceeded — task did not converge")
+```text
+state snapshot → model proposal → policy/execution → observation → new state
 ```
 
-The OpenAI equivalent uses `tools=[{"type": "function", ...}]` and `tool_calls` on the response; the shape of the loop is identical. The legacy `functions` / `function_call` parameters are deprecated.
+The model proposal is not an action. It is untrusted structured data containing either a candidate tool invocation, a request for information, or a completion claim. The harness validates schema and preconditions, resolves authority, assigns a stable logical action identity, executes through the appropriate isolation boundary, and records the observation. This distinction prevents a model-generated tool call from bypassing authentication merely because it parsed correctly.
 
-What the production version adds on top of this skeleton:
+Native structured tool calling removes a syntax failure class, but not semantic failure: a valid argument can name the wrong account, use a stale resource revision, or request an unauthorized effect. Tool schemas should therefore encode representable structure while deterministic code enforces business invariants and policy.
 
-1. **Permission gate** before `execute_tool` — classify actions as read / write / irreversible and require approval for the last class.
-2. **Token budget accounting** — track context usage every turn; trigger compaction before overflow (see [Context Management](./08-context-management.md)).
-3. **Checkpointing** — persist `messages` so a crashed or interrupted run resumes instead of restarting.
-4. **Telemetry** — record every turn as a trace span: tool name, latency, tokens, cache hit rate.
-5. **Streaming and interruption** — surface partial output and let a human steer mid-run.
+Multiple proposed actions are concurrent only when their read/write sets and snapshot semantics permit it. Independent reads may run together. Overlapping writes require serialization or optimistic revision checks. A read following a write must either observe the committed result or be explicitly bound to the prior snapshot. Parallel syntax in a model response does not imply safe parallel execution.
 
-### Extended thinking
+The loop terminates through typed reasons—verified completion, user pause, approval wait, deadline, budget exhaustion, policy denial, non-convergence, or unrecoverable error. A natural-language “done” is a completion proposal; the harness decides whether the evidence contract is satisfied. [Harness Engineering](./09-harness-engineering.md) develops the runtime mechanics, while [Orchestration Patterns](./02-orchestration-patterns.md) covers the surrounding control-flow choices.
 
-Reasoning-capable models can emit internal thinking tokens before acting, and *interleave* thinking between tool calls — reflect on a result before choosing the next action. This replaced most prompt-level reasoning scaffolds (Chain-of-Thought, Tree-of-Thought); you control it with a thinking budget parameter rather than prompt tricks. Spend the budget where verification is hard and steps are irreversible; keep it low for mechanical tool-use sequences.
+### Reasoning effort is a resource allocation
+
+Some model APIs expose reasoning-effort controls, while others express the trade-off through model choice or decoding configuration. Treat reasoning compute as one budget dimension. Additional deliberation is most valuable where a decision is hard to verify or commits an expensive branch; it has less value inside a tight loop with immediate deterministic feedback. Measure task success against total tokens, wall time, and action count rather than assuming more internal computation is uniformly better.
 
 ---
 
 ## Execution Semantics: The Loop Is a Durable State Machine
 
-The toy loop keeps `messages` in process memory. A production agent has a durable **run** containing ordered **turns**, each turn may propose one or more **actions**, and each action has an execution record. These identities solve different ambiguity problems:
+The toy loop keeps `messages` in process memory. A long-running agent has a durable **run** containing ordered **turns**, each turn may propose one or more **actions**, and each action has an execution record. These identities solve different ambiguity problems:
 
 ```text
 run_id       names one user goal and its durable lifetime
@@ -162,7 +103,9 @@ stateDiagram-v2
     Ready --> CallingModel
     CallingModel --> AwaitingApproval: proposed gated action
     CallingModel --> Executing: proposed allowed action
-    CallingModel --> Completed: final answer
+    CallingModel --> Verifying: completion proposal
+    Verifying --> Completed: evidence contract satisfied
+    Verifying --> Ready: verification observation appended
     AwaitingApproval --> Executing: approved
     AwaitingApproval --> Ready: denied result appended
     Executing --> Ready: durable tool result appended
@@ -181,60 +124,29 @@ Durability does not mean storing unrestricted transcripts forever. Persist struc
 
 ---
 
-## Tools
+## Tools as Effect Contracts
 
-Tools are the agent's API to the world. Tool design is prompt engineering with a type system — the model reads your schemas and descriptions the way a new hire reads your docs, and ambiguity costs you real tokens and wrong calls.
+A tool is an effect contract, not merely a function description. Its control-plane record should declare input and output schemas, authenticated principal requirements, read/write set, reversibility, idempotency behavior, timeout, maximum result size, data classification, and reconciliation procedure. The model-visible description explains selection; the harness-visible contract determines execution.
 
-### Design principles
+General-purpose execution tools offer reach but make effects harder to classify statically. Narrow structured tools expose better validation and least privilege but expand the catalog and can force inefficient call sequences. The right surface combines a small orthogonal core with typed tools at high-impact boundaries. Catalog discovery can defer rarely used schemas so tool breadth does not consume every context.
 
-1. **Few, orthogonal tools beat many overlapping ones.** Every tool competes for the model's attention in every turn. If two tools can accomplish the same thing, the model will sometimes pick the worse one. Consolidate (`search_logs(filters)` rather than five log tools).
-2. **Descriptions are micro-prompts.** State what the tool does, when to use it over its neighbors, what it returns, and its failure modes. The `edit_file` description above tells the model *how to avoid* the two common failure cases.
-3. **Token-efficient outputs.** Return what the model needs to decide the next step — truncate, paginate, summarize. A tool that dumps a 200KB JSON blob into context does more damage than one that errors.
-4. **Errors that teach.** `"File not found: src/uesr.py — did you mean src/user.py?"` lets the model self-correct in one turn. A bare stack trace often costs three.
-5. **Idempotent and safe to retry** wherever possible — the loop *will* retry.
+Result design closes the feedback loop. Return a typed status, concise observation, stable artifact or receipt reference, source revision, truncation indicator, and actionable error class. Large data belongs behind pagination or an artifact reference. An error should state which precondition failed without leaking secrets or encouraging the model to bypass policy.
 
-### General-purpose vs. structured tools
-
-The highest-leverage tools in practice are the general-purpose ones: **a shell, file read/write/edit, and code execution**. A bash tool subsumes hundreds of specialized tools, and writing a script is often more token-efficient than chaining ten tool calls — the "code execution as tool use" pattern has the agent *write a program* that calls APIs in a loop instead of making each call through the context window. Add structured tools where types and guardrails matter: payments, ticket updates, anything irreversible.
-
-### MCP: the integration standard
-
-The Model Context Protocol (MCP) standardizes how tools, resources, and prompts are exposed to agents — an MCP server wraps a system (GitHub, Postgres, Slack, a browser) once, and any MCP-capable harness can use it. Treat MCP servers as third-party dependencies: review what they expose, pin versions, and remember that every connected server's tool descriptions enter your prompt (use deferred loading / tool search when the catalog is large). Coverage in depth: [Coding Agent Tool Design](../19-compound-engineering/02-coding-agent-tool-design.md).
-
-```mermaid
-graph LR
-    AGENT["Agent harness"] -->|MCP client| S1["MCP server: GitHub"]
-    AGENT -->|MCP client| S2["MCP server: Postgres"]
-    AGENT -->|MCP client| S3["MCP server: internal APIs"]
-    AGENT -->|built-in| T1["bash / files / code exec"]
-```
+Protocols such as MCP standardize discovery and transport but do not establish trust. A connected server is another dependency and authority boundary: authenticate it, constrain exposed capabilities, pin compatible protocol/schema versions, and treat returned content as untrusted unless policy says otherwise. Detailed tool-surface design lives in [Harness Engineering](./09-harness-engineering.md) and [Coding Agent Tool Design](../19-compound-engineering/02-coding-agent-tool-design.md).
 
 ---
 
-## Memory and Context
+## State, Context, and Memory
 
-The context window is the agent's working memory, and it is the scarcest resource in the system. Two findings shape everything: effective attention degrades as context fills ("context rot" — models recall the middle of a long context worse than the edges), and inference cost scales with every token you keep resending. Long-horizon agents are therefore built on **context hygiene**, not maximal context.
+Do not conflate three stores. **Run state** is authoritative structured data: goal, constraints, action status, approvals, budgets, and completion evidence. **Context** is the bounded view compiled for one model turn. **Memory** is information retained across a longer scope, such as a project convention or user preference. The transcript is neither the source of truth nor a safe cross-session memory database.
 
-| Layer | Mechanism | Survives |
-|-------|-----------|----------|
-| Working memory | The message list itself | One run, until compaction |
-| Compaction summary | Model summarizes the transcript; harness restarts the loop with the summary + recent turns | Context overflow |
-| File-based memory | Agent writes notes, plans, TODOs to disk (`NOTES.md`, scratch files) and re-reads them | The session — and the next one |
-| Project memory | Curated instruction files (`CLAUDE.md`-style) loaded every session | The project |
-| Retrieval | Search tools over a corpus or past episodes | Everything else |
-
-Practical defaults:
-
-- **Compaction** preserves decisions, constraints, file paths, and learned gotchas; it discards raw tool output. Trigger it at a threshold (e.g., 80% of the window), not at overflow.
-- **The filesystem is the agent's external memory.** An agent that maintains its own `plan.md` and checks items off recovers from compaction and interruption almost for free.
-- **Just-in-time retrieval beats preloading.** Give the agent search tools (`grep`, semantic search) and let it pull what it needs, instead of stuffing everything that might be relevant into the prompt. See [Agent Context Engineering](../19-compound-engineering/03-agent-context-engineering.md).
-- Vector-store "agent memory" (embed every message, retrieve by similarity) is rarely the right first tool — explicit files the agent deliberately writes and reads are more debuggable and more faithful.
+This separation enables recovery and minimization. The runtime can rebuild a prompt from canonical state, retain sensitive artifacts under their own access policy, and compact conversational material without losing action receipts or constraints. Memory records need provenance, scope, expiry, and revocation; context items need trust labels and token budgets. [Context Management](./08-context-management.md) owns the selection, compaction, caching, and memory lifecycle details.
 
 ---
 
-## Verification: The Half of the Loop That Matters
+## Verification as an Observation Channel
 
-Agents shine on tasks where **checking an answer is cheaper than producing it** — code with a test suite, data transformations with invariants, UI changes you can screenshot. The harness should make ground truth available:
+Agency is tractable when the environment exposes observations that discriminate progress from plausible failure. Code tests, database invariants, simulators, artifact diffs, and reviewed screenshots are possible channels. They differ in coverage, latency, independence, and false-accept cost; none becomes ground truth merely because it is executable.
 
 ```mermaid
 graph LR
@@ -243,41 +155,25 @@ graph LR
     VERIFY -->|pass| DONE["Done — claim with evidence"]
 ```
 
-- Prefer **objective verifiers** (exit codes, diffs, pixel comparisons) over the model grading itself; self-evaluation without ground truth inflates success rates.
-- Make verification *cheap and incremental*: a fast targeted test the agent can run after every edit outperforms a 20-minute suite it runs once.
-- For tasks with no programmatic oracle, use rubric-based LLM-as-judge as a weak signal and route low-confidence results to a human.
-- A task with no verification signal at all is a poor fit for autonomy — keep a human in the loop.
+Model the verifier as a sensor. A false acceptance commits bad state; a false rejection spends more work or blocks a valid result. Verification cadence therefore depends on the expected loss of undetected drift versus the cost and latency of sensing. Cheap local invariants can guard each transition; expensive end-to-end or human checks belong at risk boundaries. Self-evaluation is useful for proposing defects, but it is correlated with the generator and cannot be treated as independent acceptance evidence without calibration.
 
-This is also the honest framing for reliability: per-step success compounds. A 98%-per-step agent finishes a 30-step task ~55% of the time. Verification steps are how you stop the compounding — they convert silent drift into a visible, recoverable error.
+If a path contains conditional transition-success probabilities \(p_i\), the first-order probability that all transitions are correct is \(\prod_i p_i\). In practice the errors are correlated through shared context and evidence, so multiplying global average accuracies is not a reliability estimate. A verifier changes the state graph by detecting some failures and routing them into recovery; its recall, false-positive rate, and recovery-success distribution determine the actual gain. The evaluation methodology belongs to [LLM Evaluation](./10-llm-evaluation.md); this chapter's foundational rule is that completion authority stays outside the model.
 
 ---
 
-## Security and Sandboxing
+## Security Model
 
-An agent is an untrusted-code execution problem plus a confused-deputy problem. The harness, not the model, is the security boundary.
+An agent combines an untrusted decision-maker with a confused-deputy risk. The principal's authority must be attenuated to the current action: tool, resource, verb, tenant, expiry, and approved argument digest. The model never authenticates itself, grants itself access, or converts text found in a document into authority.
 
-- **Sandbox the environment.** Run tool execution in an ephemeral container or VM: project directory mounted read-write, everything else read-only or invisible; network egress through an allowlist; secrets injected per-tool, never placed in context.
-- **Classify and gate actions.** Reads auto-approve; writes inside the workspace auto-approve or batch for review; anything irreversible or outward-facing (push, deploy, send email, spend money) requires explicit approval until you have eval evidence to relax it.
-- **Assume prompt injection.** Any untrusted content the agent reads — web pages, issues, emails, tool outputs — may contain instructions. Pattern-matching filters do not solve this. The structural defense is to avoid the *lethal trifecta*: an agent that simultaneously (1) reads untrusted input, (2) has access to private data, and (3) can communicate externally is exfiltratable by design. Remove or gate at least one leg.
-- **Provenance matters.** Mark tool results as data, not directives, in the prompt; treat "the issue comment told me to" as a bug in your harness, not the model.
-
-```python
-IRREVERSIBLE = {"deploy", "send_email", "git_push", "payment"}
-
-async def execute_gated(tool: str, args: dict, policy: Policy) -> str:
-    action_class = classify(tool, args)          # read | write | irreversible
-    if action_class == "irreversible" and not policy.pre_approved(tool, args):
-        approval = await request_human_approval(tool, args)
-        if not approval.granted:
-            return f"Denied by operator: {approval.reason}"   # the model adapts
-    return await sandbox.run(tool, args)
-```
+Isolation limits what executed code can observe and change; policy decides whether the proposed effect is permitted; approval delegates a specific effect; provenance distinguishes user intent from untrusted data. These controls are complementary. A sandbox with unrestricted network credentials still leaks data, while a policy gate without isolation cannot contain a compromised interpreter. The concrete sandbox, egress, secret-broker, and approval architecture is developed in [Harness Engineering](./09-harness-engineering.md).
 
 ---
 
 ## Evaluating Agents
 
-You cannot improve a harness you cannot measure. Public benchmarks calibrate expectations — SWE-bench Verified (real GitHub issues), Terminal-Bench (terminal tasks), τ-bench (tool use under policy constraints, with simulated users), OSWorld (computer use), GAIA (tool-augmented reasoning) — but your product needs its own eval set: 50–200 real tasks with programmatic graders, run on every harness change. Track *task success*, *cost per solved task*, *turns to completion*, and *unsafe-action rate*, not just model-level scores. Pass@k vs pass^k matters for agents: a task solved 1-in-8 runs is a very different product than one solved 8-in-8.
+Agent evaluation separates end state, trajectory, and operating envelope. End-state checks determine whether the environment satisfies the task contract. Trajectory checks capture redundant actions, unsafe proposals, policy interventions, recovery, and irreversible effects that a good final answer could hide. Operating metrics include wall time, tail latency, tokens, tool cost, and human attention per successful task.
+
+Because execution is stochastic, report the distribution across repeated runs and distinguish “at least one success” from “all repeated runs succeed.” Public benchmarks compare model–harness pairs on standardized environments; product release decisions require representative internal tasks and real policy boundaries. [LLM Evaluation and Observability](./10-llm-evaluation.md) covers dataset design, judge calibration, statistics, and production feedback.
 
 ---
 
@@ -322,12 +218,12 @@ The decisive design artifact is not the system prompt. It is the run state machi
 ## Key Takeaways
 
 1. An agent is a model-directed control loop; the harness and environment determine its real capability and safety.
-2. Production execution needs durable run, turn, action, and attempt identities so retries and recovery have defined semantics.
+2. Durable execution needs distinct run, turn, action, and attempt identities so retries and recovery have defined semantics.
 3. Side-effect correctness comes from idempotency, atomic state transitions, and reconciliation—not from asking the model to be careful.
 4. Tool descriptions, result shapes, errors, and permissions form the agent's effective API and should be designed like one.
 5. Context is working memory, not durable truth; goals, constraints, state, and evidence need structured storage outside the transcript.
 6. Verification arrests compounding error. Completion is a harness decision backed by evidence, not a model stop token.
-7. The security boundary is sandbox and policy. Untrusted content must never grant authority merely by appearing in context.
+7. The security boundary is sandbox and policy. Untrusted content cannot grant authority merely by appearing in context.
 8. Autonomy should widen only after task-specific evaluations show that the feedback loop can detect and recover from the tail failures.
 
 ## References
@@ -340,4 +236,4 @@ The decisive design artifact is not the system prompt. It is the run state machi
 - [The Lethal Trifecta for AI Agents](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/) — Simon Willison
 - [SWE-bench](https://www.swebench.com/) / [τ-bench](https://arxiv.org/abs/2406.12045) / [GAIA](https://arxiv.org/abs/2311.12983) — agent benchmarks
 - [Context Rot: How Increasing Input Tokens Impacts LLM Performance](https://research.trychroma.com/context-rot) — Chroma research
-- [ReAct: Synergizing Reasoning and Acting in Language Models](https://arxiv.org/abs/2210.03629) — the 2022 pattern that native tool calling productized
+- [ReAct: Synergizing Reasoning and Acting in Language Models](https://arxiv.org/abs/2210.03629) — reasoning-and-action feedback-loop formulation

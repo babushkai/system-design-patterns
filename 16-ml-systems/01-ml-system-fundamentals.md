@@ -2,13 +2,13 @@
 
 ## TL;DR
 
-A machine learning system is unlike traditional software in one decisive way: its behavior is defined by *data*, not just code. The model itself is a small box; almost all the operational risk lives in the system around it — data collection, feature extraction, configuration, serving infrastructure, monitoring, and the feedback loops that quietly reshape future training data. This is the central thesis of Sculley et al.'s *Hidden Technical Debt in Machine Learning Systems* (2015), and it reframes the whole discipline: you are not building a model, you are building a system whose correctness is statistical, whose specification is implicit in a dataset, and whose dependencies change underneath you without warning. Everything in this section — feature stores, dataset versioning, offline evaluation, serving, monitoring, training pipelines, label systems, registries, capacity planning, experimentation, and governance — exists to manage that fundamental difference.
+A machine learning system is unlike ordinary rule-driven software in one decisive way: a material part of its behavior is learned from *data*, not specified only by code and configuration. The model itself is a small box; most operational risk lives in the system around it — data collection, feature extraction, policy, serving infrastructure, monitoring, and the feedback loops that reshape future training data. This is the central thesis of Sculley et al.'s *Hidden Technical Debt in Machine Learning Systems* (2015), and it reframes the discipline: you are building a decision system whose empirical behavior is statistical, whose training objective is only a proxy for product intent, and whose dependencies change underneath it. Everything in this section — feature stores, dataset versioning, evaluation, serving, monitoring, training pipelines, label systems, registries, capacity planning, experimentation, and governance — exists to make that decision system controllable.
 
 ---
 
 ## An ML System Is Defined by Data, Not Just Code
 
-In traditional software, behavior is fully determined by code. A function that returns `a + b` will return the sum forever; you can read it, test it exhaustively against a specification, and reason about it in isolation. The code *is* the behavior, and the behavior is deterministic, inspectable, and stable until someone edits the source.
+In rule-driven software, behavior is determined by code, configuration, inputs, and state, but the decision rule itself is explicit. A function that returns `a + b` exposes its rule for inspection; engineers can test it against a written specification and reason locally about a change. The production system may still be nondeterministic or stateful, but its intended mapping is authored rather than inferred.
 
 An ML system breaks every part of that contract. The behavior of a fraud classifier is not written in its code — the code is a generic training procedure that could just as easily produce a recommender or an image classifier. The behavior is *learned* from data, which means the dataset is the real specification, and that specification is implicit, enormous, and constantly shifting. Two teams can run identical code on different data and ship systems that behave nothing alike. The same team can run identical code on *the same source* a month later and ship a meaningfully different system, because the world the data describes has moved.
 
@@ -198,7 +198,7 @@ The single most load-bearing row in that table is the prediction log, because fo
 
 ```sql
 CREATE TABLE prediction_log (
-    prediction_id     UUID PRIMARY KEY,        -- the join anchor for labels, forever
+    prediction_id     UUID NOT NULL,           -- stable logical join anchor for labels
     request_id        UUID NOT NULL,
     entity_id         TEXT NOT NULL,
     surface           TEXT NOT NULL,           -- which product decision consumed this
@@ -206,16 +206,21 @@ CREATE TABLE prediction_log (
     model_name        TEXT NOT NULL,
     model_version     TEXT NOT NULL,           -- silent-wrong-model detection depends on this
     feature_versions  JSONB NOT NULL,          -- {"user_stats": "v4", "txn_velocity": "v7"}
-    features_hash     TEXT NOT NULL,           -- or full values, if storage allows replay
+    served_features_ref TEXT NOT NULL,         -- immutable values/blob under retention policy
+    features_hash     TEXT NOT NULL,           -- integrity check; not reconstructive evidence
     score             DOUBLE PRECISION NOT NULL,
     threshold_policy  TEXT NOT NULL,           -- score→action mapping is versioned policy
     action_taken      TEXT NOT NULL,           -- what actually happened, post-guardrails
     experiment_bucket TEXT,
-    explored          BOOLEAN DEFAULT FALSE    -- exploration traffic must be identifiable
+    selection_policy  TEXT NOT NULL,           -- versioned logging/action policy
+    eligible_actions_ref TEXT NOT NULL,         -- immutable support/candidate-set evidence
+    action_propensity DOUBLE PRECISION NOT NULL
+        CHECK (action_propensity > 0 AND action_propensity <= 1),
+    PRIMARY KEY (prediction_id, predicted_at)   -- partition key participates in uniqueness
 ) PARTITION BY RANGE (predicted_at);
 ```
 
-Every column earns its place in a later chapter: `model_version` powers [monitoring](./04-model-monitoring.md) and rollback attribution, `prediction_id` is the label join key ([label systems](./10-label-ground-truth-systems.md)), `experiment_bucket` and `explored` power [experiments](./08-online-experiments.md) and counterfactual training data, and `feature_versions` plus `features_hash` make skew audits and decision reconstruction possible. Teams that log only `(entity, score)` discover each missing column during a different incident.
+The physical primary key includes `predicted_at` because PostgreSQL cannot enforce a unique constraint on a range-partitioned table unless it includes the partition key. The logical contract still requires `prediction_id` to be globally unique; enforce that at ID issuance or in a non-partitioned decision directory if labels resolve by ID alone. `served_features_ref` resolves to the actual vector consumed by the model (inline, or in an immutable encrypted object governed by classification and retention), while `features_hash` only verifies identity; a hash cannot reconstruct values. Counterfactual analysis needs both the eligible action support and the probability with which the logging policy selected the observed action. An `explored` boolean supplies neither, so it cannot support propensity weighting or prove that an alternative action had nonzero probability. [Online Experiments](./08-online-experiments.md) owns the estimands and assignment design; [Label and Ground-Truth Systems](./10-label-ground-truth-systems.md) owns the later outcome join.
 
 ---
 
@@ -232,38 +237,42 @@ ML maturity is not measured by model sophistication. It is measured by how safel
 | 4. Governed | risk-tiered decision system | audit logs, approvals, policy gates, human override | controls may lag new use cases |
 | 5. Adaptive | safe continuous improvement loop | automated retraining, experiments, fast rollback, mature labels | automation can amplify bad signals if gates weaken |
 
-Most teams should not rush to level 5. Continuous retraining before level 3 monitoring and level 4 rollback is not maturity; it is an incident accelerator. The mature path is to earn automation by proving the safety mechanisms around it.
+Most teams should not rush to level 5. Continuous retraining before operated monitoring, promotion gates, and rollback is not maturity; it is an incident accelerator. The mature path is to earn automation by proving the safety mechanisms around it.
 
 ---
 
-## Distinguished-Engineer Design Review Checklist
+## The Release Unit Is a Decision System
 
-For any consequential ML system, a senior review should be able to answer the following without relying on tribal memory:
+A model artifact is too small a unit to deploy safely. The behavior users experience is the composition of several independently changing functions:
 
-1. **Decision boundary:** What exact action does the model influence, and what deterministic guardrails bound it?
-2. **Data contract:** Which upstream sources, features, labels, and snapshots define the model's behavior?
-3. **Point-in-time correctness:** Could any feature or label contain information unavailable at prediction time?
-4. **Evaluation honesty:** Does the offline split mirror the production question, and are slices and uncertainty reported?
-5. **Serving path:** What is the p99 budget, and is the bottleneck model compute, feature fetch, queueing, or cold start?
-6. **Version contract:** Are model, features, preprocessing, runtime, thresholds, and fallback versioned as one release unit?
-7. **Monitoring:** What can fail silently, how soon is it detectable, and which signal triggers rollback versus investigation?
-8. **Feedback loop:** What data does the model create or suppress by acting, and how is exploration or auditing preserved?
-9. **Rollback:** What is the exact rollback target, is it warm/loadable, and what user harms are irreversible?
-10. **Governance:** Who owns the model, what risk tier is it, what approvals are enforced, and can a decision be reconstructed?
-11. **Cost:** What is cost per prediction/training run, what utilization assumption drives it, and what quota prevents runaway spend?
-12. **Retirement:** When does the model become stale, who is paged, and how is it removed safely?
+```text
+features        x = F(raw events, entity state, decision time)
+score           s = M_model(x)
+action          a = P_policy(s, eligibility, limits, experiment assignment)
+observed label  y~ = L(outcome, observation process, maturity window)
+```
 
-A design that cannot answer these is not ready for production, regardless of its AUC. A design that answers them with queryable platform state — not screenshots, Slack messages, or notebook cells — is approaching production maturity.
+Changing `F`, `M`, or `P` changes the decision even if the other two remain byte-identical. Changing `L` changes the apparent quality without changing a single production decision. The deployable release unit must therefore identify the model artifact, preprocessing and feature contracts, score calibration, threshold or ranking policy, runtime, fallback, and observation schema together. This chapter establishes that behavioral boundary; [Model Registry and ML Metadata](./13-model-registry-metadata.md) owns its manifest and lifecycle state, while [Model Deployment and Rollouts](./06-model-deployment-rollouts.md) owns atomic activation, retained rollback bundles, and traffic exposure.
+
+This boundary also prevents a common category error: optimizing a predictive metric when the system is accountable for an action. Suppose action `a` has consequence-dependent loss `C(a, y)`. The relevant objective is expected decision loss,
+
+```text
+R(P, M) = E[C(P(M(X)), Y)]
+```
+
+not AUC, log loss, or accuracy in isolation. A model with better ranking quality can create a worse system when its threshold overwhelms a review queue, when false positives carry asymmetric harm, or when a policy change applies its scores outside the population on which they were calibrated. [Offline Evaluation and Metric Design](./12-offline-evaluation-metrics.md) develops metric selection; [Online Experiments](./08-online-experiments.md) handles causal product impact. The foundational point is that ownership must extend through the score-to-action mapping.
+
+The observation process is part of the boundary too. A recommender observes outcomes only for exposed items; a fraud system gets mature labels mainly for transactions it allowed or reviewed. Consequently `y~` is not automatically a representative sample of `Y`. The release manifest must identify the exposure policy and experiment assignment, and the prediction log must retain them. Otherwise retraining silently treats the previous policy's selective observations as neutral ground truth and closes a biased feedback loop.
 
 ---
 
 ## CACE: Changing Anything Changes Everything
 
-The single most counterintuitive property of ML systems is entanglement, which Sculley captures in the CACE principle: **Changing Anything Changes Everything.** In modular software, you can reason about a component in isolation behind a stable interface. In an ML model, there is no such isolation. The model mixes all of its input features into a single learned function, so changing the distribution of *one* feature, adding a new feature, removing a stale one, or even re-ordering how features are computed can shift the learned weights on *every other* feature and change the model's behavior in ways no local analysis predicts.
+The single most counterintuitive property of learned systems is entanglement, which Sculley captures in the deliberately provocative CACE principle: **Changing Anything Changes Everything.** It is not a claim that every change always moves every prediction. It is a warning that statistical dependencies defeat the isolation promised by a software interface: retraining after changing one feature can alter the learned use of other, correlated features, and the affected slices cannot be inferred from the changed line of code alone.
 
-The practical consequence is that there is no such thing as a small, local change to a model. Adding a seemingly harmless input feature is not additive — it re-balances the entire model. Dropping a feature that "wasn't doing much" can degrade an unrelated slice of predictions, because the model had been quietly using that feature to compensate for a weakness elsewhere. This is why ML changes cannot be reasoned about purely by inspection and must be *measured*: the only reliable way to know what a change did is to evaluate the whole model against a baseline, because the blast radius of any change is the entire model.
+The practical consequence is that source-code locality does not imply behavioral locality after retraining. Adding an input can change how the learner allocates weight among correlated features; dropping a weak aggregate feature can still degrade a thin slice. The effect may in fact be negligible, but inspection cannot prove that. Every changed release therefore needs whole-model and slice comparison against its baseline, with uncertainty, because the potential blast radius crosses the model boundary.
 
-CACE is also the deep reason why training-serving skew, data dependencies, and feedback loops are so dangerous in combination: entanglement means a small perturbation in any one of them propagates everywhere. A system where everything affects everything cannot be made safe through modularity; it can only be made safe through *measurement and monitoring* of the whole. That is the engineering rationale for treating reproducibility, lineage, and monitoring as first-class concerns rather than nice-to-haves.
+CACE is also why training-serving skew, data dependencies, and feedback loops are dangerous in combination: a small perturbation can propagate through correlated inputs and policy thresholds. Software modularity still matters around the model — contracts constrain the source of a change and its blast radius — but it cannot prove the empirical effect of retraining. That effect has to be measured on the whole release and on its important slices. This is the engineering rationale for treating reproducibility, lineage, evaluation, and monitoring as first-class concerns rather than hygiene.
 
 ---
 
@@ -271,13 +280,13 @@ CACE is also the deep reason why training-serving skew, data dependencies, and f
 
 Because behavior lives in data, because failure is silent, and because everything is entangled, three properties that are optional conveniences in traditional software become load-bearing reliability features in ML systems.
 
-**Reproducibility** is the ability to rebuild the exact same model from recorded metadata — code commit, data snapshot, feature versions, parameters, and environment digest. It is foundational because every other guarantee depends on it: you cannot roll back to a model you cannot rebuild, cannot audit a decision whose inputs you cannot reconstruct, and cannot debug a regression whose training conditions you cannot recreate. A model without a reproducibility contract is not a release; it is a liability with no maintainer. ([Training Pipelines](./05-training-pipelines.md) treats this as its central property.)
+**Reproducibility** is the ability to reconstruct a declared-equivalent model from recorded metadata — code commit, data snapshot, feature versions, parameters, and environment digest. It supports audit, comparison, and disaster recovery, but it is not the live rollback mechanism: rollback restores a retained, already-qualified release bundle and must not wait for training. Without reproducibility, a team cannot audit a decision or isolate why a retrain changed; without retention, it cannot roll back promptly. ([Training Pipelines](./05-training-pipelines.md) separates these guarantees.)
 
 **Lineage** is the queryable record of what produced what — which dataset and code produced which model, and conversely, which models depend on a given dataset. It answers the question that arrives during every data incident: a source table double-counted events for a week, so *which production models trained on that window and must be retrained?* Without forward lineage the only honest answer is "we don't know, retrain everything," which is both expensive and an admission that the system is not auditable.
 
 **Monitoring** in ML is not uptime and latency — those are necessary but blind to the failure that matters. ML monitoring watches the *data and the predictions*: input distribution drift, prediction distribution shift, feature freshness, and, where labels eventually arrive, realized quality against a baseline. It exists because silent degradation produces no error to alert on, so the only way to detect it is to measure the statistical behavior of the system continuously and compare it to what "healthy" looked like (see [Model Monitoring](./04-model-monitoring.md)). The realized-quality layer depends on trustworthy labels, which are themselves a production system with delay, bias, and correction semantics (see [Label and Ground-Truth Systems](./10-label-ground-truth-systems.md)).
 
-These three are not separate hygiene tasks. They are the minimum machinery required to operate a system whose behavior is defined by changing data — reproducibility to recover, lineage to trace, monitoring to detect. A team that ships a model without them has shipped something it cannot roll back, cannot trace, and cannot tell is broken.
+These three are not separate hygiene tasks. They are the minimum machinery required to operate a system whose behavior is defined by changing data — reproducibility to reconstruct and compare, lineage to trace, monitoring to detect. Live rollback additionally requires retention of the previously qualified deployable bundle.
 
 ---
 
@@ -289,9 +298,7 @@ The reference architecture above is not speculative; it is the shape that severa
 
 **Google's TFX** (2017 paper; open-sourced components) decomposes the lifecycle into typed components — ExampleGen, StatisticsGen, SchemaGen, ExampleValidator, Transform, Trainer, Evaluator, Pusher — connected by a metadata store (MLMD) that records every artifact and execution. Two TFX design choices became industry defaults: *data validation as a pipeline stage with a schema* (the Breck et al. work in the references), and *Transform's guarantee* that the exact preprocessing graph used in training is exported inside the serving artifact — skew eliminated by construction for the preprocessing layer.
 
-**Meta's FBLearner Flow** (2016) emphasized workflow reuse and scale (thousands of experiments daily); **Netflix's Metaflow** (open-sourced 2019) took the opposite tack — a human-centric library where the versioning, snapshotting, and resume machinery hides behind ordinary Python; **Spotify, LinkedIn, and Airbnb** each published variations on the same skeleton. Read together, the convergent lesson is that every mature platform independently invented the same five organs: a feature system, a metadata/lineage store, a managed training pipeline, a registry with promotion gates, and monitored serving. When five organizations that could build anything all build the same shape, the shape is the requirement, not the fashion.
-
-The companion artifact worth knowing is Google's **ML Test Score** rubric (Breck et al., 2017): 28 concrete, testable claims across data, model development, infrastructure, and monitoring — "features are validated against a schema," "the model can be rolled back," "training is reproducible," "canary serving exists." Scoring a system against it takes an afternoon and reliably locates the gap between "we have ML in production" and "we operate ML in production."
+**Meta's FBLearner Flow** (2016) emphasized workflow reuse and experiment scale; **Netflix's Metaflow** emphasized a human-facing programming model with versioning and resume machinery behind ordinary Python. Other organizations published different decompositions. The useful convergence is not a mandatory product stack but a set of durable boundaries: immutable data and artifact identity, execution metadata, feature/preprocessing parity, promotion state, monitored serving, and a label path back to the decision. Some platforms combine them; others integrate independent systems. A design should be judged by whether those boundaries have one owner and an enforceable contract, not by whether it has boxes named "feature store" and "model registry."
 
 ---
 
@@ -299,7 +306,7 @@ The companion artifact worth knowing is Google's **ML Test Score** rubric (Breck
 
 The characteristic failures of ML systems recur across organizations, and naming them is half of preventing them. They share a family resemblance: each is invisible to the tools built for deterministic software.
 
-**Training-serving skew** is the same feature name computed differently in the offline and online paths. Offline metrics look great because they used the training-side logic; production quality drops because the model is served inputs it never learned from. The defense is a single shared feature definition for both paths, plus logging served values for replay and comparison.
+**Training/serving skew** is the same feature contract producing different as-trained and as-served values. The foundational mechanism is described above; [Feature Stores](./02-feature-stores.md) owns temporal materialization semantics and [Model Monitoring](./04-model-monitoring.md) owns sampled parity measurement and incident attribution.
 
 **Silent data-dependency regression** is a semantic change to an upstream source — a unit, a definition, a covered population — that passes every type and null check while quietly corrupting every model downstream of it. The defense is distributional validation against a baseline before data reaches training, and explicit versioned data contracts with an owner who is paged when the contract breaks.
 
@@ -311,19 +318,23 @@ The characteristic failures of ML systems recur across organizations, and naming
 
 **Entanglement surprise** is the CACE failure: a "small" change — one added feature, one dropped input — shifts behavior on an unrelated slice because the model had been silently using that input to compensate elsewhere. The defense is to never trust local reasoning about a model change and always measure the whole model against a baseline.
 
+**Release-tuple mismatch** occurs when individually valid model, feature, calibration, policy, runtime, or fallback versions are combined into a decision system that was never evaluated as a unit. The registry and rollout protocols that prevent this are owned by [Model Registry and ML Metadata](./13-model-registry-metadata.md) and [Model Deployment and Rollouts](./06-model-deployment-rollouts.md).
+
+**Observation-policy bias** occurs when the system treats labels generated under its previous action policy as an unbiased view of the world. Blocked, unshown, or unreviewed cases have missing counterfactual outcomes, so retraining confirms the old policy. The defense is exposure and propensity metadata, preserved exploration where safe, and an explicit label-population contract.
+
 ---
 
-## Decision Framework: Do You Actually Need ML?
+## Decision Framework
 
-The most consequential ML system decision is whether to build one at all. ML introduces every cost in this document — data dependencies, skew, silent failure, feedback loops, entanglement, and a permanent operational burden — and a large fraction of "ML problems" are better solved by deterministic logic that has none of those costs. The framework is a sequence of honest questions.
+The most consequential ML system decision is whether to build one at all. ML introduces every cost in this document — data dependencies, skew, silent failure, feedback loops, entanglement, and a permanent operational burden — and many prediction-shaped problems are better solved by deterministic logic. Make the choice at the *decision* boundary, not at the model boundary.
 
-*Can the decision be expressed as explicit rules that a person can read and a reviewer can audit?* If yes, write the rules. Deterministic logic is inspectable, testable, instantly explainable, and free of drift. ML is justified only when the decision boundary is genuinely too complex or too fluid to enumerate — recognizing objects in images, ranking among millions of items, detecting novel fraud patterns — not merely because rules feel tedious to write.
+First establish a non-ML baseline: a rule, lookup, popularity prior, or simple statistical score. If its expected decision loss and operating cost satisfy the product constraint, stop. Deterministic logic is inspectable and stable; ML must earn its lifecycle cost with a material improvement, not merely with a more sophisticated implementation.
 
-*Does enough labeled or behavioral data exist, and will it keep arriving?* A model is only as good as its training data, and a model with no plan for fresh labels will drift into irrelevance the moment the world moves. If the data is sparse, stale, or unrepresentative, ML will underperform a thoughtful heuristic while costing far more to operate.
+Then test identifiability: does representative training data contain signal available at decision time, and will an observation process continue to produce sufficiently unbiased, mature labels? If the useful signal exists only after the action, or labels exist only for cases selected by the current policy, a larger model does not repair the design. Redesign data collection or preserve randomized exploration first.
 
-*Are individual errors tolerable or reviewable?* Because ML is statistically correct and wrong by design on some inputs, it fits decisions where a wrong answer is recoverable — a mediocre recommendation, a flagged transaction sent to human review. It is a poor fit for decisions where a single wrong answer is catastrophic and unreviewable, unless a human or a deterministic guardrail sits between the model and the irreversible action.
+Next bound error consequences. Estimate `E[C(a,Y)]` under plausible false-positive, false-negative, and abstention rates; include queue capacity when humans review uncertain cases. Irreversible or high-consequence actions need deterministic eligibility constraints, an abstain path, human review, or a transactional limit that caps exposure. "The model is 95% accurate" says nothing about whether the remaining 5% is survivable.
 
-*Can the organization own the lifecycle after launch?* An ML system is not a feature you ship; it is a system you operate indefinitely — monitoring, retraining, investigating drift, maintaining data contracts. A team that can build a model but cannot staff its operation should not deploy it, because an unmonitored model is a silent-failure incident waiting for the data to change.
+Finally compare adaptation time with harm time. Let `T_truth` be label delay, `T_detect` proxy-detection delay, and `T_mitigate` rollback or containment time. If plausible harm becomes unacceptable before `T_detect + T_mitigate`, the system needs a smaller actuation limit or a faster independent guardrail; monitoring alone cannot make it safe. Assign owners for the data, model, policy, labels, serving path, and retirement before launch. A team that can train but cannot staff these boundaries has not funded the system it proposes.
 
 The strongest architectures are usually *hybrids*: deterministic rules define the hard safety boundaries and the non-negotiable policy, and ML ranks or scores *inside* those boundaries where its statistical strengths pay off and its failures are bounded. The anti-pattern to avoid is using ML to paper over an undefined product policy — when the action, the fallback, and the acceptable failure mode have not been decided, no model can decide them for you.
 
@@ -340,6 +351,7 @@ The strongest architectures are usually *hybrids*: deterministic rules define th
 7. CACE — Changing Anything Changes Everything — means there are no local changes to a model; the blast radius of any change is the whole model, so changes must be measured, not reasoned about.
 8. Reproducibility, lineage, and monitoring are first-class reliability features, not hygiene: recover, trace, detect.
 9. Use ML only when rules cannot express the decision, enough fresh data exists, errors are tolerable or reviewable, and the org can own the lifecycle; otherwise prefer deterministic logic, and prefer hybrids that bound ML inside rules.
+10. The release unit is the decision system — feature/preprocessing contract, model, calibration, policy, fallback, and observation schema — because expected decision loss, not a model metric alone, is the product outcome.
 
 ---
 
@@ -349,5 +361,4 @@ The strongest architectures are usually *hybrids*: deterministic rules define th
 2. [Rules of Machine Learning: Best Practices for ML Engineering](https://developers.google.com/machine-learning/guides/rules-of-ml) — Zinkevich
 3. [TFX: A TensorFlow-Based Production-Scale Machine Learning Platform](https://dl.acm.org/doi/10.1145/3097983.3098021) — Baylor et al., 2017
 4. [Data Validation for Machine Learning](https://mlsys.org/Conferences/2019/doc/2019/167.pdf) — Breck et al., 2019
-5. [The ML Test Score: A Rubric for ML Production Readiness](https://research.google/pubs/pub46555/) — Breck et al., 2017
-6. [Machine Learning: The High-Interest Credit Card of Technical Debt](https://research.google/pubs/pub43146/) — Sculley et al., 2014
+5. [Machine Learning: The High-Interest Credit Card of Technical Debt](https://research.google/pubs/pub43146/) — Sculley et al., 2014

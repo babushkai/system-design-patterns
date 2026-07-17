@@ -58,6 +58,27 @@ reason: japan_slice_fpr_regression
 
 This is the evaluation analogue of a deployment contract. It makes the decision reproducible and reviewable.
 
+An evaluation report has two identities. The **measurement definition** pins label semantics, split, metric implementation, slice predicates, uncertainty method, baseline-selection rule, and gate policy. The **measurement realization** pins the candidate and baseline hashes, evaluation manifest, runtime image, random seeds, and computed outputs. A result is comparable across runs only when the definition is compatible; reusing the metric name after changing its code or population creates false history.
+
+Publication should be transactional in the same way as a [dataset version](./11-dataset-management-versioning.md#publication-protocol-a-dataset-version-is-a-transaction). Workers write metric shards and per-example predictions into a private attempt. A reducer checks expected shards, unique example ownership, candidate/baseline alignment, and numeric validity, then seals one report hash. The registry attaches that immutable report and the gate decision in one idempotent transition. A timed-out evaluator queries the report hash before retrying; it never “passes” a model from a partial directory.
+
+## Labels Mature on a Clock
+
+Labels are often delayed, censored, or selectively observed. A chargeback may arrive weeks after a transaction; churn is not knowable until an inactivity window closes; repayment outcomes exist only after a loan matures; moderation correctness may be reviewed only for appealed decisions. Evaluating recent examples before their outcomes mature systematically treats unresolved positives as negatives.
+
+For every example define at least:
+
+```text
+prediction_time
+label_observation_deadline = prediction_time + outcome_window
+label_as_of                 = snapshot time of the label source
+label_status                = observed | unresolved | censored | excluded
+```
+
+The evaluation watermark is the latest prediction time for which the required outcome window has closed and late-label policy has been applied. “Evaluate on last week” is invalid if the metric needs a month of outcome. Report both event count and independently sampled unit count after maturity filters; a large row count can still contain little information when many rows belong to the same entity.
+
+Selective labels require a causal argument. A fraud label may be observed mainly for reviewed transactions, and repayment is observed only for approved applicants. Evaluating the candidate on those observed outcomes estimates performance on the incumbent policy's selected population, not on all decisions the candidate would make. Propensity weighting or doubly robust estimators can reduce bias when logging propensities and overlap assumptions are credible, but they can have extreme variance and cannot recover outcomes for actions with no support. The report must name the target population, observation mechanism, overlap diagnostics, and any clipped weights. When support is missing, the honest verdict is “not identifiable offline,” followed by controlled exploration or an online experiment—not a more elaborate metric.
+
 ---
 
 ## Start With the Decision, Not the Metric
@@ -212,7 +233,6 @@ def ece(y_true, y_score, n_bins=10):
         gap = abs(y_score[mask].mean() - y_true[mask].mean())
         err += (mask.sum() / len(y_true)) * gap
     return err
-# The table above → ECE ≈ 0.8M/1M×0.01 + 0.16×0.02 + 0.035×0.12 + 0.005×0.26 ≈ 0.017
 ```
 
 Note the trap visible in the arithmetic: the huge low-score bin dominates the weighted average, so the headline ECE is 0.017 — "well calibrated" — while the high-score bins that actually drive blocking decisions are off by 12 and 26 points. For decision systems, report ECE *and* the per-bin table restricted to the score region where the policy acts.
@@ -227,7 +247,7 @@ calibrator.fit(scores_calib, labels_calib)     # held-out split, not train
 p_calibrated = calibrator.predict(scores_prod)
 ```
 
-Isotonic regression is the default at large sample sizes (it fits any monotone distortion); Platt scaling — a logistic fit on the scores — is safer below a few thousand calibration examples because isotonic will overfit. Either way the calibrator is a versioned artifact with the same lifecycle as a threshold policy: retrained when base rates move, evaluated by slice, and rolled back with the model. A recalibrated model whose calibrator was fitted on last year's 1% fraud prevalence quietly reverts to miscalibration when prevalence hits 3% — which is why the prediction-distribution and delayed-label monitors in [model monitoring](./04-model-monitoring.md) are also the calibrator's health checks.
+Isotonic regression can fit flexible monotone distortions but may overfit when calibration data is sparse in the score region that matters. Platt scaling imposes a smoother logistic shape and can have lower variance when that shape is adequate. There is no universal sample-count crossover: select the method on an untouched calibration/evaluation split using the operating region and slices the policy consumes. Either way the calibrator is a versioned artifact with the same lifecycle as a threshold policy: evaluated by slice, monitored against mature labels, and rolled back with the model. A calibrator fitted under one base rate can become wrong when prevalence changes — which is why the prediction-distribution and delayed-label monitors in [model monitoring](./04-model-monitoring.md) are also the calibrator's health checks.
 
 ---
 
@@ -349,6 +369,12 @@ The `minimum_practical_effect` matters. With very large evaluation sets, tiny de
 
 The promotion gate should evaluate the delta and its uncertainty, not only the point estimate. A small noisy win is not a win. This discipline prevents model teams from shipping random variation as progress.
 
+Compare candidate and baseline on the **same resampled units**. A paired delta preserves the correlation between their errors and is usually much more precise than computing two independent intervals and subtracting endpoints. For time series or spatially correlated populations, iid bootstrap is still optimistic; use blocks or the natural cluster that preserves dependence. For very rare failures, report the count and exposure behind a rate so a narrow-looking interval does not hide a brittle approximation.
+
+Model selection adds another layer of uncertainty. If a team trains many candidates and promotes the best score on one holdout, that holdout has become part of training even though gradients never touched it. Keep a final lockbox for the last comparison, limit who can inspect per-example errors, and record the search that selected the candidate. Repeated training seeds estimate optimization variance; repeated data windows estimate temporal variance. Neither substitutes for the other. A gate can require a robust statistic across seeds or windows when training instability is material, rather than letting one lucky run represent the model family.
+
+Slice multiplicity is a policy choice. Pre-declared safety slices may each have a hard non-regression margin. Exploratory scans can control false discovery or rank findings for confirmation, but should not retroactively redefine the primary gate. Hierarchical shrinkage can stabilize tiny-slice estimates, provided the report still exposes raw counts and the model assumptions. “No significant harm” on an underpowered slice is absence of evidence, not evidence of safety.
+
 ---
 
 ## Baselines: Beat the Right Thing
@@ -385,6 +411,28 @@ The exact numbers may be uncertain, but writing them down forces the trade-off i
 
 Cost models should be versioned because product policy changes. A model approved under `cost_policy_v3` may not be approved under `v4`.
 
+## Evaluation Execution at Scale
+
+Large evaluation is a distributed join followed by aggregation. The join key is example identity; candidate prediction, baseline prediction, label, weight, slice attributes, and decision context must refer to the same observation. Joining by row position or allowing independent filters on candidate and baseline creates a silent paired-population bug. The reducer should account for every manifest row:
+
+```text
+N_manifest = N_scored + N_explicitly_excluded + N_failed
+N_failed must satisfy the gate's failure policy
+candidate_example_ids = baseline_example_ids for paired metrics
+```
+
+Metric aggregation must match the mathematical statistic. Counts and sums merge exactly; AUC, quantiles, top-K ranking, and per-query NDCG generally cannot be obtained by averaging shard-level answers. Either collect sufficient statistics with a proven merge rule or repartition by the metric's unit. For ranking, all candidates for a query belong to one reducer. For global top-K, local top-K sets can be merged only when each shard covers a disjoint population under the same score ordering. Approximate algorithms must record their error bound and configuration as part of the metric definition.
+
+The harness owns deterministic preprocessing and model invocation, not the model-training notebook. It loads artifacts by hash, validates the serving signature, captures runtime and hardware, bounds malformed outputs, and stores enough per-example results to explain aggregate movement under access controls. A small “golden” corpus with hand-checked outputs catches metric-code and serialization regressions; metamorphic tests check invariants such as permutation independence for classification metrics or score-monotonicity for threshold sweeps. The harness itself is production software because a bug in it can promote every bad candidate consistently.
+
+## Governance and Evaluation Integrity
+
+The evaluation set is a high-value secret in any system where teams can iterate against its answers. Unrestricted access produces test-set overfitting; in high-impact settings it can also expose sensitive labels or protected attributes. Separate permission to submit predictions from permission to read per-example outcomes. Return the minimum report needed for iteration, log queries and slice creation, rate-limit repeated lockbox evaluation, and rotate or refresh holdouts when their information has leaked into development.
+
+Promotion evidence should be tamper-evident and attributable: immutable candidate/baseline hashes, evaluation manifest, metric-definition hash, code/runtime digest, report hash, gate policy version, actor or workload identity, and decision timestamp. Protected-attribute slices may require a controlled evaluation service that releases aggregates subject to minimum-count and privacy policy while preserving an audit path for authorized reviewers. This is a separation-of-duties problem, not a reason to omit safety analysis.
+
+An attacker can target the evaluator as well as the model—inject easy examples, suppress hard labels, manipulate weights, or exploit NaN handling so a guardrail disappears. Fail closed on missing required metrics, non-finite values, unexpected population loss, or unsigned inputs. A result with compromised measurement provenance is not “inconclusive”; it is invalid.
+
 ---
 
 ## Offline-to-Online Gap
@@ -406,20 +454,7 @@ Offline pass → shadow for runtime safety → canary for operational guardrails
 
 A team that ships directly from offline metrics is assuming away the entire reason production ML is hard.
 
-Use an offline-to-online gap checklist before promotion:
-
-| Question | If answer is no |
-|---|---|
-| Was the evaluation data generated under a policy close to the candidate policy? | Expect logged-policy bias; require shadow/canary caution |
-| Are labels mature for the decision horizon? | Treat quality metrics as provisional |
-| Are features point-in-time correct and served by the same definitions? | Block until skew is tested |
-| Does the offline metric match the online product objective? | Use offline only as a safety filter |
-| Are important slices powered enough to detect harm? | Restrict rollout or collect more data |
-| Is the candidate changing retrieval/candidate generation? | Do not trust old-candidate-set ranking alone |
-| Could the candidate change future labels or user behavior? | Require online experiment or causal design |
-| Are threshold, calibration, and capacity migrated together? | Block deployment bundle |
-
-The checklist should live in the evaluation report so a reviewer can see which risks remain for shadow, canary, and experiment stages.
+The handoff is a typed claim manifest, not a checklist. It records the target population and logging policy, label cutoff/maturity and censoring rule, feature and candidate-set provenance, estimand, metric and slice uncertainty, threshold/calibration policy, and the claims the offline design cannot identify. Deployment consumes this manifest to choose the next evidence boundary: shadow for runtime parity, canary for bounded live-path safety, and randomized or otherwise identified measurement for causal product impact. A missing or unsupported claim remains explicit rather than being converted into a generic pass.
 
 ---
 
@@ -439,22 +474,40 @@ The checklist should live in the evaluation report so a reviewer can see which r
 
 **Offline-online surprise** happens when a model wins offline and loses online because logs were biased or the proxy metric was wrong. Defense: treat offline as a filter and require progressive rollout plus experiment for impact.
 
+**Immature-label optimism** counts unresolved delayed outcomes as negatives and makes the newest window look best. Defense: outcome-window watermarks, explicit censoring state, and label-as-of snapshots.
+
+**Selective-label blindness** evaluates only cases the incumbent chose to review or approve, then generalizes to the whole population. Defense: state the observation policy and target population, inspect propensity overlap, and declare unsupported decisions non-identifiable offline.
+
+**Distributed metric corruption** averages non-mergeable shard metrics or compares candidate and baseline on different examples. Defense: exact accounting, paired example IDs, and metric-specific sufficient-statistic or repartition logic.
+
+**Holdout becomes training data** occurs when repeated candidate and slice queries adapt development to the test set. Defense: submission/read separation, query audit, a final lockbox, and periodic holdout refresh.
+
+**Fail-open evaluator** drops NaN, missing, or unauthorized shards and still emits a passing summary. Defense: closed population accounting and typed invalid-report state; absence of a required metric is a gate failure.
+
 ---
 
 ## Decision Framework
 
-Before trusting an offline result, ask:
+First classify what the evidence can identify:
 
-1. What production decision does this metric support?
-2. Is the evaluation dataset immutable, versioned, and point-in-time correct?
-3. Does the split match the generalization question?
-4. Are the labels mature, and is the label definition versioned?
-5. Are threshold, calibration, capacity, and cost evaluated, or only ranking?
-6. Does the candidate beat the current production model on the same data?
-7. Are important slices guarded?
-8. Is the delta larger than uncertainty and training variance?
-9. Could logged-policy bias or missing counterfactuals invalidate the conclusion?
-10. What live rollout stage will verify the remaining risk?
+| Evidence condition | Defensible conclusion | Required next step |
+|---|---|---|
+| Mature labels, honest split, same decision support as production | Comparative offline quality on the represented population | Shadow/canary for implementation and runtime risk |
+| Logged under a different but overlapping policy with valid propensities | Policy-value estimate with estimator assumptions and uncertainty | Sensitivity analysis, then constrained online validation |
+| Outcomes observed only for selected actions with poor overlap | Quality on the selected subset only | Exploration, additional labeling, or causal experiment |
+| Retrieval/candidate universe changed | Component evidence, not end-to-end ranking quality | Evaluate retrieval coverage and validate live behavior |
+| Proxy metric differs from the product objective | Safety/filter evidence only | Online experiment for causal product impact |
+| Metric definition, population, or report integrity changed unexpectedly | No valid comparison | Repair and republish measurement before promotion |
+
+Then verify the decision bundle:
+
+1. The production action, target population, label clock, and generalization question are explicit.
+2. Candidate and incumbent are evaluated on the same immutable, point-in-time-correct examples using compatible definitions.
+3. Threshold, calibration, capacity, and cost are evaluated at the policy's operating region.
+4. Required slices have declared margins, enough evidence for the intended claim, and visible raw counts.
+5. The paired delta accounts for sampling, clustering, training seeds, and selection where those sources matter.
+6. The report is complete, immutable, attributable, and linked to the registry transition it controls.
+7. Remaining offline-to-online assumptions are assigned to shadow, canary, or experiment rather than silently accepted.
 
 Offline evaluation that answers these well is a trustworthy gate. Offline evaluation that cannot answer them is a chart, not evidence.
 
@@ -474,6 +527,9 @@ Offline evaluation that answers these well is a trustworthy gate. Offline evalua
 10. Bootstrap confidence intervals should use the true independent unit and a minimum practical effect, not only a p-value.
 11. Threshold migration is part of deployment; match the policy constraint instead of blindly reusing numeric cutoffs.
 12. Offline wins must pass through shadow, canary, and experiments before being treated as production wins.
+13. Delayed and selective labels define what can be learned offline; unresolved outcomes and unsupported actions are not negatives.
+14. Distributed evaluation must preserve paired example identity and use aggregation valid for the statistic.
+15. The evaluator is a governed production system: publish atomically, fail closed, protect holdouts, and attest evidence.
 
 ---
 
@@ -486,3 +542,6 @@ Offline evaluation that answers these well is a trustworthy gate. Offline evalua
 5. [Trustworthy Online Controlled Experiments](https://www.cambridge.org/core/books/trustworthy-online-controlled-experiments/6A3B263E7114E81B95669A95B219C1D8) — Kohavi, Tang & Xu, 2020
 6. [Offline Evaluation for Recommender Systems](https://dl.acm.org/doi/10.1145/1864708.1864721) — recommender evaluation and bias context
 7. [Model Evaluation, Model Selection, and Algorithm Selection in Machine Learning](https://arxiv.org/abs/1811.12808) — Raschka, 2018
+8. [Counterfactual Risk Minimization: Learning from Logged Bandit Feedback](https://proceedings.mlr.press/v37/swaminathan15.html) — Swaminathan & Joachims, 2015
+9. [Unbiased Learning-to-Rank with Biased Feedback](https://doi.org/10.1145/3018661.3018699) — Joachims, Swaminathan & Schnabel, 2017
+10. [Online Experiments](./08-online-experiments.md)

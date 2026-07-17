@@ -2,7 +2,9 @@
 
 ## TL;DR
 
-The harness is everything you build between the model and the world: the loop, the system prompt, the tool surface, the context lifecycle, the permission and sandbox boundary, and the telemetry. The same model in two different harnesses produces wildly different capability — every agent benchmark score is a *model + harness* score. Harness engineering is the discipline of treating that layer as a product: cache-aware context design, token-budgeted tools, ground-truth verification, gated autonomy, and an eval suite that runs on every change. Models improve on the provider's schedule; your harness is the part of agent capability you control.
+The harness is the trusted runtime between a probabilistic model and stateful tools. It compiles canonical task state into a model request, validates proposals, authorizes and schedules effects, journals observations, manages context revisions, enforces budgets, verifies completion, and emits evidence. Model and harness behavior are inseparable in an agent evaluation, but correctness guarantees belong to deterministic runtime boundaries.
+
+Design the harness as a versioned state machine with typed provider and tool adapters. A crash, duplicate message, stale action, model migration, policy change, or user interruption must have defined semantics. Prompt assembly, context selection, and tool descriptions matter, but their canonical chapters are linked rather than repeated here.
 
 ---
 
@@ -23,11 +25,7 @@ graph TD
     H <--> WORLD["Environment<br/>files, shell, APIs, humans"]
 ```
 
-Three observations drive the discipline:
-
-1. **Capability is co-produced.** A frontier model with a bloated tool catalog, noisy context, and no verification loop performs like a mid-tier model. Conversely, harness improvements routinely move task success more than a model-version bump — and they compound with every future model.
-2. **The harness is the durable asset.** Models are swapped every few months; the eval suite, tool surface, and safety boundary persist. Build the harness so a model upgrade is a config change plus an eval run.
-3. **The harness is the security boundary.** The model is persuadable by anything it reads; the harness is not. Every guarantee you actually need (no exfiltration, no unapproved spend, no `rm -rf /`) must be enforced in harness code, never in prompt text.
+Capability is co-produced: model policy, context, tool affordances, environment feedback, and verifier jointly determine task success. The harness is also the control and security boundary because it owns credentials, scheduling, policy, and commit. Build it so a model change is an explicitly qualified configuration migration, not an implicit behavior update.
 
 ## The Harness as a Runtime
 
@@ -58,68 +56,31 @@ The model is allowed to be nondeterministic; the runtime is not allowed to forge
 
 ---
 
-## System Prompt Architecture
+## Request Assembly Boundary
 
-The system prompt is the harness's configuration file for the model. Structure it in stable-to-volatile order, because prompt caching bills you for every token after the first change:
+The harness compiles canonical run state, tool capabilities, memory, evidence, recent events, and output constraints into one provider request plus a manifest. The compilation is deterministic for a fixed state revision and configuration. It preserves trust labels, canonical ordering, truncation decisions, schema digests, and token allocation so an incident can reconstruct what the model was allowed to observe.
 
-```
-┌──────────────────────────────────────────────┐
-│ 1. Identity & objective        (never changes)│
-│ 2. Environment description     (per deploy)   │
-│ 3. Tool-use guidance & policy  (per deploy)   │
-│ 4. Safety rules & escalation   (per deploy)   │
-├─────────────── cache breakpoint ──────────────┤
-│ 5. Session context (user, workspace state)    │
-├─────────────── cache breakpoint ──────────────┤
-│ 6. Conversation: task, tool calls, results    │
-└──────────────────────────────────────────────┘
-```
+The prompt is advisory configuration for the model, not the policy engine. Universal behavioral guidance belongs in a versioned prompt source; task state stays in durable records; evidence and tool results retain provenance; schemas enforce representable structure; authorization remains outside the request. [Prompt Engineering](./06-prompt-engineering.md) defines the compiler, and [Context Management](./08-context-management.md) defines selection and compaction.
 
-Principles:
-
-- **Right altitude.** Hardcoded if-else logic in prose is brittle; vague vibes ("be helpful") are useless. Write heuristics with reasons: *"Prefer editing existing files over creating new ones — new files fragment the project structure."* The reason lets the model generalize correctly to cases you didn't anticipate.
-- **Per-task data does not belong in the system prompt.** Task specifics go in user messages; reference material goes in files the agent reads; anything that varies per request after a cached prefix destroys your cache hit rate.
-- **Policies the model must never violate don't go here at all** — they go in the permission boundary. The prompt says "ask before deploying"; the harness *refuses* to deploy without approval. Defense in depth, with the deterministic layer as the one you trust.
-- Keep it shorter than you think. Every instruction competes with every other for attention; instructions the model reliably follows from training ("write idiomatic Python") are wasted tokens.
+Request assembly may fail before model admission: mandatory state does not fit, an active tool call cannot be represented by the target provider, a schema is unsupported, data residency excludes every model, or the context revision is stale. Return a typed error or invoke a declared migration/compaction policy; silently dropping a constraint is not graceful degradation.
 
 ---
 
-## Tool Surface Design
+## Tool Registry and Action Transactions
 
-Tools are the half of the interface you fully control. The craft (full article: [Coding Agent Tool Design](../19-compound-engineering/02-coding-agent-tool-design.md)):
+The registry separates model-facing selection metadata from execution metadata. A tool revision declares schema, handler artifact, authenticated principal type, read/write set, side-effect class, idempotency and reconciliation contract, timeout, output budget, data classification, network policy, owner, and compatibility state. Only an immutable qualified revision enters a run manifest.
 
-- **Minimal orthogonal set.** Every tool's schema and description occupies context on *every* turn and competes for selection. Ten well-separated tools outperform forty overlapping ones. When two tools overlap, the model splits its behavior between them nondeterministically.
-- **Descriptions are load-bearing.** A tool description is a micro-prompt: what it does, when to prefer it over neighbors, what it returns, known failure modes. Test descriptions like prompts — A/B them in evals.
-- **Budget every output.** Decide each tool's maximum context footprint (e.g., 25K tokens for file reads, 50KB for command output) and enforce truncation with explicit markers (`[truncated 4,312 lines — use offset/limit to read more]`). Pagination, filtering, and response-format parameters (`concise` vs `detailed`) beat dumping.
-- **Errors must teach.** The error string is the model's only debugging signal: say what failed, why, and what to try instead. Silent failure or a bare exception costs extra turns; a misleading error poisons the run.
-- **Bash is the universal escape hatch; code execution is the power tool.** A script that loops over 500 API objects costs one tool call and a few hundred tokens of output; the same work as individual tool calls floods the context. Expose heavy integrations as code-callable APIs (the MCP code-execution pattern) and keep typed, structured tools for actions where validation and gating matter — payments, deploys, anything irreversible.
-- **Scale the catalog with deferred loading.** Beyond a few dozen tools, don't preload every schema: expose a `search_tools` capability that returns full definitions on demand. Hundreds of MCP-sourced tool descriptions in a static prompt is a context tax and an attack surface.
+An action transaction proceeds through `proposed → validated → authorized → leased → executing → committed | uncertain | failed | compensated`. Persist transitions before they become externally visible. A timeout after dispatch enters `uncertain`; it does not prove failure. Reconciliation queries the destination by logical action ID or receipt before retry. Compensation is domain-specific and may be corrective rather than reversible.
+
+Tool discovery returns only capabilities allowed for the principal and task, then freezes selected schema revisions for the turn. A disappearing or mutated tool during a run becomes a compatibility event. General code execution receives a sandbox and attenuated capabilities; high-impact operations retain narrow typed interfaces even when code could technically invoke them. Detailed ergonomics live in [Coding Agent Tool Design](../19-compound-engineering/02-coding-agent-tool-design.md).
 
 ---
 
-## Context Lifecycle Engineering
+## Context Revision Lifecycle
 
-Context is the binding constraint and the dominant cost driver. The harness owns four mechanisms:
+The harness stores an append-only canonical event graph and produces disposable context revisions. A revision records source item IDs, trust/policy decisions, compaction lineage, selected tool schemas, token allocation, and rendered-request hash. Compaction or correction creates a new revision; it does not rewrite the evidence ledger.
 
-### 1. Cache discipline
-
-Many inference providers discount reusable input prefixes, and agents resend their history every turn. The exact price and eligibility vary, so the harness treats cache behavior as measured infrastructure rather than a fixed multiplier. Rules that follow:
-
-- **Append-only conversation.** Never rewrite or reorder earlier messages mid-session; any mutation invalidates the cache for everything after it.
-- **Stable prefix.** System prompt and tool schemas change only at deploy time. Timestamps, request IDs, and "current date" go at the *end* of context or in tool results, never the beginning.
-- Place cache breakpoints at the prompt/session/conversation boundaries; monitor cache-hit rate as a first-class production metric — a regression usually means someone "improved" the prompt builder.
-
-### 2. Budget accounting and compaction
-
-Track tokens by context category and reserve space for the next model response, tool schemas, and safety metadata. Compact when projected growth crosses a workload-qualified threshold, not on a fixed turn count. A summary is accepted only after its goal, constraints, decisions, identifiers, open work, and side-effect receipts are checked against durable state. Tool outputs are usually pruned before decisions, but retain a reference and the fact that the result was observed. Test compaction explicitly in evals: a bad summarizer turns a four-hour task into amnesia at hour two.
-
-### 3. Filesystem as memory
-
-Give the agent durable scratch space and teach it (via system prompt) to use it: `plan.md` for the task plan, `notes.md` for learnings, artifacts written to disk instead of held in context. File-based state survives compaction, crashes, and handoffs to other agents — and humans can inspect it. Cross-session memory (project conventions, user preferences) belongs in curated instruction files loaded at session start, not in an embedding store the model can't audit. See [Agent Context Engineering](../19-compound-engineering/03-agent-context-engineering.md).
-
-### 4. Subagent fan-out
-
-A subagent is a context firewall: it spends its own window on exploration and returns a distilled result. The harness provides the spawn primitive, caps concurrency and per-subagent budgets, and defines the result contract (e.g., "≤2K tokens, conclusions plus file references — not transcripts"). Use it for read-heavy work (search, audit, summarize); avoid it for tightly-coupled writes, where partial views produce incoherent output.
+Context budgets reserve mandatory state and output headroom before optional evidence. Tool results enter through a result envelope and may be represented later by a receipt or artifact reference. Memory writes are policy-checked effects with scope and expiry. Subagent contexts fork from an explicit parent revision and return typed claims/evidence, not an implicit shared transcript. The full lifecycle belongs to [Context Management](./08-context-management.md); the harness's job is enforcing its contracts.
 
 ---
 
@@ -166,7 +127,7 @@ Files are not automatically durable just because they are on disk. The harness r
 
 ### Verification layer
 
-Wire ground truth into the loop, because agents are only reliable on tasks where checking is cheaper than doing: run tests/typecheck/lint after edits and feed failures back as tool results; screenshot UIs; diff review before commit. Prefer exit codes over self-assessment — a model grading its own work without an oracle inflates success. Where no programmatic verifier exists, rubric-based LLM-as-judge is a *triage* signal routing work to humans, not an acceptance gate.
+Expose independent observations wherever the environment permits: tests and invariants after edits, rendered-state inspection for interfaces, and diff or state review before commit. Executability does not guarantee coverage, but self-assessment is correlated with generation and cannot substitute for an acceptance contract. Where deterministic evidence is unavailable, a qualified semantic judge may route or gate only at the operating point established for that risk class; high-consequence uncertainty remains with human authority.
 
 ---
 
@@ -176,18 +137,17 @@ Design for a persuadable model operating on untrusted input:
 
 ```mermaid
 graph LR
-    A["Tool call"] --> C{"Classify"}
-    C -->|read, in-workspace| AUTO["Auto-approve"]
-    C -->|write, in-workspace| AUTO2["Auto-approve +<br/>journal for review"]
-    C -->|"irreversible / outward<br/>(push, deploy, email, spend)"| GATE["Human approval<br/>or standing policy"]
-    C -->|denied by policy| DENY["Refuse with reason<br/>(model adapts)"]
-    AUTO & AUTO2 & GATE --> SBX["Sandbox: container,<br/>RO mounts, egress allowlist,<br/>secrets broker, rlimits"]
+    A["Tool proposal"] --> R["Resolve principal, task,<br/>resource/path, data class,<br/>effect, base revision"]
+    R --> C{"Policy decision"}
+    C -->|authorized for exact scope| SBX["Execute in sandbox with<br/>attenuated capability"]
+    C -->|approval required| GATE["Human / standing authority<br/>over exact action digest"]
+    GATE -->|approved and still current| SBX
+    C -->|denied| DENY["Typed denial observation"]
 ```
 
-- **Action classification over tool allowlists.** `bash` is neither safe nor unsafe — `cat` and `git push --force` differ. Classify the *effect* (read / reversible write / irreversible / outward-facing) and gate by class.
-- **Sandbox as default substrate.** Ephemeral container or microVM per session: workspace mounted read-write, host invisible, network egress through an allowlist proxy, CPU/memory/disk limits. Secrets live in a broker that injects them into tool *execution*, never into model-visible context.
-- **Prompt injection is unsolved; architect around it.** Anything the agent reads — web pages, issues, READMEs, tool output — may carry instructions. Tag tool results as data-not-directives, and structurally avoid the lethal trifecta: untrusted input + private data + an outward channel in one agent. If the product requires all three, the outward channel gets a human gate, always.
-- **Approval fatigue is a security bug.** If users see ten prompts per task, they will click "always allow" on the eleventh. Auto-approve the provably safe, batch the reviewable, and reserve interruptions for the handful of actions that are genuinely irreversible.
+A tool name or workspace location does not determine safety. The policy input is the authenticated principal, delegated task, requested verb, semantic resource and path, data classification, destination, base revision, reversibility, and expected external effect. A read can expose a secret; a local write can alter executable policy or destructive configuration. Automatic authorization is valid only when the complete tuple matches a standing rule.
+
+Execution then occurs in an isolation domain with explicit mounts, egress, resource limits, and a secret broker. Untrusted content remains data, but that label is not containment; the capability envelope must make the worst permitted effect acceptable even if the model follows a hostile instruction. Approval binds an exact digest and resource revision, and policy rechecks it at commit. Batch review and narrow standing rules reduce approval fatigue without broadening authority invisibly.
 
 ### Capability attenuation
 
@@ -197,30 +157,31 @@ Policy checks run again at commit. A plan approved ten minutes ago may now targe
 
 ---
 
-## Eval-Driven Harness Development
+## Harness Verification and Fault Injection
 
-The harness changes weekly; vibes don't scale. The development loop is: **build the eval before the feature, ship nothing that regresses it.**
+The harness needs deterministic contract tests independent of model quality: request compilation, tool schema compatibility, policy decisions, idempotent inbox/outbox handling, action fencing, context revision checks, budget propagation, cancellation, workspace recovery, and trace redaction. Use a scripted model adapter to emit malformed calls, duplicate action IDs, late responses, cyclic plans, and completion claims without evidence.
 
-- **Task suite.** 50–200 real tasks from your domain with programmatic graders (tests pass, artifact matches spec, API state correct). Include adversarial cases: injection attempts in tool outputs, tasks that *should* be refused or escalated, tasks requiring compaction to finish.
-- **Metrics that reflect the product.** Task success (pass^k for reliability claims, not just pass@1), cost per solved task, turns and wall-clock, tool-error rate, cache hit rate, unsafe-action attempts caught, human interventions per task.
-- **Ablate harness changes like model changes.** New tool description, new compaction prompt, new gate policy — each gets an A/B over the suite. Harness regressions are silent: nothing crashes; success just drifts from 78% to 71%.
-- **Calibrate with public benchmarks** (SWE-bench Verified, Terminal-Bench, τ-bench, OSWorld) but don't optimize for them — they tell you whether your harness is leaving model capability on the table, not whether your product works.
-- **Trace everything.** One trace per session, one span per turn/tool-call, following the OpenTelemetry GenAI semantic conventions: model, tokens in/out/cached, tool, latency, gate decisions. Production traces are tomorrow's eval cases — build the "promote this failed session to the suite" button early.
+State-machine tests kill the process between every durable transition. Tool simulators produce timeout-before-commit, timeout-after-commit, duplicate receipt, stale revision, partial stream, and compensation failure. Load tests inject provider throttling, queue saturation, cache loss, fan-out bursts, and slow clients. Security tests place hostile instructions in every data channel while observing whether capability policy—not model obedience—contains the effect.
+
+End-to-end statistical evaluation then measures the model–harness pair on representative tasks. [LLM Evaluation](./10-llm-evaluation.md) owns dataset and judge methodology; this chapter's distinctive requirement is that harness faults and unsafe trajectories remain visible even when the final artifact happens to pass.
 
 ---
 
-## Cost and Latency Engineering
+## Cost, Backpressure, and Tenant Isolation
 
-| Lever | Mechanism | Typical impact |
-|---|---|---|
-| Prompt cache hit rate | Stable prefix, append-only history | Largest single cost lever in agents |
-| Model tiering inside the harness | Small model for compaction, routing, summaries; frontier for the main loop | 2–5× cost reduction on the periphery |
-| Tool-output budgets | Truncation, pagination, code-exec batching | Smaller contexts → cheaper *and* more accurate |
-| Thinking budget policy | High for irreversible decisions, low for tight tool loops | Latency control without quality loss where feedback is cheap |
-| Parallel tool execution | `gather` independent calls | Wall-clock, not tokens |
-| Subagent fan-out | Parallel exploration, compressed returns | Latency down, tokens up — measure both |
+Every run receives hierarchical reservations for model tokens/spend, wall time, tool operations, fan-out, and concurrency. A child cannot escape the parent's remaining budget. Admission rejects work that cannot finish within its deadline or tenant allocation; bounded queues shed or degrade before expired work reaches an expensive model.
 
-Token spend is the unit economics of the product: instrument cost per *solved* task, not per request. An agent that's 30% cheaper per turn but takes 60% more turns is a regression.
+Cost attribution includes every attempt, discarded branch, verifier, tool, storage artifact, sandbox, and human review. The denominator is verified successful tasks. Parallel reads can reduce critical-path time while increasing spend; delegation can protect parent context while multiplying prefixes; compaction saves future input but costs a generation and cache revision. Measure marginal value by task slice.
+
+Tenant isolation covers queues, caches, memory, sandboxes, credentials, traces, and artifact stores. Weighted fair scheduling prevents one recursive agent from consuming the fleet. A global emergency control can cap fan-out, output, reasoning effort, or selected model tiers, but cannot weaken authorization or data isolation.
+
+## Harness Versioning and Rollout
+
+A harness release pins runtime code, state/event schema, provider adapters, prompt/context compiler, tool registry snapshot, policy revision, sandbox image, and verifier set. Long-running runs may span a release, so migration must choose one of three semantics: finish on the old revision, migrate at a versioned checkpoint, or terminate safely. Replaying old state with new branch logic without a version marker is nondeterministic workflow corruption.
+
+Provider adapters expose a capability matrix rather than a lowest-common-denominator fiction: modalities, tool protocol, parallel calls, structured-output subset, context accounting, streaming events, cancellation, and usage fields. Admission fails or invokes an evaluated fallback when a target cannot represent the active state.
+
+Rollout progresses through deterministic contract tests, offline task evaluation, shadow decisions with side effects suppressed, canary sessions pinned to one revision, and gradual traffic. Watch state-transition errors, tool/policy deltas, task success, latency, spend, and human intervention. Rollback keeps old runtime and schema readers available until in-flight state has drained or migrated.
 
 ---
 
@@ -263,11 +224,12 @@ Build the smallest runtime that makes the desired guarantee enforceable. Add com
 ## Key Takeaways
 
 1. Benchmark scores belong to model+harness pairs; the harness is the half you own, and it compounds across model generations.
-2. Order context stable-to-volatile and never mutate history — cache hit rate is the agent cost metric.
-3. Tools: few, orthogonal, token-budgeted, with errors that teach and code execution as the escape hatch.
+2. Canonical state is an event graph; each prompt is a disposable, policy-filtered context revision with a reproducible manifest.
+3. Tools execute through versioned action transactions with authority, read/write, retry, uncertainty, and reconciliation semantics.
 4. The model claims; the harness verifies. Ground truth in the loop or a human at the gate.
 5. Security lives in the permission boundary and sandbox — prompt text is advice, harness code is policy.
-6. Build the eval suite before the harness feature; harness regressions are silent.
+6. Verify the runtime with deterministic state-machine and fault-injection tests, then evaluate the model–harness pair statistically.
+7. Version and progressively roll out the whole runtime tuple; long-running state needs explicit compatibility and migration semantics.
 
 ---
 

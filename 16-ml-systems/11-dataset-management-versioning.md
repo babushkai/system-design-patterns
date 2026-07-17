@@ -53,6 +53,8 @@ retention_until: 2031-06-24
 
 The identity has three layers. **Logical identity** says what the dataset means: target, population, time range, label definition. **Provenance identity** says what produced it: source snapshots, code commit, feature versions. **Physical identity** says what bytes were materialized: content hash, schema hash, storage location. All three are necessary. Logical identity without physical immutability is a promise. Physical bytes without logical meaning are a pile of Parquet files.
 
+There is also a distinction between a **dataset definition** and a **dataset realization**. `fraud_training_set:v6` can name the governed recipe and contract; `fraud_training_set:v6@sha256:ccc...` names one execution over particular source snapshots. Definitions evolve deliberately. Realizations are immutable. Conflating them makes either every daily build look like a semantic version change or, worse, makes a semantic change hide behind the same daily name.
+
 ---
 
 ## Snapshots, Not Queries
@@ -82,7 +84,7 @@ If any term is unpinned, reproducibility is broken. `latest` is the enemy. `curr
 
 ### How Time Travel Actually Works — and When It Silently Stops
 
-Lakehouse table formats make snapshotting nearly free, and understanding the mechanism explains both why it is cheap and where it breaks. An Iceberg table is a tree of immutable metadata: a table pointer names a metadata file, which lists *snapshots*; each snapshot points to a manifest list; each manifest names data files with statistics. A commit writes new data files and a new metadata tree — it never modifies old files:
+Lakehouse table formats make creation of a snapshot metadata-efficient, and understanding the mechanism explains both why the commit is cheap and where long-term retention becomes costly. An Iceberg table is a tree of immutable metadata: a table pointer names a metadata file, which lists *snapshots*; each snapshot points to a manifest list; each manifest names data files with statistics. A commit writes new data files and a new metadata tree—it does not modify the older data-file set in place:
 
 ```text
 table pointer → metadata.json
@@ -106,9 +108,9 @@ DESCRIBE HISTORY transactions;   -- maps versions to commits, jobs, and operatio
 SELECT * FROM transactions AT (TIMESTAMP => '2026-06-24 03:00:00'::timestamp_tz);
 ```
 
-The trap is that **time travel has a garbage collector, and its defaults are much shorter than a model's lifetime.** Delta's `VACUUM` removes unreferenced files after a retention window that defaults to 7 days; Iceberg's `expire_snapshots` maintenance does the same; Snowflake time travel is 1 day by default and 90 at most. A training run that records `VERSION AS OF 812` has recorded a pointer into a tree the janitor will delete next week. Snapshot pinning is only reproducibility if the pinned snapshot is *retained*, which means dataset management must either (a) register training-consumed snapshots with the table's maintenance policy so they are exempt from expiry, or (b) materialize the training view out to its own content-addressed manifest — the pattern in the next section — and let the source table expire freely. Most mature platforms do (b) for training sets and (a) only for short-lived experimentation, because exempting snapshots forever turns every source table into an unbounded archive.
+The trap is that **time travel has a garbage collector, and its retention horizon may be shorter than the model's lifetime.** Delta `VACUUM`, Iceberg snapshot expiration, and warehouse retention policies can all make an old version unreadable after its unreferenced files are removed. Recording `VERSION AS OF 812` is therefore only a durable promise if the retention controller knows that version is a root. Dataset management must either (a) create a retained table reference or otherwise exempt training-consumed snapshots from expiry, or (b) materialize the training view into its own content-addressed manifest and allow the source table's short operational history to expire. The choice is workload-specific: retaining source snapshots preserves cheap relational time travel, while materializing a view isolates retention and access policy at the cost of another physical copy.
 
-Git-style tools occupy the same design space with different mechanics: **DVC** stores content-hashed data objects in a remote and commits small `.dvc` pointer files to git, so `git checkout && dvc checkout` restores the exact bytes of any historical dataset; **lakeFS** puts git semantics (branches, commits, merges) over an entire object-store namespace, so a training job can run against a commit ID and a backfill can be staged on a branch and reviewed before merge. The mechanism differs from Iceberg's, but the invariant purchased is identical: dataset identity is a hash-addressed, immutable reference, never a path.
+Git-style tools occupy the same design space with different mechanics: **DVC** stores content-hashed data objects in a remote and commits small `.dvc` pointer files to git, so `git checkout && dvc checkout` restores the exact bytes while the referenced objects remain retained; **lakeFS** puts git semantics (branches, commits, merges) over an object-store namespace, so a training job can run against a commit ID and a backfill can be staged on a branch and reviewed before merge. The mechanism differs from Iceberg's, but the invariant is identical: dataset identity is a retained immutable reference, not a mutable path.
 
 ---
 
@@ -176,7 +178,7 @@ def split_of(entity_id: str, salt: str = "fraud_v6") -> str:
     return "test"
 ```
 
-The salt plays the same role as an experiment salt in [online experiments](./08-online-experiments.md): changing it re-shuffles the population, so it is part of the dataset contract and must never change silently. A seeded `random.shuffle` gives a different answer the moment a row is added or the library version changes its RNG stream; a hash gives the same answer on any machine, in any language, in any year — the properties a measurement instrument needs. The materialized `split_assignments` table is still worth writing (it is what auditors and debuggers read), but with hashing it becomes a *record* of assignments rather than the *source* of them, and the two can be cross-checked.
+The salt plays the same role as an experiment salt in [online experiments](./08-online-experiments.md): changing it re-shuffles the population, so it is part of the dataset contract and must never change silently. A seeded `random.shuffle` can change assignment when rows are inserted or an implementation changes its random stream. A hash is stable only if the contract also pins canonical identifier encoding, hash algorithm, salt, modulus, and bucket boundaries; different Unicode normalization or integer serialization can otherwise split the same entity differently across languages. The materialized `split_assignments` table is still worth writing (it is what auditors and debuggers read), but with a fully specified hash it becomes a *record* of assignments rather than the *source* of them, and the two can be cross-checked.
 
 ---
 
@@ -232,6 +234,18 @@ expectations:
 
 The unit field is not decorative. It is a semantic assertion. The system cannot prove every semantic property, but it can force the team to state the ones that matter and alert when observable proxies move.
 
+Schema evolution also needs stable field identity. Renaming a Parquet column can look like “drop `merchant_id`, add `seller_id`” to a name-based reader even if the logical field is unchanged; reusing a removed field name can make old readers interpret a new meaning as the old one. Table formats that assign field IDs can preserve a rename without positional confusion, but IDs cannot decide whether the meaning is compatible. The dataset contract must classify changes:
+
+| Change | Compatibility judgment | Safe publication behavior |
+|---|---|---|
+| Add optional field with defined default | Often backward compatible | Minor definition revision; old consumers continue |
+| Rename while preserving field identity and meaning | Reader/tool dependent | Validate all readers against the field-ID mapping |
+| Change unit, population, label, or observation window | Semantically breaking | New dataset definition; do not move old aliases silently |
+| Narrow type or introduce new enum behavior | Potentially breaking | Shadow-read representative consumers before publish |
+| Delete or redact subjects | Deliberate loss of historical equivalence | Record redaction generation and affected descendants |
+
+Compatibility is a relation between producer and consumer contracts, not a property of the schema alone. Publication should therefore evaluate registered consumers or declared compatibility ranges. “The table accepted the write” proves storage validity; it says nothing about whether a trainer, evaluator, or audit reader will preserve meaning.
+
 ---
 
 ## Dataset Lineage: Provenance and Impact
@@ -271,6 +285,10 @@ There are three common approaches:
 **Aggregated or anonymized retention** stores derived statistics or irreversibly anonymized rows for reproducibility of aggregate behavior, while deleting direct identifiers. This reduces privacy risk but may not support exact retraining.
 
 The important property is honesty. A registry should record whether a dataset is **rebuildable**, **retained**, **privacy-redacted**, or **expired**. A rollback plan that depends on an expired dataset is not a plan.
+
+Deletion is a lineage workflow, not a one-table mutation. A subject lookup or privacy index maps the deletion key to raw objects, canonical records, materialized datasets, feature values, evaluation sets, caches, and prediction logs. Each descendant records one of four outcomes: physically deleted, cryptographically erased by destroying an object-specific key, irreversibly anonymized under an approved policy, or retained under a documented legal basis. The deletion coordinator is idempotent and records a monotonically increasing **redaction generation** so a restored backup cannot silently resurrect an older generation.
+
+Models create the hardest boundary: deleting a row from storage does not remove its influence from already learned weights. The governance policy must say when affected models may continue serving, when retraining is required, and what evidence closes the request. This is a legal and risk decision, not something the storage layer can infer. The registry chapter describes how retained models and their transitive inputs become lifecycle roots: [Model Registry and ML Metadata](./13-model-registry-metadata.md).
 
 ---
 
@@ -320,7 +338,27 @@ STAGING ──validate──▶ SEALED ──register lineage──▶ PUBLISHED
 
 The only atomic operation required is small: a conditional insert or compare-and-swap of the metadata record. Petabytes of files can be written non-transactionally because none are visible as a dataset until that record commits. Readers resolve the version to one manifest and never list a mutable directory. If two builders race for the same logical version, only one metadata commit wins; the loser becomes an unreferenced candidate that the janitor can remove after a safety window.
 
+The metadata store owns the public state; workers own only staged objects. That ownership boundary resolves retry ambiguity. A builder that times out after submitting the publish transaction must query by idempotency key and manifest hash before retrying. It must never assume “timeout means failure” and publish a second logical version. Readers similarly pin the returned manifest hash for the lifetime of a job so an alias move cannot create a mixed read halfway through training.
+
+| State | Owner | Consumer visibility | Recovery rule |
+|---|---|---|---|
+| `STAGING` | build attempt | none | retry tasks; expire abandoned attempts after a safety window |
+| `SEALED` | manifest builder | explicit candidate readers only | checksums and partition ownership are immutable |
+| `PUBLISHED` | metadata transaction | immutable-version readers | publication is idempotent by manifest hash and request ID |
+| `ELIGIBLE` | policy/approval service | moving aliases may target it | approval revocation creates a new state event; history remains |
+| `REDACTED` / `EXPIRED` | retention controller | resolution fails with a typed reason | never fall through to a similarly named newer version |
+
+Typed resolution failures matter. `NOT_FOUND`, `REDACTED`, `EXPIRED`, `CORRUPT`, and `ACCESS_DENIED` imply different incident and governance paths; flattening them into “file missing” makes a privacy action look like storage loss and invites unsafe reconstruction attempts.
+
 Garbage collection is a reachability problem, not an age query. Start from retained model versions, evaluation reports, legal holds, rollback policies, active experiments, and dataset aliases; traverse lineage to manifests and source snapshots; delete only objects not reachable from any retained root. “Delete every object older than 90 days” will eventually delete the only reconstructable input of a still-serving model. Conversely, “keep everything” creates unbounded cost and privacy exposure. Reachability plus explicit retention class makes the trade-off reviewable.
+
+## Trust Boundaries and Supply-Chain Controls
+
+Training data is executable influence over a model. An attacker or buggy upstream producer may not need access to model code if they can inject mislabeled examples, poison a high-leverage slice, replace a manifest object, or move a source pointer. Dataset security therefore protects both confidentiality and integrity.
+
+Separate identities should write source data, build candidates, approve governed datasets, and consume restricted snapshots. Builders receive read access to exact source versions and write access only to their staging prefix; the publication service alone creates the public version record. Manifests and quality reports are hash-linked, and high-risk datasets can be signed or attested by the build identity so a trainer can verify both bytes and producer. Secrets and direct identifiers do not belong in the general metadata graph; store opaque references and enforce column-, row-, or purpose-level access at resolution time.
+
+Integrity monitoring looks for provenance changes as well as distributions: unexpected writer identity, source snapshot outside the approved branch, a sudden rise in one contributor's rows, duplicate clusters, labeler concentration, and changes to exclusion rules. These signals do not prove poisoning, but they narrow causality before the contaminated dataset produces many descendants. Quarantine blocks alias movement while retaining the candidate and evidence for investigation.
 
 ## Dataset Observability and Service Levels
 
@@ -350,19 +388,40 @@ Freshness by itself is dangerous. A fresh but semantically broken dataset should
 
 **Manifest/path mismatch** occurs when files under a path change but the dataset version name does not. Defense: content hashes and manifest hashes as the actual identity.
 
+**Ambiguous publish retry** creates two versions or moves an alias twice when a builder times out after a successful commit. Defense: idempotency keys, manifest-hash uniqueness, and read-after-timeout reconciliation against the metadata authority.
+
+**Snapshot garbage collection outruns model retention** leaves a registry pointer whose source files have expired. Defense: make retained models roots in reachability analysis or materialize an independently retained manifest.
+
+**Cross-language split skew** sends the same entity to different splits because identifier encoding or normalization differs. Defense: specify canonical bytes and publish conformance vectors for every split implementation.
+
+**Deletion resurrection** restores a backup or cache that predates a privacy deletion. Defense: monotonic redaction generations and restore-time reconciliation before data becomes readable.
+
+**Poisoned but schema-valid input** passes types and range checks while a compromised source changes labels or population. Defense: writer provenance, contribution and duplicate analysis, signed manifests, quarantine, and separation of build from approval.
+
 ---
 
 ## Decision Framework
 
-When designing dataset management for ML, ask:
+Choose the physical versioning mechanism from the lifetime and reconstruction requirement, not from fashion:
 
-1. Can every production model name the exact dataset snapshot it trained on?
-2. Is that snapshot a query, or immutable source versions plus a content-addressed manifest?
-3. Are label definitions, feature versions, split assignments, and extraction code pinned?
-4. Can the platform reproduce both the corrected current truth and the historical truth a model actually saw?
-5. Are semantic changes versioned, or only schema changes?
-6. Can you answer impact queries from bad source data to affected deployed models?
-7. Does the retention/privacy policy state whether a dataset remains rebuildable?
+| Requirement | Prefer | Accept the cost |
+|---|---|---|
+| Short-lived experimentation over governed tables | Retained table snapshot/tag | Coupled to table maintenance and access policy |
+| Long-lived training or audit evidence | Materialized content-addressed manifest | Additional storage and publication pipeline |
+| Large derived view cheap to recompute | Immutable inputs + pinned code, with periodic rebuild test | Recovery consumes compute and depends on every input remaining reachable |
+| Privacy-sensitive population | Redactable partitions or object-specific encryption boundaries | More objects, indexes, and deletion orchestration |
+| Stable entity-disjoint evaluation | Contracted hash assignment + materialized record | Hash/encoding specification becomes governed API |
+
+Then require the design review to establish these invariants:
+
+1. Every production model names an immutable realization, not only a dataset definition or query.
+2. Source snapshots, labels, features, extraction code, split policy, and canonical identity encoding are pinned.
+3. The system can distinguish historical observed truth from a later corrected truth without overwriting either meaning.
+4. Publication has one metadata authority, idempotent recovery, and typed terminal states.
+5. Semantic compatibility and important population invariants are evaluated in addition to schema.
+6. Forward lineage can identify every deployed descendant of a bad source or deletion request.
+7. Retention roots, redaction behavior, and restore reconciliation agree with the model lifecycle.
+8. Build, approval, publication, and consumption cross explicit trust boundaries.
 
 If the answer to any of these is no, model metrics may still exist, but they are not audit-grade. The dataset is the model's specification; manage it with the same seriousness as code.
 
@@ -380,6 +439,9 @@ If the answer to any of these is no, model metrics may still exist, but they are
 8. Lineage must answer both provenance and impact, automatically.
 9. Privacy deletion and reproducibility conflict; track whether snapshots are retained, redacted, expired, or rebuildable.
 10. Training directly from mutable production tables is the dataset-management equivalent of deploying unversioned code.
+11. Publication is a metadata transaction over immutable staged objects; retries reconcile with that authority instead of guessing.
+12. Dataset security includes integrity and provenance because poisoned examples are an input supply-chain attack.
+13. Retention and deletion are lineage operations: backups, caches, models, and evaluation artifacts must agree on the redaction generation.
 
 ---
 
@@ -392,3 +454,4 @@ If the answer to any of these is no, model metrics may still exist, but they are
 5. [Apache Iceberg Table Format](https://iceberg.apache.org/spec/) — snapshot and manifest-based lakehouse tables
 6. [DVC Documentation](https://dvc.org/doc) — data and model versioning concepts
 7. [Lakehouse and Open Table Formats](../13-data-pipelines/05-lakehouse-table-formats.md)
+8. [Apache Iceberg Snapshot Retention](https://iceberg.apache.org/docs/latest/maintenance/) — expiration and reachability of snapshot files

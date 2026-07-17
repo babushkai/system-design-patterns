@@ -42,7 +42,30 @@ owner: risk-data-platform
 valid_from: 2026-01-01T00:00:00Z
 ```
 
-The version matters because label definitions evolve. A fraud team may start treating a new dispute reason as fraud. A content moderation team may change its policy for borderline hate speech. A marketplace may redefine a successful booking after cancellation rules change. If historical labels are overwritten in place, offline evaluation becomes incomparable: a model evaluated today is graded under a different target than the model shipped six months ago. The rule is the same as feature versioning: **a semantic change to a label is a new label version, never an in-place edit**.
+The version matters because label definitions evolve. A fraud team may add a dispute reason; a marketplace may redefine a successful booking after cancellation rules change. A semantic change creates a new label contract. Corrections under the *same* contract supersede earlier evidence; a new contract changes the target and must not be silently mixed into an old evaluation.
+
+---
+
+## Event Plane, Resolution Plane, and Snapshot Plane
+
+Label infrastructure has three ownership boundaries:
+
+- The **event plane** ingests outcome and annotation evidence with source-specific idempotency keys. It preserves what the source asserted and when; it does not decide final truth.
+- The **resolution plane** applies a versioned label contract to evidence, handles conflicts and retractions, and advances a label state machine.
+- The **snapshot plane** materializes reproducible views for a declared knowledge cutoff, maturity rule, and label-contract version.
+
+```mermaid
+flowchart LR
+    SRC["Outcome sources / reviewers"] --> LEDGER["Append-only evidence ledger"]
+    LEDGER --> RESOLVE["Versioned resolver"]
+    CONTRACT["Label contract"] --> RESOLVE
+    RESOLVE --> STATE["Label state + confidence"]
+    STATE --> SNAP["Immutable dataset snapshot"]
+    SNAP --> TRAIN["Training"]
+    SNAP --> EVAL["Evaluation / monitoring"]
+```
+
+The separation preserves conflicting evidence. A chargeback event, its reversal, and an expert adjudication remain independently auditable even if the current resolved label is negative. Retraining can change the resolver without rewriting source history; a snapshot digest pins the resolver, source offsets, watermark, exclusion policy, and rows used by a model.
 
 ---
 
@@ -94,7 +117,7 @@ Different domains have radically different delay profiles:
 | Abuse detection | Allow / remove content | User report, moderator review | Minutes to weeks | Strong human-review pipeline needed |
 | Healthcare | Risk prediction | Diagnosis / outcome | Weeks to years | Label incompleteness is structural |
 
-The system consequence is a **label-maturation pipeline**. Predictions start as unlabeled. Some receive provisional labels quickly. Some provisional labels are corrected later. Some remain permanently unknown. Training and evaluation jobs must declare which maturity window they require: a click model may train on 24-hour labels; a fraud model may require 90-day maturity for final evaluation but use 7-day proxy labels for early monitoring.
+The system consequence is a **label-maturation pipeline**. Predictions begin open, may accumulate provisional evidence, may be corrected, and may remain censored when observation ends before an outcome is known. Training and evaluation jobs declare the maturity rule they require. That rule should come from the empirical delay distribution and decision cost, not a round number copied from another product.
 
 ```mermaid
 flowchart LR
@@ -107,7 +130,9 @@ flowchart LR
     PROV --> PROXY["Early-warning proxy metrics"]
 ```
 
-The failure mode is reading immature labels as final truth. A fraud canary that looks safe after two hours has not measured fraud loss; it has measured operational health and perhaps early proxies. A credit model that improves 30-day delinquency may still worsen one-year default. The label system must make maturity explicit in the data model so that every metric says which truth horizon it represents.
+For positive-event maturity, define `F_+(d) = P(D \le d \mid Y=1, eventual observation)`, where `D` is observation delay. A window with `F_+(d)=0.9` has observed about 90% of eventually observed positives under that conditioning population; it says nothing by itself about positives that are never observable. Estimate delay, eventual-observation probability, and missingness by source, action, and slice. When outcomes remain right-censored, survival analysis, inverse-probability-of-censoring weights, or explicit bounds are more honest than coercing open cases to negative. Competing events—chargeback, refund, account closure—also need a contract because one event can preclude observation of another.
+
+The failure mode is reading immature labels as final truth. A fraud canary after two hours has measured operational health and perhaps proxies, not mature fraud loss. Every metric should expose observation horizon, fraction mature, censoring rule, and knowledge cutoff.
 
 ---
 
@@ -128,7 +153,7 @@ UNLABELED
   └─ insufficient observation / data missing  → UNKNOWN
 ```
 
-`UNKNOWN` is not the same as `NEGATIVE`. Treating unknowns as negatives is one of the oldest and most damaging shortcuts in ML systems. The training pipeline should either exclude unknowns, model censoring explicitly, or use domain-specific weak labels with clear weighting. What it must not do is silently coerce uncertainty into a confident zero.
+`UNKNOWN` is not the same as `NEGATIVE`, and `MATURE` need not mean immutable. The ledger carries at least four times: outcome event time, source observation time, ingestion time, and resolver effective time. A late reversal can supersede a mature label without erasing the snapshot used by an older model. Training may exclude open cases, model censoring, or consume a declared proxy; it must not silently coerce absence into zero.
 
 ---
 
@@ -140,21 +165,15 @@ A fraud model blocks high-risk transactions. Because the transaction never compl
 
 This is **selective labels**: labels are missing not at random, but because of the decision policy. Naively training on observed labels then reinforces the incumbent policy. The model learns from approved loans and knows nothing about rejected borrowers; learns from shown recommendations and knows nothing about hidden items; learns from allowed transactions and knows less about blocked ones.
 
-The defenses are structural, not cosmetic:
-
-1. **Log the action and policy** with every prediction, so training can distinguish observed outcomes under different decision paths.
-2. **Reserve exploration or audit traffic** where safe, so some uncertain cases are allowed or reviewed specifically to learn their outcomes.
-3. **Use human review queues** for high-risk ambiguous cases, creating labels where automated action would otherwise erase them.
-4. **Model missingness explicitly** instead of pretending observed labels are representative.
-5. **Evaluate with randomized or quasi-random holdbacks** when the business can tolerate them, because only randomization breaks the selection mechanism cleanly.
+Action and assignment propensities belong with every prediction because observed outcomes are conditional on policy. Randomized audit traffic can identify outcomes within the actions it is permitted to explore. When propensities are known and overlap holds, inverse-propensity or doubly robust estimators can correct some selection; extreme weights reveal that the data do not support the target policy. Human review creates adjudicated evidence but not necessarily the counterfactual outcome that would have followed an unchosen action. Where exploration is unsafe or impossible, report partial-identification bounds or the policy-specific estimand rather than claiming population truth.
 
 This is the same reason [online experiments](./08-online-experiments.md) are load-bearing: they manufacture a counterfactual the ordinary logs cannot contain. A label system that ignores selection bias becomes a machine for validating yesterday's policy with yesterday's blind spots.
 
 ---
 
-## Human Labeling Is a Distributed Consensus Problem
+## Human Labeling Is a Measurement System
 
-When labels come from human annotators or reviewers, the system design problem becomes less like data ingestion and more like consensus under noisy voters. Humans disagree. Policies are ambiguous. Reviewers fatigue. Some examples are genuinely borderline. The label platform's job is not to pretend this noise does not exist, but to measure and control it.
+Human judgments are measurements made through policy, interface, training, incentives, language, and context. Reviewers are not independent replicas voting on an objective bit: their errors can be correlated because they share an ambiguous guideline, anchoring UI, vendor training, or cultural blind spot. Redundancy reduces idiosyncratic error only when the assignment and adjudication design create meaningful independence.
 
 The basic architecture separates four roles:
 
@@ -170,7 +189,7 @@ flowchart LR
 
 The review queue chooses what needs human judgment. Task assignment balances load, expertise, language, conflict of interest, and privacy restrictions. The annotation UI presents the policy and captures the decision. Agreement and adjudication turn one or more human judgments into a label. Quality metrics monitor whether the reviewers themselves are drifting.
 
-The key design choice is the **aggregation policy**. For low-risk tasks, one reviewer may be enough. For ambiguous or high-impact tasks, require two or three independent reviewers and escalate disagreements to an expert adjudicator. This is a quorum system in miniature: more votes increase reliability but cost more and add latency. The right quorum depends on consequence.
+The key design choice is the **measurement policy**. It specifies reviewer qualifications, blinding, context shown, replication rate, disagreement handling, adjudicator authority, and whether the output is a hard class, distribution, or “insufficient evidence.” More votes cost more and may create false confidence if all reviewers share the same failure mode.
 
 | Task type | Review policy | Why |
 |---|---|---|
@@ -179,7 +198,7 @@ The key design choice is the **aggregation policy**. For low-risk tasks, one rev
 | Regulated adverse decision | Expert review + persisted rationale | Contestability and audit required |
 | Training-set cleanup | Redundant labels on a stratified sample | Estimate noise before scaling |
 
-Gold-standard tasks — examples with known labels — are the calibration mechanism. They detect reviewers who misunderstand policy, bots or low-quality vendors, and policy drift over time. Inter-annotator agreement metrics such as Cohen's kappa or Krippendorff's alpha are not academic decoration; they tell you whether the target is learnable from the labeling process. If trained humans cannot agree, expecting a model to learn a stable boundary is wishful thinking.
+Gold tasks and expert-audited samples calibrate reviewer and workflow quality, but gold sets can leak, age, and encode the same policy bias as production labels. Rotate them, stratify by difficulty and slice, and keep some blind. Agreement statistics such as Cohen's kappa or Krippendorff's alpha describe consistency under particular prevalence and assumptions; they do not establish correctness or learnability by themselves.
 
 Kappa is worth computing by hand once, because the naive alternative — raw percent agreement — systematically flatters the labeling process. Two reviewers label 200 items for "policy violation," where violations are rare:
 
@@ -196,9 +215,9 @@ Chance agreement:   A says yes 10% of the time, B says yes 9%.
 Cohen's kappa:      κ = (p_o − p_e) / (1 − p_e) = (0.93 − 0.828) / 0.172 ≈ 0.59
 ```
 
-Ninety-three percent agreement collapses to κ ≈ 0.59 — "moderate" agreement — because with a 90% negative base rate, two reviewers who mostly say "no" agree constantly by chance. On the minority class, where the model's decisions actually matter, these reviewers agree barely more than half the time beyond chance. This is the number that predicts whether the boundary is learnable, and it is routinely 30 points below the raw agreement a vendor reports. The working thresholds: κ above 0.8 supports automated training targets; 0.6–0.8 supports training with adjudication of disagreements; below 0.6 means the *policy* is the problem, and spending labeling budget before rewriting the policy document buys noise.
+Ninety-three percent raw agreement becomes `κ ≈ 0.59` because the common negative class creates high chance agreement. Kappa also has a prevalence paradox: it can fall when observed agreement stays high, so universal cutoffs such as “0.8 means ready for automation” are not defensible. Report the confusion matrix, per-class agreement, uncertainty, adjudication rate, and performance on expert-audited cases. Disagreement concentrated in one policy boundary calls for policy or interface repair; diffuse reviewer-specific error calls for training or routing changes.
 
-When more than two reviewers vote, majority vote weights a careless reviewer equally with a careful one. The standard upgrade is Dawid-Skene-style aggregation, which jointly estimates each reviewer's confusion matrix and each item's true label with EM — reviewers who agree with the consensus on gold tasks earn more weight, and the label store records the posterior (`confidence_weight`) rather than a bare vote count. Open implementations exist (e.g., `crowd-kit`); the systems requirement is only that the label event schema carries per-reviewer votes rather than pre-collapsed majorities, so the aggregation policy can improve without re-labeling anything.
+When more than two reviewers vote, Dawid–Skene-style aggregation can jointly estimate latent labels and reviewer confusion matrices under conditional-independence assumptions. It can fail when reviewers copy each other, item difficulty is unmodeled, or classes are weakly identified. Preserve per-reviewer events, assignment provenance, policy version, and adjudication separately from the resolved label so aggregation can evolve without destroying evidence. Treat posterior confidence as model output with calibration requirements, not as ground truth.
 
 ---
 
@@ -208,7 +227,7 @@ Labels are expensive, so a mature label system does not label randomly forever. 
 
 The simplest strategy is **uncertainty sampling**: send examples near the model's decision boundary to reviewers because those examples teach the model the most. If a classifier scores an example at 0.50, the label is more informative than an example scored 0.999. A second strategy is **disagreement sampling**: send examples where the champion and challenger models disagree, because those are exactly the cases deciding whether the new model is meaningfully different. A third is **slice-targeted labeling**: oversample segments where monitoring shows drift, sparse labels, or fairness risk.
 
-Active learning has a subtle systems trap: if all labels come from uncertain examples, the training set no longer represents production traffic. The label system must record the sampling policy and either reweight examples during training or maintain a background random sample as an unbiased reference. Otherwise active learning improves the model near yesterday's boundary while corrupting calibration across the full distribution.
+Active learning changes the labeled population. Record the sampler version, candidate pool, inclusion probability where defined, model version that computed uncertainty, and capacity truncation. Reweighting is possible only when inclusion probabilities are known and nonzero; deterministic top-uncertainty sampling gives common examples zero support and cannot be made representative afterward. A separate probability sample provides a stable measurement population.
 
 A good pattern is two streams:
 
@@ -259,14 +278,18 @@ The correct pattern is append-only label events with versioned materialized view
 
 ```text
 label_events
+  label_event_id
+  source_event_id / idempotency_key
   prediction_id
   label_name
   label_version
   value
   source
   confidence
-  event_time
-  observed_at
+  outcome_event_time
+  source_observed_at
+  ingested_at
+  effective_at
   supersedes_event_id
   reason
 
@@ -277,9 +300,9 @@ mature_labels_view
   labels whose observation window has closed and whose state is final
 ```
 
-The distinction between `event_time` and `observed_at` matters. `event_time` is when the real-world outcome occurred. `observed_at` is when the label system learned it. A training pipeline building a dataset as of March 1 must not use a label that occurred in February but was not observed until March 10 if that label would not have been available then. This is the label-side analogue of point-in-time correctness in [feature stores](./02-feature-stores.md).
+The time axes matter. `outcome_event_time` is when the real-world event occurred; `source_observed_at` is when its source recorded it; `ingested_at` is when the platform received it; `effective_at` is when the resolver allowed it to affect a view. A dataset with knowledge cutoff March 1 must not use an event first known on March 10 even if the outcome occurred in February. This bitemporal discipline is the label-side analogue of point-in-time correctness in [feature stores](./02-feature-stores.md).
 
-Corrections should create new events that supersede old ones. This preserves reproducibility: a model trained last month can still be evaluated against the label state that existed last month, while new training jobs use the corrected mature view. Auditability and reproducibility require history, not just the latest truth.
+Ingestion is at-least-once and idempotent by source event key. Watermarks express expected lateness, not permission to drop later truth: events after the watermark create a new snapshot revision and correction metrics. Corrections append superseding events. A training manifest records label contract, resolver digest, source partitions or offsets, knowledge cutoff, watermark, and resulting row-set digest, allowing both “truth as known then” and “best corrected truth now” evaluations.
 
 ---
 
@@ -295,17 +318,21 @@ There are three common join patterns:
 | Entity + time window | User churn label joins to last subscription-risk prediction before renewal | Window boundary errors |
 | Exposure + outcome | Recommendation click joins to shown item and position | Position and visibility bias |
 
-Direct IDs should be engineered wherever possible. If the product action creates an outcome later — transaction, moderation decision, loan application, recommendation impression — carry the prediction or exposure ID into downstream event streams. This is ordinary correlation-ID discipline, but for truth.
+Direct IDs should be engineered wherever possible. If the product action creates an outcome later—transaction, moderation decision, application, impression—carry the decision or exposure ID into downstream event streams. The ID proves correlation, not causal attribution: a purchase after several recommendations may relate to multiple exposures, and a default outcome follows an approval policy as well as a score. The label contract must name the attribution rule and estimand.
 
 When only entity-time joins are possible, the window must be part of the label definition contract. "User churned" may label the prediction made at subscription renewal, the last prediction before cancellation, or every weekly prediction in the 30 days before cancellation. These are different targets. An implicit window is a hidden label definition, and hidden definitions become unreproducible metrics.
 
-The correctness checks are simple and non-negotiable:
+The join is governed by invariants:
 
-1. **Uniqueness** — one outcome should not label multiple predictions unless the definition explicitly allows it.
-2. **Completeness** — expected outcomes should not disappear because of missing IDs or late events.
-3. **Temporal validity** — the label must not be visible to a training row before `observed_at`.
-4. **Action consistency** — labels must be interpreted in the context of the action taken.
-5. **Version consistency** — the label definition version used for training must match the metric's declared target.
+| Invariant | Evidence |
+|---|---|
+| Cardinality | Distribution of outcomes per prediction and predictions per outcome, with explicit allowed multiplicity |
+| Completeness | Source totals reconciled to joined, quarantined, late, duplicate, and unmatched counts |
+| Temporal validity | No row uses evidence after the snapshot knowledge cutoff |
+| Action consistency | Resolved state accounts for allow, block, review, noncompliance, and unknown counterfactual |
+| Contract consistency | Metric and dataset pin the same label definition and resolver version |
+
+Ambiguous joins enter quarantine rather than being assigned by nearest timestamp. Quarantine volume is part of label quality and capacity; silently dropping it biases toward the easy-to-join population.
 
 Most "mysterious" offline metric jumps are label-join changes in disguise.
 
@@ -336,16 +363,17 @@ Alerting should follow the same discipline as model monitoring: page on broken i
 
 ## Capacity Planning for Labeling Queues
 
-Human labeling systems are queueing systems. If examples arrive faster than reviewers can process them, label delay grows, monitoring becomes stale, retraining slows, and active learning loses value. Little's law applies directly:
+Human labeling systems are queueing networks. If offered work exceeds effective service capacity, delay grows, monitoring becomes stale, and active-learning choices expire before review. Little's law relates long-run averages in a stable system:
 
 ```text
 queue_size = arrival_rate × time_in_system
-reviewers_needed ≈ arrival_rate × average_handle_time / target_utilization
+offered_load_erlangs = arrival_rate × average_handle_time
+scheduled_reviewers ≈ offered_load / target_occupancy / (1 − shrinkage)
 ```
 
-Suppose an abuse system sends 50,000 items per day to human review. That is roughly 0.6 items/s. If each review takes 45 seconds, the raw work is 27 reviewer-seconds per second — about 27 fully utilized reviewers. At a sane 70% utilization, plus breaks, training, and variance, the staffing target is closer to 40-50 reviewers. If policy changes double the review rate without increasing staffing, the backlog does not grow linearly in pain; the queueing delay compounds, and labels arrive too late to be useful.
+Suppose an abuse system receives 50,000 reviews/day uniformly and mean handle time is 45 seconds. Offered load is about 26 reviewer-erlangs. At 75% target occupancy and 20% shrinkage for breaks, training, QA, and meetings, the mean-load staffing floor is `26 / 0.75 / 0.8 ≈ 44` scheduled reviewers. That is not a tail-SLA answer: arrivals vary by hour, handle times are heavy-tailed, skills and languages partition capacity, and escalations revisit work. Use an Erlang-C or simulation model on interval-level arrival and service distributions, then validate against queue-age percentiles.
 
-Reviewer utilization has the same hockey-stick behavior as service utilization. Running a review workforce at 95% utilization looks efficient until a small surge creates a multi-day backlog. Headroom is not waste; it is what keeps truth fresh enough for monitoring and retraining.
+As utilization approaches one, waiting time becomes highly sensitive to variability. Priority queues can protect urgent work but starve low-priority random audits, destroying the unbiased measurement stream. Reserve capacity by class, age work into escalation, and apply backpressure to active-learning producers before they consume the audit budget.
 
 The operational SLO should be stated as label freshness:
 
@@ -361,17 +389,11 @@ Once labels are treated as an SLO-backed service, the design choices become clea
 
 ## Privacy, Security, and Governance of Labels
 
-Labels are often more sensitive than features. A feature may say a user made a transaction; a label may say the transaction was fraudulent, the content was illegal, the patient developed a disease, or the applicant defaulted. Label stores therefore carry privacy and access-control requirements comparable to audit logs.
+Labels can reveal allegations, diagnoses, policy violations, defaults, or protected characteristics and may be more sensitive than the features being labeled. Separate subject identity from task content, issue purpose-scoped reviewer tokens, redact fields not needed for judgment, and keep export privileges narrower than review privileges. Every read, assignment, vote, adjudication, and correction is attributable; vendor boundaries, reviewer geography, and conflict-of-interest routing are part of task assignment.
 
-The minimum controls are:
+Append-only history does not imply infinite raw-data retention. Retain source evidence, pseudonymous ledger entries, and aggregate quality records under distinct policies; encrypt them with separable keys so identity access can be revoked without destroying permitted aggregate evidence. Lineage supports deletion and objection impact analysis across labels, snapshots, caches, and trained artifacts, while legal holds and audit requirements remain explicit constraints rather than accidental permanent storage.
 
-1. **Purpose limitation** — labels collected for one purpose may not automatically be valid for another.
-2. **Access control** — reviewers and engineers see only the fields required for their task.
-3. **Audit logging** — every label read, write, correction, and adjudication is attributable.
-4. **Retention policy** — label history is preserved for reproducibility but expired or anonymized when legal basis ends.
-5. **Deletion impact analysis** — if a subject invokes deletion rights, lineage must identify which labels and derived models are affected.
-
-For high-risk decisions, label governance connects directly to contestability. If a user appeals a moderation decision and the label is overturned, the correction must flow into the label store, update evaluation metrics, and potentially trigger impact analysis: which models trained on the incorrect label, and did similar cases get mislabeled? A correction that changes only the user's current state but not the training label is how systems relearn the same mistake.
+For high-risk decisions, an appeal creates new adjudication evidence linked to the original decision and label events. The resolver may supersede the current label; new evaluation snapshots quantify the change; forward lineage identifies models and similar cases requiring review. The original record remains intact. This prevents both relearning an overturned judgment and rewriting history as if the initial decision never occurred.
 
 ---
 
@@ -395,22 +417,33 @@ The characteristic failures of label systems recur across organizations, and nam
 
 **Label-pipeline outage disguised as model improvement** happens when positive labels stop arriving, making precision or loss appear better. The defense is label volume, source mix, and delay monitoring that gates interpretation of quality metrics.
 
+**Watermark truncation** drops outcomes that arrive after the expected-lateness boundary, making older cohorts look cleaner and faster sources look more negative. Watermarks close a snapshot revision, not truth ingestion; late events append corrections and update delay models.
+
+**Correlated reviewer error** produces high agreement because reviewers share the same ambiguous policy or anchoring interface. More votes reinforce the error. Blind replication, independent expert audits, slice-level confusion matrices, and policy experiments test validity rather than agreement alone.
+
+**Resolver drift** changes aggregation code while keeping the label version fixed. Source events are stable but resolved labels and metrics move. Resolver digests belong in snapshots, and semantic changes require either a new contract or an explicitly versioned backfill.
+
+**Quarantine bias** discards ambiguous joins and malformed evidence, leaving an easy, systematically different training population. Reconcile every source event to resolved, open, duplicate, late, or quarantined state and monitor each by slice.
+
 ---
 
 ## Decision Framework
 
-When designing or reviewing label infrastructure, ask these questions before trusting any model metric:
+Start from the target and observation process, then choose storage and review mechanics:
 
-1. **What exactly is the label definition, and is it versioned?** If the target cannot be stated as a contract, the model is optimizing an implicit and unstable specification.
-2. **What is the observation window and maturity state?** If negatives can be assigned before the window closes, the training set is contaminated.
-3. **Can every label join back to the exact prediction or exposure that created its context?** If not, metrics are only as trustworthy as a fuzzy join.
-4. **Which labels are missing because of the system's own actions?** If the current policy controls what can be observed, naive training is biased.
-5. **What label sources exist, and how reliable is each?** Human expert, user report, chargeback, heuristic, and pseudo-label are not interchangeable truths.
-6. **Is label history append-only and reproducible?** If corrections overwrite the past, old training runs and audits cannot be reconstructed.
-7. **Are label volume, delay, source mix, join failure, and reviewer agreement monitored?** If not, label-pipeline failures will masquerade as model changes.
-8. **Does labeling capacity meet the freshness SLO?** If queues back up, truth arrives too late for monitoring, retraining, and governance.
+| Property of truth | Design consequence |
+|---|---|
+| Positive event arrives quickly; absence defines negative | Explicit deadline, open/censored state, empirical delay monitoring |
+| Outcome depends on action taken | Log policy and propensity; define policy-specific estimand or bounded exploration |
+| Several sources can conflict or retract | Preserve evidence ledger; version resolver and adjudication precedence |
+| Human policy judgment is central | Calibrated reviewers, blind replication, expert audit, `INSUFFICIENT` state |
+| Labels are weak but broad | Source-specific error estimates, confidence calibration, strong-label audit sample |
+| Outcomes map ambiguously to decisions | Product-carried correlation IDs; quarantine and explicit attribution contract |
+| High correction or legal sensitivity | Bitemporal ledger, reproducible snapshots, restricted evidence vault, forward lineage |
 
-A label system that answers these well makes the rest of the ML platform trustworthy. One that does not turns every offline metric, experiment result, drift alert, and governance report into a number built on sand.
+Choose maturity from the cost of false positives and false negatives plus the delay distribution. A training snapshot may favor coverage with provisional weights, while a promotion gate uses only mature evidence; they must not share an unlabeled `label` column that hides this difference. Choose the random audit stream before active-learning capacity so adaptive sampling cannot consume the measuring instrument.
+
+The trust boundary is the snapshot manifest. It pins the label contract and resolver, knowledge cutoff, source offsets, watermark, sampling policies, exclusions, and row digest. Monitoring reconciles every source event into resolved, open, duplicate, late, or quarantined state. Capacity is sized to the label-freshness objective by skill and priority, including QA and adjudication. If these contracts are unavailable, downstream evaluation should report `INSUFFICIENT_LABEL_EVIDENCE` rather than a precise but unauditable metric.
 
 ---
 
@@ -419,15 +452,15 @@ A label system that answers these well makes the rest of the ML platform trustwo
 1. Labels are not a column; they are delayed, policy-shaped claims about reality, produced by a system with latency, bias, missingness, and corrections.
 2. The label is the supervised model's specification. If the label definition is vague or unstable, the model faithfully learns the wrong target.
 3. The prediction log is the join anchor: capture model version, feature references, action, policy, experiment, and context at decision time or it cannot be reconstructed later.
-4. Label delay determines architecture. Metrics must distinguish provisional, mature, negative, positive, unknown, and expired-unknown states.
+4. Label delay determines architecture. Metrics need observation horizon, maturity fraction, censoring rule, and knowledge cutoff—not just a label value.
 5. Negative labels are harder than positives because they often mean "no positive event by the deadline"; premature negatives are a major source of silent training corruption.
-6. Selective labels create feedback-loop bias: the system only observes outcomes for decisions its current policy allowed. Exploration, audit samples, and human review create counterfactual evidence.
-7. Human labeling is a noisy consensus system. Use reviewer quorums, adjudication, gold tasks, and agreement monitoring when labels affect important decisions.
+6. Selective labels create feedback-loop bias: the system observes outcomes under actions its policy took. Randomized or otherwise identified exploration can create supported counterfactual evidence; human review adds adjudicated evidence or proxy labels, not the unchosen action's realized outcome.
+7. Human labeling is a measurement system with correlated error. Agreement is not correctness; preserve individual evidence, use independent audits, and model ambiguity explicitly.
 8. Active learning should be paired with an unbiased random audit stream; adaptive samples improve models but are dangerous measuring sticks.
 9. Weak labels are useful only when their source, coverage, confidence, and bias are recorded. Mixing weak and strong labels into one untyped column creates label debt.
-10. The label store should be append-only, versioned, and correctable through supersession, not mutable overwrites.
+10. The evidence ledger should be append-only and bitemporal; reproducible snapshots pin resolver code, source offsets, watermark, cutoff, and row digest.
 11. Label quality needs monitoring: volume, positive rate, delay, unknown rate, source mix, reviewer disagreement, corrections, and join failures.
-12. Labeling queues need capacity planning. If truth queues up, monitoring and retraining are stale no matter how good the model platform looks.
+12. Little's law sizes average work, not tail freshness; interval variability, skills, shrinkage, adjudication, and reserved audit capacity determine staffing.
 
 ---
 
@@ -441,3 +474,5 @@ A label system that answers these well makes the rest of the ML platform trustwo
 6. [Learning from Delayed Outcomes via Proxies with Applications to Recommender Systems](https://arxiv.org/abs/2010.08942) — delayed feedback and proxy-label framing
 7. [Selective Labels and Deferential Fairness](https://arxiv.org/abs/1809.05699) — selective labels in high-stakes decision systems
 8. [Trustworthy Online Controlled Experiments](https://www.cambridge.org/core/books/trustworthy-online-controlled-experiments/6A3B263E7114E81B95669A95B219C1D8) — Kohavi, Tang & Xu, 2020
+9. [Maximum Likelihood Estimation of Observer Error-Rates Using the EM Algorithm](https://www.jstor.org/stable/2346806) — Dawid & Skene, 1979
+10. [Survival Analysis: A Self-Learning Text](https://link.springer.com/book/10.1007/978-1-4419-6646-9) — Kleinbaum & Klein; censoring foundations
