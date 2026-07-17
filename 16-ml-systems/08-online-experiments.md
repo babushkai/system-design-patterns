@@ -155,10 +155,10 @@ Statistical assumptions are platform contracts because they determine allocation
 
 A first-order equal-allocation estimate for a binary metric is
 
-\[
-n_{arm} \approx
+$$
+n_{\mathrm{arm}} \approx
 \frac{2p(1-p)\left(z_{1-\alpha/2}+z_{1-\beta}\right)^2}{\delta^2},
-\]
+$$
 
 where \(\delta\) is the predeclared absolute minimum detectable effect, \(1-\beta\) is power, and \(\alpha\) is the two-sided false-positive rate. Unequal allocation, clustering, covariate adjustment, repeated looks, attrition, and overdispersion change this design.
 
