@@ -2,21 +2,17 @@
 
 ## TL;DR
 
-A feature store is not a database for machine-learning features; it is a *consistency system* that bridges two storage engines with opposite optimization targets. An offline store optimizes throughput and completeness so that training can scan years of history; an online store optimizes p99 latency so that serving can read a feature in single-digit milliseconds. The feature store's reason to exist is to guarantee that a feature computed for training and the same feature computed for serving are *the same value* — one definition, two access paths. Everything else it does — point-in-time-correct joins, materialization, freshness SLOs, versioning, a registry — exists to protect that single guarantee against the fact that the two stores are physically separate systems that drift apart by default.
+A feature store is not merely a database for machine-learning columns; it is a *temporal consistency system* that maintains two physical projections of one logical feature contract. An offline store optimizes throughput and history so training can reconstruct past decisions; an online store optimizes bounded tail latency so serving can read current values. The feature store cannot magically guarantee byte-identical values across engines. Its job is to define what equivalence means — semantics, event-time cutoff, servable-time cutoff, defaults, correction policy, and tolerated numeric error — then make divergence measurable and recoverable. Point-in-time joins, materialization, freshness SLOs, versioning, and the registry all protect that contract.
 
 ---
 
 ## The Problem a Feature Store Solves: Training/Serving Skew
 
-The failure that justifies the entire category is *training/serving skew*, and it is worth stating precisely because it is so easy to underestimate. A team defines a feature — say, "number of failed logins in the last ten minutes." For training, an analyst writes it as a windowed SQL aggregation over a warehouse table of login events. For serving, an application engineer writes it as a counter incremented in Redis on each login attempt. These two implementations *look* equivalent. They are not. The SQL version counts events by their event timestamp; the Redis counter counts by arrival and expires on a sliding TTL. One includes late-arriving events, the other does not. One resets at midnight UTC, the other rolls continuously. The model trains on one distribution and serves on another, and because nothing crashes, the degradation is silent — the model simply makes worse decisions than its offline metrics promised.
-
-The engineering implication is that *two implementations of one feature is a bug, not a convenience*. The same logic written twice will diverge, and the divergence will be invisible until it shows up as unexplained production loss. A feature store attacks this by making the feature *definition* the single source of truth and deriving both the offline and online values from it — or, at minimum, by logging served values so the offline pipeline can be replayed against them and the skew measured. The deeper principle echoes the leakage discipline of [training pipelines](./05-training-pipelines.md): the offline world and the online world must agree, or the model is trained on a fiction.
-
-Without a feature store, this skew is structural. Every model team builds its own feature pipeline, "user purchase count in last 7 days" means three different things across three teams, and the same logic is debugged independently in six places. The feature store is the system that collapses those duplicated, drifting definitions into one contract with two materialization paths.
+[ML System Fundamentals](./01-ml-system-fundamentals.md) defines training/serving skew and why it silently degrades a model. This chapter owns the feature-platform mechanism that constrains it: one logical feature contract is materialized into an offline historical projection and an online low-latency projection. Those projections need not be byte-identical, but they must agree on event-time semantics, servability, defaults, correction history, and numeric tolerance. The feature store makes that agreement explicit, versioned, and measurable; [Model Monitoring](./04-model-monitoring.md) owns the sampled parity audit after serving.
 
 ---
 
-## The Online/Offline Duality Is a CAP-Flavored Trade-off
+## Two Materialized Projections, One Logical Contract
 
 The defining structural fact about a feature store is that it is a *dual-store* system, and the two stores cannot be the same engine because they are optimized for contradictory access patterns.
 
@@ -24,7 +20,9 @@ The **offline store** lives in a warehouse or lake — BigQuery, Snowflake, Reds
 
 The **online store** is a low-latency key-value system — Redis, DynamoDB, Cassandra, or an embedded store like RocksDB — keyed by the entity being scored. It is optimized for *p99 latency*: a serving request that needs twenty features for a `user_id` must fetch them in single-digit milliseconds, because the feature lookup sits on the critical path of a prediction that itself has a tight latency budget. It typically stores only the *latest* value per entity, not history, because serving only ever asks "what is this feature right now?"
 
-These two stores hold the same logical features but make opposite trade-offs, and keeping them consistent is the central engineering challenge. This is a [CAP-flavored](../01-foundations/03-cap-theorem.md) tension wearing ML clothing. The online store is, architecturally, a read-optimized [cache](../04-caching/01-cache-strategies.md) of values whose system of record is the offline store and the upstream event streams. Like any cache, it can be stale, it can miss, and hot entities create [hot-key](../02-distributed-databases/05-partitioning-strategies.md) pressure exactly as they would in any read-heavy KV store. The feature store does not escape these distributed-systems problems; it *inherits* them, and a large part of operating one is managing the consistency gap between a complete-but-slow store and a fast-but-approximate one.
+These stores do not present a CAP choice: the trade-off exists even without a network partition. They are independently updated projections with different layouts and completion times, so the fundamental problem is asynchronous materialized-view consistency. The online projection can be stale or missing while the offline projection is complete; a replay can repair one before the other; and numeric engines can differ at rounding boundaries even when they consume identical events.
+
+The source of truth should therefore be explicit. For streaming features it is usually an immutable log of computed feature updates; for batch features it may be a versioned table snapshot plus the transformation version. The online store is a read-optimized materialized view, not an unquestioned authority. Every update needs an identity such as `(feature_version, entity_key, logical_window, materialization_generation)` so writers can be idempotent and reconciliation can ask whether both projections incorporated the same update. Availability and correctness remain separate: the store may answer quickly with an old generation, so a successful read is not proof that the feature contract was met.
 
 ```mermaid
 flowchart LR
@@ -41,7 +39,7 @@ flowchart LR
 
 ## Online Store Internals: How Feature Values Actually Sit in the KV Store
 
-The online store's job sounds trivial — "return the latest features for `user_id=42` in a few milliseconds" — but the physical layout determines whether a 20-feature read is one round trip or twenty, and that difference is the whole latency budget.
+The online store returns the latest valid features for an entity under a bounded latency budget. Its physical layout determines whether a 20-feature read is one round trip or twenty, and therefore whether feature retrieval fits that budget.
 
 **Redis layout (Feast 0.40 style).** Feast stores one Redis hash per `(project, entity_key)` pair. The hash key is a serialized entity key; each hash field is a murmur3 hash of `(feature_view, feature_name)` and the value is a protobuf-serialized `ValueProto` plus a per-feature-view event timestamp field:
 
@@ -56,20 +54,22 @@ The consequence of this layout: fetching *all* features for one entity is a sing
 
 **DynamoDB layout.** One table per feature view; partition key is the serialized entity key, and the item holds all features of that view as attributes plus an `event_ts`. A 20-feature read across 4 feature views becomes a 4-item `BatchGetItem` — again bounded round trips, paid for with the constraint that a feature view's features live and die together.
 
-**Capacity math you should do before choosing an engine.** Suppose 50M active entities, 120 features across 6 feature views, average serialized feature value 12 bytes, feature names hashed to 4-byte fields:
+**Capacity math must include replication and write amplification.** Suppose 50M active entities, 120 features across 6 feature views, average serialized feature value 12 bytes, feature names hashed to 4-byte fields:
 
 ```text
-Per entity:   120 × (4 + 12) B values + 6 × ~20 B timestamps + key overhead ≈ 2.2 KB
-Total:        50M × 2.2 KB ≈ 110 GB  → fits a 3-node Redis cluster with replicas (r6g.2xlarge class)
+Per entity:   120 × (4 + 12) B values + 6 × ~20 B timestamps + key/index overhead ≈ 2.2 KB
+Logical data: 50M × 2.2 KB ≈ 110 GB
+Provisioned:  110 GB × replication_factor × allocator/index headroom
+              at RF=2 and 35% headroom: 110 × 2 / 0.65 ≈ 338 GB
 
-Read load:    2,000 predictions/s × 1 HGETALL = 2,000 ops/s   (trivial for Redis)
-Write load:   streaming materialization of 6 views × 50M entities:
-              if each entity updates ~10×/day → 50M × 10 / 86,400 ≈ 5,800 writes/s sustained
+Read load:    2,000 predictions/s × 1 HGETALL = 2,000 read ops/s
+Write load:   if each of 6 entity/view pairs updates ~10×/day:
+              50M × 6 × 10 / 86,400 ≈ 34,700 write ops/s sustained
 ```
 
-The asymmetry is typical and worth internalizing: **feature stores are write-heavy systems**. Serving reads are bounded by prediction traffic, but materialization writes are bounded by *event volume times feature count*, and a backfill multiplies that by the history length. Most feature-store capacity incidents are write-side — a backfill saturating the online store and destroying serving p99 — which is why mature systems rate-limit backfill writes or route them through a separate ingestion path with lower priority than live materialization.
+The example assumes ten updates *per entity-view pair*, not ten total entity updates; omitting the six-view factor would understate writes by six. Whether either rate is easy for a particular engine cannot be inferred from its product category. Measure it on a loaded representative shard because allocator fragmentation, object metadata, replicas, and rebalancing headroom dominate small values. Serving reads scale with prediction traffic and the number of entity/view keys per prediction, while materialization writes scale with changed entity-view pairs; a backfill can compress months of logical time into hours of wall time. Backfill traffic therefore needs a separate quota and lower priority than live updates. Capacity must also survive one shard unavailable and one shard moving during rebalance, not merely fit in the steady-state cluster.
 
-**TTLs are a correctness feature, not a cost feature.** An entity that stops generating events keeps its last materialized value forever unless a TTL expires it. For a feature like `failed_login_count_10m`, a value written at 09:00 is *semantically zero* by 09:10 — but the store still returns 3. Either the materialization emits explicit zero-updates when windows empty (expensive: it turns silence into traffic), or the feature carries a TTL equal to its window and the serving path treats a miss as the declared default (`allowed_default: 0` in the contract). Getting this wrong produces a model that thinks users are permanently mid-attack because their counter never decayed.
+**Validity is a correctness property; a storage TTL is only one mechanism.** An entity that stops generating events keeps its last materialized value until it expires. For a feature like `failed_login_count_10m`, a value computed for a window ending at 09:00 is not necessarily valid until "write time plus ten minutes": a delayed replay written at 09:30 would incorrectly live until 09:40. Each value should carry a semantic `valid_until` derived from its window and event-time policy, and the serving layer should reject it after that instant. A physical TTL may reclaim storage, but it should be derived from `valid_until`, not define it. Expiry behavior — explicit zero, declared default, feature-light fallback, or refusal to score — is part of the versioned feature contract and must match the offline join.
 
 ---
 
@@ -89,32 +89,37 @@ Kafka's default delivery guarantee is at-least-once: after a consumer crash, the
 
 ```python
 # Flink-style (1.18) keyed sliding-window aggregation, event-time semantics.
-events
-  .assign_timestamps_and_watermarks(
-      WatermarkStrategy
-        .for_bounded_out_of_orderness(Duration.of_seconds(30))   # tolerate 30s lateness
-        .with_timestamp_assigner(lambda e, _: e.event_time_ms))
-  .key_by(lambda e: e.user_id)
-  .window(SlidingEventTimeWindows.of(Time.minutes(10), Time.seconds(30)))
-  .aggregate(CountFailedLogins())
-  .sink_to(online_store_upsert)   # SET, not INCR: replay-safe by construction
+updates = (
+    events
+    .assign_timestamps_and_watermarks(
+        WatermarkStrategy
+        .for_bounded_out_of_orderness(Duration.of_seconds(30))
+        .with_timestamp_assigner(lambda e, _: e.event_time_ms)
+    )
+    .key_by(lambda e: e.user_id)
+    .window(SlidingEventTimeWindows.of(Time.minutes(10), Time.seconds(30)))
+    .aggregate(CountFailedLogins())
+)
+updates.sink_to(feature_update_log)  # durable record projected to both stores
 ```
 
-Because the sink writes `(entity, feature, window_end, value)` and the write is a last-write-wins upsert keyed on `(entity, feature)`, replaying a day of events after a failure converges to the same final state — [idempotency](../01-foundations/08-idempotency.md) recovered by moving state ownership out of the store and into the checkpointed processor.
+Each record carries `(feature_version, entity, logical_window, generation, value)`. The online projection performs a conditional upsert: replace the current value only when the incoming `(logical_window, generation)` is at least as new as the stored one. A blind last-write-wins update is insufficient because an old replay can arrive after a live update and move the feature backward in logical time. With an immutable update identity and a monotonic compare-and-set, duplicates become harmless and out-of-order writers converge. This recovers [idempotency](../01-foundations/08-idempotency.md) by keeping aggregation state in the checkpointed processor and making store updates projections of durable records.
 
 **Watermarks decide the correctness/freshness trade.** The 30-second bounded-out-of-orderness above means every window closes 30 seconds later than it could — freshness paid for tolerance of late events. Set it to zero and mobile clients on bad networks silently drop out of your counts; set it to ten minutes and your "real-time" feature is ten minutes stale. The right number comes from measuring the actual event-time-vs-arrival-time skew distribution of the source, not from a default.
 
-**The dual-write trap.** Materialization must land the same value in the online store *and* the offline history. Writing both from the processor is a classic dual-write: if the online write succeeds and the offline append fails, training and serving have permanently diverged for that window. The robust pattern is log-first: the processor emits computed feature values to a Kafka topic; one consumer upserts the online store, another appends to the offline store (Iceberg/Delta), and both are independently replayable from the topic. The topic is the source of truth for "what values did we compute," which is exactly the property you need for skew audits.
+**The dual-write trap.** Materialization must land the same logical update in the online store *and* the offline history. Writing both from the processor is a classic dual-write: if one succeeds and the other fails, training and serving diverge. The robust pattern is log-first: the processor emits computed feature updates to a durable topic; one consumer conditionally upserts the online store, another appends to the offline table, and both are independently replayable. Reconciliation compares the highest committed generation in each projection with the log, so repair is deterministic rather than a best-effort backfill.
 
 ```mermaid
 flowchart LR
     EV["Event stream"] --> AGG["Stream processor<br/>checkpointed window state"]
     AGG --> FT["Feature-values topic<br/>(source of truth)"]
     FT --> ONW["Online writer → Redis/DynamoDB"]
-    FT --> OFFW["Offline appender → Iceberg/Delta<br/>(availability_time = write time)"]
+    FT --> OFFW["Offline appender → Iceberg/Delta"]
+    ONW --> ACK["Commit ledger<br/>servable_at + generation"]
+    ACK --> OFFW
 ```
 
-Note the annotation on the offline path: the appender must record the *availability time* — when the value became servable — because that is the honest join key for the point-in-time joins described next.
+The offline appender's write time is **not** the feature's availability time. It proves only that the history row landed offline. If the online write completes later, using the offline timestamp gives training information production could not yet read. Exact reconstruction requires an acknowledgement or commit ledger from the online writer recording `(update_id, servable_at, generation)`, later joined into offline history. When that cost is unjustified, the system must state its approximation — for example a conservative availability watermark — and validate it against sampled feature vectors logged at serving time.
 
 ---
 
@@ -124,13 +129,14 @@ If consistency between the two stores is the central engineering challenge, *poi
 
 The rule is simple to state and easy to violate: a training row labeled at time *T* must see only feature values that were *knowable at T*. A training set is built by joining a table of labeled events (each with an entity and a timestamp) against the history of feature values. The naive implementation joins each entity to its *current* or *latest* feature value — and that join *leaks the future*. Consider a fraud label generated for a transaction at 10:05. The feature "account risk score" was recomputed at 10:40 after the fraud was discovered and the account flagged. A latest-value join hands the model the 10:40 value as if it were available at 10:05. The model learns to read the answer off a feature that, in production, will not yet contain it. Offline AUC soars; production performance collapses.
 
-A correct point-in-time join is an *as-of* join: for each labeled row at time *T*, take the most recent feature value whose availability time is ≤ *T*. Getting this right depends on distinguishing three timestamps that are easy to conflate:
+A correct point-in-time join is an *as-of* join: for each example whose decision happened at time *T*, take the newest feature version that both satisfies the feature's semantic cutoff and was servable by *T*. Getting this right depends on distinguishing four timestamps that are easy to conflate:
 
 - **Event time** — when the fact actually happened in the world (the login occurred at 10:00).
 - **Ingestion time** — when the system received and recorded the event (the log landed at 10:03).
-- **Availability time** — when the computed feature value became readable from the online store (materialized and queryable at 10:10).
+- **Computation time** — when a materialization run produced this version (the window closed at 10:08).
+- **Servable time** — when that version became readable from the online path (the conditional write committed at 10:10).
 
-The correct join key is *availability time*, because that is what a real serving request at *T* could actually have read. A feature whose underlying event happened at 10:00 but which did not become servable until 10:10 was *not available* to a decision made at 10:05, and using it leaks. This is why a feature store must store *feature history*, not just the latest value, in the offline store: without the time series of values and their availability timestamps, an honest as-of join is impossible to reconstruct, and backtests quietly diverge from production. The discipline mirrors the time-based-split rule for training: the offline world must only ever see what the online world knew at the moment of the decision.
+Servable time enforces system knowledge: an event that happened at 10:00 but was not readable online until 10:10 cannot be used for a 10:05 decision. Event-time boundaries enforce feature semantics: a "trailing 10 minutes before the transaction" feature must also exclude events at or after the decision even if a backfill computed them earlier in wall-clock time. An honest join therefore needs bitemporal history — valid time describing the world and system time describing what each materialized generation was able to expose. Corrections append a new generation; they do not overwrite the as-served past. That permits two legitimate queries: *as served*, for reproducing a decision, and *as corrected*, for training a future model after a data repair.
 
 Mechanically, point-in-time retrieval is a nearest-preceding-version query:
 
@@ -146,24 +152,25 @@ LEFT JOIN LATERAL (
   FROM feature_history f
   WHERE f.entity_id = e.entity_id
     AND f.feature_name = 'account_risk'
-    AND f.availability_time <= e.decision_time
-  ORDER BY f.availability_time DESC
+    AND f.window_end <= e.decision_time
+    AND f.servable_at <= e.decision_time
+  ORDER BY f.window_end DESC, f.generation DESC
   LIMIT 1
 ) f ON true;
 ```
 
-At scale this is not executed as one nested lookup per row; the implementation is a sorted merge over `(entity_id, availability_time)`:
+At scale this is not executed as one nested lookup per row; the implementation can be a sorted merge over entity and temporal version columns:
 
 ```text
 training examples:  (entity_id, decision_time) sorted ascending
-feature history:    (entity_id, availability_time) sorted ascending
+feature history:    (entity_id, servable_at, window_end, generation) sorted
 
 for each entity:
-  advance feature cursor while availability_time <= decision_time
-  emit current feature value for that decision_time
+  advance versions while servable_at <= decision_time
+  among semantically valid versions, emit the newest committed generation
 ```
 
-That merge is why feature-history layout matters. Partition by date alone and every entity lookup scans too much. Partition by entity hash alone and time-window backfills become expensive. Most systems choose a hybrid: date partitions for batch pruning, clustered or sorted by entity and availability time inside each partition.
+That merge is why feature-history layout matters. Partition by date alone and every entity lookup scans too much. Partition by entity hash alone and time-window backfills become expensive. A common compromise is date partitioning for batch pruning, clustered or sorted by entity and servable time within each partition. Engines differ, so the design must be validated on the actual join shape rather than inferred from a generic partitioning rule.
 
 ---
 
@@ -191,7 +198,7 @@ The unifying trade-off is freshness versus cost. Fresher features require more f
 
 Once materialization is in place, *freshness* — how old the value in the online store is allowed to be — becomes a service-level objective, not a vague aspiration. It belongs in the same operational vocabulary as latency and error rate, monitored with [SLOs and error budgets](../11-observability/05-slos-error-budgets.md).
 
-The reason freshness must be an explicit SLO is that staleness is invisible from inside the serving path. The online store returns a value with the same latency whether that value was updated three seconds ago or three days ago; nothing about a successful read reveals that the materialization job died last night. The only way to detect staleness is to measure the *age of the latest update* per feature group and compare it to a declared budget. A fraud feature might carry a 60-second freshness SLO; a churn feature might tolerate 24 hours. When the measured age exceeds the budget, the system should react — page the owner, fail closed, or route to a fallback model that does not depend on the stale feature — rather than continuing to serve confidently wrong predictions.
+The reason freshness must be an explicit SLO is that staleness is invisible in read latency. The online store answers just as quickly with a value updated three seconds ago as with one updated three days ago. But "age of latest update" is ambiguous for sparse entities: a user who generated no events for a month can still have a correct zero-valued window. Monitor the materialization path with watermark lag (`now - max source event time incorporated`) and commit lag (`servable_at - source watermark`), and validate each returned value against its own `valid_until`. These distinguish a dead pipeline from legitimate entity inactivity. When the budget is exceeded, the contract chooses the response — reject the feature, route to a feature-light model, fail closed, or use a declared default — rather than letting the store's successful read choose implicitly.
 
 The design rule that follows is that *freshness is a declared property of every feature*, recorded in the registry and enforced in production. A feature whose freshness is not stated has no definition of "broken," and a materialization pipeline that is not watched for staleness is a silent failure waiting to happen.
 
@@ -204,11 +211,16 @@ entity: user_id
 owner: identity-risk-platform
 source: login_events:v12
 semantics: "count failed login attempts by event_time over trailing 10 minutes"
-materialization: streaming
-freshness_slo: { p99_age_seconds: 60 }
+materialization:
+  mode: streaming
+  freshness_slo:
+    source_watermark_lag_p99_seconds: 30
+    online_commit_lag_p99_seconds: 30
 online_store: redis_cluster_identity_features
 offline_store: iceberg.identity_features.failed_login_count_10m
-join_time: availability_time
+join_time:
+  valid_time: window_end
+  system_time: servable_at
 backfill_policy: append_correction_not_overwrite
 allowed_default: 0
 consumers:
@@ -240,6 +252,16 @@ The governance angle matters because shared features create shared dependencies 
 
 ---
 
+## Security Boundaries in a Shared Feature Platform
+
+Features often concentrate sensitive facts that were previously separated across source systems. Reuse therefore increases both economic value and breach radius. The registry should carry data classification, permitted purposes, retention, geographic constraints, and owning principal alongside schema and freshness. Authorization is checked when a model release binds a feature view and again when the serving identity reads it; discoverability of a feature name must not imply permission to inspect values.
+
+Physical layout follows trust boundaries. Packing features from unrelated tenants or classifications into one entity hash may reduce round trips but makes least-privilege reads impossible: permission to fetch the hash exposes every field. Split views and encryption domains where authorization differs, even if it costs another batched read. Cache and online-store keys include tenant or authorization scope, and observability avoids placing raw feature payloads in broadly accessible logs.
+
+The write path is a model-integrity boundary. Only the materialization identity for a registered feature version may publish its generations; conditional writes prevent stale replays, while source and code lineage identify poisoning scope. A compromised backfill job should not be able to overwrite live generations or mutate as-served history. Separate live and backfill credentials, rate limits, and commit namespaces make that containment enforceable rather than procedural.
+
+---
+
 ## How the Real Systems Are Built
 
 The category was defined in production before it was named. **Uber's Michelangelo Palette** (introduced around 2017) is the canonical dual-store design: a Hive/Spark-based offline store for training and a Cassandra-plus-Redis online store for serving, with a shared DSL so that a feature defined once is materialized to both paths — the explicit architectural answer to training/serving skew. **Airbnb's Zipline** (described publicly from 2018) focused hard on point-in-time correctness, generating training data with as-of joins that respect each label's timestamp, precisely to prevent the future-leakage failure, and unifying batch and streaming feature computation behind one definition.
@@ -260,13 +282,14 @@ user = Entity(name="user_id", join_keys=["user_id"])
 
 login_stats_source = FileSource(
     path="s3://features/login_stats/",           # offline history (Parquet)
-    timestamp_field="availability_time",          # the honest join key
+    timestamp_field="feature_timestamp",         # PIT ordering column in this source
+    created_timestamp_column="created_timestamp",# resolves later corrections/ties
 )
 
 user_login_stats = FeatureView(
     name="user_login_stats",
     entities=[user],
-    ttl=timedelta(minutes=10),                    # window-sized TTL: stale value == miss
+    ttl=timedelta(minutes=10),                    # max feature age accepted by retrieval
     schema=[
         Field(name="failed_login_count_10m", dtype=Int64),
         Field(name="avg_txn_amount_7d", dtype=Float64),
@@ -299,20 +322,22 @@ features = store.get_online_features(
 ).to_dict()
 ```
 
-Everything the chapter has argued is visible in miniature: `timestamp_field` is availability time, `ttl` encodes the freshness semantics, `get_historical_features` is the as-of join, and `materialize_incremental` is the batch materialization path whose silent death is the canonical staleness incident.
+The example shows the API shape, but it also exposes a boundary a real design must resolve. Feast orders historical rows by the source timestamp and can use the created timestamp to resolve duplicate versions; it does not infer the exact commit time at which an arbitrary online store made a value readable. If availability lag matters to correctness, publish a source whose feature timestamp conservatively represents servability or join an external online-commit ledger before building training rows. Likewise, `ttl` constrains retrieval age but is not a substitute for a returned value's semantic `valid_until`. `get_historical_features` supplies the as-of retrieval mechanism; the platform owner still owns honest clocks and correction semantics.
 
-### System Comparison
+### Choose the Ownership Boundary, Not a Feature Matrix
 
-| System | Definition model | Offline store | Online store | Streaming | Point-in-time join | Notable |
-|---|---|---|---|---|---|---|
-| Feast (OSS) | Python feature views | BigQuery / Snowflake / Redshift / files | Redis / DynamoDB / Bigtable / SQLite | Push sources (bring your own processor) | `get_historical_features` | Pluggable everything; you operate materialization |
-| Tecton | Declarative framework (batch + stream + on-demand) | Managed (Delta on S3) | Managed (DynamoDB / Redis) | Managed Spark/streaming | Managed, availability-time-aware | Freshness SLOs, materialization monitoring built in |
-| Chronon (Airbnb) | `GroupBy` compiles to batch + stream | Hive/Spark | KV (in-house) | Flink, same definition | Compiled as-of joins | Skew eliminated by construction, not convention |
-| Vertex AI Feature Store | BigQuery-native views | BigQuery | Bigtable-backed managed serving | Via Dataflow | BigQuery `AS OF` semantics | Online serving directly over BigQuery data |
-| SageMaker Feature Store | Feature groups (schema'd) | S3/Iceberg offline mirror | Managed low-latency store | Kinesis/managed ingest | Athena as-of queries | Dual-store managed pair per feature group |
-| Hopsworks | Feature groups + views | Hudi on HopsFS | RonDB (NDB) | Flink/Spark | Training datasets API | Online store is a real-time SQL database |
+Published systems converge on a logical registry, historical retrieval, an optional online projection, and materialization. They differ in which hard guarantees the platform owns:
 
-The honest summary of the comparison: the open-source path (Feast) gives you the *contract* but leaves materialization operations — the hard part — to you; the managed platforms (Tecton, Vertex, SageMaker) are selling exactly that operational layer. Choose based on where your team's operational budget is, not on feature checklists.
+| Boundary | Library-oriented platform | Managed materialization platform | Consequence |
+|---|---|---|---|
+| transformation execution | caller supplies batch/stream jobs | platform compiles or operates jobs | flexibility versus one operational owner |
+| online store | caller provisions and scales it | platform owns capacity and failover | control versus latency/freshness SLO delegation |
+| stream semantics | caller owns watermark, checkpoint, replay | platform exposes a constrained policy | custom correctness versus reduced surface area |
+| point-in-time history | API runs against caller's timestamps | platform may track more lifecycle metadata | verify whether "availability" means event time, creation time, or actual servable time |
+| reconciliation | caller builds parity and repair | platform may expose generation/freshness state | this is the differentiator most feature matrices omit |
+| governance | metadata schema and integrations | integrated ownership/access workflows | neither helps if policy is not enforced at read and release time |
+
+The buying decision is therefore an ownership decision. An open implementation can provide a strong definition and retrieval API while leaving stream processing, online-store capacity, reconciliation, and on-call response to the adopter. A managed system may own more of that path but constrains engines, regions, clocks, or debug access. Test the temporal contract and failure recovery with representative events; the number of supported stores says little about whether an old replay can regress a live value.
 
 ---
 
@@ -320,45 +345,29 @@ The honest summary of the comparison: the open-source path (Feast) gives you the
 
 The characteristic failures of a feature store are direct consequences of its dual-store structure, and naming them is most of preventing them.
 
-**Training/serving skew** is the defining failure: the offline and online values for the "same" feature diverge because they were computed by two code paths. The defense is to derive both from one definition where possible, and otherwise to log served feature values and replay them through the offline pipeline to measure the delta — skew you do not measure is skew you are shipping.
+**Projection divergence** means the online and historical projections no longer satisfy the same feature contract, even when both stores are healthy. Compare immutable update generations and sampled as-served values, then repair the lagging projection from the update log. The general skew hazard is foundational in [ML System Fundamentals](./01-ml-system-fundamentals.md); this chapter's responsibility is to make feature-version, valid-time, servable-time, and correction semantics reconcilable.
 
 **Stale online features** occur when the online store is healthy and fast but the materialization that feeds it has silently stopped. Reads succeed; the values are old. The defense is a freshness SLO with per-feature-group age monitoring that fails closed or falls back when the budget is exceeded.
 
-**Point-in-time leakage** is the offline-side mirror of skew: a training join that uses feature values not knowable at the label's timestamp. It inflates offline metrics and collapses in production. The defense is as-of joins keyed on availability time, plus stored feature history to make those joins reconstructible.
+**Point-in-time leakage** is the offline-side mirror of skew: a training join uses source facts semantically after the decision or a feature generation not yet servable then. It inflates offline metrics and collapses in production. The defense is bitemporal history, as-of retrieval on valid and servable time, and append-only corrections that preserve the as-served view.
 
 **Hot-key load** appears when a few entities — a celebrity user, a viral item, a high-volume merchant — concentrate read traffic on a handful of online-store keys, creating tail-latency spikes exactly as they would in any [partitioned KV store](../02-distributed-databases/05-partitioning-strategies.md). The defense is the usual cache toolkit: replicate hot keys, add a local read cache in front of the online store, or precompute and pin aggregates for known-hot entities.
 
-A production incident runbook should be pre-written because feature incidents are silent from the model's perspective:
+Containment follows the ownership boundary. The serving gateway owns whether a known-invalid value may reach a model, so it applies the declared fallback immediately. The materialization owner then compares source watermark, processor checkpoint, update-log offset, online committed generation, and offline committed generation to locate the broken edge. The registry supplies the reverse dependency query from feature version to model releases and affected decisions. Repair appends a new generation and reconciliation proves both projections caught up; it does not rewrite history. Retraining is warranted only if contaminated decisions later entered the label population. This causal chain is more useful than "restart Redis": a healthy KV process can be serving semantically invalid values throughout the incident.
 
-```text
-Alert: failed_login_count_10m freshness p99_age_seconds > 60 for 5 minutes
-1. Stop the bleeding: serving gateway marks feature group stale.
-2. Degrade safely: route dependent models to fallback model/rules that do not consume it.
-3. Identify scope: registry query consumers(feature=failed_login_count_10m:v4).
-4. Inspect materialization: stream lag, dead-letter rate, source schema changes.
-5. Backfill/correct: append corrected feature values with observed_at and correction reason.
-6. Re-evaluate: rerun affected offline metrics and monitor prediction distribution.
-7. Decide retrain: if production decisions consumed stale values long enough to affect labels,
-   trigger lineage-based retraining after labels mature.
-```
+### Causal Traps That Preserve Availability
 
-The key is step 2: a model should not continue serving confident predictions on known-stale features just because Redis still returns a value.
-
----
-
-## Common Mistakes
-
-**Joining training data on event time instead of availability time.** The feature history table has both timestamps; the tempting join key is the one that describes the world (event time), but the honest one is the one that describes the *system* (availability time):
+**Using event time as proof of servability.** The feature history has both valid-time and system-time dimensions. Event time constrains which facts semantically belong in the feature; `servable_at` constrains whether production could have read that generation. Satisfying one does not imply the other:
 
 ```sql
--- WRONG: assumes the feature was servable the instant the event happened.
+-- WRONG: assumes the feature was servable when its source event happened.
 AND f.event_time <= e.decision_time
 
 -- RIGHT: only values that had actually landed in the online store by decision time.
-AND f.availability_time <= e.decision_time
+AND f.servable_at <= e.decision_time
 ```
 
-With a 5-minute materialization lag, the wrong join gives every training row a 5-minute head start the production model will never have. Offline metrics inflate by exactly the value of that head start — often a lot, for velocity features whose most recent minutes are their most predictive.
+With a 5-minute materialization lag, the wrong join gives training a head start production never had. A complete predicate also enforces the feature's window end or valid interval; `servable_at` alone does not stop a backfilled value from incorporating post-decision events.
 
 **Treating an online-store miss as an error instead of a semantic value.** New users, expired TTLs, and backfill gaps all produce misses. If the serving path throws or imputes ad hoc (`None` → 0 here, → mean there), the miss behavior itself becomes a source of skew, because the training pipeline imputed differently. The default for a missing feature is part of the feature's *definition* (`allowed_default`), applied identically by the offline join and the online read.
 
@@ -370,32 +379,41 @@ With a 5-minute materialization lag, the wrong join gives every training row a 5
 
 ---
 
-## Decision Framework: Do You Even Need One?
+## Decision Framework
 
-A feature store is significant infrastructure, and the most important design decision is whether the problem actually calls for one. The honest default for many teams is *no*.
+A feature store is justified by a temporal-consistency and reuse problem, not by the existence of features. Decide in this order:
 
-The questions that decide it are about *sharing* and *serving*. Do multiple models consume the same features, such that building them once and reusing them pays off? Does the model serve online, so that the same feature must be computed both for batch training and for low-latency inference — the condition that creates skew risk in the first place? Do features need to be fresh within seconds, making materialization a real engineering problem? Do regulated decisions require lineage and an audit trail? When several of these are true, the consistency, discovery, and freshness machinery of a feature store earns its keep.
+| Decision | Evidence to quantify | Design consequence |
+|---|---|---|
+| Is an online projection required? | decision deadline minus source/read latency; tolerated score staleness | if no, use a versioned offline table and point-in-time dataset builder |
+| Is the same logic shared? | number of models, duplicated transforms, cost of one semantic change | one model with stable batch inputs rarely justifies a platform |
+| Which clock defines correctness? | event lateness distribution, materialization lag, label decision time | defines watermarks, `servable_at`, as-of joins, and correction semantics |
+| What is the dominant access path? | peak predictions/s × entity/view fan-out; value bytes; hot-key skew | chooses entity layout, sharding, batching, and online engine |
+| How fresh must each feature be? | quality or decision-loss curve versus feature age | selects batch, stream, or request-time computation and the fallback at expiry |
+| Can both projections be reconciled? | immutable update identity, generation ledger, retention horizon | without this, "one definition" is a convention rather than a guarantee |
+| Who owns shared failure? | consumers per feature and maximum affected decision rate | determines isolation, quotas, on-call ownership, and deprecation policy |
 
-When they are not, simpler tools are not just acceptable but correct. A single offline-only model that scores a batch nightly needs no online store at all — a versioned, immutable training table built with a careful point-in-time query is sufficient, and it is the [training pipeline's](./05-training-pipelines.md) snapshot discipline doing the work. A single online feature that is read but never used in training is just a [cache](../04-caching/01-cache-strategies.md); reach for Redis, not a feature platform. The trap is adopting a feature store for the *resume* rather than the requirement: an unowned feature store with no registry governance and one consumer is strictly worse than the precomputed table it replaced, because it adds operational surface without delivering reuse or consistency. Build the feature store when you have the skew problem it solves — not before.
+Capacity follows the physical plan, not the logical feature count. Estimate online memory with replication and failover headroom; read demand as `prediction_rate × entity/view keys per prediction`; live write demand from changed entity/view pairs; and backfill demand separately. Benchmark p99 while live writes, reconciliation, shard movement, and a rate-limited backfill run together. A store that meets latency on an idle benchmark has not demonstrated the workload it will operate.
 
-The monitoring that confirms a feature store is healthy is itself a small SLO suite, and it connects directly to [model monitoring](./04-model-monitoring.md): freshness lag (is materialization alive?), online read p99 (does the feature read fit the prediction's latency budget?), online miss rate (are keying or backfill gaps starving the model?), null/default rate (did a source regress?), and offline/online parity delta (is skew creeping in?). A feature store whose own health is unmonitored cannot guarantee the consistency that is its only reason to exist.
+The minimum health model spans the whole projection path: source-watermark lag, processor checkpoint age, update-log consumer lag, online committed generation, offline committed generation, online read p99/miss/default rates, and sampled as-served parity. [Model Monitoring](./04-model-monitoring.md) consumes those signals; it should not have to infer feature freshness from a shifted score distribution days later.
 
 ---
 
 ## Key Takeaways
 
-1. A feature store is a consistency system, not a database: its job is to guarantee that a feature computed for training and for serving is the same value — one definition, two access paths.
-2. Training/serving skew is the problem it solves; two implementations of one feature will silently diverge and degrade the model while offline metrics look fine.
-3. The online/offline duality is a CAP-flavored trade-off: the offline store optimizes throughput and full history, the online store optimizes single-digit-millisecond p99, and keeping them consistent is the core challenge.
-4. Point-in-time correctness is the defining correctness property: train only on values knowable at each row's timestamp, joining on availability time, or the future leaks in.
-5. Distinguish event time, ingestion time, and availability time; the online store can only ever have read what was available, so availability time is the honest join key.
+1. A feature store is a temporal-consistency system, not merely a database: it maintains two physical projections of one versioned feature contract and makes divergence measurable and repairable.
+2. Its skew defense is feature-specific: one logical definition, explicit valid/servable clocks, immutable generations, and reconciliation of the two materialized projections.
+3. The online/offline duality is asynchronous materialized-view consistency, not a CAP trade-off: the stores optimize incompatible access paths and complete updates independently.
+4. Point-in-time correctness is bitemporal: a training row may use only values semantically valid for the decision and actually servable by that time.
+5. Distinguish event, ingestion, computation, and servable time. The offline appender's timestamp does not prove when an online value became readable; exact reconstruction needs an online commit ledger or an explicit conservative approximation.
 6. Materialization (batch, streaming, on-demand) is a freshness-versus-cost decision made per feature; streaming demands idempotency and ordering discipline.
-7. Feature freshness is an online-serving SLO — measured as the age of the latest update and enforced by fail-closed or fallback, because staleness is invisible from a successful read.
+7. Feature freshness is an online-serving SLO expressed through source-watermark lag, online commit lag, and per-value validity; age since an entity's last event is not enough.
 8. A semantic change is a new feature name, never an in-place edit; models pin immutable feature view versions, because type compatibility is not semantic compatibility.
 9. The registry delivers the reuse and governance that justify the platform; without owned, discoverable metadata a feature store is just another database.
 10. Most single-model, offline-only, or single-cache use cases do not need a feature store; adopt one when sharing, online serving, freshness, or lineage make the consistency machinery pay for itself.
-11. Feature stores are write-heavy: serving reads scale with prediction traffic, but materialization writes scale with event volume × feature count, and backfills multiply that — rate-limit them away from the serving path.
-12. Streaming materialization must be replay-safe by construction: checkpointed window state plus last-write-wins upserts (never increments), with the computed-values topic as the replayable source of truth for both stores.
+11. Many feature stores are write-heavy: reads scale with prediction fan-out, live writes with changed entity/view pairs, and backfills compress long history into short wall time, so backfills need separate quotas and priority.
+12. Streaming materialization must be replay-safe by construction: checkpointed window state, immutable update identities, and monotonic conditional upserts prevent duplicates or old replays from moving state backward.
+13. Shared features expand the confidentiality and poisoning blast radius; authorization belongs at release binding and read time, while live and backfill writers need separate least-privilege identities and namespaces.
 
 ---
 
@@ -407,4 +425,3 @@ The monitoring that confirms a feature store is healthy is itself a small SLO su
 4. [Tecton: What Is a Feature Store?](https://www.tecton.ai/blog/what-is-a-feature-store/) — managed feature platform and materialization model
 5. [Hidden Technical Debt in Machine Learning Systems](https://proceedings.neurips.cc/paper_files/paper/2015/file/86df7dcfd896fcaf2674f757a2463eba-Paper.pdf) — Sculley et al., 2015
 6. [Data Validation for Machine Learning](https://mlsys.org/Conferences/2019/doc/2019/167.pdf) — Breck et al., 2019
-7. [Spanner: Google's Globally-Distributed Database](https://research.google/pubs/pub39966/) — Corbett et al., OSDI 2012 (consistency-vs-latency framing)

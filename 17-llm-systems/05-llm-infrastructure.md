@@ -6,7 +6,7 @@ LLM infrastructure is a deadline-aware, quota-constrained distributed serving sy
 
 Separate the global **control plane**—model catalog, policy, evaluation evidence, rollout state, quotas, pricing, and placement—from regional **data planes**—admission, routing, caches, queues, inference pools, and streaming. A provider API and a self-hosted model should implement the same logical contract but retain different failure semantics. Provider fallback is not transparent if models differ in tokenization, context limits, tool schemas, safety behavior, or output distribution.
 
-Optimize for goodput: requests that meet the product's correctness, latency, and policy SLO per unit cost. Raw GPU utilization, tokens per second, or low API price can each improve while useful completion rate gets worse.
+Optimize for goodput—the rate of requests that meet correctness, latency, and policy bounds—and report cost efficiency beside it. Raw GPU utilization, tokens per second, low API price, or goodput alone can each improve while another product constraint gets worse.
 
 ---
 
@@ -36,11 +36,12 @@ TTFT = Q + L_{route} + L_{prefill} + L_{network-first},
 T_{complete} = TTFT + \sum_{j=1}^{T_{out}} ITL_j + L_{postprocess}.
 \]
 
-Goodput can be written as:
+Goodput and cost efficiency are separate objectives:
 
 \[
-G = \frac{\#\ requests\ completed\ within\ quality,\ policy,\ and\ latency\ bounds}
-{time \times cost\ unit}.
+G = \frac{N_{qualified\ completions}}{time},
+\qquad
+E_C = \frac{N_{qualified\ completions}}{cost}.
 \]
 
 This prevents the platform from declaring success after batching increases throughput but violates interactive TTFT, or after an aggressive fallback improves availability but lowers answer quality below the product threshold.
@@ -53,19 +54,24 @@ flowchart TB
     E --> G[Regional AI gateway]
     G --> A[Admission and quota]
     A --> P[Policy + data classification]
-    P --> R[Capability-aware router]
-
-    R --> EXT[External provider adapters]
-    R --> HOST[Self-hosted inference pools]
-    HOST --> SCH[Deadline-aware scheduler]
-    SCH --> PF[Prefill workers]
-    SCH --> DC[Decode workers]
-
-    R --> CACHE[(Exact / prefix caches)]
+    P --> R[Capability-aware router<br/>resolve target revision]
     R --> AUX[Embedding, rerank,<br/>moderation, tool services]
-    EXT --> S[Streaming multiplexer]
-    PF --> S
+    AUX --> R
+    R --> RC{Exact response cache}
+    RC -->|authorized hit| S[Streaming multiplexer]
+    RC -->|miss| T{Resolved execution target}
+
+    T --> EXT[External provider adapters]
+    T --> HOST[Self-hosted inference pools]
+    HOST --> ENG[Serving engine<br/>admission + scheduler]
+    ENG <--> KV[(Prefix / KV cache)]
+    ENG -->|co-located prefill + decode| S
+    ENG -->|optional phase split| PF[Prefill pool]
+    PF --> XFER[Versioned KV handoff]
+    XFER --> DC[Decode pool]
     DC --> S
+
+    EXT --> S
     S --> C
 
     CP[Global control plane<br/>catalog, rollout, evals, policy,<br/>quotas, placement, pricing] -.-> G
@@ -174,8 +180,8 @@ Fallback compatibility includes tokenizer, system instruction, tool protocol, sc
 
 The detailed GPU mechanics are in [GPU Inference Internals](./11-gpu-inference-internals.md). At the platform level, distinguish two phases:
 
-- **Prefill** processes the input in parallel, is compute-intensive, creates the KV cache, and dominates TTFT for long prompts.
-- **Decode** generates one token per active sequence per step, repeatedly reads model weights and KV state, and is commonly memory-bandwidth-bound.
+- **Prefill** processes many input tokens in parallel and creates the KV cache. Long, well-batched prefills often expose enough matrix work to approach a compute or attention-kernel limit, but short or skinny shapes can remain launch- or bandwidth-limited; queueing plus prefill commonly dominates TTFT for long prompts.
+- **Decode** generates one token per active sequence per step and repeatedly reads model weights and growing KV state. It is commonly memory-bandwidth-bound at low batch, while compute, KV traffic, or communication can dominate elsewhere.
 
 Their different resource shapes motivate continuous batching, chunked prefill, or separate prefill/decode pools.
 
@@ -290,13 +296,17 @@ Self-hosted recovery objectives must account for artifact availability and model
 
 ## Capacity and Cost Engineering
 
-For provider traffic, estimate cost from the joint input/output distribution, cache discount, reasoning usage, tool calls, and retries—not average request tokens:
+For provider traffic, estimate cost rate from the joint distribution and every attempt, including retries and discarded candidates. Let \(\lambda_s\) be arrivals per unit time and express the fixed term over that same unit:
 
 \[
-C = \sum_s \lambda_s
-  \left(E[T_{in,s}]c_{in} + E[T_{cached,s}]c_{cached}
-       + E[T_{out,s}]c_{out} + E[C_{tools,s}]\right).
+C_{rate} = \sum_s \lambda_s E\!\left[
+      \sum_{a\in A_s}
+      \left(T^{fresh}_{sa}c_f + T^{cached}_{sa}c_h
+            + T^{output}_{sa}c_o + T^{reason}_{sa}c_r
+            + C^{tools}_{sa}\right)\right] + C_{fixed,rate}.
 \]
+
+Fresh and cached input are disjoint in this ledger. If a provider includes reasoning in output accounting or applies tiered pricing, the versioned pricing adapter maps reported usage into mutually exclusive billable categories before aggregation.
 
 For self-hosting, model memory feasibility first, then goodput at the target SLO. Weight memory, KV capacity, interconnect, bandwidth, and scheduler behavior determine the feasible region. Benchmark the real prompt/output distribution with warm-up, concurrency sweeps, failures, and mixed traffic. Peak synthetic tokens/s is not capacity for an interactive SLO.
 

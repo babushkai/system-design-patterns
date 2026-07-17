@@ -2,7 +2,9 @@
 
 ## TL;DR
 
-Orchestration is how you structure LLM calls and control flow. The fundamental split: **workflows** (your code decides the steps, the model fills them in) versus **agents** (the model decides the steps). Production systems should use the simplest pattern that meets the bar — chaining, routing, parallelization, orchestrator–workers, evaluator–optimizer — and graduate to an autonomous loop only for open-ended tasks with verifiable outcomes. Reasoning models internalized most 2023-era prompt scaffolds (Chain-of-Thought, Tree-of-Thought, self-consistency); the modern levers are thinking budgets, plan–execute–verify structure, subagent context isolation, and durable execution.
+Orchestration assigns control authority: which transitions are fixed in code, which choices a model may propose, which effects require policy or human approval, and which observations permit the run to advance. A workflow owns the graph in code; an agent selects paths from environment feedback. Chaining, routing, parallelization, orchestrator–workers, evaluator–optimizer loops, and autonomous loops are therefore different graph and join semantics, not a catalog of prompt recipes.
+
+Choose the least adaptive graph that reaches the required workload. Every adaptive branch needs a typed state transition, budget reservation, termination rule, and verifier. Model-internal reasoning can change the amount of external search that is useful, but it cannot replace durable state, authority boundaries, idempotency, or independent verification.
 
 ---
 
@@ -11,13 +13,13 @@ Orchestration is how you structure LLM calls and control flow. The fundamental s
 ```mermaid
 graph TD
     TASK["Task arrives"] --> Q1{"Can you enumerate<br/>the steps in advance?"}
-    Q1 -->|Yes| WF["WORKFLOW<br/>Code owns control flow.<br/>Predictable cost & latency.<br/>Debuggable step by step."]
+    Q1 -->|Yes| WF["WORKFLOW<br/>Code owns control flow.<br/>Explicit transitions,<br/>retry, and replay."]
     Q1 -->|No| Q2{"Can the outcome<br/>be verified cheaply?"}
     Q2 -->|Yes| AG["AGENT<br/>Model owns control flow.<br/>Handles the unenumerable.<br/>Bound it with budgets."]
     Q2 -->|No| HITL["Human-in-the-loop<br/>or don't automate it"]
 ```
 
-This distinction (popularized by Anthropic's *Building Effective Agents*) is the most useful one in the field. Workflows trade flexibility for predictability — when you know the steps, encoding them in code is strictly better than asking a model to rediscover them on every request. Agents trade predictability for reach. The most common architecture mistake of the past two years was building an agent (or a multi-agent system) where a three-step workflow would do.
+This distinction, popularized by Anthropic's *Building Effective Agents*, separates two control authorities. Workflows trade flexibility for explicit state transitions; agents trade predictability for input-dependent reach. When the valid transitions and exceptional branches can be enumerated, code can enforce them, replay them, and attach exact retry policy. Asking a model to rediscover that graph adds variance without adding reach. Agency earns its cost only where observations reveal useful branches that cannot be specified economically in advance.
 
 A useful corollary: **autonomy is a dial, not a binary.** The same task can ship as a workflow with one agentic step inside it, or as an agent constrained by a workflow-shaped plan. Move the dial toward autonomy only when evals show the rigid version failing on real inputs.
 
@@ -27,7 +29,7 @@ A useful corollary: **autonomy is a dial, not a binary.** The same task can ship
 
 ### Prompt Chaining
 
-Decompose a task into a fixed sequence where each call consumes the previous call's output. Add programmatic **gates** between steps — cheap checks that catch derailment early instead of letting errors compound.
+Decompose a task into a fixed sequence where each call consumes a versioned intermediate artifact. A gate decides whether that artifact satisfies the next transition's preconditions. Gates may be deterministic assertions, executable verification, calibrated semantic evaluation, or human authority; calling every gate “validation” hides very different error profiles.
 
 ```mermaid
 graph LR
@@ -40,23 +42,13 @@ graph LR
     S3 --> OUT["Output"]
 ```
 
-```python
-async def marketing_chain(brief: str) -> str:
-    outline = await llm(f"Extract a structured outline from this brief:\n{brief}",
-                        response_format=Outline)          # typed gate: pydantic validation
-    if len(outline.sections) < 3:
-        outline = await llm(f"Outline too thin ({len(outline.sections)} sections). "
-                            f"Expand to 4-6:\n{outline.model_dump_json()}",
-                            response_format=Outline)
-    draft = await llm(f"Write copy for each section:\n{outline.model_dump_json()}")
-    return await llm(f"Edit for tone and tighten by 20%:\n{draft}")
-```
+Each stage record includes its input revision, output artifact, evaluator revision, attempt, and decision. On failure, retry only if the failure class is transient or the next attempt changes evidence or strategy; repeatedly regenerating behind the same gate produces correlated samples. Backtracking should invalidate the precise upstream artifact whose contract failed rather than append criticism to an ever-growing prompt.
 
-Use when: the decomposition is stable and each step has a checkable contract. The gates are the point — a chain without validation is just a slower single prompt.
+The pattern fits a stable decomposition whose intermediate artifacts have checkable contracts. Its correctness boundary is the gate: without schema, provenance, or semantic verification between stages, a chain merely serializes and amplifies an early error.
 
 ### Routing
 
-Classify the input, then dispatch to a specialized prompt, toolset, or model. Routing is also the standard **cost-tiering** mechanism: send the easy 80% to a small fast model, escalate the hard 20%.
+Classify the input, then dispatch to a specialized prompt, toolset, policy, or model. Routing may reduce cost by assigning simpler cases to cheaper targets, but the achievable split is an observed property of the traffic distribution and router operating point—not a fixed easy/hard percentage.
 
 ```python
 ROUTES = {
@@ -72,14 +64,14 @@ async def handle(ticket: str) -> str:
     return await run(cfg, ticket)
 ```
 
-Use when: inputs cluster into categories with different optimal handling. Keep the classifier's label set small and mutually exclusive; route "unknown" to the most capable path, not the cheapest.
+Routing fits inputs whose classes require materially different tools, policies, models, or latency budgets. The router is a model release in its own right: calibrate confusion by slice, expose an `unknown` or abstention path, and make the fallback preserve security and capability requirements. Routing an uncertain high-impact request to the cheapest branch converts classification error directly into product loss.
 
 ### Parallelization
 
 Two distinct forms:
 
 - **Sectioning** — split independent subtasks, run concurrently, merge. (Review a PR for security, performance, and style in three parallel calls.)
-- **Voting** — run the *same* task N times, aggregate. Majority vote for classification; union for issue-finding; best-of-N with a grader for generation. This is the production descendant of self-consistency: you pay N× for a reliability bump where it matters.
+- **Replication and aggregation** — run the *same* task (N) times, then apply a declared union, quorum, ranking, or adjudication rule. The value depends on error correlation and evaluator quality, while cost grows with every attempt.
 
 ```python
 findings = await asyncio.gather(
@@ -88,17 +80,17 @@ findings = await asyncio.gather(
     llm(STYLE_REVIEW + diff),
 )                                   # sectioning
 
-verdicts = await asyncio.gather(*[
-    llm(f"Does this diff introduce a breaking API change? yes/no + evidence:\n{diff}")
-    for _ in range(5)
-])                                  # voting: flag if ≥2 say yes
+proposals = await asyncio.gather(*[
+    run_candidate(case, seed=s) for s in selected_seeds
+])
+decision = aggregate(proposals, rule=qualified_join_policy)
 ```
 
-Use when: subtasks are independent (sectioning) or single-shot reliability is below the bar and verification is hard (voting). Latency ≈ the slowest branch instead of the sum.
+Sectioning requires independence of both reads and writes; otherwise branches race or reason from inconsistent state. Voting requires sufficiently independent errors and a decision rule tied to evidence. A parallel join observes the slowest required branch, so fan-out trades serial latency for tail amplification and higher spend rather than making work free.
 
 ### Orchestrator–Workers
 
-A capable model decomposes the task *at runtime* and dispatches subtasks to worker calls (often cheaper models, or parallel instances), then synthesizes. Unlike sectioning, the subtasks aren't known in advance — the decomposition is itself model output. This is the backbone pattern of deep-research systems and most production "multi-agent" deployments; the full treatment, including context-sharing economics, is in [Multi-Agent Systems](./03-multi-agent-systems.md).
+A model decomposes the task *at runtime* and proposes subtasks for admission before workers execute them. Unlike sectioning, the complete decomposition is not known in advance. The scheduler still owns dependency validity, read/write conflicts, capabilities, deadlines, and fan-out. The full distributed-systems treatment is in [Multi-Agent Systems](./03-multi-agent-systems.md).
 
 ```mermaid
 graph TD
@@ -111,23 +103,7 @@ graph TD
 
 ### Evaluator–Optimizer
 
-One call generates; another grades against explicit criteria and returns actionable feedback; loop until pass or budget exhausted. This works when evaluation is genuinely easier than generation — translation nuance, search-result relevance, matching a style guide.
-
-```python
-async def refine(task: str, max_rounds: int = 3) -> str:
-    draft = await llm(task)
-    for _ in range(max_rounds):
-        review = await llm(f"Grade against the rubric. PASS or revisions needed.\n"
-                           f"Rubric:\n{RUBRIC}\n\nDraft:\n{draft}",
-                           response_format=Review)
-        if review.verdict == "PASS":
-            break
-        draft = await llm(f"Revise. Address every point.\n"
-                          f"Feedback:\n{review.feedback}\n\nDraft:\n{draft}")
-    return draft
-```
-
-Caution: an LLM grader without ground truth drifts toward leniency, and generator/grader pairs from the same model family share blind spots. Anchor the rubric with objective checks (length, schema, banned claims, citation presence) wherever possible.
+One node generates; another evaluates explicit criteria and returns defect-addressed feedback. The loop is justified only when evaluation has a useful operating point and the revision step produces measurable progress. Persist criterion-level results, protect dimensions that already pass, and stop on pass, budget exhaustion, score stagnation, or oscillation. If generator and evaluator share evidence, model family, or prompt assumptions, their errors may be correlated; a fluent `PASS` is not independent evidence. [LLM Evaluation](./10-llm-evaluation.md) owns judge qualification and uncertainty.
 
 ---
 
@@ -135,9 +111,9 @@ Caution: an LLM grader without ground truth drifts toward leniency, and generato
 
 When steps can't be enumerated, hand control flow to the model: tools in a loop, environment feedback each turn, harness-enforced budgets. The mechanics live in [Agent Fundamentals](./01-agent-fundamentals.md); what matters here is the macro-structure that makes loops reliable.
 
-### Plan–Execute–Verify
+### Plan, Context Fork, and Durable Resume
 
-The dominant macro-pattern for agentic work. Make the agent externalize a plan *as an artifact* (a markdown checklist, a TODO list the harness renders), execute against it, and verify each increment against ground truth before moving on.
+A long agentic run externalizes a versioned plan as durable state, executes one admissible increment, and verifies the resulting environment before authorizing dependent work. The plan records task IDs, dependencies, ownership, base revisions, acceptance conditions, and status; it is an operational projection of run state, not a markdown narrative.
 
 ```mermaid
 graph LR
@@ -150,33 +126,13 @@ graph LR
     PLAN -.->|"human approves plan<br/>before execution"| EXEC
 ```
 
-Why it works:
+The plan changes only through recorded transitions: new evidence may add or invalidate nodes, but completed effects and rejected alternatives remain in history. A context fork receives a bounded task packet from one plan revision and returns typed evidence; it does not acquire implicit authority over shared state. Delegation is useful for context isolation or independent work even when it provides no wall-clock benefit. Tightly coupled work remains under one decision owner because every handoff discards latent context.
 
-- The plan is a **checkpoint for humans** — reviewing a plan costs seconds; reviewing a 2,000-line surprise diff costs an afternoon.
-- The plan **survives compaction** — after a context reset, the agent re-reads its own plan and continues; goal drift drops sharply.
-- Verification per increment stops error compounding (the 98%-per-step problem) at the increment boundary.
-
-Plan-and-Execute as a *rigid* pattern (plan once, execute blindly) failed; the version that won keeps the plan live — the agent updates it as reality pushes back.
-
-### Subagent Delegation
-
-Spawning a fresh agent for a subtask is primarily a **context-isolation** move, not a parallelism move. A subagent can burn 200K tokens grepping through a codebase and return a 2K-token answer; the orchestrator's context stays clean. Delegate when the subtask is self-contained and its intermediate state is noise to the parent; don't delegate tightly-coupled work — each handoff loses unwritten context, and subagents that each "see only slices" of a shared artifact produce incoherent results.
-
-### Long-Horizon Loops: Compaction and Memory
-
-For tasks longer than one context window, the harness owns continuity:
-
-- **Compaction** — summarize the transcript (decisions, file paths, constraints, open items), restart the loop with summary + recent turns.
-- **File-based state** — the agent maintains `plan.md` / `notes.md`; the loop survives process restarts, not just context resets.
-- **One-writer rule** — a long-running agent session should be the only writer to its workspace; concurrent mutation invalidates its world model.
-
-### Durable Execution
-
-Agent loops in production are long-running, stateful, failure-prone processes — the same problem shape as payment workflows, and the same solution applies: durable execution engines (Temporal-style) that persist each step, replay on crash, and resume from the last checkpoint. Tool calls become activities with retry policies; human approvals become signals; "the pod died at turn 37" stops being a lost task. If you're not adopting an engine, you still need its invariants: every turn persisted, every tool idempotent or compensatable, resume-from-checkpoint tested.
+Compacted prompts, files, and model messages are context representations, not the authoritative run. A durable engine persists node transitions and external-action receipts, resumes from checkpoints, and replays recorded nondeterministic observations. Tool calls declare retry and reconciliation semantics; human decisions arrive as versioned signals. [Context Management](./08-context-management.md) owns context revisions, while [Harness Engineering](./09-harness-engineering.md) owns the runtime boundary.
 
 ## Orchestration as a Typed State Graph
 
-The diagrams above describe control flow, but a production orchestrator needs a more exact model. Treat every workflow or agent run as a graph of **logical nodes**, and every execution of a node as an **attempt**. A node is not merely a prompt. It is a contract:
+The diagrams above describe control flow, but a deployed orchestrator needs a more exact model. Treat every workflow or agent run as a graph of **logical nodes**, and every execution of a node as an **attempt**. A node is not merely a prompt. It is a contract:
 
 \[
 N = (I, O, P, S, R, C, B)
@@ -196,7 +152,7 @@ stateDiagram-v2
     Reconciling --> Committed: effect confirmed
     Reconciling --> Ready: effect absent
     Running --> AwaitingApproval: policy requires human decision
-    AwaitingApproval --> Ready: approved signal
+    AwaitingApproval --> Running: execute stored approved action digest
     AwaitingApproval --> Cancelled: rejected / expired
     Committed --> [*]
     Cancelled --> [*]
@@ -224,7 +180,7 @@ Orchestration patterns compose quality, latency, and cost differently. If a sequ
 P(\text{success}) = \prod_{i=1}^{n} p_i.
 \]
 
-A ten-stage chain whose stages each succeed 98% of the time succeeds only about 81.7% of the time before retries. Independence is optimistic: adjacent LLM stages often share the same mistaken premise, so correlated semantic failures make the actual result worse. Gates help only when they detect errors with sufficient recall and do not introduce many false rejections.
+Under independence, a ten-stage chain whose stages each succeed 98% of the time succeeds about 81.7% of the time before retries. Shared evidence and model behavior invalidate that product: dependence can make all-stage success higher or lower than the independent estimate even when marginal stage rates are unchanged. Estimate joint or conditional outcomes on complete traces. Gates help only when they detect errors with sufficient recall and do not introduce excessive false rejection or recovery cost.
 
 For a sequential path, latency is approximately the sum of stage latencies plus queueing and retry time. For a parallel fork, completion latency is the maximum branch latency plus fork/join overhead:
 
@@ -258,23 +214,19 @@ Pause and resume are also policy operations. A paused run must release compute l
 
 ---
 
-## What Reasoning Models Changed
+## Model-Internal Reasoning and External Control Flow
 
-The 2023 orchestration canon — ReAct, Chain-of-Thought, Tree-of-Thought, self-consistency, Reflexion — was a set of *prompt-level workarounds* for models that couldn't deliberate. RL-trained reasoning models (the o-series, DeepSeek-R1, Claude's extended thinking, Gemini's thinking modes) internalized that deliberation: the model explores, backtracks, and self-corrects inside its thinking tokens, and you buy more of it with a **thinking-budget parameter** instead of prompt scaffolding. Test-time compute became a dial.
+ReAct, Chain-of-Thought, Tree-of-Thought, self-consistency, and Reflexion exposed useful computation through prompt-level structures. Some reasoning-oriented models now perform more search, backtracking, and self-correction inside model-managed reasoning, sometimes with an effort or token budget. This changes where orchestration belongs: internal search can replace verbose reasoning scaffolds, but it cannot replace durable workflow state, independent verification, policy, or side-effect semantics.
 
-| 2023 pattern | What it did | Where it went |
+| Technique | Computation it exposes | External orchestration role |
 |---|---|---|
-| ReAct (`Thought:/Action:` text) | Interleaved reasoning + tool use via parsed text | Native tool calling + interleaved thinking. The *idea* won; the prompt format died. |
-| Chain-of-Thought ("think step by step") | Elicited intermediate reasoning | Internalized by reasoning RL. Still useful on small/non-reasoning models, and for *auditable* reasoning you must log. |
+| ReAct (`Thought:/Action:` text) | Interleaved reasoning + tool use via parsed text | Structured tool protocols usually replace text parsing; the observe–act feedback pattern remains. |
+| Chain-of-Thought ("think step by step") | Elicited intermediate reasoning | May be redundant on reasoning-oriented models; explicit concise rationales remain useful when the product requires reviewable decision evidence. |
 | Self-consistency (sample N, vote) | Reliability via diversity | Survives as the voting form of parallelization — applied at the *task* level where verification is hard. |
-| Tree-of-Thought (explicit search) | Explored alternative reasoning paths | Internalized (models backtrack in-thought). Explicit search survives in domains with cheap programmatic evaluators (game states, formal proofs). |
-| Reflexion (verbal self-critique across retries) | Learning from failed episodes | Survives as plan–execute–verify with *real* verifier feedback instead of self-generated critique — and as RL training data on the provider side. |
+| Tree-of-Thought (explicit search) | Explored alternative reasoning paths | External search remains valuable where candidates can be checkpointed, evaluated independently, or distributed. |
+| Reflexion (verbal self-critique across retries) | Revision conditioned on a prior attempt | Useful only when feedback adds evidence or a qualified evaluator; self-critique alone can preserve the original blind spot. |
 
-Practical guidance:
-
-- **Don't stack scaffolds on reasoning models.** Forcing a hand-written CoT format on a model with native thinking typically wastes tokens and can degrade quality. Set the budget, state the goal and constraints, give it tools.
-- **Match budget to verifiability.** High thinking budget for one-shot, hard-to-verify decisions (architecture, migration plans); low budget for tight tool loops where the environment gives feedback every few seconds anyway.
-- **Scaffolds still earn their keep** on small models (cost tiering), in regulated settings where reasoning must be externalized and stored, and for structured aggregation (voting) where you need statistical confidence rather than one model's conviction.
+Do not assume a reasoning scaffold transfers across models, tasks, or tool environments. Compare it with the simplest goal-and-constraint request using paired evaluation. Allocate more internal or external search only while its marginal verified-success gain exceeds latency and cost, and distinguish private model reasoning from the concise decision evidence an auditor needs. External search remains appropriate when branches require different evidence, independent execution, checkpointing, or explicit control over termination.
 
 ---
 
@@ -282,20 +234,20 @@ Practical guidance:
 
 | Pattern | Control flow | Cost profile | Reach | Use when |
 |---|---|---|---|---|
-| Single call + good prompt | — | 1× | Low | Always try first |
+| Single call + typed contract | — | One generation | Low | One bounded transformation over supplied context |
 | Prompt chaining | Code | n× sequential | Low | Stable decomposition, checkable steps |
-| Routing | Code | ~1× + classifier | Low | Heterogeneous inputs, cost tiering |
+| Routing | Code | Classifier plus selected branch | Low | Heterogeneous inputs, capability or cost tiering |
 | Parallel: sectioning | Code | n× concurrent | Medium | Independent subtasks |
 | Parallel: voting | Code | n× concurrent | Medium | Reliability below bar, weak verifiers |
 | Orchestrator–workers | Model plans, code executes | Variable | High | Unpredictable decomposition (research, search) |
-| Evaluator–optimizer | Code loop | 2–6× | Medium | Grading easier than generating |
-| Agent loop | Model | Unbounded — budget it | Highest | Open-ended, verifiable, tool-rich tasks |
+| Evaluator–optimizer | Code loop | Generation plus bounded evaluation/revision attempts | Medium | Qualified grading is easier than generating |
+| Agent loop | Model | Input-dependent; bounded by admission | High | Open-ended, verifiable, tool-rich tasks |
 
-Composition is the norm: a router in front, an agent loop for the hard branch, plan–execute–verify inside the loop, a voting step at the end for the release gate. Compose patterns the way you compose functions — each addition must pay for itself in eval results, not vibes. Every layer adds latency, cost, and a new way to fail silently.
+Patterns can compose, but their contracts compose too. A router changes the eligible graph, an agent loop adds dynamic nodes, and a replicated branch adds a join and cancellation policy. Record each boundary in one run graph and admit each addition only when measured marginal value exceeds its latency, spend, and failure surface.
 
 ---
 
-## Failure Modes to Design Against
+## Failure Modes
 
 **Scaffold ossification** occurs when a workflow tuned around one model becomes a ceiling on its successor. A redundant extraction stage can add latency and lose information even after a newer model can perform the full task in one call. Re-run ablations—full workflow versus each simplified variant—during every model or prompt migration. Preserve a stage because it produces measured error containment, not because it appears architecturally sophisticated.
 
@@ -330,7 +282,7 @@ Build the minimum graph that passes offline evaluations and shadow traffic. Then
 
 ## Key Takeaways
 
-- An orchestration step is a typed, versioned state transition with explicit retry and side-effect semantics; a prompt alone is not a production node.
+- An orchestration step is a typed, versioned state transition with explicit retry and side-effect semantics; a prompt alone is not a runtime node.
 - Workflow reliability multiplies across sequential stages, parallel latency inherits the slowest branch, and all attempted work contributes to cost.
 - Durable execution requires stable logical identities, recorded nondeterminism, idempotency or reconciliation, versioned replay, and propagated cancellation.
 - Voting and LLM grading reduce error only when their failures are sufficiently independent and calibrated against real ground truth.

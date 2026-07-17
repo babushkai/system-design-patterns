@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-Training a large model is a supercomputing problem wearing an ML costume. Two constraints force distribution: the model's training state doesn't fit on one accelerator (a 70B-parameter model needs ~1.1 TB just for weights, gradients, and optimizer state), and the compute doesn't fit in one lifetime (the same model trained on 15T tokens is ~500 GPU-years — you run 8,000 GPUs for three weeks or you don't run at all). Everything in this chapter follows from how you split those two things: **data parallelism** replicates the model and averages gradients (cheap until the all-reduce and the batch-size ceiling bite), **ZeRO/FSDP** shards the training state across the replicas, **tensor parallelism** splits individual matrix multiplies (needs NVLink-class bandwidth, so it stays inside a node), and **pipeline parallelism** splits layers into stages (pays a bubble that shrinks with microbatch count). Real jobs compose all of them, and the composition is dictated by the memory hierarchy of the cluster, not by preference. The operational reality on top: a synchronous job moves at the speed of its slowest worker, at 10,000+ GPUs *something* fails every few hours (Llama 3's team logged 466 interruptions in 54 days), and the metric that summarizes all of it — MFU, the fraction of theoretical FLOPs you actually achieve — hovers around 40% for well-run large jobs. This chapter builds the arithmetic for each piece: memory ledgers, collective-communication costs, bubble fractions, checkpoint intervals, and where the missing 60% goes.
+Distributed training is a placement problem over two ledgers: bytes that must be resident and operations that must finish before a deadline. Data parallelism replicates computation and synchronizes gradients; FSDP/ZeRO shards replicated state; tensor, sequence, context, pipeline, and expert parallelism partition different axes of the computation. None is “the scaling strategy” in isolation. The useful composition maps high-frequency communication to the fastest links, keeps each kernel large enough to use the device, stays below the optimization system's effective-batch limit, and leaves recoverable state at well-defined step boundaries. Synchronous jobs inherit the slowest rank and every collective dependency, so topology, stragglers, checkpoint commit semantics, data cursors, and numerical state are part of model correctness—not cluster plumbing. The central invariant is: **a distributed step either becomes one globally committed optimizer step with reproducible input and state, or recovery discards it everywhere.**
 
 The orchestration layer above this — pipelines, retraining, reproducibility — is [Training Pipelines](./05-training-pipelines.md); the sibling problem of extracting FLOPs from a single accelerator at inference time is [GPU Inference Internals](../17-llm-systems/11-gpu-inference-internals.md); cluster-level sizing and cost is [ML Capacity & Cost Planning](./14-ml-capacity-cost-planning.md).
 
@@ -12,7 +12,7 @@ The orchestration layer above this — pipelines, retraining, reproducibility �
 
 ### The memory ledger
 
-Training state is far bigger than the model. With standard mixed-precision Adam, every parameter carries:
+Training state can be far bigger than the inference weights. For one illustrative mixed-precision Adam configuration, every parameter carries:
 
 ```
 bf16 weights                     2 bytes
@@ -23,76 +23,83 @@ fp32 Adam variance (v)           4 bytes
 ────────────────────────────────────────
                                 16 bytes per parameter
 
-  7B model:   112 GB  of state  — doesn't fit an 80 GB H100
- 70B model:   1.1 TB            — doesn't fit a NODE of 8 H100s (640 GB)
-405B model:   6.5 TB            — needs ≥ 82 GPUs before ONE token is processed
+  7B model:   112 GB of state
+ 70B model:   1.12 TB of state
+405B model:   6.48 TB of state
 ```
 
-And that's before **activations** — the intermediate tensors saved during the forward pass for use in the backward pass, which scale with `batch × sequence_length × hidden × layers` and routinely exceed the parameter state at long sequence lengths. (The standard mitigation, *activation checkpointing*, discards most activations and recomputes them during backward — spending roughly 30% more FLOPs to cut activation memory several-fold. Memory and compute are fungible, and large-model training constantly trades one for the other.)
+The multiplier is not universal. An optimizer may omit fp32 master weights, quantize or factor its state, accumulate gradients in another dtype, or add auxiliary parameters. Start with an inventory of actual tensors and their sharding/replication groups instead of multiplying parameter count by a remembered constant.
+
+That inventory still excludes **activations**—intermediate tensors retained for backward—which depend on microbatch size, sequence length, hidden dimensions, layer structure, attention algorithm, and which operations are recomputed. Activation checkpointing discards selected tensors and recomputes them during backward, trading additional compute for a lower memory high-water mark. The exact exchange depends on the checkpoint partition and fused kernels; profile it rather than assuming one fixed overhead.
 
 ### The compute ledger
 
-Training FLOPs are well-approximated by `6 × parameters × tokens` (forward ≈ 2·P·T, backward ≈ 2× forward):
+For a dense decoder-only Transformer, training FLOPs are often estimated as `6 × parameters × tokens` (forward roughly `2·P·T`, backward roughly twice forward). Embeddings, attention's sequence-length-dependent terms, recomputation, sparsity, and auxiliary losses make it an estimate, not an accounting identity:
 
 ```
-70B params × 15T tokens × 6 ≈ 6.3 × 10²⁴ FLOPs
+P = 70B parameters, T = 15T tokens
+estimated useful work = 6PT ≈ 6.3 × 10²⁴ FLOPs
 
-One H100: ~990 TFLOP/s peak (bf16, dense). At a realistic 40% MFU:
-  ~4 × 10¹⁴ FLOP/s achieved
-  6.3e24 / 4e14 ≈ 1.6 × 10¹⁰ GPU-seconds  ≈  500 GPU-YEARS
-
-  On 8,192 GPUs: ~22 days.  On 8 GPUs: ~63 years.
+If a measured configuration sustains 4 × 10¹⁴ useful FLOP/s per device:
+  device-seconds ≈ 6.3e24 / 4e14 ≈ 1.6 × 10¹⁰
+  ideal wall time on N devices = device-seconds / N
 ```
 
-The ledgers make the design space concrete: you need tens of GPUs just to *hold* a large model's training state, and thousands to train it in calendar time. The rest of this chapter is about splitting the state and the work so those thousands of GPUs help instead of waiting on each other.
+The achieved rate must come from a topology-matched benchmark and include the chosen recomputation and parallel schedule. The ideal wall-time division still omits initialization, evaluation, checkpointing, failures, and lost steps. The ledgers make the design space concrete without choosing the answer: memory yields a minimum feasible placement; deadline and achieved rate yield a throughput placement; cost and optimization efficiency decide whether that placement is worth using.
 
 ---
 
 ## Data Parallelism: Replicate the Model, Average the Gradients
 
-The baseline strategy: every worker holds a full model replica, processes a different slice of each batch, and workers average gradients before stepping — which keeps all replicas bit-for-bit identical and makes N workers mathematically equivalent to one worker with an N×-larger batch.
+The baseline strategy: every worker holds a full model replica, processes a different slice of each batch, and workers reduce gradients before stepping. With the same global batch, loss reduction, optimizer definition, and numerical semantics, this targets the same mathematical update as one worker processing that global batch. Bitwise identity is a stronger promise and may fail when reduction order, kernels, or random-number streams differ.
 
 The averaging is an **all-reduce**, and its cost is worth knowing exactly because it recurs every single step. The bandwidth-optimal ring algorithm has each of N workers send and receive
 
 ```
 2 × (N-1)/N × D  ≈  2D bytes        (D = gradient bytes, N large)
 
-70B model, bf16 gradients: D = 140 GB → each GPU moves ~280 GB per step.
-On a 50 GB/s effective inter-node link: ~5.6 seconds — likely LONGER
-than the compute step itself.
+Illustration: 70B parameters with 2-byte gradients gives D = 140 GB,
+so a large ring moves about 280 GB per rank per synchronization.
+If 50 GB/s is the achievable effective-bandwidth ceiling, bytes/bandwidth
+gives a bandwidth-only transfer-time lower-bound estimate of about 5.6 s.
+Collective startup, contention, topology imbalance, and protocol effects
+can make the transfer longer; overlap can hide part of that elapsed
+communication from the step's exposed critical path, not make the bytes
+move faster than the measured path permits.
 ```
 
 Three mechanisms keep this from being fatal:
 
 - **Overlap**: gradients for late layers are ready while early layers are still doing backward. Frameworks bucket gradients and launch all-reduce on each bucket as it completes, hiding communication behind computation. A well-tuned job hides most of the 2D; a poorly-tuned one serializes compute-then-communicate and loses a third of its throughput to the network.
 - **Gradient accumulation**: run k micro-batches locally, sync once. Divides communication frequency by k at the cost of a k×-larger effective batch — which is only free if you *wanted* a bigger batch (see below).
-- **Hierarchical topology**: reduce within a node over NVLink (~900 GB/s) first, then across nodes over the much slower fabric — the ring's cost is set by its slowest link, so you build the rings to match the hardware.
+- **Hierarchical topology**: reduce or reduce-scatter within a fast locality domain, exchange the smaller necessary state across slower domains, then complete the local collective. The exact hierarchy follows measured GPU, PCIe, NUMA, NIC, node, and switch paths; advertised link rates do not equal collective bandwidth.
 
 ### The ceiling nobody escapes: batch size
 
-Data parallelism's scaling limit is usually not the network — it's *optimization*. N workers means an N×-larger global batch, and beyond a model/dataset-dependent **critical batch size**, larger batches stop reducing the number of steps needed: you burn more FLOPs for the same learning progress. The gradient-noise-scale work (McCandlish et al.) formalizes it; the practical symptom is that scaling from 1k to 4k GPUs makes each *step* 4× bigger but no longer makes *training* meaningfully faster. Learning-rate scaling and warmup (Goyal et al.'s linear-scaling rule) push the ceiling but don't remove it. This is why pure data parallelism runs out at some point even with a perfect network — and why the other parallelisms exist even for models that would technically fit on one device.
+Data parallelism has both a communication limit and an *optimization* limit. Holding microbatch size fixed while adding replicas enlarges the global batch. Beyond a model-, data-, optimizer-, and training-phase-dependent **critical batch size**, larger batches may stop reducing steps-to-target enough to justify their additional examples. The practical symptom is that step throughput rises while time-to-quality does not. Learning-rate schedules can change the boundary but do not create unlimited statistical efficiency. Measure tokens or examples and wall time to a fixed validation target—not only steps per second—before declaring a scaling win.
 
 ---
 
 ## ZeRO / FSDP: Shard the State Across the Replicas
 
-Plain data parallelism is memory-obtuse: N replicas hold N identical copies of 16 bytes/param. ZeRO (and PyTorch's FSDP, the same idea) removes the redundancy in three escalating stages:
+Plain data parallelism replicates model state at every data rank. ZeRO and PyTorch FSDP belong to the same state-sharding family and remove different parts of that redundancy. Under the illustrative 16-byte Adam ledger above, the persistent-state floor is:
 
 ```
-Per-GPU memory (P params, N data-parallel workers):
+Persistent bytes per rank (P params, N data-parallel workers), excluding
+activations, temporary all-gather buffers, allocator fragmentation, and metadata:
 
   Plain DP:        16P                    all state replicated
   ZeRO-1:          4P  + 12P/N            optimizer state sharded
   ZeRO-2:          2P  + 14P/N            + gradients sharded
   ZeRO-3 / FSDP:         16P/N            + parameters sharded
 
-  70B on 64 GPUs with ZeRO-3: 1.12 TB / 64 ≈ 17.5 GB per GPU — fits,
-  with room for activations.
+  70B on 64 ranks with ZeRO-3: 1.12 TB / 64 ≈ 17.5 GB per-rank
+  parameter/gradient/optimizer shard, before activations and workspaces.
 ```
 
-The mechanics of stage 3: each layer's parameters live sharded; just before a layer runs (forward and again in backward), workers **all-gather** that layer's weights, use them, and immediately free them; gradients are **reduce-scattered** so each worker keeps only its shard. Communication rises from the 2D of plain DP to ~3D — a 1.5× tax paid for an N-fold memory reduction, and like DP's all-reduce it overlaps: prefetch the next layer's all-gather while computing the current one.
+The mechanics of full sharding: parameters live sharded outside computation; before a wrapped unit runs, workers **all-gather** the needed parameters; after computation they can reshard them; gradients are **reduce-scattered** so each worker keeps its shard. Whether parameters remain materialized between forward and backward, how units are wrapped, and how far prefetch runs change both peak memory and communication. Byte-count comparisons such as “about 1.5× plain data parallel communication” assume a particular full-shard schedule and no caching; use the actual collective trace for the configuration being evaluated.
 
-The design sensibility to absorb: **ZeRO treats aggregate cluster memory as one pool and pays bandwidth to pretend it's local.** It composes with data parallelism trivially (it *is* data parallelism, memory-optimized) and is the default answer for models in the 7B–70B range. Its limit is that the model's *layers* still execute on every GPU — when a single layer's working set or the activation traffic outgrows the node, you need parallelisms that split the computation itself.
+The design sensibility to absorb: **full sharding trades repeated materialization traffic for removal of replica-state redundancy.** It remains data-parallel computation; every rank participates in each wrapped unit. It is attractive when aggregate shard-group memory fits the state and parameter collectives can be hidden or tolerated. When a unit's gathered working set, activations, or collective path is still infeasible, the computation itself must be partitioned.
 
 ---
 
@@ -100,36 +107,36 @@ The design sensibility to absorb: **ZeRO treats aggregate cluster memory as one 
 
 ### Tensor parallelism: split the matrices
 
-Tensor parallelism (Megatron-style) splits individual weight matrices across GPUs — each holds a column- or row-slice, computes a partial matmul, and an all-reduce assembles the result. The brutal property: that all-reduce happens **per layer, per microbatch, in the critical path** — it cannot be hidden behind other compute the way DP's gradient sync can.
+Tensor parallelism splits individual operators—commonly matrix dimensions—across ranks. Each rank computes a partial result, and collective communication assembles or redistributes activations for the next operator. The exact sequence may use all-reduce, reduce-scatter, all-gather, or fused variants, but it occurs inside the layer and microbatch dependency path; it has less opportunity for coarse overlap than end-of-backward data-parallel synchronization.
 
 ```
-Consequence: TP lives or dies on interconnect latency+bandwidth.
-  NVLink within a node:   ~900 GB/s  → TP works
-  InfiniBand across nodes: ~50 GB/s  → TP dies
-
-Rule that follows: TP degree ≤ GPUs per node (8, typically).
-TP is not a scaling strategy — it's a "make the layer fit and keep
-per-GPU matmuls large" strategy, confined to one node.
+Consequence: TP lives or dies on measured interconnect latency and
+bandwidth at the activation message sizes it generates. Keep its group
+inside the fastest useful locality domain unless cross-domain profiling
+proves the latency and kernel-size trade acceptable. Increasing degree
+shrinks per-rank matrices; eventually communication and small kernels
+cost more than the memory reduction saves.
 ```
 
 ### Pipeline parallelism: split the layers
 
-Pipeline parallelism assigns contiguous layer blocks to *stages* on different nodes; activations flow forward stage-to-stage and gradients flow back. Stage-to-stage traffic is just one activation tensor per microbatch — tiny compared to TP's chatter — so PP is the parallelism that crosses slow links happily.
+Pipeline parallelism assigns contiguous layer blocks to *stages* on different nodes; activations flow forward stage-to-stage and gradients flow back. It usually communicates at fewer dependency points than tensor parallelism and can therefore tolerate a slower cross-domain path **when** activation messages, microbatch cadence, and bidirectional traffic fit the link budget and overlap with stage compute. It does not cross slow links for free: large activations, small stages, many virtual stages, congestion, or a latency-sensitive schedule can make the boundary dominant. Place and size pipeline boundaries from measured stage-to-stage transfer time, not from the categorical rule that pipeline parallelism belongs across nodes.
 
-Its tax is the **bubble**: stages idle while the pipeline fills and drains. With p stages and m microbatches per batch:
+Its tax includes the **bubble**: stages idle while the pipeline fills and drains. For a simple flush schedule with `p` balanced stages and `m` microbatches:
 
 ```
 bubble fraction = (p − 1) / (m + p − 1)
 
-  p=8,  m=8:    47% of the schedule is idle  — catastrophic
-  p=8,  m=64:   ~10%                          — acceptable
-  p=8,  m=256:  ~3%                           — good
+  p=8,  m=8:    47% idealized bubble
+  p=8,  m=64:   ~10% idealized bubble
+  p=8,  m=256:  ~3% idealized bubble
 
-So PP demands many microbatches — which is the same resource the
-batch-size ceiling limits. Deep pipelines + modest global batch =
-bubbles you cannot schedule away. (1F1B scheduling and interleaved
-stages reduce peak activation memory and shave the bubble, but the
-(p−1)/(m+p−1) shape is the invariant to reason with.)
+The example shows why more microbatches amortize fill/drain time, but
+the formula is schedule-specific. 1F1B, interleaving, virtual stages,
+and bidirectional schedules change memory and bubble behavior; stage
+imbalance and communication add idle time not present in the formula.
+Microbatch count also participates in global batch and activation
+memory, so it is not an unconstrained bubble knob.
 ```
 
 ### Composing them: 3D parallelism
@@ -137,19 +144,21 @@ stages reduce peak activation memory and shave the bubble, but the
 Real large-model jobs use all three, and the composition follows the hardware hierarchy rather than taste:
 
 ```
-  TP  innermost — needs NVLink        → within the node, degree ≤ 8
-  PP  next      — tolerates slow links → across nodes, until it fits
-  DP  outermost — embarrassingly parallel across the rest (often with
-                  ZeRO-1 sharding the optimizer inside each replica)
+  TP  on the fastest useful links      → frequent activation collectives
+  PP  across stage boundaries          → activation/gradient streams
+  DP  across replicas                  → gradient/state synchronization
 
-Example, 70B on 512 H100s (64 nodes):
+  Illustrative factorization on 512 accelerators (64 eight-device nodes):
   TP=8 (one node) × PP=4 (4 nodes = one model replica of 32 GPUs)
   × DP=16 replicas
-  Per-GPU: 1/32 of the model's layers × 1/8 of each matrix. Fits with
-  activation headroom; global batch = 16 × microbatches × micro size.
+  Per-GPU: one of 4 pipeline layer groups and one of 8 tensor shards of
+  the local matrices—approximately 1/(4×8) = 1/32 of dense parameters
+  when stages are balanced, not 1/32 of the layers times another 1/8.
+  The placement must also fit activations; global batch =
+  16 × microbatches × micro size.
 ```
 
-The knobs interact: raising PP eases memory but demands more microbatches (bubble) which raises the global batch toward its ceiling; raising TP shrinks per-GPU matmuls until they're too small to saturate the tensor cores. Finding the optimum is an afternoon of arithmetic plus a day of profiling, and it is genuinely worth it — published configs (Megatron-LM, Llama 3) are the right starting points, not the right answers, for your cluster's fabric.
+The knobs interact: raising pipeline degree can ease per-stage parameter memory but increases scheduling and balance pressure; raising tensor degree shrinks per-rank kernels and increases frequent communication; raising data-parallel degree enlarges the global batch unless another dimension changes. Published configurations are hypotheses tied to their model and topology. Build a memory/communication estimate, then profile candidate layouts on the real placement before committing a full run.
 
 ```mermaid
 flowchart TB
@@ -219,147 +228,247 @@ Floating-point addition is not associative: `(a+b)+c` can differ from `a+(b+c)`.
 
 Numerical safety signals need rank-level provenance. Track loss scale, non-finite gradients, gradient norm before and after clipping, parameter/update norms, activation extrema, router statistics, and optimizer state health. A global mean can hide one rank producing corrupt values just before all-reduce spreads them everywhere. Sample per-rank checksums or known-answer kernels during burn-in, quarantine hardware with repeatable deviations, and record the exact topology and library versions in the training run. “Loss became NaN” is the final symptom; the useful signal is which tensor, rank, and step first violated its expected range.
 
+## Global-Step Semantics and State Ownership
+
+A parallel job needs one definition of a training step. For data-parallel degree `D`, `M` accumulation microbatches per replica, and microbatch size `b`, the nominal global batch is:
+
+```text
+B_global = b × M × D
+```
+
+Tensor and pipeline ranks cooperate on the same examples and do not multiply `B_global`. Sequence/context ranks split tokens of those examples. Expert ranks receive routed tokens. Confusing a compute-partition dimension with a data-replica dimension changes loss normalization and learning-rate semantics without an obvious crash.
+
+The coordinator owns the monotonically increasing **committed optimizer step** and the global data cursor. Ranks own temporary activations and gradient shards for the current attempt. A synchronous attempt follows a logical state machine:
+
+```text
+PREPARED(step, data_range, rng_epoch)
+  → FORWARD_COMPLETE
+  → GRADIENTS_REDUCED
+  → OPTIMIZER_APPLIED
+  → STEP_COMMITTED(step + 1)
+```
+
+The implementation does not need a database transaction per step, but it needs fail-stop semantics across the process groups. If a rank disappears or collective completion is ambiguous before every shard has applied the update, the surviving ranks cannot safely continue by assuming their local step is authoritative. Abort the affected job membership and restore a globally consistent checkpoint, unless the algorithm explicitly provides a consensus/reconstruction protocol for in-memory state. A heartbeat that says “rank alive” is weaker than collective progress; monitor both.
+
+Loss normalization belongs in the contract. Variable-length packing, dropped samples, expert token dropping, or a final short microbatch can make the number of contributing tokens differ by rank. Reducing per-rank mean gradients weights small and large token sets equally; reducing summed loss gradients and dividing by the global valid-token count gives different mathematics. Record and reduce the denominator that matches the objective.
+
+### Membership changes are optimizer changes
+
+Elastic infrastructure can replace ranks, but changing data-parallel degree changes `B_global` unless accumulation or microbatching changes with it. It can also change collective order, shard ownership, data assignment, and optimizer hyperparameter assumptions. Safe resize occurs at a committed boundary: stop admitting a new step, publish or materialize consistent state, establish a new membership epoch, reshard, restore data/RNG state, recompute the batch plan, and only then resume. “Elastic” should mean the protocol automates those changes—not that convergence is invariant to them.
+
+Parallel groups and rank placement are versioned run metadata:
+
+```yaml
+membership_epoch: 7
+world_size: 512
+dimensions: {data: 16, pipeline: 4, tensor: 8}
+rank_mapping_hash: sha256:...
+global_batch: 2048
+loss_denominator: valid_tokens
+data_cursor: {manifest: "corpus@sha256:...", global_sequence: 918273645}
+```
+
+This makes a resume explainable and lets tooling detect a world-size change that would silently alter the optimizer trajectory.
+
+## Checkpoints Are Distributed Transactions
+
+A valid checkpoint is a consistent cut across model parameters, optimizer state, scheduler, gradient scaler, RNG streams, data sampler/cursor, curriculum state, and parallelism metadata. A directory containing most rank shards is not a degraded checkpoint; it is an uncommitted attempt.
+
+1. Freeze or copy a state associated with committed step `s` using a barrier, copy-on-write buffers, or a framework protocol with equivalent consistency.
+2. Each rank writes its shard to an attempt-scoped namespace and reports hash, size, and logical shard ownership.
+3. A finalizer verifies the expected shard set, rejects duplicate/missing ownership, and writes a manifest that also pins code, runtime, dataset, topology, and state-schema versions.
+4. One atomic metadata commit publishes `checkpoint(s) → manifest_hash`.
+5. Only published manifests may become restart or retention roots; abandoned attempts are garbage-collected after in-flight writes cannot be mistaken for orphans.
+
+Asynchronous checkpointing shortens the training pause only if the in-memory snapshot is stable while background I/O runs. Draining live optimizer buffers while the next step mutates them produces a fast, corrupt checkpoint. Double buffering, host snapshots, or explicit copy completion owns that consistency cost. Incremental checkpoints add a dependency chain: recovery time and garbage collection must include every reachable base and delta, and periodic compaction prevents an old base from becoming a single point of failure.
+
+Restore is a tested protocol, not the inverse of write by assumption. Verify manifest and shard hashes, state-schema compatibility, resharding rules, data availability, membership epoch, and a short known-answer continuation. Periodically restore onto a different but supported topology if that is part of disaster recovery. The [dataset chapter](./11-dataset-management-versioning.md) defines how the data manifest remains reachable; the [model registry](./13-model-registry-metadata.md) defines how a completed training result becomes a governed release artifact.
+
 ---
 
 ## The Parts That Aren't Matrix Math
 
 ### The input pipeline must outrun the GPUs
 
-A training step consumes `global_batch × seq_len` tokens; the storage and preprocessing path has to deliver that every step, forever:
+A training step consumes the global batch's valid tokens; the storage and preprocessing path has to deliver them before the compute schedule needs them:
 
 ```
-8,192 GPUs × ~50K tokens/s/GPU ≈ 4 × 10⁸ tokens/s ≈ several GB/s of
-decompressed, tokenized, shuffled data — sustained for weeks.
+required_examples/s = committed_steps/s × examples/step
+required_bytes/s    = required_examples/s × encoded_bytes/example
 ```
 
-This is a storage-systems problem ([Training Pipelines](./05-training-pipelines.md) covers formats and sharding); the distributed-training-specific requirements are **determinism and resumability** — every worker must see a disjoint shard, in an order that is exactly reproducible so a job restarted from a checkpoint continues the *same* data sequence (skipping consumed samples) rather than re-sampling. Data-order bugs are among the nastiest in the field: they show up as irreproducible loss curves, silent sample duplication, or eval contamination, weeks after the fact.
+The byte rate must use encoded/decompressed representation at the constrained stage; compressed object-store throughput and host-to-device throughput are different ledgers. This is a storage-systems problem ([Training Pipelines](./05-training-pipelines.md) covers formats and sharding); the distributed-training-specific requirements are **global assignment and resumability**. Every data replica must receive the intended disjoint range, and a restart must continue from the checkpoint's global sequence without silently repeating or skipping examples. Exact sample order may or may not be a reproducibility requirement, but the chosen guarantee must be stated and tested. Data-order bugs surface as unexplained loss differences, sample duplication, or evaluation contamination long after ingestion.
 
 ### Stragglers: the max() over workers
 
 A synchronous step completes when the *slowest* participant finishes. At scale this transforms rare slowness into constant slowness:
 
 ```
-One GPU has a 1-in-1000-steps slow event (thermal throttle, ECC retry,
-noisy neighbor on the NIC, background daemon):
-  1 GPU:      0.1% of steps affected
-  8,192 GPUs: essentially EVERY step waits for someone's slow event —
-  the fleet moves at its collective p99.9.
+If each of N ranks independently has probability p of a slow event in
+a step, the chance at least one rank is slow is:
+
+  P(any slow) = 1 - (1 - p)^N
+
+Even small p becomes visible at large N. Correlated events such as a
+congested switch or shared storage pause are worse than this independent
+model and must be measured at their failure-domain level.
 ```
 
-Defenses are unglamorous and essential: pre-flight burn-in to evict weak hardware, tight monitoring of per-rank step times (the histogram's outlier *is* the job's speed), topology-aware placement so one oversubscribed switch doesn't slow a whole ring, and hot spares to swap in rather than debug in place. Asynchronous SGD — the 2012-era answer — traded this problem for stale gradients and worse convergence; modern practice is synchronous training plus ruthless straggler elimination.
+Defenses include pre-flight burn-in to quarantine repeatably weak hardware, per-rank and per-collective timing, topology-aware placement, and a replacement/restart policy that is faster than debugging a live collective. Asynchronous optimization changes the learning algorithm by admitting stale updates; it is a valid design only when its convergence behavior is intentionally evaluated, not a transparent infrastructure fix for synchronous stragglers.
 
 ### Failure math and checkpointing
 
-Component failures are Poisson; fleets are large; multiply:
+An independent constant-hazard model is a useful first estimate, although real failures are correlated and non-stationary:
 
 ```
-If one GPU fails on average every ~5 years:
-  16,384 GPUs → a hardware failure every ~2.7 hours of wall clock.
+If one component's assumed mean time between failure is M and there are
+N independent required components, the first-order fleet MTBF is M/N.
 
-Llama 3 405B (Meta, 2024): 54 days on 16K H100s, 466 job
-interruptions — one every ~2.8 hours — 78% attributed to hardware
-(GPUs, HBM, NICs, cables). This is the NORMAL operating regime.
+As one empirical case, Meta reported 466 interruptions during a 54-day
+observation window of Llama 3 405B pre-training. Treat this as evidence
+that recovery dominates at that scale, not as a failure rate portable
+to another fleet.
 
-Synchronous training means one failure stops all 16K GPUs. Recovery =
-restore from last checkpoint. Expected loss per failure:
-  (checkpoint_interval / 2) × fleet — plus restart time × fleet.
+For a synchronous job whose process group fails as a unit, one required
+rank failure stops useful progress. Under failures uniform within the
+checkpoint interval, expected lost device-time per failure is roughly:
+  (checkpoint_interval / 2 + restart_time) × allocated_devices
 
 Optimal checkpoint interval (Young/Daly):
   τ* ≈ sqrt(2 × δ × MTBF)      δ = time to write a checkpoint
-  δ = 5 min, MTBF = 2.7 h  →  τ* ≈ 52 min.
-  But drive δ down to 30 s (async, sharded) → τ* ≈ 16 min, and the
-  expected goodput loss per failure drops ~3×.
 ```
 
-That last line is why modern checkpointing is an engineering topic of its own: **sharded** (every rank writes its own state slice in parallel — a 6.5 TB state written by 16K ranks is manageable; funneled through rank 0 it's an outage), **asynchronous** (snapshot to host memory in seconds, drain to [object storage](../03-storage-engines/08-object-storage.md) in the background while training continues), and increasingly **peer-redundant** (recover a lost rank's state from neighbors' memory rather than storage). Checkpoint frequency stops being a dial you set timidly and becomes cheap insurance.
+The interval approximation is a starting point. Its independent-failure assumptions, checkpoint cost, restart time, and lost-work distribution must be checked against the fleet's measurements; maintenance events and network failures can interrupt many ranks together.
 
-The end-to-end health metric is **goodput**: the fraction of wall-clock GPU-time spent on steps that contributed to the final model — after subtracting restarts, replayed work, stalls, and initialization. Mature large-job teams report goodput improvements (85→95%+) worth millions of dollars, achieved entirely with the unglamorous machinery above.
+The optimization pressure is why checkpoint architecture matters: shard writes across ranks instead of funneling multi-terabyte state through one coordinator; snapshot stable buffers and drain to [object storage](../03-storage-engines/08-object-storage.md) asynchronously where bandwidth permits; or add peer/local redundancy when the recovery protocol can reconstruct a globally consistent state. Lower pause time permits more frequent protection, but background bandwidth, incremental-chain restore time, and publication consistency remain in the ledger.
+
+The end-to-end operational metric is **training goodput**: the fraction of allocated device-time spent on committed work that contributes to the retained run, after replay, stalls, initialization, and recovery. Define the denominator and treatment of evaluation/checkpoint work explicitly. A high step-throughput job can have poor goodput when it repeatedly loses recent steps.
 
 ---
 
-## MFU: The One Number That Summarizes Everything
+## MFU and Goodput Answer Different Questions
 
-**Model FLOPs Utilization** — achieved useful FLOPs (`6·P·tokens/sec`) divided by the fleet's theoretical peak — is the honest scoreboard, immune to batch-size games and hardware-generation confusion:
+**Model FLOPs Utilization (MFU)** compares estimated model work with device peak:
 
-```
-MFU = (6 × P × tokens_per_second) / (N_gpus × peak_FLOPs_per_gpu)
-
-Reference points:
-  50-57%   exceptional (dense LLM, tuned Megatron-class stack, PaLM/
-           Llama-3-scale engineering)
-  35-45%   good, typical for well-run large jobs
-  20-30%   common in practice — something is eating a third of the fleet
-  <20%     the job has a bug wearing a performance costume
-
-Where the missing fraction goes (the audit order):
-  1. data stalls        — input pipeline can't feed (check first, it's
-                          the cheapest fix and the most common)
-  2. communication      — unoverlapped all-reduce/all-gather time
-  3. pipeline bubbles   — (p−1)/(m+p−1), by construction
-  4. kernel inefficiency— small matmuls (TP too high), missing fused
-                          kernels (FlashAttention et al.)
-  5. stragglers/restarts— the max() tax and the failure tax (goodput)
+```text
+MFU = estimated_model_FLOPs_per_token × committed_tokens_per_second
+      -------------------------------------------------------------
+      devices × applicable_peak_FLOPs_per_device
 ```
 
-MFU is also the negotiation currency: "we need 2× the GPUs" and "we can raise MFU from 25% to 40%" are the same sentence to a budget, and the second one is usually cheaper ([ML Capacity & Cost Planning](./14-ml-capacity-cost-planning.md)).
+For the dense-Transformer approximation, the numerator may use `6P × tokens/s`. The denominator must name precision, dense-versus-sparse peak convention, and device SKU. MoE needs active-parameter or operator-aware accounting; activation recomputation performs real hardware work that the simple useful-model numerator intentionally does not credit. Those choices make MFU a defined metric for one workload family, not an absolute ranking across arbitrary models.
+
+MFU answers “how effectively does this configuration turn theoretical arithmetic capacity into modeled useful computation while it runs?” It does not include whether the chosen global batch reaches quality efficiently, whether recent steps will be discarded after failure, or whether the allocated job sat queued. **Time-to-quality** captures optimization efficiency; **training goodput** captures retained progress over elapsed allocated time; cost per accepted model captures the economic result. A complete comparison reports all three.
+
+Decompose step time on the measured critical path:
+
+```text
+T_step = T_device_compute
+       + T_exposed_collective
+       + T_pipeline_idle
+       + T_input_wait
+       + T_host_or_launch
+       + T_straggler_excess
+```
+
+Overlapped work is counted only in the dominant term, so the decomposition comes from a rank-correlated timeline rather than adding profiler summaries. Compare candidates at the same model, sequence mix, precision, checkpoint policy, and quality target. There is no universal “good MFU” threshold: small models, long-context attention, MoE routing, network topology, and recomputation have different ceilings. The useful baseline is a roofline or best-known configuration for the same workload and hardware, followed by attribution of the measured gap.
+
+## Operational Observability and Security Boundaries
+
+Fleet averages erase the causal rank. Emit step, microbatch, and collective IDs so timelines across ranks can be joined. Track data-ready time, kernel and collective spans, message bytes, effective collective bandwidth, pipeline-stage idle, valid tokens, memory high-water mark, allocator retries, thermal/ECC/NIC signals, checkpoint pause/background bandwidth, membership epoch, and committed step. Keep low-rate per-rank detail plus triggered high-resolution traces around stalls, non-finite values, membership change, and checkpoint/restore. An accelerator “utilization” gauge cannot distinguish useful matmul, a spinning collective, or work that will be replayed.
+
+Progress monitoring must run outside the blocked process group. A rank may be alive while its training thread waits forever in a collective; conversely, a long compilation or checkpoint can look stalled unless the phase is known. Watchdog policy uses phase-specific deadlines, identifies the earliest rank/collective that stopped advancing, captures evidence, then aborts and recovers consistently. Killing one process without fencing the rest can leave old ranks communicating with a replacement membership.
+
+Training infrastructure crosses valuable trust boundaries. Checkpoints contain model weights and often optimizer statistics that may reveal more than the final release; dataset manifests expose sensitive provenance; worker credentials can read large corpora and write trusted artifacts. Use workload identity scoped to exact input manifests and attempt prefixes, isolate tenants at scheduler/network/storage layers, encrypt checkpoint and transport paths, and prevent arbitrary experiment code from acquiring registry-promotion credentials. The finalizer—not a worker rank—publishes checkpoint and model manifests.
+
+Integrity is equally important. Pin and attest training images and extensions, verify checkpoint shards and dataset manifests by hash, record code/runtime/topology provenance, and quarantine nodes with repeatable numerical or communication anomalies. A compromised or faulty rank can contaminate a collective before global loss changes. Per-rank numeric sentinels and sampled checksums provide earlier evidence, while the immutable lineage path supports impact analysis after discovery.
 
 ---
 
 ## Failure Modes
 
-**The NCCL stall that looks like a hang.** One rank dies or one NIC flaps; every other rank blocks inside a collective, GPUs pinned at 100% utilization doing nothing. Without watchdogs the job hangs silently until a human notices. Defenses: collective timeouts (NCCL watchdog), per-rank liveness heartbeats *outside* the training loop, and automated restart-from-checkpoint — at a failure every ~3 hours, recovery must be reflexive, not paged.
+**Collective stall that looks like compute.** One rank or link stops advancing; every dependent rank blocks inside a collective while device activity may remain nonzero. Defense: phase-aware collective timeouts, progress heartbeats outside the process group, earliest-rank traces, membership fencing, and automated restore from a published checkpoint.
 
-**Dataloader starvation misdiagnosed as GPU problems.** Step time is high, GPU utilization graphs look busy (they show occupancy, not useful work), and the team tunes kernels for a week. The tell: profile one step; if the GPU waits on the input queue, the fix is in CPU count, decode/tokenize throughput, or storage bandwidth. Always audit item #1 before item #4.
+**Dataloader starvation misdiagnosed as device inefficiency.** Step time is high, coarse utilization looks busy, and kernel tuning cannot move throughput. Defense: correlate data-ready spans across ranks and locate whether object reads, decompression, tokenization, host memory, or device copies precede the idle gap.
 
-**Silent divergence after restart.** Resume mishandles the data-order cursor, the LR schedule, or RNG state; the loss curve looks *plausible* but the run is no longer the run you think it is — discovered at eval time, weeks later. Treat resume as a tested code path: restart a small job mid-run and diff loss curves bit-for-bit against an uninterrupted control.
+**Silent semantic divergence after restart.** Resume mishandles the data cursor, scheduler, scaler, RNG, or membership-dependent batch plan; loss remains plausible but the resumed run is a different experiment. Defense: publish complete state, run controlled interrupted-versus-uninterrupted continuations, and compare at the declared reproducibility level rather than promising bitwise identity on unsupported topology changes.
 
-**Loss spikes and bad numerics at scale.** bf16 training with large batches occasionally spikes; a single corrupted node (bad HBM producing NaNs or — worse — *wrong numbers without NaNs*, silent data corruption) can poison a global all-reduce. Defenses: gradient-norm clipping and monitoring, per-rank gradient-norm outlier detection (the corrupt rank is visible *before* the loss shows it), skip-batch-on-spike policies, and periodic known-answer tests on suspect hardware.
+**One-rank numerical corruption becomes global.** A non-finite or silently incorrect shard enters a reduction and contaminates every replica. Defense: per-rank pre-collective numeric checks where affordable, gradient/update norms, hardware error correlation, deterministic burn-in tests, and a globally coordinated abort/skip policy that advances optimizer and data state consistently on every rank.
 
 **Topology-blind placement.** The scheduler grants 512 GPUs scattered across the datacenter; rings cross oversubscribed spine links; all-reduce runs at a fraction of node-local speed. Gang scheduling with topology awareness (whole racks/pods, [ML Capacity & Cost Planning](./14-ml-capacity-cost-planning.md)) is a first-order throughput factor, not an infra nicety.
 
 **Cargo-culted parallelism configs.** A 3D config tuned for one fabric (NVLink+NDR InfiniBand) transplanted onto slower cloud networking inverts its trade-offs — TP across nodes, PP with too few microbatches. The published config encodes someone else's hardware; re-derive from your own bandwidth numbers.
 
+**Partial optimizer step survives a failure.** Some ranks apply an update before another rank dies, and survivors continue under a replacement membership. Defense: treat ambiguous step completion as uncommitted, fence the old membership, and restore one globally consistent state.
+
+**Fast asynchronous checkpoint captures mixed steps.** Background writers read buffers while the optimizer mutates them. Every file is present and checksum-valid, but the set never existed at one logical step. Defense: stable snapshot buffers or copy-on-write plus a manifest published only after global step-consistency checks.
+
+**Loss normalization changes with packing.** Ranks average gradients over different valid-token counts, so padding or dropped examples changes their weight in the global update. Defense: reduce the numerator and the intended global denominator explicitly and test irregular final microbatches.
+
+**Membership resize silently changes optimization.** Elastic recovery adds or removes data replicas, changing global batch and sample order. Defense: resize at a committed epoch boundary, reshard deliberately, and recompute/record batch and schedule semantics.
+
+**Expert hot spot becomes a learning bug.** Router imbalance saturates an expert; overflow is dropped or rerouted, changing both step time and the learned objective. Defense: observe per-expert load and overflow, model all-to-all capacity, and evaluate the quality effect of capacity/balancing policy.
+
+**Checkpoint access bypasses release governance.** Experiment workers can overwrite retained state or publish a checkpoint as an approved model. Defense: attempt-scoped write identities, immutable hashes, a separate finalizer, and registry promotion credentials unavailable to training code.
+
 ---
 
 ## Decision Framework
 
-| Situation | Reach for |
-|---|---|
-| Model + optimizer state fits on one GPU | Plain DDP; add gradient accumulation before adding machinery |
-| State exceeds one GPU, fits the cluster ÷ N | ZeRO/FSDP (stage 2, then 3) — the 7B–70B workhorse |
-| Single layer / activation working set exceeds a node's memory even sharded | Add TP (≤ node size), then PP across nodes |
-| Hundreds of nodes, model spans many | Full 3D: TP≤8 innermost, PP to fit, DP (+ZeRO-1) outermost |
-| Long-context training blowing activation memory | Activation checkpointing first; sequence/context parallelism second |
-| MoE model | Expert parallelism (all-to-all); budget fabric for it explicitly |
-| Scaling DP but steps-to-converge stopped improving | You've hit the critical batch size — more GPUs won't help; change the parallelism split or accept the wall |
-| Job at ≥ thousands of GPUs | Async sharded checkpointing, NCCL watchdogs, hot spares, per-rank step-time monitoring — before scaling, not after the first 3 a.m. hang |
-| Deciding cluster size / budget | Do the 6PT arithmetic and target MFU first ([capacity planning](./14-ml-capacity-cost-planning.md)); GPU count is an output, not an input |
+Choose parallelism by the tensor or schedule that fails the feasibility test:
+
+| Binding condition | Candidate mechanism | Cost to validate |
+|---|---|---|
+| Full state fits per device and global batch can use more replicas | Data parallelism | Gradient collective exposure and time-to-quality at larger batch |
+| Replicated optimizer/gradient/parameter state exceeds memory | FSDP/ZeRO sharding | Gather/reduce-scatter bytes, wrap granularity, memory high-water mark |
+| Individual operators or their working sets remain too large | Tensor parallelism | Critical-path activation collectives and shrinking per-rank kernels |
+| Layer groups fit but whole depth does not | Pipeline parallelism | Schedule bubble, stage balance, activation transfer, microbatch budget |
+| Long-sequence activations or attention state dominate | Activation recomputation, sequence/context parallelism | Extra compute, token exchange, masking and numerical correctness |
+| Sparse experts dominate storage/routing | Expert parallelism and possibly expert replication | All-to-all, hot experts, overflow semantics, quality impact |
+| Calendar deadline requires more devices but DP batch is inefficient | Increase model-parallel work per replica before DP degree | Memory/communication trade and measured time-to-target |
+
+Then require the operating design to answer:
+
+1. What exact tensor inventory sets the memory high-water mark at each rank, including activations and temporary workspaces?
+2. Which collective messages cross which physical links, at what sizes and frequency, and how much is exposed on the step critical path?
+3. What is the global-batch and valid-token denominator, and how does it behave under accumulation, packing, and membership change?
+4. What state makes a step committed, and what happens after ambiguous collective or optimizer completion?
+5. Does a checkpoint represent one committed step across model, optimizer, RNG, scheduler, and data cursor, and can it be restored on the promised topology?
+6. Which rank, stage, expert, link, or input shard causes a slow step, and is telemetry sufficient to establish that causality?
+7. Are MFU, training goodput, time-to-quality, and cost compared under the same workload and recovery policy?
+8. Which identities may read data, write attempts, finalize checkpoints, and promote a release artifact?
 
 ---
 
 ## Key Takeaways
 
-1. **Two ledgers force distribution**: 16 bytes/param of training state (memory) and 6·P·T FLOPs (compute). Do this arithmetic before any architecture discussion — GPU count is an output.
-2. **Data parallelism scales until the batch-size ceiling**, not just the network — beyond the critical batch size, more replicas buy bigger steps, not faster training.
-3. **ZeRO/FSDP is data parallelism with the redundancy removed** — 16P/N memory for ~1.5× communication, and the default answer below the "one layer doesn't fit a node" threshold.
-4. **TP is confined to the node, PP crosses nodes, and the bubble is (p−1)/(m+p−1)** — the 3D composition is dictated by the interconnect hierarchy, not preference.
-5. **Synchronous training moves at the fleet's p99.9** — straggler elimination, burn-in, and topology-aware placement are throughput features.
-6. **At 10K+ GPUs, failure every few hours is the normal regime** — Young/Daly sizes the checkpoint interval, and driving checkpoint *cost* down (sharded, async) is worth more than any single kernel optimization.
-7. **MFU is the scoreboard, goodput is the uptime** — audit data stalls before communication before bubbles before kernels; ~40% MFU is good, and the gap from 25% to 40% is usually cheaper than 60% more GPUs.
-8. **Resume is a correctness feature** — data cursors, RNG, and LR schedules must survive restarts bit-for-bit, and the only way to know is to test the restart path like production code.
+1. Build the actual tensor-state and operation ledgers; bytes per parameter and `6PT` are explicit approximations, not universal constants.
+2. Data parallelism is constrained by both exposed gradient communication and optimization efficiency at the resulting global batch.
+3. FSDP/ZeRO removes replicated state by paying parameter-materialization and gradient-sharding communication; wrap and reshard policy determine the real exchange.
+4. Tensor, pipeline, sequence/context, and expert parallelism split different dependencies and must be mapped to the physical topology they communicate over.
+5. A synchronous step is a global state transition: ambiguous partial completion is discarded across the affected membership.
+6. Global loss denominators, data cursors, RNG, scheduler, scaler, and membership epoch are training state, not incidental process memory.
+7. Checkpoints are distributed transactions whose manifest publishes one consistent committed step; asynchronous I/O still requires a stable snapshot.
+8. Elastic resize changes batch, shard, collective, and often numerical semantics, so it occurs at an explicit membership boundary.
+9. Synchronous speed is controlled by the slowest required dependency; per-rank correlated timelines are more useful than fleet-average utilization.
+10. MFU measures arithmetic efficiency for a defined workload, training goodput measures retained progress, and time-to-quality measures optimization outcome.
+11. Security boundaries separate experiment code, checkpoint finalization, and registry promotion while hashes and attestations protect lineage integrity.
+12. Recovery claims require repeated restore-and-continue tests, including any alternate topology promised for disaster recovery.
 
 ---
 
 ## References
 
-- Shoeybi, M., et al. (2019). *Megatron-LM: Training Multi-Billion Parameter Language Models Using Model Parallelism*. (Tensor parallelism.)
-- Rajbhandari, S., et al. (2019). *ZeRO: Memory Optimizations Toward Training Trillion Parameter Models*. SC.
-- Huang, Y., et al. (2019). *GPipe*; Narayanan, D., et al. (2019/2021). *PipeDream* and *Efficient Large-Scale Language Model Training on GPU Clusters Using Megatron-LM* (3D parallelism, 1F1B, MFU-style accounting).
-- Goyal, P., et al. (2017). *Accurate, Large Minibatch SGD: Training ImageNet in 1 Hour*. (Linear scaling rule.)
-- McCandlish, S., et al. (2018). *An Empirical Model of Large-Batch Training*. (Gradient noise scale / critical batch size.)
-- Chowdhery, A., et al. (2022). *PaLM: Scaling Language Modeling with Pathways*. (MFU definition and reference numbers.)
-- Grattafiori, A., et al. (2024). *The Llama 3 Herd of Models*. (16K-GPU operations: 466 interruptions/54 days, failure taxonomy, MFU at scale.)
-- Jiang, Z., et al. (2024). *MegaScale: Scaling Large Language Model Training to More Than 10,000 GPUs*. NSDI.
-- Young, J. W. (1974) / Daly, J. T. (2006). Optimal checkpoint interval analyses.
-- Zhao, Y., et al. (2023). *PyTorch FSDP: Experiences on Scaling Fully Sharded Data Parallel*. VLDB.
-- NCCL documentation: *Collective Operations* (ring/tree algorithms and their cost models).
+1. [Megatron-LM: Training Multi-Billion Parameter Language Models Using Model Parallelism](https://arxiv.org/abs/1909.08053) — Shoeybi et al., 2019
+2. [ZeRO: Memory Optimizations Toward Training Trillion Parameter Models](https://arxiv.org/abs/1910.02054) — Rajbhandari et al., 2020
+3. [GPipe: Efficient Training of Giant Neural Networks Using Pipeline Parallelism](https://arxiv.org/abs/1811.06965) — Huang et al., 2019
+4. [Efficient Large-Scale Language Model Training on GPU Clusters Using Megatron-LM](https://arxiv.org/abs/2104.04473) — Narayanan et al., 2021
+5. [Accurate, Large Minibatch SGD: Training ImageNet in 1 Hour](https://arxiv.org/abs/1706.02677) — Goyal et al., 2017
+6. [An Empirical Model of Large-Batch Training](https://arxiv.org/abs/1812.06162) — McCandlish et al., 2018
+7. [PaLM: Scaling Language Modeling with Pathways](https://arxiv.org/abs/2204.02311) — Chowdhery et al., 2022
+8. [The Llama 3 Herd of Models](https://arxiv.org/abs/2407.21783) — Grattafiori et al., 2024
+9. [MegaScale: Scaling Large Language Model Training to More Than 10,000 GPUs](https://www.usenix.org/conference/nsdi24/presentation/jiang-ziheng) — Jiang et al., NSDI 2024
+10. [A Higher Order Estimate of the Optimum Checkpoint Interval for Restart Dumps](https://doi.org/10.1016/j.future.2004.11.016) — Daly, 2006
+11. [PyTorch FSDP: Experiences on Scaling Fully Sharded Data Parallel](https://arxiv.org/abs/2304.11277) — Zhao et al., 2023
+12. [PyTorch FullyShardedDataParallel Documentation](https://docs.pytorch.org/docs/stable/fsdp.html) — sharding and reshard semantics
+13. [NVIDIA NCCL Collective Operations](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/collectives.html)

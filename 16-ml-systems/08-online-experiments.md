@@ -2,19 +2,17 @@
 
 ## TL;DR
 
-An online experiment is the causal-inference infrastructure that answers the only question that ultimately matters in production ML: *did this change actually help?* Offline metrics, canary health, and dashboards full of correlations cannot answer it, because none of them observe the counterfactual — what would have happened to the same users under the old system at the same moment. A randomized controlled experiment manufactures that counterfactual by splitting traffic and comparing concurrent, comparable populations. The platform that does this well is a measurement system with a decision rule: deterministic assignment, exposure logging, a metrics pipeline, guardrails, and integrity checks. The hard parts are not the statistics; they are treating assignment as a distributed-systems correctness problem, trusting the data before trusting the result, and resisting the temptation to read a number before the experiment has earned it.
+An online experiment estimates what assigning a production change caused, for a declared population, outcome, and time horizon. The platform is a versioned measurement system: stable randomization, assignment and exposure events, metric contracts, reproducible analysis snapshots, integrity gates, uncertainty, and a decision rule. Randomization removes many confounders in expectation, but valid inference still depends on identity, interference, compliance, missingness, late data, and an analysis method that matches stopping and allocation. A canary can bound operational exposure; an experiment supports a causal product claim.
 
 ---
 
 ## Why Experiments Exist: The Counterfactual Offline Metrics Cannot See
 
-Every other measurement an ML system produces is confounded. The model's offline AUC improved, but the holdout set is a frozen snapshot of a world the model will now change. Engagement went up after launch, but engagement also went up because it was December, because a competitor had an outage, because a marketing campaign ran the same week. Logs are a record of what happened under one policy; they contain no information about what *would* have happened under a different one. Correlation in observational data is the rule, not the exception, and almost none of it is causal.
+Offline metrics answer performance on a specified dataset; before/after dashboards combine treatment with seasonality, product changes, and external events. Observational causal methods can identify effects under additional assumptions, but ordinary production logs record realized actions and outcomes rather than the missing potential outcome under another policy. Randomization creates a concurrent comparison whose assignment mechanism is known.
 
-The defining property of a controlled experiment is that randomization breaks confounding *by construction*. When you assign users to control and treatment by a coin flip, the two groups are statistically identical in every respect — known and unknown, measured and unmeasured — except the one thing you changed. Any difference in outcomes that exceeds noise must therefore be *caused* by the change. This is the entire reason experiments are the gold standard: they are the only mechanism that isolates causation from the tangle of correlation that production data is made of.
+Random assignment makes treatment independent of pre-treatment characteristics *in expectation*. A finite realized sample is not identical across arms; chance imbalance remains and is represented by uncertainty intervals. Under correct assignment, no interference, consistent treatment, and complete outcome handling, the difference in outcomes identifies a causal effect for the randomized population. Randomization is powerful because it makes those assumptions inspectable—not because every observed difference is automatically causal.
 
-This matters acutely for ML because offline and online success are only loosely coupled. A model can post a better validation metric and lose money, because the offline metric measured ranking accuracy on logged data while the business cares about long-term retention. It can pass a canary — healthy latency, no error spike, stable score distribution — and still degrade the product, because [deployment rollouts](./06-model-deployment-rollouts.md) verify *operational* safety, not *business* impact. The canary tells you the new model will not fall over; the experiment tells you whether anyone is better off for it. The engineering implication is that experimentation is not a data-science nicety bolted onto the side of an ML platform. It is the feedback channel that makes the entire training-and-deployment loop honest, and the discipline that prevents a team from shipping a year of "improvements" that, measured properly, net to zero.
-
-The payoff, when this is done well, is enormous and well documented. The most cited example is from Microsoft's Bing: a single engineer's change to how ad headlines were displayed sat in the backlog for months because it looked trivial; when finally tested it increased revenue by roughly 12% — over one hundred million dollars a year — with no measurable harm to user experience. No human judged it important; only the experiment did. The same body of work shows the inverse just as forcefully. Ron Kohavi reports that across Microsoft, Google, and Bing, only about a third of well-designed ideas actually improve the metric they were built to improve; another third are flat, and a third are negative. Without experiments, an organization ships all three kinds and calls all of them wins.
+This matters acutely for ML because deployment changes both decisions and future data. A model may improve logged-data ranking accuracy yet reduce long-term satisfaction, or pass canary latency guardrails while degrading outcomes. [Deployment rollouts](./06-model-deployment-rollouts.md) control exposure; the experiment estimates the effect of that exposure. Keeping those responsibilities separate prevents operational health from being misreported as product value.
 
 ---
 
@@ -34,17 +32,37 @@ flowchart LR
     DECIDE -->|"SRM / invalid"| FIX["Distrust + debug"]
 ```
 
-Four properties make this a system rather than a flowchart. Assignment must be *deterministic and independent*, so a user's bucket is stable and uncorrelated with anything else. Exposure logging must be *faithful*, recording who actually saw the treatment, not merely who was eligible. The metrics pipeline must be *reproducible*, computing the same numbers from the same logs every time. And an *integrity layer* must sit in front of the decision, refusing to let a corrupted experiment reach a human who will read it as truth. Mature platforms — Microsoft's ExP, Google's overlapping-experiment infrastructure, Airbnb's ERF, Netflix's XP, LinkedIn's T-REX, Booking.com's platform that runs over a thousand concurrent experiments — are mostly investment in those four properties, not in statistical tests, which are the easy and well-understood part.
+Four properties make this a system rather than a flowchart. Assignment must be stable and auditable. Exposure logging must distinguish eligibility, assignment, delivery, and treatment receipt. Metric computation must pin metric definitions, event versions, windows, and late-data cutoffs. An integrity layer must withhold a decision when these contracts fail. The estimand and statistical test matter, but they operate only after the measurement system has produced valid units and outcomes.
+
+---
+
+## Control Plane, Event Plane, and Analysis Snapshots
+
+The **control plane** owns experiment identity, hypothesis, unit, eligibility predicate, layer, allocation, start and stop epochs, metric contracts, and decision rule. Configurations are immutable revisions. Increasing treatment from 5% to 25% creates a new allocation epoch; it must not silently rewrite history or rebucket the original 5% unless the design explicitly permits it.
+
+The **event plane** emits assignment, exposure, and outcome events. These are different facts:
+
+```text
+eligible → assigned(control|treatment) → delivered(config revision) → exposed → outcome(s)
+```
+
+The **analysis plane** materializes a reproducible snapshot from event-time windows, deduplication rules, identity resolution, exclusion rules declared before treatment, and a metric-definition version. A result should be addressable as
+
+```text
+(experiment revision, allocation epoch, metric version, data cutoff, analysis method)
+```
+
+so a recomputation either reproduces the number or explains which input changed. “Exactly once” event delivery is unnecessary; globally unique event IDs, idempotent ingestion, and deterministic aggregation are enough. Late events update provisional snapshots until a declared watermark, after which corrections create a new analysis revision rather than silently changing the shipped decision.
 
 ---
 
 ## Choosing the Right Instrument
 
-The A/B test is the canonical experiment, but it is one of several instruments, and the discipline is to use the *weakest* one that answers the question being asked — because each stronger instrument costs more traffic, more time, or more risk. The instruments form a ladder distinguished by the question they answer, not merely by how they split traffic.
+The A/B test is one of several instruments. Select by estimand, interference, traffic, and cost rather than treating them as stronger or weaker versions of the same test.
 
-A **shadow** deployment runs the new model on live traffic but discards its output, so it answers "can this run safely at production load?" without ever affecting a user. A **canary** routes a small slice of real traffic to the new system and watches operational health, answering "is this safe enough to keep ramping?" — it is a [rollout safety](./06-model-deployment-rollouts.md) mechanism, not a measurement of value. An **A/B test** is the first instrument that answers "is this *better*?", because it holds a concurrent control group and measures the causal difference in outcomes. **Interleaving** is a specialized, high-sensitivity instrument for ranking: instead of showing different users different rankers, it blends two rankers' results into one list per query and attributes clicks to their source, which can detect a ranking difference with one to two orders of magnitude less traffic than a user-split A/B test — at the cost of only answering the narrow question "which ranker wins per query?" A **bandit** continuously shifts traffic toward whichever variant is performing best, answering "how do I maximize reward while still learning?" — ideal for fast optimization against a clear, short-term reward, but the wrong tool when you need an unbiased, stable readout of product impact, because its adaptive allocation deliberately breaks the fixed, balanced split that clean measurement depends on.
+A **shadow** run tests the read path without applying candidate actions. A **canary** bounds live action exposure and gates operational safety. A randomized **A/B test** estimates an assignment effect against a concurrent control. **Interleaving** mixes rankers within a result list and can efficiently estimate a narrow per-query preference, but not general product impact. A **bandit** adapts allocation to reward; it reduces regret but requires logged action probabilities and policy-aware inference because naive fixed-split estimators are invalid. A **switchback** randomizes a shared market over time when user-level arms would interfere.
 
-The engineering implication is that these are not interchangeable. A canary that looks healthy is not evidence the change helped; a bandit that converged is not an unbiased estimate of effect size. Reach for the A/B test when the decision is "ship or not," for interleaving when the decision is purely about ranking quality, and for the bandit only when continuous optimization matters more than a trustworthy one-time verdict.
+These instruments are not interchangeable because they target different quantities. The experiment registry records the instrument, estimand, unit, assignment probability, and stopping rule so a downstream analysis cannot interpret a canary, interleaving win, or adaptive reward trace as a fixed-split treatment effect.
 
 ---
 
@@ -52,19 +70,20 @@ The engineering implication is that these are not interchangeable. A canary that
 
 The bucketing service decides which variant each unit sees, and its correctness requirements are those of a distributed system, not a statistics package. Three invariants must hold simultaneously across every server, region, and request that touches the experiment.
 
-Assignment must be **deterministic**: the same user must land in the same bucket on every request, on every machine, with no shared state and no network call. The standard solution is a pure function — hash the unit identifier together with the experiment identifier, and map the hash to a bucket. Because the function is deterministic, a thousand stateless servers compute the same assignment for a given user without coordinating, which is exactly the property a high-traffic serving path needs.
+Assignment should be **stable within an allocation epoch**: the same canonical unit and configuration revision resolve to the same bucket on every serving node. A pure hash function avoids a synchronous shared-state lookup, but only if the hash algorithm, byte encoding, identifier namespace, salt, and bucket boundaries are versioned. Changing from signed to unsigned modulo or hashing client IDs on one path and account IDs on another creates cross-service treatment leakage while each implementation looks deterministic in isolation.
 
-Assignment must be **independent across experiments**. If experiment A and experiment B both hash on the raw user ID, a user in A's treatment is also, deterministically, in B's treatment — the two experiments become correlated, and each one's effect leaks into the other's measurement. The fix is a *per-experiment salt* mixed into the hash, so each experiment induces a statistically independent shuffle of the population. The same salt mechanism lets you *re-randomize* a follow-up experiment so it is not contaminated by which bucket a user happened to be in last time.
+Assignment should be **uncorrelated across independently analyzed experiments**. Reusing the same unsalted bucket map can align arms. A per-experiment or per-layer salt creates a separate deterministic shuffle, subject to ordinary hash-quality assumptions. Statistical independence of assignment does not remove product interaction: two treatments may still change the same outcome, which is why interacting parameters share an exclusion layer or require a factorial design.
 
-Assignment must produce **no leakage across variants**. A user must never be exposed to both control and treatment, because a user who sees both is comparable to neither. This is harder than it sounds in practice: shared caches keyed without the variant, CDN responses that serve a control-rendered page to a treatment user, and assignment computed inconsistently on client and server all leak treatment across the boundary. The conceptual core of correct assignment fits in a few lines, and the discipline is that this function — and only this function — decides buckets, everywhere.
+Assignment must prevent **unplanned leakage across variants** within the causal window. Shared caches keyed without release epoch, inconsistent client/server identity, and rebucketing during a ramp can expose one unit to both policies. Switchbacks and intentional crossovers are exceptions only because their periods, washout, and analysis model the carryover explicitly. One versioned assignment library should define bucket semantics across paths.
 
 ```python
-def assign(unit_id, experiment_id, salt, num_buckets=1000):
-    h = stable_hash(f"{experiment_id}:{salt}:{unit_id}")   # consistent, no shared state
-    return h % num_buckets                                  # bucket → variant via config
+def assign(unit_id, experiment_revision, salt, num_buckets=10_000):
+    key = canonical_bytes("v1", experiment_revision, salt, unit_id)
+    h = stable_hash_v1(key)                    # specified algorithm and unsigned interpretation
+    return h % num_buckets                     # immutable bucket map for this allocation epoch
 ```
 
-At scale, no organization runs one experiment at a time, and the assignment layer must arbitrate hundreds of concurrent ones. Google's overlapping-experiment infrastructure (Tang et al., 2010) introduced the vocabulary the industry still uses: traffic is divided into **layers**, experiments *within* a layer partition the same users exclusively (two experiments that touch the same system parameter cannot both treat one user), while experiments in *different* layers overlap freely — every user is simultaneously in one experiment per layer, and the per-layer salts keep the assignments statistically independent:
+At scale, the assignment layer must arbitrate concurrent experiments. In the overlapping-experiment design described by Tang et al. (2010), traffic is divided into **layers**: experiments within one layer partition units exclusively, while allocations in different layers may overlap. Independent per-layer salts make assignments independent by construction:
 
 ```text
 Layer: ranking        |  exp A (30%)  |  exp B (30%)  |  holdout (40%)  |
@@ -74,39 +93,39 @@ Layer: pricing        |  exp D (10%) |            control (90%)         |
 user u = (A-treatment, C-control, D-control)   ← one draw per layer, independent salts
 ```
 
-The layer map is a governance artifact: it encodes which subsystems are allowed to experiment independently (their effects are assumed additive) and which must share a layer because they interact. Putting two interacting features in different layers is how platforms end up shipping combinations no one ever tested.
+The layer map is a governance artifact: it encodes which allocations may overlap and which must be mutually exclusive. Independent salts make cross-layer combinations observable; they do not guarantee additive effects. If two treatments interact, an unplanned analysis can be underpowered for that interaction and each marginal effect averages over the other layer's allocation. Put mutually incompatible treatments in one layer, or predeclare a factorial/interaction analysis with adequate cell sizes when learning the combination matters.
 
-The choice of *what* to hash — the randomization unit — is a modeling decision disguised as a configuration value. Randomizing per request maximizes statistical power but shows one user inconsistent behavior and is only valid for stateless predictions. Randomizing per user gives a coherent experience and is the default for personalized surfaces. Randomizing per session, per entity (a merchant, a creator, a listing), or per cluster trades power for correctness when the smaller unit would let treatment and control interfere. The rule is to randomize at the *coarsest unit at which interference still occurs* — the smallest unit that keeps the groups genuinely independent, because finer units buy power and coarser units buy validity.
+The choice of *what* to hash is part of the causal design. Request randomization is valid only when carryover and cross-request interference are negligible. User randomization preserves a coherent personalized experience. Merchant, household, market, or graph-cluster randomization may be necessary when one unit's treatment changes another unit's outcome. Choose the finest unit that plausibly contains treatment spillovers and analyze at the randomized unit; counting lower-level events as independent otherwise produces standard errors that are too small.
 
 ---
 
 ## Exposure Logging: Measuring Who Was Actually Treated
 
-Assignment says which bucket a user is in; exposure logging says whether the user actually *experienced* the treatment. The gap between the two is where a large fraction of experiment bugs live. A user assigned to a new ranking model who never issued a query was assigned but never exposed; counting them dilutes the measured effect toward zero and can hide a real win. The exposure log must record, at the moment of treatment, the experiment and variant, the stable unit identifier, the timestamp, the model and policy version, the surface, and — for ranking systems — the candidate set and positions shown. This is the same exposure log that [recommendation systems](./07-recommendation-systems.md) depend on for unbiased training data; the experiment and the model share it, which is why faithful logging is load-bearing twice over. When outcomes arrive later, the exposure ID becomes the join anchor for the label system, which is why label correctness and experiment correctness are coupled (see [Label and Ground-Truth Systems](./10-label-ground-truth-systems.md)).
+Assignment says which policy a unit was allocated; delivery and exposure say whether the production path actually presented it. The gap may be ordinary eligibility behavior, noncompliance, or an implementation defect. Exposure events record experiment and allocation epoch, stable unit, delivery token, time, release and policy versions, and surface; ranking exposures additionally record the shown slate and positions. The same event supports [recommendation learning](./07-recommendation-systems.md), while its stable ID anchors delayed outcomes in the [label system](./10-label-ground-truth-systems.md). Missing or arm-asymmetric exposure is therefore both an experiment integrity signal and a training-data bias.
 
-The analysis convention that keeps this honest is **intent-to-treat**: analyze every unit by the bucket it was *assigned* to, regardless of whether it was exposed or complied. Intent-to-treat is conservative — it includes never-exposed users — but it is unbiased, because the assignment was random while exposure is not. Filtering down to "users who actually received treatment" feels more precise and is a classic trap: exposure is itself an outcome influenced by the treatment, so conditioning on it reintroduces exactly the selection bias randomization was meant to destroy. The safe default is to analyze by assignment and treat any deviation as a deliberate, justified exception.
+The robust primary analysis is usually **intent-to-treat (ITT)**: compare eligible units by assigned arm whether or not delivery succeeded. It estimates the effect of assigning the production policy, including noncompliance. Filtering to units that received treatment is biased when receipt is affected by treatment or by post-assignment behavior. A triggered analysis can be valid when the trigger is pre-treatment, arm-symmetric, and frozen in the design; a treatment-on-the-treated effect needs additional identification, such as assignment as an instrument. The experiment record must name the estimand rather than switching populations after results appear.
 
 ---
 
 ## Sample Ratio Mismatch: The Canonical Integrity Alarm
 
-Before any result is interpreted, one check overrides all others: did the traffic actually split the way it was supposed to? If an experiment was configured 50/50 but the observed exposure is 50.2/49.8 on millions of users, something is broken. This is **Sample Ratio Mismatch**, and it is the single most important data-integrity alarm in experimentation because it is a *system* failure, not a statistical subtlety. The intended ratio is a known constant; a significant deviation from it means the pipeline that produced the data is faulty, and a faulty pipeline can produce any result, including a falsely positive one.
+Before interpreting an effect, verify whether the randomized units split according to the configured allocation. A statistically incompatible count is **sample ratio mismatch (SRM)**, an integrity alarm that often indicates assignment, eligibility, identity, filtering, or logging defects. Run the primary SRM test on assignment counts at the randomized unit. Exposure-count imbalance is also diagnostic, but it may be a real treatment effect when treatment changes delivery or triggering; treating that as ordinary assignment SRM can hide the mechanism that should instead appear as noncompliance.
 
-The reason SRM is so diagnostic is that the split ratio has *no business reason to drift*. When it does, the cause is almost always a mechanical bug that also biases the metric: a treatment that loads more slowly loses more users before they are logged, so the treatment bucket under-counts exactly the impatient users who would have dragged its metric down — the experiment then "wins" because its weakest users silently vanished. Other classic causes are redirect loss (a treatment that bounces through an extra redirect loses traffic that control keeps), asymmetric bot filtering, caching that serves one variant disproportionately, and a logging path present in one arm but not the other. Fabijan et al.'s KDD 2019 work at Microsoft showed SRM is common enough — appearing in a meaningful fraction of experiments — that automated SRM detection is now table stakes on any serious platform.
+Assignment counts have a known probability under the configured randomizer. A significant mismatch can arise from implementation defects, inconsistent eligibility, identity duplication, arm-dependent filtering, or analysis bugs. Exposure imbalance has a wider causal tree: redirect loss and asymmetric delivery may be defects, while a treatment that legitimately changes triggering may alter exposure. The integrity report should show assignment, delivery, exposure, and outcome attrition separately rather than collapsing them into one ratio.
 
-The operational rule is absolute: **an experiment that fails the SRM check is invalid, and its metrics must not be read.** A team that "eyeballs the SRM but ships anyway because the win is large" has learned nothing, because the same bug that broke the ratio likely manufactured the win. A trustworthy platform surfaces SRM before it surfaces the primary metric, so the integrity verdict is reached before anyone forms an opinion about the result. SRM is the experimentation analog of a checksum failure: you do not interpret corrupted data, you fix the corruption.
+An unexplained assignment-level SRM invalidates the configured randomized comparison. The platform withholds the ship verdict while retaining diagnostic metrics needed to locate the defect. If investigation identifies a benign analysis mistake, a new reproducible snapshot can restore validity; post-hoc reweighting is not a default repair for unknown arm-dependent missingness.
 
 Detection is a one-line chi-squared goodness-of-fit test, run automatically on every experiment before any metric is displayed:
 
 ```python
 from scipy.stats import chisquare
 
-observed = [1_004_512, 995_488]           # exposed users per arm
+observed = [1_004_512, 995_488]           # unique assigned units per arm
 expected = [1_000_000, 1_000_000]         # from the configured 50/50 split
 stat, p = chisquare(observed, expected)
 # p ≈ 1.8e-10  → SRM. A 0.45% imbalance on 2M users is wildly non-random.
 
-if p < 0.001:                             # low threshold: this test runs on every experiment
+if p < 0.001:                             # example policy; repeated looks need their own control
     experiment.mark_invalid("SRM")        # hide metrics, page the owner
 ```
 
@@ -130,20 +149,18 @@ Most SRMs are not fixable by reweighting because the missing users are usually m
 
 ## Statistical Concepts as Design Constraints
 
-The statistics an experimentation system needs are not a textbook of derivations; they are a handful of constraints that shape how the system is built and operated. Each one, gotten wrong, quietly converts the platform from a truth-teller into a random-number generator.
+Statistical assumptions are platform contracts because they determine allocation, logging, stopping, and which decision the result can support.
 
-**Statistical power and minimum detectable effect** govern how much traffic an experiment needs. Power is the probability of detecting a real effect of a given size; the convention is 80%. The smaller the effect you want to detect — the *minimum detectable effect* — the more samples you need, and the relationship is steep: halving the detectable effect roughly quadruples the required sample size. The engineering implication is that an underpowered experiment is worse than no experiment, because it consumes traffic and produces a confident-looking "no significant difference" that is actually a failure to measure. Before running, a platform should compute the required sample size from the baseline rate and the smallest effect worth shipping, and refuse experiments that cannot reach it in a reasonable window. Variance-reduction techniques like CUPED — which regresses out each user's pre-experiment behavior — buy back power without more traffic, often cutting required sample size by a third to a half, and are pure efficiency: same answer, less traffic.
+**Statistical power and minimum detectable effect** govern how much traffic an experiment needs. Power is chosen for the decision context rather than fixed universally at 80%. For common mean estimators, halving the target absolute effect roughly quadruples sample size. An inconclusive interval from an underpowered experiment is not evidence of equivalence. The design should start from the smallest effect that would change the ship decision, baseline variance, allocation, clustering, expected attrition, and planned analysis; non-inferiority and equivalence questions need their own margins rather than a failed superiority test.
 
-A rough binary-metric sample-size estimate makes the trade-off visible:
+A first-order equal-allocation estimate for a binary metric is
 
-```text
-n_per_arm ≈ 16 × p(1-p) / δ²      # 80% power, 5% alpha, rule-of-thumb
+\[
+n_{arm} \approx
+\frac{2p(1-p)\left(z_{1-\alpha/2}+z_{1-\beta}\right)^2}{\delta^2},
+\]
 
-baseline conversion p = 0.10
-minimum detectable absolute lift δ = 0.002  (10.0% → 10.2%)
-
-n_per_arm ≈ 16 × 0.10 × 0.90 / 0.002² ≈ 360,000 users per arm
-```
+where \(\delta\) is the predeclared absolute minimum detectable effect, \(1-\beta\) is power, and \(\alpha\) is the two-sided false-positive rate. Unequal allocation, clustering, covariate adjustment, repeated looks, attrition, and overdispersion change this design.
 
 Halving the MDE to 0.1 percentage points requires roughly four times the users. This is why "just run it for a day" is not an experiment plan; it is a traffic allocation with unknown sensitivity.
 
@@ -171,23 +188,46 @@ theta = np.cov(y, x)[0, 1] / np.var(x)      # regression coefficient
 y_adj = y - theta * (x - x.mean())          # adjusted outcome; unbiased, lower variance
 ```
 
-If pre- and post-experiment behavior correlate at ρ = 0.7 — common for engagement metrics — variance drops by ρ² ≈ 49%, which halves the required sample size from the power calculation above. CUPED is the rare free lunch in experimentation: the same answer, in half the time, with math a code reviewer can verify.
+In the ideal linear case, variance falls by approximately `ρ²`, where `ρ` is correlation between the pre-treatment covariate and outcome. The gain must be measured on representative pre-period data. Covariates must be determined before assignment; treatment-affected or differentially missing covariates bias the estimate. CUPED improves precision under its contract, but does not repair interference, logging defects, or a wrong randomization unit.
 
-**Peeking** is the most common way honest teams fool themselves. A fixed-horizon significance test is only valid if you look *once*, at the pre-committed end. If you check the dashboard every day and stop the first time `p < 0.05`, you are running many tests and reporting the luckiest one; the true false-positive rate inflates from the nominal 5% to 20% or more. This is not a statistical nuance to wave away — it is the difference between a platform that ships real wins and one that ships noise. There are only two correct designs: fix the horizon in advance and do not stop early, or adopt a *sequential testing* method (always-valid p-values, group-sequential boundaries) that is mathematically built to permit continuous monitoring. What you cannot do is use a fixed-horizon test and peek; the system should enforce this by hiding the verdict until the pre-registered duration or by computing sequential boundaries natively.
+**Peeking** invalidates fixed-horizon error guarantees when the stopping decision depends on intermediate ordinary p-values. The inflation depends on the number and correlation of looks, so a universal percentage is misleading. Either commit to a fixed analysis horizon or use a group-sequential, alpha-spending, confidence-sequence, or other design whose inference matches continuous monitoring. Operational guardrails may always stop an experiment for safety; that stop is distinct from claiming a statistically positive product effect.
 
 **Multiple comparisons** are peeking across metrics instead of across time. Examine fifty metrics and twenty slices and, at a 5% threshold, several will look significant by pure chance. A platform that lets analysts hunt through hundreds of numbers for a green cell manufactures false discoveries by design. The defenses are to *pre-register the primary metric* so that one number carries the decision, and to apply a correction (Bonferroni for strict control, Benjamini-Hochberg for exploratory false-discovery-rate control) to everything else, treating secondary findings as hypotheses to confirm, not conclusions to ship.
 
-**Novelty and primacy effects** are why duration is a validity constraint, not a convenience. A new UI or recommendation behavior can spike engagement simply because it is different — users click the unfamiliar thing — and the effect decays within days as novelty wears off. The mirror image, primacy, is when users initially resist a change they later prefer. An experiment stopped at its early peak measures the transient, not the steady state. The system implication is a *minimum duration* (typically capturing at least one or two full weekly cycles) so that the measured effect reflects sustained behavior rather than a reaction to change.
+**Novelty, primacy, and carryover** make duration part of the estimand. An interface change can have a transient effect; a learned policy may take time to alter behavior; a switchback may retain treatment effects after the arm changes. Choose a horizon from known business cycles and the decision's expected dynamics, inspect time-by-treatment effects as predeclared diagnostics, and define washout where carryover is plausible. A universal “two weeks” rule cannot establish steady state.
 
 ---
 
 ## Metric Design: One Primary Metric, Guarded
 
-A trustworthy experiment commits to its metrics *before* it sees data, and structures them in a hierarchy. At the top is a single **primary metric**, the Overall Evaluation Criterion (OEC): the one number that, by prior agreement, decides ship-or-not. Pre-registering it is what makes the decision honest — it removes the freedom to go looking for whichever metric happened to move. Beneath it sit **guardrail metrics**: things that must not get worse even if the primary improves, such as latency, error rate, crash rate, complaint and refund rates, and revenue. Below those are **diagnostic metrics** that explain *why* a result happened — score distributions, candidate-set sizes, cache hit rates — but never decide on their own.
+A trustworthy experiment predeclares a decision rule. Often this is one primary metric or a composite Overall Evaluation Criterion plus guardrail non-inferiority limits. Some decisions legitimately require co-primary metrics or a Pareto rule; the cost is multiplicity and more inconclusive outcomes. Diagnostic metrics explain mechanisms but do not become alternate primaries after results arrive.
 
-The guardrail layer encodes a hard-won principle: a win on the primary metric is not a license to ship if a guardrail breaks. This is the same *guarded primary metric* discipline that governs [recommendation systems](./07-recommendation-systems.md) — promote on engagement only when the metrics you refuse to sacrifice confirm you are not buying short-term clicks with long-term harm. Guardrails also catch the most direct attack on the system: metric hacking. A model can almost always move a narrow proxy (immediate clicks) by sacrificing the real goal (satisfaction, retention) — clickbait is the canonical example. Guardrails and a carefully chosen OEC are the structural defense against optimizing a number into the ground.
+Guardrails encode harms the primary objective is not allowed to purchase. Each needs a direction, non-inferiority or harm margin, uncertainty rule, maturity window, and action. Merely requiring `p > 0.05` for every guardrail confuses absence of evidence with evidence of safety. This is the same guarded-objective discipline used in [recommendation systems](./07-recommendation-systems.md).
 
-The cost of guardrails is itself measurable. Bing's performance experiments famously quantified that a 100-millisecond server slowdown reduced revenue by about 0.6%, and Amazon's early work found every 100 milliseconds of latency cost roughly 1% of sales — which is precisely why latency is a near-universal guardrail. The experiment that improves relevance but adds 200 milliseconds may well be a net loss, and only a guardrail makes that trade-off visible before launch.
+Guardrails make tradeoffs measurable. A relevance treatment that adds latency may improve ranking metrics while reducing completed sessions; neither effect can be inferred safely from a generic industry conversion factor. Measure the latency dose-response on the product and encode the acceptable degradation as a non-inferiority margin.
+
+---
+
+## Metric Contracts and Streaming Correctness
+
+A metric name is not a definition. `conversion_rate` needs a numerator event, denominator population, attribution window, unit of analysis, timezone, bot and fraud policy, identity stitching rule, late-data cutoff, and version. Ratio metrics should be computed from unit-level sufficient statistics; averaging per-event ratios or treating repeated events from one user as independent changes both the estimand and its standard error.
+
+```yaml
+metric: purchase_conversion:v5
+unit: user_id
+population: eligible_and_assigned
+numerator: first_purchase_completed
+denominator: one_per_assigned_user
+attribution: [assignment_time, assignment_time + 7d]
+dedupe_key: purchase_id
+late_data_watermark: 48h
+identity_policy: account_id_at_assignment:v2
+variance: user_level
+```
+
+Metric pipelines should publish freshness and completeness beside effects. If payment events lag differently by arm, the current estimate is not merely stale; it is biased. Backfills and corrections create a new snapshot revision, preserve the original decision snapshot, and declare whether the conclusion changes. For cluster or switchback experiments, aggregation and variance estimation follow the randomized cluster or time block, including carryover exclusions; event counts do not become independent samples because they are numerous.
+
+Security and privacy are measurement properties. Experiment IDs in client logs can reveal unreleased features; user histories used for covariate adjustment expand the sensitive-data footprint. Minimize client-visible configuration, authenticate exposure events, restrict raw event access, use purpose-scoped identifiers, and apply retention/deletion rules to analysis snapshots. An attacker who can forge exposures or outcomes can manufacture a ship decision without touching model serving.
 
 ---
 
@@ -205,15 +245,15 @@ The architectural responses change the unit of randomization to restore independ
 
 The headline of an experiment is an average treatment effect, and an average is a summary that can conceal as much as it reveals. A model change that improves the aggregate metric by 1% may be improving the experience for the majority while actively harming a minority — new users, a particular locale, a specific device class, a high-risk tenant, cold-start items with little history. The average ships; the harmed segment is discovered in a support escalation weeks later.
 
-This is why slice analysis is a required stage, not an optional drill-down: the system must routinely break results down across the segments the business cares about and surface segments where the effect is significantly negative even when the overall effect is positive. The discipline connects directly to [ML risk and governance](./09-ml-risk-governance.md) — a disparate harm across a protected or vulnerable group is not just a metrics curiosity, it is a fairness and compliance obligation, and an aggregate win is not a defense against it. Slice analysis must be balanced against multiple comparisons (enough slices and one will look harmed by chance), so the correct posture is to pre-register the slices that matter, apply a false-discovery correction, and treat a consistent, plausible regression in an important segment as a reason to scope or block the launch rather than to celebrate the average.
+Predeclare slices tied to the product and harm model, then report effects and uncertainty for them even when the aggregate is positive. Many post-hoc slices create false discoveries and low power, while aggregate randomization does not guarantee precise balance inside every small slice. Hierarchical models, multiplicity control, and follow-up confirmation can improve inference. [ML risk governance](./09-ml-risk-governance.md) determines which protected or vulnerable-group limits bind and what insufficient evidence means; the experiment platform supplies traceable estimates rather than inventing legal thresholds.
 
 ---
 
 ## The Organizational Discipline: Trustworthiness Is a Culture
 
-The deepest lesson from the literature — Kohavi, Tang, and Xu's *Trustworthy Online Controlled Experiments* (2020) distilling two decades at Amazon, Microsoft, and beyond — is that an experimentation platform is as much an institution as a piece of software. Its product is *trust*: when a result says treatment is better, the organization must be able to act on it without re-litigating whether the pipeline was broken, whether someone peeked, or whether the metric was chosen after the fact. That trust is fragile and is destroyed faster by one celebrated false win than it is built by a hundred honest ones.
+An experimentation platform needs institutional ownership because validity spans product code, identity, event schemas, statistics, and launch authority. Metric owners version definitions; platform owners maintain assignment and analysis; experiment owners declare hypotheses and respond to guardrails; independent reviewers are appropriate for high-consequence decisions. No role can certify validity from its component alone.
 
-This is the practical meaning of **Twyman's law** — "any figure that looks interesting or different is usually wrong" — which is the experimenter's first reflex. A result that is too good to be true (a 25% lift from a button color) is far more likely to be a logging bug, an SRM, or a leak than a genuine discovery, and the trustworthy response is to distrust it until the integrity checks pass. The cultural apparatus that protects trust includes pre-registration of the primary metric and duration, automated SRM and data-quality gates that the analyst cannot bypass, an institutional review of consequential launches, and a maintained registry so that experiments expire, flags are cleaned up, and assignment logic stays legible. An experiment platform without this discipline does not produce weaker results; it produces *untrustworthy* ones, which is worse, because the organization acts on them anyway.
+Unexpectedly large effects trigger stronger integrity review because logging leaks, identity defects, caching, and sample loss can create them. The platform preserves negative and inconclusive results, expires experiments and flags, and prevents metric or population changes after observation without a new revision. This is operational skepticism expressed as state and ownership rather than folklore.
 
 A production experiment registry should make the decision auditable:
 
@@ -246,7 +286,7 @@ The characteristic ways experiments mislead recur across organizations, and nami
 
 **Sample ratio mismatch** is the broken pipeline masquerading as a result. The traffic split deviated from the design, which means a mechanical bug shaped the data and very likely the conclusion. The defense is automated SRM detection that gates the result before it is read, and a hard rule never to ship on an SRM-failing experiment.
 
-**Peeking-induced false positives** come from stopping a fixed-horizon test the first time it looks significant, inflating the false-positive rate from 5% to 20% or more. The defense is to pre-register the duration and hide the verdict until it elapses, or to adopt a sequential test designed for continuous monitoring.
+**Peeking-induced false positives** come from stopping a fixed-horizon test on an ordinary intermediate p-value. The amount of inflation depends on the schedule and correlation of looks. Precommit the horizon or use sequential inference designed for the actual monitoring rule.
 
 **Underpowered experiments** consume traffic and return an inconclusive "no difference" that is really a failure to measure. The defense is an up-front power calculation, variance reduction like CUPED, and refusing experiments that cannot reach adequate sample size in a reasonable window.
 
@@ -254,38 +294,49 @@ The characteristic ways experiments mislead recur across organizations, and nami
 
 **Novelty and primacy effects** let a transient reaction to change masquerade as a durable effect. The defense is a minimum duration spanning full behavioral cycles so the steady state, not the spike, is measured.
 
-**Twyman's law violations** are the too-good results shipped without scrutiny. A spectacular lift is usually a bug — a leak, a logging asymmetry, an SRM. The defense is institutional skepticism: extraordinary results require extraordinary verification before they are believed.
+**Implausible effects without integrity escalation** ship a large apparent win caused by cache leakage, identity duplication, or asymmetric event loss. Compare unaffected invariants, reproduce from raw assignment, and inspect effect timing and slices before authorizing the change.
+
+**Allocation-epoch contamination** occurs when a ramp rebuckets existing units or analysis combines 5%, 25%, and 50% epochs without preserving assignment history. Previously exposed units carry treatment into a nominal control arm. Immutable allocation epochs, sticky assignment, and explicit washout rules preserve the comparison.
+
+**Metric-definition drift** changes event filters, identity stitching, or attribution windows while an experiment runs. The dashboard moves even though user behavior does not. Pin metric versions to the experiment revision and publish backfills as new analysis snapshots.
+
+**Pseudo-replication** counts millions of clicks as independent even though assignment occurred across hundreds of markets or users. The point estimate may be reasonable while the interval is far too narrow. Aggregate or use cluster-robust inference at the randomization unit.
+
+**Forged or asymmetric exposure** lets client bugs—or an adversary—emit treatment events without delivery, manufacturing both SRM and effect. Server-verifiable delivery tokens, schema validation, and arm-symmetric logging make the evidence chain tamper-resistant.
 
 ---
 
-## Decision Framework: When an Experiment Is the Right Tool
+## Decision Framework
 
-A controlled experiment is the gold standard for measuring impact, but it is not always available or appropriate, and forcing one where it does not fit produces false confidence. A small set of questions decides whether an A/B test is the right instrument.
+Select the instrument from the estimand and interference structure:
 
-*Is there enough traffic to reach adequate power on the smallest effect worth shipping?* If the user base is too small or the effect too subtle, the experiment will be underpowered and its "no difference" verdict meaningless; a staged geo rollout with a synthetic-control comparison, or a longer aggregation window, may be the only honest option.
+| Decision | Appropriate design | Principal limitation |
+|---|---|---|
+| Does a production change improve user outcomes? | Stable-unit randomized A/B test | Needs sufficient traffic, ethical withholding, and limited spillover |
+| Which of two rankers wins per query? | Interleaving | Narrow preference estimand; not a product-impact estimate |
+| How should reward be maximized while learning? | Contextual bandit | Adaptive data needs policy-aware inference |
+| Does treatment alter a shared market? | Cluster or switchback experiment | Few independent units and carryover reduce power |
+| Is a safety fix operationally safe? | Progressive rollout with harm guardrails | May not estimate incremental product value |
+| Randomization is impossible | Quasi-experimental design | Stronger, less testable identification assumptions |
 
-*Can treatment and control be kept independent?* If interference is unavoidable and even cluster or switchback designs cannot isolate the arms, a user-level A/B test will measure the wrong quantity, and a marketplace-level or time-based design is required instead.
+Then specify the evidence contract. The randomization unit must contain plausible spillovers; the estimand must name ITT, treatment-on-treated, non-inferiority, or another target; the metric window must include the outcome that changes the decision; and the sample calculation must use independent units, expected attrition, and the planned analysis. If the true outcome matures after the launch decision, use fast proxies only for bounded rollout safety and retain a holdout for the slower outcome where doing so is ethical.
 
-*Is withholding the treatment ethical and safe?* For some changes — a fix to an abuse or fraud detector, a security patch, a safety guardrail — denying the improvement to a control group is unacceptable, and the right move is a staged rollout with monitoring rather than a holdout.
-
-*Does the outcome that matters arrive within the experiment's horizon?* When the true outcome is long-horizon — multi-year retention, credit default, lifetime value — and labels arrive weeks or months late, a short experiment can only measure proxies. The discipline is to use short-term proxies for the ramp decision while reserving long-running holdbacks and observational causal methods (difference-in-differences, instrumental variables, synthetic control) for the slow truth.
-
-When the answers line up — sufficient traffic, separable arms, ethical to withhold, an outcome observable in time — a randomized experiment is the most reliable evidence a system can produce, and should be the default gate on any consequential ML change. When they do not, the right response is not to run a broken experiment and trust it anyway; it is to reach for the next-best causal method and be explicit about its weaker guarantees.
+Finally, bind operations to inference. Safety guardrails may stop at any time. A positive product claim follows the predeclared fixed or sequential rule. Allocation changes create epochs, not overwritten configuration. An invalid integrity state yields no ship verdict. This prevents rollout urgency from quietly changing the causal question after data arrives.
 
 ---
 
 ## Key Takeaways
 
-1. Experiments exist to expose causation: randomization breaks confounding by construction, which is the only honest way to know whether a change helped. Offline metrics and canary health cannot answer the business question.
+1. Randomization makes treatment independent of pre-treatment characteristics in expectation; causal interpretation still requires correct assignment, a defined estimand, consistency, and controlled interference.
 2. The platform is a measurement system — assignment, exposure logging, metrics pipeline, integrity layer, decision rule — not a traffic split. Each stage can silently invalidate the result.
-3. Treat assignment as a distributed-systems problem: deterministic hashing for stable, coordination-free buckets; a per-experiment salt for independence; and zero leakage of treatment across variants.
-4. Randomize at the coarsest unit where interference still occurs — fine units buy power, coarse units buy validity.
-5. Sample ratio mismatch is a system bug, not a stats nuance: a split that drifts from its design means the pipeline is broken, and a broken pipeline can manufacture any result. SRM-failing experiments are invalid, full stop.
+3. Treat assignment as a versioned distributed-systems contract: canonical identity, specified hashing, immutable bucket maps, stable allocation epochs, and no cache or configuration leakage.
+4. Randomize at the finest unit that plausibly contains carryover and spillovers, then analyze at that unit; if interference crosses randomized units, redesign or bound the estimand.
+5. Assignment-level SRM is a gating integrity failure; exposure imbalance can also reveal treatment-dependent delivery and must be diagnosed rather than mislabeled.
 6. Statistics are design constraints: size for adequate power, never peek at a fixed-horizon test, correct for multiple comparisons, and run long enough to outlast novelty effects.
 7. Pre-register one guarded primary metric; guardrails block wins that break latency, revenue, or trust, and defend against metric hacking.
 8. Interference breaks SUTVA in marketplaces and social systems; cluster and switchback designs restore validity at a real cost in power.
 9. A positive average can hide a harmed segment — slice analysis is a required stage and a governance obligation, not an optional drill-down.
-10. The platform's product is trust; Twyman's law and institutional review exist because one celebrated false win destroys more credibility than a hundred honest results build.
+10. Metric contracts, late-data revisions, cluster-aware inference, authenticated exposure, and privacy controls are part of causal correctness, not reporting details.
 
 ---
 
@@ -296,7 +347,7 @@ When the answers line up — sufficient traffic, separable arms, ethical to with
 3. [Diagnosing Sample Ratio Mismatch in Online Controlled Experiments](https://www.exp-platform.com/Documents/2019_KDD_SampleRatioMismatch.pdf) — Fabijan et al., KDD 2019
 4. [Overlapping Experiment Infrastructure: More, Better, Faster Experimentation](https://research.google/pubs/overlapping-experiment-infrastructure-more-better-faster-experimentation/) — Tang et al., Google, 2010
 5. [Improving the Sensitivity of Online Controlled Experiments by Utilizing Pre-Experiment Data (CUPED)](https://www.exp-platform.com/Documents/2013-02-CUPED-ImprovingSensitivityOfControlledExperiments.pdf) — Deng et al., 2013
-6. [Sequential Testing for A/B Experiments](https://www.evanmiller.org/sequential-ab-testing.html) — Evan Miller
+6. [Always Valid Inference: Continuous Monitoring of A/B Tests](https://arxiv.org/abs/1512.04922) — Johari, Pekelis & Walsh, 2017
 7. [Detecting Network Effects: Randomizing Over Randomized Experiments](https://www.kdd.org/kdd2017/papers/view/detecting-network-effects-randomizing-over-randomized-experiments) — Saint-Jacques et al., LinkedIn, KDD 2017
 8. [It's All A/Bout Testing: The Netflix Experimentation Platform](https://netflixtechblog.com/its-all-a-bout-testing-the-netflix-experimentation-platform-4e1ca458c15) — Netflix, 2016
 9. [Experiments at Airbnb](https://medium.com/airbnb-engineering/experiments-at-airbnb-e2db3abf39e7) — Airbnb Engineering

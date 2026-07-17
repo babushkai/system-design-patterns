@@ -12,7 +12,7 @@ Serving is a production service first, so the general patterns apply directly: [
 
 Almost every interesting decision in model serving is a point on a single trade-off curve between latency and throughput, and understanding why this trade-off is *fundamental* — not an implementation detail — is the key to the whole topic.
 
-The reason it is fundamental is that modern inference hardware is built for parallelism, not for serial speed. A GPU running a single request leaves most of its arithmetic units idle; the same GPU running thirty-two requests at once does roughly thirty-two times the useful work in barely more wall-clock time, because the dominant cost is moving the model's weights from memory into the compute units, and that cost is paid once per batch regardless of batch size. So there are two completely different numbers a serving system can optimize. **Latency** is how long one request waits. **Throughput** is how many requests the system finishes per second. On a GPU these are not merely different — they are in *tension*, because the cheapest way to raise throughput is to make each request wait a little so it can ride along with others.
+The reason it is fundamental is that modern accelerators are built for parallel work. A single small request may leave arithmetic units or memory bandwidth underused; batching can amortize weight traffic and launch overhead while exposing larger matrix operations. The gain is model- and shape-dependent and eventually saturates memory or compute, so a batch of thirty-two is not promised to deliver thirty-two times the work at the same latency. There are still two distinct objectives. **Latency** is how long one request waits. **Throughput** is how many valid requests the system finishes per second. They are in tension whenever raising achieved batch size requires queueing or larger batches increase service time.
 
 The engineering implication is that you cannot tune a serving system without first deciding which number the product actually cares about. A fraud-authorization call that blocks a checkout cares about p99 latency and will pay for idle hardware to get it. An overnight batch that scores every user's churn risk cares only about total cost and will happily run enormous batches at terrible per-request latency. Most real systems sit between these poles, and the entire job of serving infrastructure is to give an operator a *knob* on that curve rather than an accident.
 
@@ -22,7 +22,7 @@ The engineering implication is that you cannot tune a serving system without fir
 
 Before any topology or hardware decision, a model belongs to one of a few serving *regimes*, and the regime is fixed by how soon the prediction is needed relative to when its input arrives. Choosing the regime correctly is the highest-leverage decision in the whole design, because it determines which constraints even apply.
 
-**Batch (offline) scoring** runs predictions on a schedule over a large, already-collected dataset — every user's daily churn score, an overnight recommendation refresh. It has no latency budget in the user-facing sense, so it sits at the throughput extreme: maximize batch size, saturate the hardware, minimize cost-per-prediction. The catch is *staleness* — the score reflects the world as of the last run — and *invalidation*, the question of when a precomputed prediction is too old to trust. Batch is the cheapest regime by a wide margin, and a surprising number of "real-time" requirements dissolve under the question "how fresh does this actually need to be?"
+**Batch (offline) scoring** runs predictions on a schedule over a collected dataset — every user's daily churn score, an overnight recommendation refresh. It has a completion deadline rather than a per-request latency SLO, so it can use large batches and elastic capacity. The catch is *staleness*, invalidation, and materialized-output storage: a cheap computation is not cheap if most scores are never read or must be recomputed after every state change. Batch often has the lowest compute cost per prediction when the population is dense and the freshness window is real.
 
 **Online synchronous** serving answers a request in the request's own latency budget — fraud authorization, search ranking, personalization on page load. This is the regime where every constraint in this document bites: tail latency, cold start, batching trade-offs, autoscaling on the right signal. It is also the most expensive, because it forces the hardware to be ready *now* rather than whenever convenient.
 
@@ -34,11 +34,18 @@ The practical rule is to *push work toward the cheapest regime that still meets 
 
 ## Why GPUs Change the Economics
 
-Serving on CPUs and serving on accelerators are different businesses, and the difference is almost entirely about *utilization as the unit of cost*.
+Serving on CPUs and serving on accelerators have different cost curves because accelerators are expensive, coarse-grained capacity and gain efficiency from parallel work.
 
-A CPU fleet degrades gracefully and is cheap enough that some idle headroom is unremarkable. An accelerator fleet does not work that way. A GPU instance is a large fixed hourly cost whether it is doing useful work or sitting idle, and the expensive part — the accelerator — is indivisible: you cannot buy "thirty percent of an H100." This turns utilization from a nice-to-have efficiency metric into *the* metric. A GPU at twenty percent utilization is not eighty percent fine; it is a machine where eighty percent of a very large bill is being set on fire. This is the same economics that dominates [training pipelines](./05-training-pipelines.md), where an A100 starved of input data idles at premium rates — except in serving the starvation comes from a thin, bursty request stream rather than slow data I/O.
+A GPU instance is a fixed hourly cost whether it is working or idle, and capacity usually arrives in whole devices or fixed slices. Utilization is therefore an important diagnostic, but it is not the objective: a device can report high utilization while processing inefficient shapes, recomputing work, or building a queue whose responses miss their deadlines. The economic metric is cost per *successful, in-SLO* prediction:
 
-This is the real reason batching exists. Batching is not primarily a latency feature or a throughput feature; it is the mechanism that keeps an expensive, indivisible accelerator busy enough to justify its price. Once you see utilization as the cost driver, a cascade of serving decisions follows: you consolidate many models onto shared accelerators (multi-model serving, as in NVIDIA Triton) rather than dedicating a GPU per model, you batch aggressively to fill the silicon, and you scale on queue depth rather than CPU because CPU tells you almost nothing about whether the GPU is saturated. The accelerator is the constraint, and a well-designed serving system organizes everything else around keeping it fed.
+```text
+cost_per_good_prediction = fleet_cost_per_second
+                           / in_SLO_predictions_per_second
+```
+
+Batching, compilation, and consolidation matter only insofar as they improve that denominator without violating quality or latency. Deliberate idle headroom may be economically correct when it prevents a burst from turning paid compute into timed-out responses.
+
+Batching amortizes weight reads and launch overhead across requests, often raising the number of in-SLO predictions per device. Consolidation can recover capacity stranded by thin traffic, but it introduces interference and a larger failure domain. Queue depth is usually a better autoscaling signal than CPU for a GPU-bound endpoint, yet direct accelerator metrics and end-to-end deadline misses remain necessary because feature fetch or serialization can be the real bottleneck. Hardware efficiency is a constrained optimization, not a mandate to keep every accelerator at 100%.
 
 ---
 
@@ -50,27 +57,14 @@ Static batching — wait until exactly N requests have arrived, then run them to
 
 The subtlety that catches teams is that this is a *queueing* decision, not a constant. Under heavy load, batches fill before the timer fires, so the wait adds little and throughput is high. Under light load, the timer dominates and adds its full delay to requests that did not need to wait at all. The worst regime is moderate, bursty load, where the queue oscillates and the added latency becomes unpredictable — which is exactly where the tail blows up. The right batch-wait is therefore a function of the traffic shape, and the honest way to set it is to measure p99 latency at the actual peak burst size rather than reasoning about averages. A serving system that batches without measuring its tail under burst has chosen a throughput it cannot describe and a latency it cannot promise.
 
-A useful first-pass capacity model is deliberately simple:
+A batching benchmark must separate device service time from queueing delay. Queue delay consumes the request's deadline but does not create accelerator capacity. For each request-shape bucket and candidate batch policy, record the achieved batch-size distribution, device service-time distribution, queue wait, memory high-water mark, rejection rate, and the resulting goodput:
 
 ```text
-per_replica_throughput ≈ effective_batch_size / (batch_compute_time + queue_wait)
-required_replicas     ≈ peak_rps / (per_replica_throughput × safe_utilization)
+nominal_throughput(B) = B / service_time_for_batch_B
+goodput                = completed_in_SLO_predictions / wall_time
 ```
 
-Example:
-
-```text
-effective_batch_size: 32
-batch_compute_time:   20 ms
-queue_wait target:     5 ms
-safe utilization:     70%
-
-per replica ≈ 32 / 0.025s = 1,280 predictions/s raw
-safe        ≈ 1,280 × 0.70 = 896 predictions/s
-10K peak RPS needs ≈ 12 replicas before failover/deploy headroom
-```
-
-The formula is not a substitute for load testing; it is the sanity check that prevents magical thinking. If the measured system needs 30 replicas, either the effective batch is smaller, queue wait is larger, feature fetch dominates, or the accelerator is not the bottleneck you thought it was.
+`nominal_throughput` is only a kernel/service bound. The production denominator excludes responses that finish after their consumer's deadline, so a policy can raise nominal throughput while reducing goodput. Replay the measured arrival trace, including bursts and incompatible shapes, and sweep queue wait and batch limits until the in-SLO frontier is visible. [ML Capacity and Cost Planning](./14-ml-capacity-cost-planning.md) owns the subsequent fleet-size, failure-headroom, and cost calculation; this chapter supplies its benchmark contract rather than a replica count inferred from one batch measurement.
 
 ### Why the Tail Blows Up Nonlinearly
 
@@ -85,7 +79,7 @@ W ≈ (service_time × ρ) / (1 − ρ)      (M/M/1 approximation)
 ρ = 0.95  →  W ≈ 19  × service_time
 ```
 
-The wait *quadruples* between 70% and 90% utilization. This is the mathematical reason the capacity model above targets `safe_utilization ≈ 0.70`: run a GPU pool at 95% average utilization and any burst pushes ρ over 1 transiently, the queue grows without bound until the burst ends, and p99 explodes while the mean still looks acceptable. The economics push utilization up (idle GPUs burn money) and the queueing math pushes it down (hot GPUs burn the tail); the 60–75% band is where most serious serving fleets land, and it is a *chosen* compromise, not slack.
+The wait *quadruples* between 70% and 90% utilization in this idealized queue. A dynamic batcher is not an M/M/1 server — service time depends on batch size and request shape, arrivals are often bursty, and several execution instances may share a device — so the equation does not prescribe a universal 70% target. It proves the qualitative point: as offered load approaches measured capacity, small estimation errors or bursts create disproportionate waiting. Select target load from a trace-driven load test and the permitted tail, then reserve explicit headroom for a replica failure and a rolling deployment.
 
 ### What the Knobs Look Like in Practice
 
@@ -108,7 +102,7 @@ dynamic_batching {
 instance_group [ { count: 2, kind: KIND_GPU, gpus: [0] } ]   # 2 execution streams on one GPU
 ```
 
-Two details deserve attention. `max_queue_size` with `REJECT` is [load shedding](../06-scaling/07-backpressure.md) encoded in config: an unbounded queue converts a 30-second saturation burst into minutes of serving stale, already-timed-out requests. And `instance_group.count: 2` runs two copies of the model concurrently on one GPU so that one instance's host-to-device transfer overlaps the other's compute — a free ~20–40% utilization gain for small models that many teams never turn on. TensorFlow Serving exposes the same knobs as `max_batch_size`, `batch_timeout_micros`, and `num_batch_threads`.
+Two details deserve attention. `max_queue_size` with `REJECT` is [load shedding](../06-scaling/07-backpressure.md) encoded in config: an unbounded queue converts a short saturation burst into a long queue of requests whose callers may already have timed out. `instance_group.count: 2` allows concurrent execution streams, which can overlap transfers and kernels for some models but also duplicates model state and can increase contention. It is a benchmark knob, not a free gain. TensorFlow Serving exposes analogous batch size, timeout, and worker controls.
 
 ---
 
@@ -119,12 +113,15 @@ Online serving is governed by a *latency budget*, and the number that matters in
 The reason is that an inference call is rarely the whole story. A user-facing prediction typically fans out: the request must be authenticated and routed, features must be fetched (often from a [feature store](./02-feature-stores.md) over the network), the model must run, and the result must be post-processed and logged. Each stage consumes part of a fixed end-to-end budget, and a useful design discipline is to write that budget down explicitly before choosing hardware — because if feature lookup is eating most of a 100 ms budget, a faster GPU will not fix the user experience.
 
 ```text
-End-to-end p99 budget: 120 ms
+End-to-end p99 objective: 120 ms
+Allocated stage deadlines (not measured stage p99s):
   ingress + auth/routing      15 ms
   feature fetch               40 ms   <- often the real bottleneck
   model inference             45 ms
   post-processing + logging   20 ms
 ```
+
+Percentiles are not additive: the sum of four stage p99 measurements is neither the end-to-end p99 nor a defensible prediction of it, because slow stages may be correlated or occur on different requests. Stage deadlines are an engineering allocation; verify the end-to-end percentile from joint request traces and retain per-stage spans for attribution.
 
 The deeper point is *which percentile* the budget applies to. A model whose mean latency is 20 ms but whose p99 is 300 ms will, in any request that fans out to several models or several features, produce a slow user experience surprisingly often — because a request that touches ten backends inherits roughly the p99 of the *slowest* of the ten. This is the tail-at-scale problem, and serving makes it worse in two specific ways. First, batching couples requests: one slow or oversized request in a batch delays every other request in that batch, so a single pathological input raises the tail for its innocent batchmates. Second, queueing under burst inflates the tail nonlinearly — when arrivals briefly exceed service rate, the queue grows faster than it drains and wait time spikes for everyone behind the burst. The defenses are the standard tail-control toolkit applied to inference: strict per-request timeouts, bounded queues with [load shedding](../06-scaling/07-backpressure.md), separate pools so an expensive model cannot starve a cheap one, and occasionally request hedging for read-only predictions. The governing rule is that **p99, not mean, is the contract**, because users experience the tail.
 
@@ -132,11 +129,11 @@ The deeper point is *which percentile* the budget applies to. A model whose mean
 
 ## Cold Start: Why Scale-to-Zero Is Dangerous
 
-The single most important way model serving differs from ordinary stateless web serving is that a serving replica is *not* ready the instant it starts. It must first load the model into accelerator memory, and that load is slow.
+A serving replica is not ready merely because its process started. It must fetch and initialize the complete artifact/runtime path and pass a representative readiness inference before accepting traffic.
 
-The mechanism is unavoidable: model weights are large and must be copied from storage into device memory before a single prediction can run. A modest model loads in a second or two; a multi-gigabyte model loads in tens of seconds; a large language model with tens or hundreds of gigabytes of weights, streamed from object storage onto a GPU, can take *minutes* to become ready. During that entire window the replica is consuming an expensive instance and serving nothing. This is the cold-start problem, and it inverts a common piece of cloud wisdom. Scale-to-zero — letting a service drop to no replicas when idle and spin one up on the next request — is an elegant cost optimization for cheap, fast-starting services. For a large model it is a trap: the first request after scale-to-zero pays the entire load time as latency, which can mean a multi-minute response or, far more likely, a timeout.
+The mechanism is unavoidable: a replica must fetch and verify the artifact, initialize the runtime, allocate memory, place weights in host or device memory, compile or select kernels where required, and pass readiness inference. The duration varies by artifact bytes, storage locality, runtime, hardware, and cache state; model size alone does not justify a universal seconds-or-minutes claim. During that path the replica consumes capacity and serves nothing. Scale-to-zero is therefore valid only when the caller's deadline or asynchronous queue can absorb the measured cold path. Otherwise the first request times out regardless of how attractive idle-cost savings looked.
 
-The engineering implications follow directly. Latency-critical models should keep a *warm pool* of provisioned replicas rather than scaling from zero, accepting the cost of idle capacity as the price of a predictable tail. Autoscaling must be *predictive* enough — scaling up on early saturation signals — that new replicas finish loading *before* the existing ones are overwhelmed, because reacting only when the queue is already full means the new capacity arrives minutes too late. Where idle cost genuinely must be minimized (rarely-used models, large model catalogs), the realistic options are keeping a single warm replica as a floor, accepting cold-start latency only for explicitly non-interactive paths, or caching loaded models on local NVMe so reload skips the slow object-storage hop. Platforms like KServe expose scale-to-zero precisely because it is attractive — but it belongs to small models and tolerant clients, never to a latency-bound large-model endpoint.
+The engineering implications follow directly. Latency-critical models keep enough warm capacity to cover demand during the measured scale-up lead time, accepting idle headroom as the price of a predictable tail. Autoscaling must trigger early enough that a new replica passes readiness before the existing fleet saturates. Where idle cost must be minimized, alternatives include a smaller warm floor, explicitly non-interactive cold paths, artifact caches on local storage, or a multi-model pool that retains popular artifacts in memory. The decision is made by comparing the cold-path distribution with the deadline, not by classifying a model as categorically small or large.
 
 ---
 
@@ -150,7 +147,7 @@ Where the model runs relative to the application is an architectural decision wi
 | **Dedicated model server** | One local/network hop | Model scales and deploys independently; polyglot | Shared model, GPU consolidation, frequent model updates |
 | **Managed inference endpoint** | Network hop + provider overhead | Fully external; provider owns capacity and scaling | Want to avoid running accelerators; bursty or experimental load |
 
-**Embedded serving** links the model directly into the application process. It is the fastest possible path — no serialization, no network — and the simplest to reason about, but it couples the model's lifecycle to the application's: every model update is an application redeploy, the model competes for the app's memory and CPU, and the app is locked into whatever runtime the model needs. This is the right answer for a small gradient-boosted model behind a tight latency budget, and the wrong answer for anything that needs a GPU or independent rollout.
+**Embedded serving** links the model directly into the application process. It avoids a serialization and network boundary, but couples the model's lifecycle to the application's: every model update is an application redeploy, the model competes for the app's host or accelerator resources, and the app is locked into a compatible runtime. GPU-backed in-process inference is possible; the trade-off is that placement, memory ownership, failure isolation, batching across callers, and independent rollout now belong to the application. Embedded serving fits a tightly owned model with compatible lifecycle and resource needs, while a dedicated server is usually preferable when those concerns must scale or fail independently.
 
 **A dedicated model server** — TensorFlow Serving, Triton, TorchServe, or a custom service — runs the model as its own deployable, reached over a local socket or the network. This is the workhorse topology for serious systems because it buys *independence*: models roll out separately from application code (essential for safe canary and rollback), multiple applications share one model and one set of accelerators, and the model can run in whatever language and runtime it wants while callers stay polyglot. The cost is a network hop and a new dependency in the request path, which means the model server now needs its own SLO, timeout, and fallback like any other downstream.
 
@@ -177,8 +174,10 @@ A production serving contract should be explicit enough for an on-call engineer 
 ```yaml
 endpoint: fraud_authorization
 model: fraud_classifier:v42
-p99_latency_budget_ms: 120
-budget:
+end_to_end_slo:
+  percentile: p99
+  max_ms: 120
+stage_deadlines_ms:                  # allocations, not independently measured p99s
   ingress_auth: 15
   feature_fetch: 40
   inference: 45
@@ -202,7 +201,7 @@ logging_required:
   - experiment_bucket
 ```
 
-The contract turns vague SLO talk into an executable design: autoscaling knows which signal leads saturation, deployment knows what must stay warm, and incident response knows the degradation order before the incident starts.
+The contract turns vague SLO talk into an executable design: autoscaling knows which signal leads saturation, deployment knows what must stay warm, and incident response knows the degradation order before the incident starts. The numbers are illustrative outputs of a workload benchmark and risk decision, not defaults to copy; the end-to-end SLO is verified jointly rather than inferred by summing stage percentiles.
 
 ---
 
@@ -212,7 +211,7 @@ Autoscaling a model service on CPU utilization is a common and expensive mistake
 
 The reason is that the bottleneck resource is the accelerator and the queue in front of it, neither of which shows up as CPU pressure. A GPU server can be at the edge of collapse — its batch queue growing, p99 climbing — while its CPU sits at thirty percent, because the work is happening on silicon the CPU metric does not see. Scaling on CPU therefore adds replicas too late, after latency has already broken, or never. The signals that actually predict saturation are **queue depth and batch wait time** (requests are piling up faster than the GPU drains them), **GPU utilization and memory** (the accelerator is the constraint, so measure it directly), and **inference latency and timeout rate** (the symptom the user feels). Scaling on queue depth is usually the best single choice because it is a *leading* indicator: the queue grows before latency breaks, giving the slow new replicas time to load.
 
-The cold-start problem sharpens all of this. Because a new large-model replica takes tens of seconds to minutes to become ready, autoscaling must trigger well before the existing fleet is saturated — the scale-up signal has to lead demand by at least the replica warm-up time, or the new capacity arrives after the incident is over. This is why latency-critical large models combine conservative scale-*down* (keep warm capacity longer than seems necessary) with aggressive, predictive scale-*up*, and never scale to zero. The autoscaler's job is to have warm hardware ready *before* it is needed, which is only possible if it watches a signal that moves first.
+The cold-start problem sharpens all of this. Autoscaling must trigger early enough to cover the measured replica-readiness distribution; reacting after the queue breaches its budget cannot restore capacity retroactively. Latency-critical pools therefore choose their warm floor, scale-down stabilization, and forecast horizon from arrival bursts, readiness lead time, and failure headroom. Scale-to-zero remains an explicit deadline-versus-cost decision rather than a rule inferred from model size.
 
 ---
 
@@ -220,11 +219,11 @@ The cold-start problem sharpens all of this. Because a new large-model replica t
 
 Caching in model serving operates at several layers, and each one trades a different kind of staleness for a different kind of speed.
 
-**Response caching** stores the prediction for an identical input. It is enormously effective when the input space is small or skewed — the same handful of popular items scored over and over — and useless when every request is unique. The hazard is correctness: a cached prediction is stale the moment the model version changes, so the model version *must* be part of the cache key, or a deployment will silently keep serving the old model's answers. The same thundering-herd dynamics that afflict any cache apply here: when a hot key expires, a burst of concurrent misses can stampede the GPU all at once ([cache stampede](../04-caching/04-cache-stampede.md) defenses — request coalescing, early recomputation — transfer directly).
+**Response caching** stores the prediction for an equivalent decision input. It is effective when the input space is skewed and unsafe when equivalence cannot be named. The key must cover the full release manifest, tenant/authorization scope, relevant entity or feature generations, request-time inputs, and policy context. Model version alone is insufficient: the same model returns a stale decision after account state, inventory, eligibility, or threshold policy changes. The invalidation horizon must be shorter than the decision's semantic validity. The same thundering-herd dynamics that afflict any cache apply here: when a hot key expires, a burst of concurrent misses can stampede the accelerator ([cache stampede](../04-caching/04-cache-stampede.md) defenses transfer directly).
 
 **Embedding and feature caching** memoizes the expensive intermediate representations rather than the final answer. Many recommendation and ranking systems compute a user embedding once and reuse it across many candidate scorings within a request; caching it cuts redundant model passes dramatically. This caches a *component* of the computation, which is often safer than caching the final prediction because embeddings change less frequently than scores.
 
-**KV caching** is specific to autoregressive LLMs and is less an optimization than a structural necessity. Generating each new token requires attending to all previous tokens; without caching the key/value tensors of prior tokens, the model would recompute the entire prefix for every single token, making generation quadratic. The KV cache makes decoding linear, but it does so by consuming large amounts of accelerator memory that grows with sequence length and concurrency — which turns KV-cache *memory management* into the central serving problem for LLMs, discussed below.
+**KV caching** is specific to autoregressive transformers and is less an optional optimization than a change in the unit of repeated work. With cached keys and values, one new-token attention step compares its query with a prefix whose length grows linearly, so that step's dense-attention work is linear in prefix length and total decode attention over generated tokens is quadratic. A naive implementation that reruns dense self-attention over the entire growing prefix at every step pays quadratic attention per rerun and cubic total attention in the generated length (holding prompt length aside). KV caching removes that repeated prefix projection and attention computation, but consumes accelerator memory proportional to live cached tokens; [GPU Inference Internals](../17-llm-systems/11-gpu-inference-internals.md) owns the exact equations and scheduler consequences.
 
 ---
 
@@ -232,7 +231,7 @@ Caching in model serving operates at several layers, and each one trades a diffe
 
 Choosing what hardware to serve a model on is a latency-versus-cost decision, not a default, and treating every model as a GPU model overspends badly.
 
-The spectrum runs from CPUs through GPUs to specialized accelerators. **CPUs** are cheap, abundant, divisible, and have no cold-start weight-load drama; for small models, low query rates, or latency budgets that a quantized CPU model comfortably meets, they are frequently the correct and dramatically cheaper choice. **GPUs** win when the model is large enough that CPU inference blows the latency budget, or when request volume is high enough that batching on a GPU beats a much larger CPU fleet on total cost — the crossover is a throughput calculation, not an article of faith. **Specialized accelerators** — TPUs, AWS Inferentia, and the like — can offer better price-per-inference for models that map well onto them, at the cost of a narrower software ecosystem and portability friction.
+The spectrum runs from CPUs through GPUs to specialized accelerators. **CPUs** are widely available and can be provisioned in finer increments; for small models, low query rates, or latency budgets that an optimized CPU model meets, they may be the cheaper choice. They still pay artifact fetch, deserialization, memory placement, runtime initialization, and warm-up, so their cold path must be measured rather than dismissed. **GPUs** win when parallel throughput or latency offsets their coarser, more expensive capacity. **Specialized accelerators** can improve price per valid inference for compatible workloads at the cost of a narrower software ecosystem and portability friction.
 
 The engineering implication is to *measure the crossover* rather than reach for the GPU reflexively. A model serving ten queries per second within a 50 ms budget after quantization may be far cheaper on CPUs than on a barely-utilized GPU, and the utilization economics from earlier make a lightly-loaded GPU one of the worst cost outcomes available. Techniques that move the crossover — quantization to int8, distillation to a smaller model, compilation with TensorRT or ONNX Runtime — often let a model meet its budget on cheaper hardware, and are worth exhausting before paying for the next accelerator tier. Hardware choice is a per-model decision driven by the model's size, its latency budget, and its actual traffic, and the right fleet is usually heterogeneous.
 
@@ -240,13 +239,14 @@ The engineering implication is to *measure the crossover* rather than reach for 
 
 ## The Optimization Stack: Making the Model Cheaper Before Buying Hardware
 
-The crossover-moving techniques deserve concrete treatment, because they are applied in a specific order — each step cheaper than the next — and skipping the ladder is the most common serving cost mistake.
+The crossover-moving techniques deserve concrete treatment because each changes a different resource: compilation changes execution, reduced precision changes representation, and distillation changes the model itself. Their order is workload-dependent, but each candidate must pass the same release contract: output compatibility, slice quality, latency distribution, memory, and cost under production shapes.
 
-**Compilation** fuses operations and specializes kernels for the target hardware. Exporting to ONNX Runtime or compiling with TensorRT routinely yields 1.5–3× latency improvement over eager-mode PyTorch with *zero* accuracy change:
+**Compilation** can fuse operations, remove framework overhead, and specialize kernels for target hardware and allowed shapes. Export is not automatically semantics-preserving: unsupported operators, changed padding, precision conversion, or a too-narrow shape profile can alter outputs or fail only on rare inputs. Compare compiled and reference outputs on a versioned conformance corpus before benchmarking:
 
 ```python
 # PyTorch 2.x → ONNX → TensorRT, the standard production path
 torch.onnx.export(model, example_input, "model.onnx",
+                  input_names=["input"], output_names=["output"],
                   dynamic_axes={"input": {0: "batch"}},   # allow dynamic batching
                   opset_version=17)
 ```
@@ -258,23 +258,25 @@ trtexec --onnx=model.onnx --saveEngine=model.plan \
         --fp16
 ```
 
-The `--fp16` flag alone typically halves memory traffic — which matters because most served models are memory-bandwidth-bound, so halving the bytes moved roughly halves the latency.
+The `--fp16` flag halves bytes per represented element relative to fp32, but it does not imply half the end-to-end latency. Speedup depends on whether the workload is bandwidth-bound, whether kernels use reduced-precision units, how much time sits outside the model, and whether casts or unfused operators erase the gain.
 
 **Quantization** stores weights (and optionally activations) in fewer bits. The arithmetic is what makes it compelling:
 
 ```text
 7B-parameter model:
-  fp32:  7B × 4 B = 28 GB    (doesn't fit a 24 GB L4)
-  fp16:  7B × 2 B = 14 GB    (fits, with little room for batch)
-  int8:  7B × 1 B =  7 GB    (fits with headroom for batching)
-  int4:  7B × 0.5 B = 3.5 GB (fits on half a MIG slice)
+  fp32:  7B × 4 B = 28 GB    (packed weight bytes)
+  fp16:  7B × 2 B = 14 GB    (packed weight bytes)
+  int8:  7B × 1 B =  7 GB    (packed weight bytes)
+  int4:  7B × 0.5 B = 3.5 GB (packed weight bytes only)
 ```
 
-Because inference is memory-bound, int8 is not just smaller — it is *faster*, roughly in proportion to the bytes saved. Post-training quantization (ONNX Runtime's `quantize_dynamic`, TensorRT's int8 calibration) costs an afternoon; the accuracy loss is usually under a point for int8 and must be *measured on your evaluation slices*, not assumed — quantization error concentrates in rare, extreme inputs, which is exactly where fraud and safety models earn their keep.
+These are representation lower bounds, not deployment memory requirements. Runtime memory also includes quantization scales and metadata, temporary workspaces, activations, allocator fragmentation, and workload-specific state such as a KV cache. A weight-byte calculation therefore cannot establish that an artifact fits a device or partition.
 
-**Distillation** trains a smaller student model to match a large teacher's outputs, and is the heavyweight option: real training work, but 5–10× cheaper serving forever after. The typical pattern is a large teacher scoring offline or in the ranking tier while a distilled student handles the high-QPS filtering tier.
+Lower precision reduces the weight footprint and can improve throughput when compatible kernels and hardware exist. It can also add dequantization overhead or become compute-bound elsewhere, so speed is measured rather than inferred from bytes alone. Accuracy impact is model-, calibration-data-, operator-, and slice-dependent; global metric parity does not prove parity on rare or high-consequence inputs. The quantized artifact therefore has its own hash, runtime compatibility contract, and evaluation report rather than being treated as a packaging variant of the original.
 
-The order matters because of cost: compilation is free accuracy-wise, quantization is cheap and slightly lossy, distillation is a project. Exhaust them in that order, *then* discuss bigger hardware. A team that serves an uncompiled fp32 model on an H100 because "latency was too high on the L4" has usually skipped all three steps of this ladder.
+**Distillation** trains a smaller student against teacher outputs and usually changes both quality and operating point. It can be valuable when a smaller architecture moves the service to cheaper hardware or creates more batching headroom, but the economic gain depends on achieved throughput and traffic volume. A common tiered design uses a cheap student to filter candidates and a larger model to rerank the survivors; evaluation must measure cascade recall, not just the student's standalone metric.
+
+Choose by the measured bottleneck. Remove framework and serialization overhead when host time dominates; compile or select better kernels when device execution dominates; reduce precision when memory capacity or bandwidth dominates; change the architecture or distill when the model itself is structurally too expensive. Hardware changes belong in the same benchmark matrix because engineering time has a cost too. There is no universal ladder, only a resource diagnosis and a release-quality gate.
 
 ---
 
@@ -286,7 +288,7 @@ The utilization economics push toward consolidating many models onto few acceler
 
 **CUDA MPS (Multi-Process Service)** lets separate processes share a GPU with true concurrent kernel execution, without partitioning memory. Better fault isolation than one process, still no memory isolation.
 
-**MIG (Multi-Instance GPU)**, on A100/H100-class hardware, slices one physical GPU into up to seven fully isolated instances, each with dedicated memory and compute (an H100 slices into profiles like `1g.12gb` or `3g.47gb`). A MIG slice is a hard boundary: a 7-billion-parameter model quantized to fit 20 GB gets a `2g.24gb` slice, its noisy neighbor cannot touch it, and Kubernetes schedules slices as first-class resources. The price is granularity — slices are fixed sizes, and a model that needs 25 GB wastes most of a 47 GB slice.
+**MIG (Multi-Instance GPU)** partitions supported GPUs into hardware-isolated profiles with dedicated fractions of memory and compute. Available profiles and isolation details depend on the exact device and software stack. Select a profile from measured peak runtime memory and service time under concurrency, not parameter count or quantized weight bytes. Fixed profile sizes improve isolation but can strand capacity when a workload falls just above a boundary; orchestration also has to treat profile identity as part of placement compatibility.
 
 The decision mirrors any [multi-tenancy](../06-scaling/12-multi-tenancy.md) call: shared process for density among trusted equals, MIG for hard isolation between tenants with different SLOs. The anti-pattern is the unexamined default of one whole dedicated GPU per small model — the most expensive possible configuration, and the most common.
 
@@ -294,29 +296,29 @@ The decision mirrors any [multi-tenancy](../06-scaling/12-multi-tenancy.md) call
 
 ## LLM Serving as a System Problem
 
-Large language models are the same serving problem turned up to a point where its constraints become qualitatively different, and a brief look at *why* is instructive even outside the LLM world.
+Autoregressive LLMs break several simplifying assumptions made by fixed-shape inference. Requests consume work over time rather than in one bounded call; input and output lengths vary widely; the scheduler can admit and retire sequences at token-step boundaries; and KV-cache memory grows with live sequence tokens. Consequently admission control must reserve memory and work, not merely count requests.
 
-The first difference is that LLM inference is **memory-bandwidth-bound during decode**, not compute-bound. Generating tokens one at a time means repeatedly streaming the model's weights and the growing KV cache through the accelerator to produce a single token's worth of work, so the limiting resource is how fast memory can feed the compute units, not the compute units themselves. This inverts the usual intuition: throughput per GPU, which dominates LLM serving cost, is gated by memory traffic and memory capacity rather than raw FLOPs. ([GPU Inference Internals](../17-llm-systems/11-gpu-inference-internals.md) derives the roofline math and throughput ceilings behind this claim.)
+| Fixed-shape serving assumption | LLM replacement |
+|---|---|
+| one latency number | time to first token, inter-token latency, and end-to-end latency |
+| request count approximates load | prompt tokens, generated tokens, model, and deadline define load |
+| static/dynamic request batches | iteration-level continuous batching |
+| activation memory bounded by batch shape | KV-cache capacity grows with active sequence lengths |
+| replicas are interchangeable | prefix/cache locality and parallelism placement affect routing cost |
 
-The second difference is that requests have **wildly variable, unbounded length**. A static batch is hopeless when one request generates ten tokens and another generates two thousand: the whole batch is held hostage by its longest member, and finished requests cannot leave until the batch completes. The answer, introduced by Orca (Yu et al., OSDI 2022) and popularized by vLLM, is **continuous batching** (also called iteration-level scheduling): the scheduler operates at the granularity of a single decoding step, evicting finished sequences and admitting new ones *between* token steps, so the GPU never idles waiting for the slowest request and new arrivals do not wait for a batch boundary. This is dynamic batching's idea taken to its logical extreme, and it is the single largest throughput lever in LLM serving.
+The general serving control loop still applies — bounded queues, admission control, degradation, versioned artifacts, and cost per in-SLO result — but its resource units change. A gateway that admits 100 one-token prompts and 100 long-context generations as equal requests has no defensible overload behavior. The detailed KV-memory equation, roofline limits, continuous-batching scheduler, and prefill/decode placement belong to [GPU Inference Internals](../17-llm-systems/11-gpu-inference-internals.md) and [LLM Infrastructure](../17-llm-systems/05-llm-infrastructure.md); duplicating them here would give two chapters ownership of the same mechanism.
 
-The third difference is that the **KV cache is the scarce resource**, and managing it is where the systems work lives. The arithmetic makes the scarcity concrete. Per token, the cache stores a key and a value vector for every layer:
+---
 
-```text
-kv_bytes_per_token = 2 (K and V) × n_layers × n_kv_heads × head_dim × bytes_per_element
+## Security and Abuse Resistance
 
-Llama-3-70B (fp16 KV, grouped-query attention):
-  2 × 80 layers × 8 kv_heads × 128 dim × 2 B ≈ 0.32 MB per token
+The inference gateway is a resource-security boundary. Input validation must happen before expensive allocation: authenticate the caller, enforce model and tenant quotas, bound tensor dimensions or sequence length, reject malformed dtypes and decompression bombs, and translate the request into an estimated work unit. A byte-size limit alone is insufficient when a small compressed or sparse input expands into a large dense tensor. Admission control protects availability from both hostile traffic and ordinary clients whose shape distribution changed.
 
-One 8K-token conversation:        8,192 × 0.32 MB ≈ 2.6 GB
-Weights (int4-quantized 70B):                     ≈ 35 GB
-H100 (80 GB) after weights:                       ≈ 45 GB free
-Max concurrent 8K conversations:  45 / 2.6        ≈ 17 requests
-```
+Model artifacts and runtimes are part of the software supply chain. The release manifest pins artifact and runtime hashes, serving schema, preprocessing graph, and allowed hardware profile. Loading language-native serialized objects from an untrusted registry can execute code; prefer constrained formats where possible and validate or convert artifacts in an isolated build step. The serving identity reads only approved artifacts and feature namespaces and cannot promote a new release. Artifact verification happens before placement into a shared warm cache, so one compromised tenant cannot seed executable state for another.
 
-Seventeen concurrent requests on a $30K accelerator — and that is *with* grouped-query attention cutting the KV heads 8×; a multi-head-attention model of the same size would fit two. This is why KV-cache memory, not compute, caps LLM throughput, and why the batch size that continuous batching can sustain is a memory calculation, not a scheduling choice. vLLM's PagedAttention (Kwon et al., SOSP 2023) attacked the allocation side of this: treating KV-cache memory like virtual memory — fixed-size pages (16 tokens each by default) mapped by a block table, rather than one contiguous max-length reservation per request — eliminated the fragmentation and over-reservation that previously wasted 60–80% of the cache, and reported up to an order-of-magnitude throughput improvement over naive serving as a result. The lesson generalizes beyond LLMs: when a resource is both scarce and the throughput bottleneck, the highest-leverage engineering is in *how that resource is allocated*, not in how fast each operation runs.
+Multi-tenant inference also creates confidentiality boundaries. Cache keys include tenant, authorization scope, full release version, and every input that affects the result; otherwise a response or embedding cache can leak data across callers. Prediction logs and feature payloads follow purpose-limited retention and access controls. Rate limiting raises the cost of model extraction and membership-inference probing, but it is not proof against either; sensitive systems combine quotas, output minimization appropriate to the product, anomaly detection, and governance over who may query which model.
 
-The fourth difference is that one request has **two phases with opposite hardware profiles**. *Prefill* (processing the prompt) is compute-bound and parallel — thousands of tokens in one pass; *decode* is memory-bound and serial — one token per pass. Mixing them in one batch means a long prefill stalls every decoding request's next token, which is user-visible as inter-token jitter. Modern stacks either chunk prefills into slices interleaved with decode steps (vLLM's chunked prefill) or disaggregate entirely, running prefill and decode on separate GPU pools connected by a KV-cache transfer (the "prefill/decode split"). The right SLO vocabulary splits accordingly: **TTFT** (time to first token — the prefill experience) and **TPOT/ITL** (time per output token — the decode experience) replace the single "latency" number, because one endpoint can be excellent at one and terrible at the other. LLM-specific serving is covered in full in [LLM Infrastructure](../17-llm-systems/05-llm-infrastructure.md).
+The security fallback must preserve authorization semantics. Falling back from a tenant-specific model to a shared model, or from private features to a cached response, can be an information leak even when it restores latency. Every degradation rung is reviewed for both product safety and data isolation, not just compute availability.
 
 ---
 
@@ -324,7 +326,7 @@ The fourth difference is that one request has **two phases with opposite hardwar
 
 The characteristic failures of model serving recur across organizations, and most of them are direct consequences of the constraints above.
 
-**Cold-start latency spikes** appear when a scaling event or deploy brings up a replica that must load a large model before serving. The first requests routed to it stall for the entire load time and frequently time out. The defense is warm pools, predictive scale-up that leads demand by the warm-up time, and never scaling latency-critical large models to zero.
+**Cold-start latency spikes** appear when a scaling event or deploy brings up a replica that must fetch, verify, deserialize, compile, and place an artifact before serving. If readiness reports success before representative inference passes, traffic discovers the missing kernel or memory margin. The defense is artifact-locality planning, readiness that includes a conformance inference, and enough warm capacity for the stated SLO. Scale-to-zero is valid only when the caller's deadline explicitly includes cold-start time or an asynchronous queue absorbs it.
 
 **Batch-induced tail latency** is the quiet cost of throughput optimization: mean latency looks fine, but p99 climbs because a too-long batch wait, or one oversized request poisoning its batch, delays everyone. The defense is to measure p99 under realistic burst load, cap batch wait and batch size, and isolate expensive models in their own pools.
 
@@ -336,56 +338,48 @@ The characteristic failures of model serving recur across organizations, and mos
 
 **Thundering herd** strikes when many cache entries expire at once, a popular replica restarts, or a dependency recovers and a backlog floods in — a synchronized surge that overwhelms the GPU pool. The defense is request coalescing, jittered cache expiry, bounded queues with [load shedding](../06-scaling/07-backpressure.md), and [circuit breakers](../06-scaling/06-circuit-breakers.md) on downstream feature fetches.
 
-A degradation ladder — defined *before* an incident — turns these from outages into graceful falls: full model → cached prediction → smaller/cheaper model → rules fallback → safe default. Each rung should name its user impact explicitly, because the right "safe default" for fraud (manual review) is very different from the right one for recommendations (popular content).
+**Retry amplification and zombie work** occur when a caller times out and retries while the original inference continues consuming the accelerator. The user sees a failure, the fleet performs the work twice, and overload deepens. End-to-end deadlines must propagate into the batch queue; expired requests must be removed before dispatch when possible, retries need one bounded owner, and an idempotency or request key should coalesce equivalent work. Successful device execution is not successful serving if the result missed its consumer's deadline.
 
-Overload runbook:
+**Partial observability** occurs when asynchronous logging is dropped under the same overload that triggers fallback. The service recovers, but no one can reconstruct which model, features, or degradation path made affected decisions. Prediction logs need their own bounded, durable path and an explicit failure policy: block high-risk actions, write a minimal local audit record, or count an acknowledged observability gap. Silently dropping logs makes the incident operationally unrecoverable.
 
-```text
-Alert: inference queue_wait_p99 > budget or timeout_rate > 1%
-1. Confirm bottleneck: queue depth, GPU util, GPU memory, feature-store p99, batch size.
-2. If feature fetch is slow: open circuit to stale/non-critical features or fallback model.
-3. If GPU saturated: increase replicas if warm capacity exists; otherwise shed low-priority traffic.
-4. If OOM/long input: enforce max input length/batch size; quarantine offending traffic slice.
-5. If deploy-related: flip active pointer to previous warm model; do not wait for redeploy.
-6. After recovery: replay prediction logs for dropped/fallback traffic and quantify user impact.
-```
+A degradation ladder — full release, previous warm release, feature-light or cheaper model, deterministic policy, abstention/manual review — turns saturation into a bounded product behavior. It is not automatically ordered by compute cost: a cached prediction may be unsafe after a state change, and a previous model may depend on the same broken feature. Each rung therefore declares validity conditions, maximum age, user impact, and which failures it is independent of.
 
-The first step matters: adding GPUs to a feature-store incident is expensive theater, and increasing batch size during a tail-latency incident can make the user-visible symptom worse.
+Containment should follow the saturated resource. Growing pre-inference time with idle devices points to feature fetch, serialization, or host scheduling. Growing device queue with stable service time points to insufficient accelerator capacity or a burst. Rising service time at a fixed shape points to interference or thermal/runtime regression; rising service time with shape identifies input mix. OOM tied to one shape is an admission-contract failure, while OOM after a deploy is an artifact-capacity failure. Roll back only when the timeline implicates the release; otherwise rollback can preserve the same dependency incident and waste recovery time.
 
 ---
 
 ## Decision Framework
 
-When designing or reviewing a model serving system, a few questions separate a service that holds its SLO from one that surprises its operators.
+Design the system from the decision deadline backward.
 
-*Which number does the product actually care about — p99 latency or cost-per-prediction?* The answer determines where you sit on the batching curve and is the first thing to decide, because it dictates every tuning choice downstream.
+| Step | Quantitative question | Resulting choice |
+|---|---|---|
+| Regime | how stale may the decision be? | batch, asynchronous, streaming, or synchronous serving |
+| Budget | what end-to-end percentile and deadline apply, including fallback? | stage budgets for features, queue, inference, post-processing, and logging |
+| Workload | what are arrival bursts, shape/length distribution, model mix, and priority classes? | shape buckets, queue isolation, request weights, admission limits |
+| Benchmark | for each hardware/runtime/batch point, what are service-time distribution, memory, quality, and power/cost? | feasible operating frontier rather than a vendor-spec estimate |
+| Capacity | what target load meets the tail under a replica loss and rolling deploy? | warm floor, replica count, headroom, and scale-up lead time |
+| Topology | which lifecycle needs independent scaling and rollout? | embedded, dedicated, shared, or managed endpoint |
+| Failure semantics | what happens when a dependency is slow, the queue is full, or logging is unavailable? | timeout ownership, shedding priority, fallback validity, audit policy |
+| Release | can one manifest bind artifact, runtime, feature schema, policy, and rollback target? | atomic promotion and decision reconstruction |
 
-*Is the model embedded, on a dedicated server, or on a managed endpoint, and does that match its size and update cadence?* Embed small fast models with few callers; run a dedicated server when a GPU, independent rollout, or shared access is needed; reach for a managed endpoint to avoid running accelerators for bursty or experimental load.
-
-*If batching, has p99 been measured at the real peak burst size — not the mean?* Batching that is not characterized under burst has chosen a tail latency nobody can describe.
-
-*Does the autoscaler watch queue depth or GPU saturation, and does it lead demand by the replica warm-up time?* Scaling on CPU, or reacting only when the queue is already full, guarantees that slow-loading replicas arrive too late.
-
-*Is scale-to-zero off for every latency-critical large model, with a warm pool sized for the burst?* Cold-start latency is the failure that most reliably violates a serving SLO.
-
-*Does every prediction log carry its model version, and does a degradation ladder exist before the next incident?* Without version stamping you cannot detect a silent wrong model; without a defined ladder, saturation becomes an outage instead of a graceful fall.
-
-A serving system that answers these well is one whose latency, cost, and failure behavior are *chosen* rather than discovered in production.
+For each feasible point, calculate `cost_per_good_prediction`, not just hourly device price, and reject any point that misses the quality or tail constraint. Validate with replayed production traces plus adversarial bursts, cold replicas, one-replica loss, shard movement, and concurrent rollout. The selected operating point is then encoded as admission limits and autoscaling policy; it should not depend on an on-call engineer remembering benchmark assumptions.
 
 ---
 
 ## Key Takeaways
 
 1. Model serving is a latency-bounded, throughput-constrained, hardware-bound service; its defining tension is that the techniques which raise throughput (batching, queueing) inflate the latency tail.
-2. On accelerators, utilization is the unit of cost — an idle GPU is wasted money — and batching exists primarily to keep expensive, indivisible hardware busy.
+2. Optimize cost per successful, in-SLO prediction. Utilization is a diagnostic, not the objective; batching and consolidation are valuable only when they improve useful throughput without breaking the tail.
 3. Dynamic batching is a queueing decision: a bounded wait trades a few milliseconds of latency for a larger batch, and its tail must be measured under realistic burst, not averaged.
 4. p99, not mean, is the contract, because fan-out and batch coupling make tail latency the experience users actually feel.
-5. Cold start is the property that separates model serving from stateless web serving: large models take tens of seconds to minutes to load, so scale-to-zero is dangerous and warm pools are the norm.
+5. Cold start includes artifact fetch, verification, deserialization, compilation, placement, and conformance inference; warm capacity is required whenever the deadline cannot absorb that path.
 6. Choose the topology — embedded, dedicated server, or managed endpoint — by model size, update cadence, and how many callers need predictions.
 7. Autoscale on queue depth and GPU saturation, not CPU, and lead demand by the replica warm-up time so slow-loading replicas arrive before the incident.
 8. Cache at the right layer — response, embedding, or KV — and always include the model version in the cache key.
-9. Hardware is a per-model cost/latency decision; measure the CPU-versus-GPU crossover and exhaust quantization and distillation before paying for the next accelerator tier.
-10. LLM serving is the same problem at its limit — memory-bound decode, continuous batching, and KV-cache allocation as the dominant throughput lever.
+9. Hardware and optimization are bottleneck decisions: benchmark compilation, precision, architecture, and device choices under production shapes and the same release-quality gate.
+10. LLM serving preserves the control loop but changes the resource unit from requests to token work and KV memory; its canonical mechanisms live in the dedicated LLM infrastructure chapters.
+11. The gateway is a resource and confidentiality boundary: validate shapes before allocation, quota estimated work, verify artifacts, isolate tenant caches, and preserve authorization through fallback.
 
 ---
 

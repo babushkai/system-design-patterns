@@ -12,20 +12,14 @@ The window is finite; attention and recall are non-uniform; input is repeatedly 
 
 Every request presents the model with one bounded sequence or equivalent ordered content structure: system instructions, tool definitions, conversation state, retrieved documents, the current message, and space reserved for the response. Advertised model limits continue to grow, but a large repository, long-running agent trace, or document corpus can still exceed them—and quality can degrade well before the hard limit.
 
-The budget must be *allocated*, and unallocated budgets fail in a characteristic way: retrieval or history grows to fill all available space, the response gets squeezed, and quality drops precisely on the complex tasks that needed room to answer. A production system states its allocation explicitly:
+The budget must be allocated before optional material is selected. Let \(W_m\) be the qualified usable window for model \(m\), which may be below its protocol maximum. Feasibility requires
 
-```yaml
-# Context budget for a support agent on a 200K-token model
-context_budget:
-  system_prompt_and_tools: 8_000     # fixed, cache-friendly prefix
-  memory_and_user_profile: 2_000
-  retrieved_documents: 40_000        # RAG results, capped at retrieval time
-  conversation_history: 120_000      # compaction triggers at this threshold
-  current_turn_headroom: 10_000
-  reserved_for_output: 20_000        # never let input squeeze this
-```
+\[
+T_{instructions}+T_{tools}+T_{active\ state}+T_{evidence}+T_{history}
++T_{current}+R_{output}+R_{variance} \le W_m.
+\]
 
-Two non-obvious rules hide in that YAML. First, *output reservation is a correctness constraint, not a courtesy*: a model that exhausts its generation allowance truncates an answer or tool call, and some APIs account internal reasoning against related output limits. Second, the compaction threshold must sit below the hard window by a measured safety margin for current-turn variance, tool schemas, output, and quality degradation. There is no universal percentage; qualify the threshold for each model, prompt shape, and workload slice.
+The first terms may have minimum reservations or hard inclusion rules; optional evidence and history compete only for what remains. \(R_{output}\) is a correctness reservation because truncation can cut a structured value or tool proposal. \(R_{variance}\) covers token-estimation error, input growth, and any model-specific accounting that shares the limit. The allocator stores both planned and actual use by class, then recalibrates reservations from truncation, overflow, and task-success data. There is no portable percentage: limits follow the joint distribution of model, renderer, tool set, language, task, and output contract.
 
 ## Context Assembly as a Materialized View
 
@@ -99,122 +93,69 @@ Caching also reduces prefill work and can improve TTFT, but only for eligible pr
 
 ## Attention Is Not Uniform: Lost in the Middle and Context Rot
 
-A context window is not random-access memory. Liu et al.'s *Lost in the Middle* (2023) established the canonical result: on multi-document QA, accuracy is highest when the relevant document is at the *beginning or end* of the context and drops substantially when it sits in the middle — a U-shaped attention curve that persists, attenuated, in current frontier models. Follow-on "needle in a haystack" testing became a standard model-qualification exercise, and the broader phenomenon — quality degrading as contexts grow long even when the needle is findable — is now commonly called *context rot*: models get distracted by irrelevant material, over-attend to recent tokens, and lose track of constraints stated once, early, in a 300K-token transcript.
+A context window is not random-access memory. *Lost in the Middle* demonstrated position-dependent accuracy on multi-document QA, with stronger use of evidence near boundaries than in the middle for the evaluated models and tasks. Later long-context evaluations show that recall, distractor sensitivity, and reasoning quality vary with model, position, formatting, evidence density, and task. “Context rot” is a useful name for degradation as irrelevant or conflicting material grows, but it is an empirical workload property rather than one universal curve.
 
-The engineering responses are placement and hygiene rules rather than exotic machinery:
+Placement is therefore an evaluated part of context compilation. Mandatory policy and current intent receive stable, explicit structure; evidence stays adjacent to the claims or task segment it governs; chronology and table structure are not destroyed merely to place a high score at an edge. Repeating an obligation can increase salience but creates divergent copies unless every rendering is derived from one canonical field.
 
-- **Put instructions at the edges.** Durable rules live in the system prompt (top); the current task and any binding constraints are restated near the end. Long-document prompts routinely repeat the question *after* the document for exactly this reason.
-- **Order retrieved documents by importance, outside-in** — most relevant first and last, weakest in the middle — rather than by retrieval score order alone.
-- **Don't ship irrelevant context.** Retrieval that pads the window with marginal chunks doesn't just waste money; it actively degrades answers by feeding the distraction failure. A reranker that cuts twenty chunks to five ([RAG Patterns](./04-rag-patterns.md)) is an attention optimization as much as a cost one.
-- **Test your own needle.** Providers' needle benchmarks are synthetic. If your system depends on recall from position 200K of a legal contract, build a twenty-case retrieval probe from your own documents and run it when you change models — the same qualification discipline as any [offline evaluation](./10-llm-evaluation.md).
+Selection quality matters as much as placement. Marginal evidence consumes tokens and can introduce distractors or contradictions, so evidence allocation should optimize sufficiency and redundancy rather than maximize chunk count. Qualification probes vary decisive-evidence position, distractor density, document structure, and context length on the actual task distribution. A synthetic needle measures one retrieval behavior, not the system's ability to reason over its own evidence.
 
 ---
 
-## Prefix Caching Discipline: The Load-Bearing Optimization
+## Prefix Identity, Reuse, and Revision
 
-Prompt caching commonly reuses an exact or token-equivalent prefix according to provider-specific rules. A change near the start invalidates reuse for everything after it. This turns caching from a checkbox into an architecture constraint: assemble stable parts first and volatile parts last, and make turn \(N+1\) extend turn \(N\)'s prefix wherever the API permits.
+Prefix reuse is a derived optimization over one rendered request revision. A cache entry is correct only when its identity includes the token sequence and every state-affecting input: resolved model and tokenizer, adapter, template/compiler revision, tool schemas, position handling, multimodal content, and the provider/runtime's cache domain. Text equality alone is insufficient if another hidden input changes activations.
 
-The rules that follow are simple and violated constantly:
+For request revisions \(r_a\) and \(r_b\), the reusable span is their longest compatible token prefix. Stable operator configuration and tool schemas therefore precede volatile per-turn content where the target protocol allows it. Canonical serialization prevents semantically irrelevant map order or whitespace changes from reducing reuse. Model migration, tool-set change, correction, minimization, and compaction create explicit divergence points; correctness and deletion obligations take precedence over preserving a cache hit.
 
-1. **Freeze the prefix.** System prompt and tool definitions render first; they must be byte-identical across calls. A timestamp, a request ID, or a "helpful" per-user greeting interpolated into the system prompt silently reprices the entire conversation to uncached rates.
-2. **Append, never edit.** The message history must be append-only. Rewriting an earlier tool result, re-ordering messages, or re-serializing JSON with non-deterministic key order breaks the prefix at the edit point.
-3. **Don't swap tools or models mid-session.** Tool definitions sit at position zero; adding or removing one invalidates the whole cache. Caches are also per-model — routing a conversation between models forfeits the cache each switch, which changes the math on "use the cheap model for easy turns" routing.
-4. **Verify with usage fields, not assumptions.** Where the runtime reports cached-read tokens or cache decisions, record them. A low cached-token share on an eligible multi-turn workload suggests a silent invalidator; compare the canonical manifests of consecutive requests.
-
-The serving-side mirror of this discipline — cache-aware routing, failover cost, fleet KV footprint — is in [Agent Inference](./12-agent-inference.md).
-
-```python
-# WRONG: rebuilds the prompt each turn; three separate cache-killers.
-system = f"You are a support agent. Today is {datetime.now()}."   # (1) volatile prefix
-messages = sorted(history, key=relevance)[-20:]                    # (2) reordered history
-tools = pick_tools_for(query)                                      # (3) varying tool set
-
-# RIGHT: stable prefix, append-only history, fixed tools; volatile info
-# travels in the latest message where it invalidates nothing.
-system = SYSTEM_PROMPT_FROZEN
-messages = history + [{"role": "user",
-                       "content": f"[context: {datetime.now():%Y-%m-%d}] {query}"}]
-```
-
-Compaction and caching interact: compacting the transcript necessarily rewrites history and invalidates the cache once. That is the right trade — one cache-write against a much smaller transcript — but it is why compaction should fire at *thresholds*, not every turn.
+The context manifest records the eligible prefix, compatibility inputs, cache decision, and reported reused tokens. Comparing consecutive manifests distinguishes a legitimate revision from a volatile timestamp, request ID, nondeterministic serializer, or routing change inserted too early. Hit count alone is weak: report fresh and reused tokens, prefill work avoided, entry size, eviction, and tenant/policy domain. The serving-side residency and routing consequences belong to [Agent Inference](./12-agent-inference.md).
 
 ---
 
 ## Long Context vs RAG
 
-"Just put it all in the context" and "retrieve only what's relevant" are the two poles of context management, and million-token windows have moved the boundary without dissolving it.
+"Load the working set" and "retrieve only what is needed" are two selection policies. A larger window changes their feasible region but does not remove freshness, authorization, evidence-allocation, cache, or attention constraints.
 
-**Long context wins** when the working set is bounded and reused: a single repository, one contract, a book, this quarter's reports. Everything is visible, cross-document reasoning works without a separate retrieval miss, and prefix reuse may make repeated processing economical. The costs are the per-query price floor, slower first-token latency on cold prefixes, eviction risk, and context rot on tasks that need precise recall from deep positions.
+**Long context** fits a bounded, request- or session-scoped working set whose contents are repeatedly used. It removes an online retrieval-miss boundary, but pays cold prefill, residency/eviction, and distractor costs. “Loaded” still does not mean “used correctly,” and source identity must survive rendering if claims require attribution.
 
-**RAG wins** when the corpus is unbounded or fresh: millions of documents, data updated hourly, per-user permissioning on what may be seen at all, or the need for citations that point at a source rather than a position in a megaprompt. No window will ever hold the corpus, so selection is not optional — the question is only whether selection happens in a retrieval system you can measure and tune, or implicitly inside a model straining at a stuffed window.
+**RAG** fits a corpus larger or more dynamic than one request should load, especially when access control, temporal selection, correction, deletion, or evidence ranking must happen before model exposure. It adds corpus-publication and retrieval failure boundaries but makes selection independently observable.
 
-The production pattern is usually the hybrid: **RAG selects the working set; long context holds it.** Retrieval narrows millions of documents to the fifty that matter for this session, the session loads them once into a cached prefix, and the conversation proceeds against that stable context. Agentic systems add a third mode — *just-in-time retrieval* — where the model itself fetches context through tools (`grep`, file reads, search APIs) mid-task instead of front-loading it; this trades pre-computed recall for the agent's ability to follow its nose, and most serious coding agents now rely on it more than on embedding indexes.
+A hybrid uses retrieval to publish a bounded evidence snapshot and then reuses that snapshot across turns. **Just-in-time retrieval** instead lets observations determine later reads through typed tools. It reduces front-loaded context and supports exploratory tasks, but adds tool latency, stopping-policy, reproducibility, and wandering risk. These modes may coexist: load stable high-use evidence, retrieve the long tail, and record the exact source revisions seen.
 
 | Dimension | Long context | RAG | Agentic (just-in-time) |
 |---|---|---|---|
-| Corpus size | Bounded by the qualified model/workload limit | Unbounded | Unbounded but navigable |
-| Freshness | Reload to update | Index latency (minutes) | Live at read time |
-| Failure mode | Context rot, cost floor | Retrieval miss | Wandering, tool-call latency |
-| Attribution | Weak (position) | Strong (source chunks) | Strong (explicit reads) |
-| Best when | Bounded reused working set | Search over large corpora | Exploration, code, ops |
+| Corpus scope | Bounded request/session snapshot | Indexed corpus | Tool-navigable namespace |
+| Freshness boundary | Snapshot reload | Corpus publication lag | Source state at each read |
+| Primary failure | Distractor/position use and cold prefill | Coverage or ranking miss | Incomplete search or wandering |
+| Reproducibility | Pin rendered source revisions | Pin corpus/index snapshot | Persist read queries and receipts |
+| Selection authority | Context assembler | Retrieval pipeline | Model proposes; tool/policy enforces |
 
 ---
 
-## Compaction: Surviving Past the Window
+## Compaction Lifecycle and Publication
 
-Every long-running conversation eventually faces the same event: the next turn will not fit. Compaction is the standard answer — summarize the older portion of the transcript into a compact digest, keep the recent turns verbatim, and continue with the digest in place of the history it replaced. Providers increasingly offer this server-side (the API summarizes and returns a compaction block you thread back), and every serious agent harness implements a client-side version; the design questions are the same either way.
+A long-running session eventually crosses a qualified context, latency, or cost threshold. Compaction transforms a source event range into a smaller derived artifact plus lineage. It is not an in-place transcript edit. The canonical event graph, task state, and effect receipts remain authoritative under their retention policy; the compacted artifact is one materialized view.
 
-**Trigger on measured thresholds, not turns.** Compact when projected next-turn input plus output and safety reserves crosses a qualified budget line. Compaction costs a summarization call and usually invalidates part of a reusable prefix, so doing it every turn pays that price without proportional benefit.
+A compaction job pins `source_revision`, declares the item classes and exact fields it must preserve, generates narrative compression only for residual prose, validates the result, and publishes a new context revision with compare-and-swap against the active base. If the session advances during the job, the artifact is stale and must be rebased or discarded. Publication also declares the cache divergence point and which source payloads can be rehydrated.
 
-**The summary is a load-bearing artifact, not prose.** A generic "summarize this conversation" loses exactly the details that matter later. Production compaction prompts enumerate what must survive:
-
-```text
-Compact the conversation above into a handoff brief for an agent continuing
-this task. Preserve, with exact literal values:
-1. The task goal and acceptance criteria, as most recently amended.
-2. Every decision made and its stated reason.
-3. Constraints and user corrections (things tried and rejected — and why).
-4. Exact identifiers: file paths, URLs, IDs, branch names, command flags.
-5. Current state: what is done, what is in progress, what remains.
-Omit: exploratory dead ends (except the lesson), verbatim tool output,
-pleasantries. Target under 2,000 tokens.
-```
-
-The classic compaction bug is losing a *negative* constraint — the user said "don't touch the billing module" forty turns ago, the summary dropped it, and the agent, now unconstrained, touches the billing module. Corrections and prohibitions deserve explicit line items in the compaction schema precisely because they are short, rare, and catastrophic to lose.
-
-**Keep the raw transcript anyway.** Compaction is for the model's working context; the full history should still land in your trace store for debugging, evaluation, and audit ([LLM Evaluation](./10-llm-evaluation.md)). Summarizing your only copy is destroying evidence.
+Trigger policy uses projected next-turn feasibility and the measured benefit of a smaller view, not turn count. Compaction consumes generation and verification work and can invalidate prefix reuse, so a premature revision can cost more than it saves. Negative constraints, approvals, identifiers, unresolved effects, and completion evidence remain structured fields rather than relying on a summarizer to remember them. The validation contract appears in [Compaction Correctness and Evaluation](#compaction-correctness-and-evaluation).
 
 ---
 
-## Context Editing: Pruning Instead of Summarizing
+## Context Editing and Artifact Rehydration
 
-Compaction rewrites history; *context editing* deletes parts of it. In tool-heavy agent sessions, the bulk of the transcript is tool results — a 40K-token file read, a 25K-token test log — that were essential the turn they arrived and are dead weight ten turns later. Clearing stale tool results (while keeping the fact that the call happened) routinely reclaims half a transcript without touching the conversational content, and providers now expose this as a first-class API feature alongside client-side implementations.
+Context editing changes a rendered view without deleting canonical events. Tool observations, retrieved documents, generated artifacts, and prior model deliberation have different useful lifetimes. Represent each large item with an inline excerpt plus a durable receipt containing artifact identity, source revision, access policy, size, truncation state, and a rehydration operation. Later revisions may replace the excerpt with that receipt once no active dependency requires the full payload.
 
-The same logic applies at *write* time, which is cheaper than pruning after the fact:
+Admission bounds result size before it enters the view. The boundary chooses among inline content, pagination, structured extraction, or an access-controlled artifact reference based on expected reuse and the cost of another read. A truncation marker must be machine-visible and preserve where the omitted content can be recovered; otherwise the model may treat an incomplete observation as complete. Model-internal reasoning has no independent evidentiary status and need not be retained in future contexts unless a provider protocol requires a continuation token or the product explicitly stores a concise decision record.
 
-- **Truncate tool results at the harness boundary.** No tool should be able to dump 100K tokens into the transcript; cap each result (with a "truncated, full output at `<path>`" marker) and let the agent request more if needed.
-- **Offload large artifacts to the filesystem.** A generated report or fetched webpage goes to a file; the transcript carries the path and a two-line summary. The context holds *references*, the filesystem holds *content* — restorable on demand at the cost of a read.
-- **Drop reasoning blocks from prior turns.** Extended-thinking output from earlier turns rarely helps later ones; most providers either strip it automatically or recommend clearing it.
-
-The discipline mirrors [backpressure](../06-scaling/07-backpressure.md): bound what enters the queue rather than heroically draining it later.
+Editing creates a new manifest with source-item lineage and cannot remove unresolved tool-call/result pairs, approvals, current constraints, or evidence needed by a pending claim. Rehydration rechecks authorization, freshness, and base revision rather than assuming that an old reference still names visible or valid content. This is information-flow [backpressure](../06-scaling/07-backpressure.md): bound materialization while preserving the ability to retrieve canonical state.
 
 ---
 
 ## Memory: What Survives the Session
 
-Everything above manages context *within* a session. Memory is the machinery for context that must outlive it—user preferences, project conventions, and lessons from past failures. For small, inspectable agent memory, **versioned files or records** are a strong default; larger systems may add structured stores and retrieval indexes without surrendering provenance or user control.
+Everything above manages context *within* a session. Memory is policy-governed information that may outlive one run: declared user preferences, project conventions, or reviewed lessons. Canonical memory may use versioned files for a small inspectable scope or typed records for larger systems; retrieval indexes remain derived projections. The model may propose reads and writes, but the harness owns scope, validation, retention, revocation, and automatic loading.
 
-The pattern, popularized by MemGPT's OS analogy (context window as RAM, external store as disk) and now shipped as first-class "memory tools" by providers and standard in coding agents, gives the model tools to read and write a persistent directory, plus a small always-loaded index. The model decides what is worth writing; the harness decides what gets auto-loaded at session start (typically a bounded index file, not the whole store):
-
-```text
-memory/
-  MEMORY.md            # index, always loaded (~1K tokens, hard-capped)
-  project-conventions.md
-  user-prefers-terse-replies.md
-  lesson-vitest-not-jest.md    # one fact per file, written after a correction
-```
-
-Files make memory inspectable, correctable, and naturally versionable, and they encourage deliberate reads rather than automatic similarity injection. Structured records add validation and targeted revocation; embedding indexes add recall over large histories. The index should point to canonical memory records rather than become the source of truth. Its failure mode—confidently injecting an outdated “fact” because it is semantically similar—is exactly the [feedback-loop contamination](../16-ml-systems/01-ml-system-fundamentals.md) problem, so automatic injection should remain bounded and skeptical.
+The canonical record must remain inspectable and correctable. An embedding match is a retrieval candidate, not proof that an old claim is still valid for this user, project, or time. This is the same [feedback-loop contamination](../16-ml-systems/01-ml-system-fundamentals.md) problem as training on model-generated outcomes: an inferred memory can be repeatedly reintroduced until it appears authoritative unless provenance and review state remain visible.
 
 The operational hazards are staleness and scope. A memory that was true in March ("the deploy script is `deploy.sh`") silently poisons sessions in July; memory entries need the same treatment as [dataset versioning](../16-ml-systems/11-dataset-management-versioning.md) gives data — provenance, and deletion when wrong. And memory written from one user's session must never load into another's: memory stores are per-tenant security boundaries, not shared caches.
 
@@ -261,11 +202,11 @@ Canary probes place required facts and constraints at controlled positions, veri
 
 ## Structure the Context for the Agent's Own Attention
 
-Two lightweight patterns exploit the attention curve deliberately, and both look almost too simple to matter.
+Two context projections can isolate high-value state without changing canonical ownership.
 
-**Recitation.** Agents on long tasks drift from the goal — the "lost in the middle" victim is the objective itself, stated once, 200K tokens ago. Harnesses counter this by having the agent maintain a todo list or plan file and *re-append it* to the tail of the context as it updates — rewriting the goal into the high-attention recent-token zone every few turns. The todo list's value is less project management than attention anchoring.
+**Active-obligation projection.** Compile the current goal, acceptance conditions, prohibitions, approvals, and open dependencies from structured run state near the decision they govern. Do not ask the model to maintain a second authoritative todo list. Projection cadence and placement are qualified against drift and token cost; every rendered copy carries the source revision so a correction updates all future views.
 
-**Sub-agents as context partitions.** When a subtask needs to consume a lot of context — read thirty files, digest a long log — spawning a sub-agent with a fresh window and getting back a summary keeps the orchestrator's context clean. The sub-agent burns its window on the exploration; the parent pays only for the distilled result. This is context *isolation*, the same reason [multi-agent systems](./03-multi-agent-systems.md) exist at all, and it is frequently a better answer than a bigger window: two focused 50K contexts outperform one distracted 300K context on many tasks.
+**Subagents as context partitions.** A bounded read-heavy subtask can consume its own context and return a provenance-rich result, keeping exploratory detail out of the parent. This trades context isolation and possible wall-clock parallelism for duplicated prefixes, coordination, and lossy handoff. Evaluate it against a single-agent baseline; [Multi-Agent Systems](./03-multi-agent-systems.md) defines the ownership and cost boundary.
 
 ---
 
@@ -295,30 +236,34 @@ Two lightweight patterns exploit the attention curve deliberately, and both look
 
 ## Decision Framework
 
-*Where should this information live?* — The four-tier answer: in the **system prompt** if it is true for every request; in **memory files** if it must survive sessions; in the **transcript** if it is this conversation's working state; behind **retrieval or tools** if it is one working set among many. Most context bloat is information living one tier too high.
+Choose context architecture in dependency order:
 
-*Is the transcript append-only and the prefix frozen?* If not, fix that before any other optimization — it is the difference between cached and uncached economics.
+| Decision | Mechanism | Required evidence |
+|---|---|---|
+| Authority and lifetime | Separate operator policy, run state, evidence, session events, and cross-session memory | Owner, provenance, valid time, ACL, retention |
+| Mandatory versus optional state | Reserve instructions, active obligations, protocol pairs, and output before scored selection | Manifest proves no required item was silently omitted |
+| Working-set selection | Load bounded snapshots, use RAG, or permit bounded just-in-time reads | Coverage, attention use, freshness, and latency by slice |
+| Reuse boundary | Canonical renderer and complete prefix-compatibility identity | Reused tokens/work and legitimate invalidation reason |
+| Overflow behavior | Type-specific pruning, artifact receipts, or validated compaction | Continuation eval and rehydration success |
+| Branch and correction semantics | Parent-linked context revisions with compare-and-swap publication | Late branches cannot enter authoritative state |
+| Persistent memory | Versioned canonical records plus optional derived index | Scope, revocation, expiry, and tenant isolation |
 
-*What fires when the budget is hit?* A system without an explicit compaction threshold has chosen "fail at the window limit" as its policy.
-
-*Can the model find what it needs, or merely fit it?* Fitting 800K tokens is easy; recalling one clause from the middle is not. If precise recall matters, retrieve narrowly instead of stuffing broadly, and test recall at depth with your own documents.
-
-*What survives the session, and who can read it?* Memory is a persistence layer with tenancy, staleness, and audit properties — design it like one.
+The correct context is the smallest authorized view that preserves the task's obligations and sufficient evidence at the required success rate. Cache value does not override correction, deletion, or policy; window fit does not prove attention; and compaction is unavailable until its acceptance contract can reject a lossy state mutation.
 
 ---
 
 ## Key Takeaways
 
-1. Context engineering has replaced prompt wording as the core skill: the question is what the model sees each call, across the whole task lifecycle, not how the instruction is phrased.
-2. The window is a budget with explicit allocations, output and variance reserves, and a workload-qualified compaction threshold below the hard limit.
-3. Repeated context creates triangular token growth; append-only history, stable prefixes, pruning, and measured cache reuse change both cost and TTFT.
-4. Attention is U-shaped — instructions at the edges, weakest content in the middle, and never ship context you don't need, because irrelevant tokens actively degrade answers.
-5. Million-token windows moved the long-context/RAG boundary but didn't dissolve it: RAG selects the working set, long context holds it, and agents increasingly retrieve just-in-time through tools.
-6. Compaction is a schema, not a summary: decisions, constraints, corrections, and exact identifiers survive verbatim; the full transcript still goes to the trace store.
-7. Prune at the boundary: cap tool results, offload artifacts to files, clear stale tool outputs — references in context, content on disk.
-8. Memory needs canonical, inspectable, correctable records; files are a strong small-system default, while indexes remain derived retrieval structures with staleness and tenancy controls.
-9. Recitation and sub-agent context partitions are cheap, high-leverage attention tools: rewrite the goal into the recent-token zone, and buy fresh windows instead of bigger ones.
-10. Trace the context manifest and watch token allocation, cached-token share, compaction, staleness, truncation, and per-task spend; these failures are otherwise invisible.
+1. A context is a policy-filtered materialized view; canonical task, evidence, effect, and memory state live outside the prompt.
+2. Budget feasibility reserves mandatory state, output, and variance before allocating optional history or evidence.
+3. Repeated context creates triangular input work; prefix reuse helps only under a complete compatibility identity and measured cache behavior.
+4. Attention use is position-, task-, formatting-, and model-dependent; qualify selection and placement rather than equating fit with recall.
+5. Long context, indexed retrieval, and just-in-time tools are complementary working-set policies with distinct freshness and failure boundaries.
+6. Compaction publishes a lineage-preserving derived revision through validation and compare-and-swap; canonical payload retention follows policy, not tracing convenience.
+7. Large observations become bounded excerpts plus rehydratable receipts, and every rehydration rechecks authorization and freshness.
+8. Memory is a versioned, scoped, revocable store; similarity indexes are derived candidates, never authority.
+9. Parent-linked context revisions prevent late branches, corrections, and model migrations from silently rewriting active state.
+10. Context manifests connect allocation, omissions, truncation, cache reuse, compaction, source revisions, and task outcomes.
 
 ---
 

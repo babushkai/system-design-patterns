@@ -2,7 +2,9 @@
 
 ## TL;DR
 
-Fine-tuning is the *last* tool in the adaptation toolbox, not the first — and the gap between it and the alternatives has widened every year as frontier models got better at following instructions, longer at context, and cheaper per cached token. The modern decision runs: prompting (with a strong model, good examples, and [structured outputs](./06-prompt-engineering.md)) → retrieval ([RAG](./04-rag-patterns.md), for knowledge) → and only then fine-tuning, which earns its keep for *behavior*, not knowledge: locking in style and format, distilling a frontier model's skill on a narrow task into a small cheap model, deep domain adaptation, and pushing tool-use or classification reliability past what prompting achieves. When you do tune, the practical stack has standardized: LoRA/QLoRA on an open-weights base for most cases (fractions of a percent of the parameters, one GPU, merge or hot-swap adapters at serving time), preference optimization (DPO and successors) rather than full RLHF for alignment-shaped goals, and evaluation infrastructure that exists *before* training starts — because the dominant failure mode is not underfitting, it is shipping a model you can't prove is better, trained on data you can't reproduce, into a serving stack that can't roll it back. Data quality decides outcomes: a thousand meticulously curated examples beat fifty thousand scraped ones, and the training-data pipeline inherits every discipline from [dataset versioning](../16-ml-systems/11-dataset-management-versioning.md).
+Fine-tuning changes a model artifact's conditional behavior. It is justified when a versioned training intervention produces a measured quality, latency, cost, privacy, or ownership benefit over the best prompt/retrieval/tool baseline, and when the organization can operate the resulting data and release lifecycle. It is a poor store for mutable or permissioned facts; retrieval and source-of-truth tools own those.
+
+The system is larger than the optimizer: data rights and lineage, contamination-resistant evaluation, base/tokenizer/template compatibility, checkpoint recovery, privacy and safety testing, artifact registration, quantization qualification, adapter placement, rollback, and refresh. Parameter-efficient methods reduce trainable state but do not remove activation, data, serving, or governance costs. The durable asset is a reproducible behavior dataset and evaluation contract; any individual base model or adapter will age.
 
 ---
 
@@ -10,22 +12,21 @@ Fine-tuning is the *last* tool in the adaptation toolbox, not the first — and 
 
 The question arrives as "should we fine-tune?" and should be answered by walking a ladder in cost-of-ownership order:
 
-**1. Prompting a frontier model.** With current instruction-following, few-shot examples, and schema-enforced outputs, prompting solves the large majority of "we need the model to do X our way" requests — at zero training cost, with instant iteration, and with prompt changes deployable in minutes. Long context plus [prompt caching](./08-context-management.md) also dissolved a classic fine-tuning motivation: stuffing stable domain reference material into a cached prefix costs ~0.1× input pricing per request, which is usually cheaper than a training program.
+**1. Prompting and deterministic interfaces.** Establish the strongest qualified baseline using concise instructions, representative examples, structured outputs, tools, and the intended reasoning budget. Prompting has low iteration latency but nonzero inference-token, evaluation, and maintenance cost. Its economics depend on the deployed model and measured prefix reuse, not a universal cached-token ratio.
 
-**2. RAG.** If the gap is *knowledge* — facts the model doesn't have, or facts that change — retrieval wins almost unconditionally: it updates in minutes (re-index) instead of weeks (re-train), it cites sources, and it respects per-user permissions. Fine-tuning is a terrible knowledge store: facts baked into weights go stale immediately, can't be attributed, can't be deleted per-tenant, and interact with the GDPR-style deletion problem (a model that memorized a user's data cannot un-memorize it by deleting a database row — see [ML risk & governance](../16-ml-systems/09-ml-risk-governance.md)).
+**2. Retrieval and source-of-truth tools.** If the gap is mutable knowledge, authorization-sensitive data, exact calculation, or evidence, supply it at inference. Retrieval can publish corrections and enforce current ACLs independently of weight refresh. Fine-tuned weights do not provide record-level attribution or immediate deletion semantics; training on sensitive facts expands the governance boundary (see [ML risk and governance](../16-ml-systems/09-ml-risk-governance.md)).
 
 **3. Fine-tuning.** What remains is *behavior and economics*, and here tuning is genuinely strong:
 
 | Motivation | Why tuning wins | Typical shape |
 |---|---|---|
-| Style/format lock-in | Prompt tokens spent re-describing tone/format on every call become weights | 1–5K examples, SFT |
-| Distillation for cost/latency | A small model matching the big one *on your task* serves at 5–20× less | Teacher generates 10–100K examples, student SFT |
-| Deep domain adaptation | Vocabulary/conventions prompting can't fully instill (legal, medical, codebase-specific) | Continued pretraining + SFT |
-| Reliability on a narrow task | Squeeze the last points of tool-call or classification accuracy | SFT on success traces, incl. failures-turned-corrections |
+| Style/format lock-in | Stable examples can move repeated behavioral guidance into weights | Curated SFT, compared with schema/prompt baseline |
+| Distillation for cost/latency | A smaller model may reproduce bounded teacher behavior on the target distribution | Teacher/corrected data plus student SFT and coverage tests |
+| Deep domain adaptation | A measured representation or task gap remains after supplying evidence | Continued pretraining and/or SFT, compared with retrieval baseline |
+| Reliability on a narrow task | Repeated behavior can be learned from governed corrections | SFT on representative successes, corrected failures, and abstentions |
 | Latency floors | Shorter prompts (no few-shot block) and smaller models cut TTFT | SFT replacing the prompt scaffolding |
-| Open-weights ownership | No per-token vendor bill, data stays in-VPC, model is an asset | LoRA/full FT on Llama/Qwen/Mistral-class base |
 
-The honest anti-checklist: don't tune to add facts (use RAG), don't tune what a better prompt fixes (run that experiment first — it's a day, not a quarter), don't tune without an eval set that would detect success (you won't be able to tell), and don't tune if you can't fund the *second* training run — data drifts, base models improve, and a one-off tuned model with no refresh pipeline is next year's stranded asset.
+Treat the tune as a product line rather than a one-off job. The proposal should include the baseline experiment, dataset and legal basis, qualification suite, serving artifact, break-even volume, owner, rollback, deletion response, and refresh trigger. If the second run cannot be reproduced from sealed inputs, the first checkpoint is a stranded experiment rather than an operable model.
 
 ### Frame the tune as a falsifiable intervention
 
@@ -48,28 +49,29 @@ A tuned checkpoint cannot be qualified independently of its template and serving
 
 The workhorse: continue training the model on `(input → desired output)` pairs with the standard language-modeling loss (masking the loss on the prompt tokens so only the completion is learned). Everything else in this chapter is a variation on where the pairs come from and which parameters move.
 
-### LoRA and QLoRA: The Default Mechanics
+### LoRA and QLoRA: Parameter-Efficient Mechanics
 
-Full fine-tuning updates every weight — for a 70B model that means holding weights, gradients, and optimizer state for 70B parameters (roughly 500GB+ in mixed precision with Adam), i.e., a multi-node job. **LoRA** (Hu et al., 2021) observes that task adaptation lives in a low-rank subspace: freeze the base weights `W`, and learn a pair of small matrices `B·A` (rank r, typically 8–64) added to each attention/MLP projection:
+Full fine-tuning updates every selected base parameter and therefore holds or shards weights, gradients, optimizer state, and activations. **LoRA** freezes a base matrix \(W\) and learns a low-rank update \(BA\):
 
 ```text
-h = Wx + (α/r)·B·A·x        W frozen (d×d),  A: r×d,  B: d×r
+h = Wx + (α/r)·B·A·x
 
-7B model, r=16 on attention+MLP projections:
-  trainable params ≈ 40–80M   (~1% of the model)
-  optimizer state: ~1GB instead of ~84GB
-  → one 24–48GB GPU trains what previously took a cluster
+For W in R^(d_out × d_in):
+  full trainable parameters = d_out × d_in
+  LoRA trainable parameters = r × (d_in + d_out)
 ```
 
-**QLoRA** (Dettmers et al., 2023) pushes the base model itself into 4-bit quantization (NF4) with the LoRA adapters trained in bf16 on top — a 70B base fits on a single 48GB card for training, at near-parity quality with 16-bit LoRA. The practical guidance that has settled out: apply adapters to all linear layers rather than just `q,v` projections; rank 16–32 covers most tasks (rank buys capacity slowly); learning rate ~1e-4 with the adapter, 10× lower if you unfreeze anything else; and expect the *data* to matter far more than any of these knobs.
+The reduction depends on layer dimensions, target modules, and rank. **QLoRA** stores the frozen base in a quantized representation while training adapter parameters at a higher compute precision. It reduces base-weight memory, but activations, temporary dequantization state, adapter optimizer state, sequence length, and runtime kernels still determine whether a configuration fits. The QLoRA paper's single-device result is an existence proof for a specific stack, not a capacity guarantee for every model or sequence length.
+
+Choose target modules and rank through ablation. Low rank can underfit a complex distribution shift; excessive rank raises memory and can overfit without improving the product metric. A merged adapter removes runtime adapter selection but creates a separate full artifact. An unmerged adapter preserves composability and multi-tenant serving but adds compatibility, cache, scheduling, and isolation concerns.
 
 At the end you either **merge** the adapter into the base weights (zero serving overhead, one artifact) or keep it separate — which enables the serving pattern below.
 
 ### Preference Optimization: DPO and Friends
 
-SFT teaches the model what good outputs *look like*; preference methods teach it which of two outputs is *better* — the shape of alignment, helpfulness, and taste objectives where no single gold answer exists. Classic **RLHF** (reward model + PPO) delivered ChatGPT but is operationally heavy: four models in memory, RL instability, reward hacking. **DPO** (Rafailov et al., 2023) collapsed the pipeline: a closed-form loss trains directly on `(prompt, chosen, rejected)` triples — no reward model, no rollouts, roughly as easy to run as SFT — and it (plus successors like KTO, ORPO, and IPO) is now the default for preference-shaped goals outside frontier labs. **RLAIF / Constitutional AI** replaces human preference labels with AI feedback guided by written principles, which is how preference data scales past what human annotation budgets allow. For most application teams the recipe is: SFT on curated demonstrations first, then a DPO pass on preference pairs harvested from your own eval comparisons and user feedback.
+SFT teaches the model what target outputs look like; preference methods fit relative judgments where no single reference completion captures the objective. Online RLHF introduces rollout, reward-model, policy, reference, and value/optimizer state plus reward-hacking and stability risks. **DPO** trains directly on `(prompt, chosen, rejected)` triples relative to a reference policy, avoiding online policy rollouts and a separately served reward model in the optimization loop. This simplifies one class of preference training but does not make pair collection, reference choice, regularization, or evaluation trivial. Other objectives encode different assumptions about feedback and policy drift; choose from the label contract rather than framework defaults.
 
-**GRPO and verifiable-reward RL** — the technique behind reasoning models like DeepSeek-R1 — trains against *checkable* rewards (tests pass, answer matches) rather than learned preference models, and is worth knowing as the frontier of the field; few application teams run it, but "can I define a verifiable reward for my task?" is becoming a serious question for agentic fine-tunes.
+Policy optimization with verifiable rewards uses executable or otherwise checkable outcomes instead of a learned preference score. It is attractive where rollouts can be sandboxed and reward cannot be cheaply gamed—formal answers, tests, or constrained environments. It introduces rollout infrastructure, variance, credit assignment, environment versioning, and reward-hacking risk. Compare it with rejection sampling or SFT on verified successes before operating an online RL loop.
 
 For a prompt \(x\), preferred response \(y_w\), rejected response \(y_l\), policy \(\pi_\theta\), and frozen reference \(\pi_{ref}\), DPO increases the relative log-probability margin of the preferred pair:
 
@@ -93,23 +95,33 @@ Do not confuse corpus perplexity improvement with product success. A model can p
 
 ### Distillation
 
-The highest-ROI pattern in production today: use a frontier model (the teacher) to generate or grade tens of thousands of task-specific examples, then SFT a small open model (the student) on them. The student won't match the teacher in general — it will often match it *on your distribution*, at a fraction of the serving cost and latency. Two disciplines keep it honest: filter the teacher's outputs (grade them with the teacher itself or a judge, keep the top slice — quality in, quality out), and check the provider's terms of service, since some prohibit training competing models on their outputs. Distillation is also the standard escape hatch from per-token pricing: prototype on the frontier API, distill the stabilized behavior into a model you own.
+Distillation transfers behavior from a teacher or ensemble into a student on a bounded distribution. The student need not match the teacher outside that support, so coverage and abstention are part of the contract. Teacher generations should retain prompt, sampling, model, evidence, and verification provenance; self-grading by the same teacher is a correlated filter, not independent truth. Use executable checks, expert correction, or a calibrated judge where possible, and verify that data licenses and provider terms permit the intended training and deployment.
+
+The break-even condition is volume-dependent:
+
+\[
+N_{break-even} =
+\frac{C_{data}+C_{training}+C_{eval}+C_{platform}+C_{refresh}}
+{C_{baseline/task}-C_{student/task}},
+\]
+
+provided the student satisfies every quality and safety gate. Include failed tasks and fallback-to-teacher cost in both per-task terms.
 
 ---
 
 ## Data Is the Product
 
-Every experienced team says the same thing: the model is a commodity; the training set is the asset. The disciplines:
+The training corpus and its lineage determine what intervention can be reproduced, inspected, deleted, and refreshed. Model and data are both release inputs; neither is a commodity when its exact revision changes behavior.
 
-**Curation beats volume.** The LIMA result (1K excellent examples producing a strong assistant) generalized: for behavior-shaped SFT, 500–5,000 meticulously curated examples routinely beat 50K scraped ones, because the model learns the *average* of what you show it — including the average sloppiness. Every example should be one you'd be happy to see verbatim in production.
+**Curation controls signal.** Small high-quality instruction sets can outperform much larger noisy sets for some adaptation tasks, as LIMA illustrates, but sample complexity depends on base capability, task diversity, and desired coverage. Track marginal gain as examples are added and retain hard negative, abstention, and rare-policy slices instead of optimizing row count.
 
-**Mine production, then fix it.** The best source of training data is your own traces: real inputs, with outputs *corrected* by humans or by a stronger model. Failures from your [eval suite](./10-llm-evaluation.md) and user thumbs-downs, repaired into golden examples, target exactly the distribution where the model is weak — this is active learning with the labeling budget pointed at known gaps, the same logic as [label systems'](../16-ml-systems/10-label-ground-truth-systems.md) uncertainty sampling.
+**Mine production with selection controls.** Real traces expose the served distribution, but feedback is biased by exposure, user action, and incumbent behavior. Sample both successes and failures, retain assignment/exposure metadata, correct outputs through a governed label process, and keep a locked evaluation path. The [label-system](../16-ml-systems/10-label-ground-truth-systems.md) chapter covers adjudication and sampling.
 
 **Deduplicate, decontaminate, split honestly.** Near-duplicate examples silently overweight their pattern; eval examples leaking into training data produce the classic too-good-to-be-true validation score ([leakage](../16-ml-systems/05-training-pipelines.md), in fine-tuning clothes). Split by *entity or scenario*, not by row, when generalization to new entities is the goal.
 
 **Version the dataset like a release artifact.** Snapshot, hash, and record the exact training set with the produced model — a tuned model whose data can't be reconstructed can't be debugged, audited, or legally defended. The full argument lives in [dataset management](../16-ml-systems/11-dataset-management-versioning.md); fine-tuning inherits all of it, plus a sharper privacy edge: PII in training data can resurface verbatim in generations, so scrubbing happens *before* training, not in the output filter.
 
-**Format for the target.** Chat-tuned bases expect their own template (roles, special tokens); mismatched templating is the most common silent quality killer in open-weights tuning. Match the serving-time system prompt during training — the model should train in the costume it will wear.
+**Format for the target.** Chat-tuned bases encode template assumptions through roles and special tokens; a training/serving mismatch silently changes the learned sequence distribution. Pin tokenizer, chat template, role boundaries, loss mask, and serving-time instruction contract as one compatibility tuple.
 
 ### Dataset contract and lineage
 
@@ -140,20 +152,11 @@ Use a time-forward test when the product faces drift. Keep a locked qualificatio
 
 ## Training Mechanics Worth Knowing
 
-The hyperparameter surface for LoRA-SFT is mercifully small, and most failures are diagnosable from two curves:
+Learning rate, schedule, effective token batch, sequence length, packing, loss mask, target modules, rank, precision, and training duration interact with model family and data. Copying one recipe across bases is not reproducibility. Run a small design of experiments around a documented baseline and select on held-out product metrics, not minimum training loss.
 
-```text
-epochs: 1–3 for SFT (more = memorization; watch eval loss, not train loss)
-lr: 1e-4 (LoRA) with cosine decay + short warmup; 5e-6..2e-5 if full-tuning
-batch: effective 32–128 via gradient accumulation; sequence-pack short examples
-precision: bf16 compute; NF4 base for QLoRA
-```
+Train and validation loss diagnose optimization fit but not behavior alone. Falling train loss with worsening held-out loss suggests overfitting or split leakage; flat curves can indicate optimizer scale, frozen targets, masking errors, or weak data signal; stable loss can coexist with regression on rare safety or tool slices. Monitor slice metrics and general-capability probes at checkpoints, then retain the earliest checkpoint on the product Pareto frontier.
 
-- **Train loss ↓, eval loss ↑** → overfitting: fewer epochs, more/better data, lower rank.
-- **Both flat** → learning rate too low, wrong modules adapted, or the data doesn't actually contain a learnable signal (the most common and least suspected cause).
-- **Benchmark regressions on general tasks** → catastrophic forgetting: mix a slice of general instruction data into the training set, lower the LR, or reduce epochs. Always run a general-capability probe suite alongside your task evals — a support-tone fine-tune that quietly loses arithmetic is a classic.
-
-Tooling has consolidated: Hugging Face TRL / Axolotl / Unsloth (and LLaMA-Factory) cover open-weights SFT/DPO on one node for most cases; provider fine-tuning APIs (OpenAI, Google, and hosted platforms like Together/Fireworks) trade control for zero infrastructure. The [training-pipeline disciplines](../16-ml-systems/05-training-pipelines.md) — reproducibility contracts, seeds and determinism, run tracking, checkpointing — apply unchanged and are covered there.
+Training frameworks and hosted APIs package mechanics but do not remove the [training-pipeline](../16-ml-systems/05-training-pipelines.md) contract: immutable inputs, versioned environment, deterministic-enough replay, checkpoint integrity, data cursor recovery, metrics, and artifact lineage.
 
 ### Memory accounting
 
@@ -193,11 +196,11 @@ Monitor loss by data slice, token type, and sequence length. A single aggregate 
 
 The deployment decision interacts with the tuning method more than teams expect:
 
-**Merged model.** Fold the LoRA into the base and serve one artifact — simplest, zero overhead, right answer for a single tuned model at scale. Everything from [LLM Infrastructure](./05-llm-infrastructure.md) applies unchanged.
+**Merged model.** Fold the LoRA update into the base and publish one qualified artifact. This removes per-request adapter selection but duplicates weight storage and rollout capacity per variant. It fits a small stable variant set with enough traffic to justify dedicated replicas.
 
-**Multi-LoRA serving.** Keep adapters separate and load them per-request on a shared base: vLLM, LoRAX, and similar servers batch requests for *different* adapters through one copy of the base weights (S-LoRA-style paging), which changes the economics of per-tenant customization entirely — hundreds of customer-specific adapters (each a few hundred MB, often much less) on one GPU pool, instead of hundreds of dedicated deployments. If your roadmap says "a tuned variant per customer/segment," this is the architecture, and it's a reason to prefer LoRA over full tuning even when compute is no constraint.
+**Multi-adapter serving.** Keep adapters separate and resolve one or more compatible adapters per request over a shared base. This amortizes base weights across a sparse variant catalog, but adapter residency, cold load, batching compatibility, per-tenant isolation, and cache thrash become control-plane concerns. Compare the measured adapter working set with HBM/host capacity before assuming one pool can serve every tenant variant.
 
-**Champion/challenger, always.** A tuned model is a model release: registry entry with lineage to data snapshot + base model + config, offline gate against the incumbent *including the prompting-only baseline* (the tune must beat the best prompt, or it shipped complexity for nothing), then shadow/canary with delayed-metric patience — the whole [deployment-rollout](../16-ml-systems/06-model-deployment-rollouts.md) ladder. The extra fine-tuning-specific gate: re-qualification when the *base* model or its serving stack upgrades, because an adapter is pinned to exact base weights; "upgrade the base and keep the adapter" is not a safe operation, it's a retrain.
+**Champion/challenger release.** Register lineage to the exact data, base, tokenizer, template, optimizer, and serving artifact; gate against the qualified prompting/retrieval baseline; shadow effects safely; canary by stable session assignment; and retain a tested rollback target. An adapter is compatible with exact base weights and target modules, not merely a marketing family name. A base or runtime change creates a new candidate that must be re-qualified and may require retraining.
 
 ### Adapter control plane
 
@@ -265,7 +268,7 @@ Safety tuning does not replace runtime policy. Distribution shift, adversarial i
 
 *Is the gap knowledge or behavior?* Knowledge → retrieval. Behavior (style, format, task skill, tool reliability) → tuning is on the table.
 
-*What's the unit economics goal?* If the motivation is cost/latency, distillation to a small open model is the pattern, and the business case is `(frontier per-token cost − student serving cost) × volume` against the training program + refresh pipeline.
+*What's the unit economics goal?* First compare a smaller existing target, routing, prompt/context reduction, quantization, batching, and caching under the same quality constraints. Distillation is justified when a student can reproduce the bounded behavior more economically after including teacher generation, training, qualification, fallback, serving, and refresh cost. Its break-even model uses verified successful volume, not raw tokens alone.
 
 *One model or many variants?* Per-tenant/per-task variants → LoRA + multi-adapter serving; single flagship behavior → merge and serve plain.
 
@@ -275,13 +278,13 @@ Safety tuning does not replace runtime policy. Distribution shift, adversarial i
 
 ## Key Takeaways
 
-1. The adaptation ladder is prompting → RAG → fine-tuning; long context, prompt caching, and stronger instruction-following keep moving work down-ladder, and the tune must beat the best prompt to justify existing.
-2. Fine-tune for behavior and economics — style lock-in, distillation, domain depth, narrow-task reliability — never for facts, which belong in retrieval.
-3. LoRA/QLoRA is the default mechanism: ~1% trainable parameters, single-GPU training, adapters you can merge or hot-swap; full fine-tuning is the exception that needs a reason.
-4. DPO-style preference optimization replaced RLHF for most teams' alignment-shaped goals; verifiable-reward RL (GRPO) is the frontier behind reasoning models.
-5. Distilling a frontier teacher into a small student on your distribution is the highest-ROI pattern — filter the teacher's outputs, and check the ToS.
-6. Data is the product: curated beats copious, production failures repaired into golden examples are the best source, and the training set is versioned, deduplicated, decontaminated, and PII-scrubbed like the release artifact it is.
-7. Multi-LoRA serving makes per-tenant customization an adapter-management problem instead of a fleet problem — often the deciding argument for LoRA.
+1. Qualify prompting, deterministic tools, and retrieval before training; a tune must produce a measured system-level gain over that baseline.
+2. Use weights for stable behavior and representation changes, not as the authority for mutable or permissioned facts.
+3. LoRA/QLoRA reduces trainable and base-weight state under explicit module, rank, precision, and sequence assumptions; it does not eliminate activation, evaluation, serving, or governance cost.
+4. Preference and verifiable-reward objectives encode different feedback contracts and failure modes; choose them from label and verifier semantics rather than fashion.
+5. Distillation is a bounded-distribution compression program whose business case depends on verified quality, fallback rate, volume, and refresh cost.
+6. Data lineage, mixture weights, loss masks, contamination controls, and split semantics determine what behavior the run actually learns.
+7. Multi-adapter serving trades duplicated bases for residency, compatibility, scheduling, isolation, and cache-management complexity.
 8. A tuned model is a model release: registry lineage, offline gates including the prompting baseline, canary rollout, and re-qualification whenever the base model moves.
 
 ---

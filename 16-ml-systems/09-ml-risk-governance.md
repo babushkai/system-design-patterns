@@ -2,17 +2,26 @@
 
 ## TL;DR
 
-ML governance is the system of *enforced controls* that makes a model's decisions auditable, accountable, and reversible. The central failure of governance is treating it as documentation — a model card in a wiki, a policy PDF, a one-time fairness review — rather than as machinery wired into the deployment path. A control that does not block something is theater: a fairness threshold nobody gates on, a lineage requirement the registry does not enforce, an approval that happens after the model already serves traffic. Effective governance is the set of controls the *system* enforces automatically — a registry that refuses an unlineaged artifact, a promotion gate that blocks an unreviewed high-risk model, an audit log dense enough to reconstruct any decision after the fact. Everything in this file follows from one principle: **govern through infrastructure, not intention.**
+ML governance is the control system that maps a use context to accountable owners, evidence requirements, authorized state transitions, runtime limits, detection, response, and retirement. Preventive controls belong on promotion and policy-change paths; detective controls continuously test whether assumptions still hold; corrective controls contain and remediate harm. Documentation is evidence and interface, but it is not enforcement by itself. The architectural objective is traceable authority: the system can show which approved release and policy produced a decision, which evidence justified that authority, when the evidence expires, who can intervene, and how the system returns to a safer state.
 
 ---
 
-## Governance Fails When It Is Documentation, Not Enforcement
+## Governance Is a Closed Control Loop
 
-The defining mistake in ML governance is the same one [training pipelines](./05-training-pipelines.md) make with reproducibility — treating a property the organization *wants* as a property the system *guarantees*. A governance program built on documents produces an impressive binder and no actual control. The model card describes intended use, but nothing stops the model from being repurposed. The policy says high-risk models require sign-off, but the deploy script does not check. The fairness review happened once, at launch, and the world moved on without it.
+Governance fails when intended controls and effective controls diverge. A model card may correctly describe intended use while an endpoint permits reuse elsewhere. An approval may exist while a threshold can change outside the approved bundle. A launch review may pass while the population and policy drift later. The remedy is not to dismiss documentation; it is to bind structured evidence to enforceable transitions and then measure whether the controls work in operation.
 
-The engineering implication is sharp: **a control that is not on the critical path of deployment is not a control.** If the only thing standing between a model and production is a human remembering to follow a process, the process will be skipped under deadline pressure, forgotten after reorgs, and quietly abandoned as the team that wrote it disperses. The controls that survive are the ones the system enforces whether or not anyone remembers them — exactly like the training-pipeline rule that *no artifact enters the registry without a complete lineage contract*. Governance inherits that rule and extends it: no model reaches a regulated tier without its required controls satisfied, and "satisfied" is a state the registry stores and the gate checks, not a checkbox a human ticked.
+```mermaid
+flowchart LR
+    MAP["Map context + harm"] --> REQUIRE["Select controls + evidence"]
+    REQUIRE --> AUTHORIZE{"Authorize state transition?"}
+    AUTHORIZE -->|yes| OPERATE["Operate within declared limits"]
+    AUTHORIZE -->|no| DENY["Deny with reasons"]
+    OPERATE --> MEASURE["Measure performance, drift, harm, control health"]
+    MEASURE --> MANAGE["Contain, correct, compensate, retire"]
+    MANAGE --> MAP
+```
 
-A useful test mirrors the reproducibility test from training pipelines. If every engineer who knows the governance process left tomorrow, would the system still refuse to deploy an unreviewed credit model? If the answer depends on human memory, you have documentation. If the answer is "yes, the gate blocks it," you have governance.
+Preventive gates block unsupported promotion. Detective controls such as audit sampling, appeal trends, and slice monitoring may not block a request synchronously, but they are still real controls when they have owners, service levels, and mandatory response transitions. Corrective controls include traffic rollback, decision suspension, human review, notification, and compensation. A governance design that contains only gates is brittle; a design with only dashboards is advisory. The closed loop needs both.
 
 ---
 
@@ -20,7 +29,7 @@ A useful test mirrors the reproducibility test from training pipelines. If every
 
 A model that recommends songs and a model that approves loans are both "ML in production," but governing them identically is a category error. Apply the loan model's controls to the song recommender and you bury low-risk work in bureaucracy until teams route around governance entirely. Apply the recommender's controls to the loan model and you ship a life-altering decision system as an ordinary code change. **Risk tiering is the decision framework that allocates scrutiny in proportion to consequence**, and it is the single most important design choice in a governance system because every other control derives from it.
 
-The dimensions that determine a tier are not technical accuracy but *impact*: **who is affected** (an internal dashboard versus the general public versus a protected class), **reversibility** (can the affected person appeal, or is the decision final), and **regulatory exposure** (does the decision fall under credit, employment, health, or housing law). A high-accuracy model that denies someone a mortgage with no appeal path is higher-risk than a mediocre model suggesting playlists, regardless of which has the better AUC.
+Tiering starts from context and plausible harm, not model accuracy alone. Relevant dimensions include severity and scale of impact, affected populations, action reversibility, human dependence, detectability, abuse potential, data sensitivity, autonomy, and applicable sectoral law. Likelihood is uncertain before deployment, so a low estimated probability does not erase a catastrophic impact. The same artifact can occupy different tiers when used to summarize an internal queue versus autonomously deny a service; **intended use and decision authority are part of model identity**.
 
 | Tier | Example | Controls the system must enforce |
 |---|---|---|
@@ -29,17 +38,16 @@ The dimensions that determine a tier are not technical accuracy but *impact*: **
 | High | Fraud holds, dynamic pricing, abuse enforcement | + human override, audit log, rollback, policy approval |
 | Critical | Credit, hiring, health, legal-access decisions | + explainability, contestability, strict data governance, periodic audit |
 
-The tier is not advisory metadata; it is the input that *parameterizes the deployment path*. The engineering implication is that tiering must be assigned early and stored where the gate can read it, because the tier decides which gates run.
+The tier parameterizes required evidence, approver roles, rollout authority, monitoring, retention, and review cadence. It is versioned and re-evaluated on material change: new population, new purpose, greater autonomy, policy change, new data source, or changed legal context. A release cannot inherit an old approval merely because its model hash stayed constant.
 
 ```mermaid
-flowchart TD
-    Q1{"Does the model decide<br/>something about a person?"}
-    Q1 -->|"no"| LOW["Low tier"]
-    Q1 -->|"yes"| Q2{"Is the decision<br/>reversible or appealable?"}
-    Q2 -->|"yes"| MED["Medium tier"]
-    Q2 -->|"no"| Q3{"Is it legally or<br/>financially significant?"}
-    Q3 -->|"no"| HIGH["High tier"]
-    Q3 -->|"yes"| CRIT["Critical tier"]
+flowchart LR
+    USE["Use context + population"] --> HARM["Harm scenarios<br/>severity × scale"]
+    AUTH["Decision authority + reversibility"] --> HARM
+    DATA["Sensitivity + provenance"] --> HARM
+    LAW["Applicable obligations"] --> HARM
+    HARM --> TIER["Risk tier + risk acceptance"]
+    TIER --> CONTROLS["Evidence, approvals, runtime limits,<br/>monitoring, response, review cadence"]
 ```
 
 ---
@@ -48,9 +56,9 @@ flowchart TD
 
 Every governance question — *why was this person denied? was this model reviewed? what data did it learn from? can we roll it back?* — reduces to a reconstruction problem. If the system cannot reconstruct the conditions of a past decision, no amount of policy can govern it. **Lineage is therefore the foundation on which every other control rests**, the same way reproducibility is the foundation of the training pipeline.
 
-The governance requirement extends the training pipeline's [reproducibility contract](./05-training-pipelines.md) from "what produced this model" to "what produced this *decision*." A production decision must be traceable along three axes: the **model version** that made it, the **training data and features** that shaped that version, and the **specific inputs** present at decision time. Pin all three and an auditor — internal, regulatory, or a court — can answer "why" months later. Drop any one and the decision is unreconstructable, which under regimes like GDPR or the EU AI Act is itself a violation, not merely an inconvenience.
+The governance requirement extends the training pipeline's [reproducibility contract](./05-training-pipelines.md) from “what produced this model” to “what produced this decision.” Trace the model and training lineage, the release and policy versions, the inputs actually used, system fallbacks, and any human intervention. What must be retained, for how long, and in what form depends on purpose and applicable law; retaining every raw feature indefinitely can itself violate data-minimization and retention obligations.
 
-The enforcement point is an append-only **audit log** for every high-impact decision, recording at minimum the timestamp, the model and policy versions, the feature references consumed (by version, not raw sensitive values), the score and threshold, the final action, and any human override and its reason. The log is immutable by design — you cannot govern an audit trail that the system being audited can edit — and it doubles as the raw material for incident analysis and the labels for the next retraining cycle. The discipline that makes this work is the same one that makes lineage work in training: the metadata is captured *automatically at decision time*, not reconstructed afterward from memory or scattered logs, because reconstruction after the fact is exactly the capability whose absence defines an ungovernable system.
+The serving path emits an append-only **decision event** with a unique ID, release epoch, artifact digest, policy version, input snapshot reference or governed digest, output, fallback state, and override. Tamper evidence comes from write-once storage controls, restricted writers, integrity hashes, replication, and audited reads—not from the word “immutable.” Sensitive input values can live in a separately encrypted vault with shorter retention while the decision ledger retains stable references and integrity proofs. Labels and appeals may link to the decision event, but they remain separate ledgers: using the audit stream directly as ground truth would mix what the system decided with whether that decision was correct.
 
 ---
 
@@ -140,7 +148,7 @@ decision_audit_event:
     score: 0.73
     calibrated_probability: 0.19
     action: approve_limit_2500
-    counterfactual_reason_codes:
+    explanation_reason_codes:
       - high_utilization_ratio
       - short_credit_history
   human_override:
@@ -154,21 +162,40 @@ decision_audit_event:
     legal_hold: false
 ```
 
-The promotion evidence bundle ties the inventory and audit requirements back to the deployment path. It should contain the exact evaluation report, slice metrics, signed approvals, serving contract validation, rollback proof, and kill-switch test result. The bundle's hash is what the registry should store on the model version. If a later incident asks why the model was allowed into production, the answer should be one object, not a scavenger hunt through dashboards and tickets.
+The promotion evidence bundle ties inventory and decision logging to deployment. It contains exact evaluation snapshots and uncertainty, slice definitions, approvals, serving-contract validation, rollback evidence, control tests, known limitations, and an expiry policy. The registry stores its digest on the release. If a later incident asks why a release was authorized, the answer is a stable evidence graph rather than a scavenger hunt through mutable dashboards.
+
+---
+
+## Authority Is a Versioned Lease
+
+Approval should grant bounded authority to a complete decision release, not permanent trust to model weights. The lease binds model digest, feature and label contracts, policy, use context, population, endpoint, traffic ceiling, control versions, and expiry. A material change invalidates or narrows the lease.
+
+```text
+authority(release) = approved evidence
+                     ∩ allowed purpose and population
+                     ∩ traffic/autonomy limits
+                     ∩ evidence freshness
+                     ∩ healthy mandatory controls
+```
+
+The governance control plane evaluates this state and issues a signed release authorization. The serving control plane accepts only authorized digests and logs the authorization ID with each decision epoch. This boundary prevents a registry approval from being reused for another endpoint or a threshold edit from bypassing model review. Short control-plane outages need not stop inference immediately: the data plane can use a cached authorization until its lease expires, then follow the declared fail-safe.
+
+Exceptions are also state. A break-glass authorization names the incident, scope, approvers, compensating controls, expiry, and retrospective review. An undocumented bypass is a vulnerability; an expiring, dual-authorized exception is a governable risk decision.
 
 ---
 
 ## Approval Gates and Separation of Duties
 
-For tiers above "low," the question *who is allowed to put this in front of real people?* must have an enforced answer. An approval gate is the control that makes promotion to a regulated tier conditional on a sign-off from someone who is not the model's author — **separation of duties**, the principle that the person who builds a system should not be the only person who approves it. The author optimizes for shipping; the reviewer optimizes for not harming users. Collapsing the two roles removes the only check on "ship it, the metric went up."
+For higher tiers, promotion requires an enforced authorization from roles independent enough to challenge the release. **Separation of duties** reduces conflict of interest and single-principal compromise; it does not assume authors are reckless or reviewers infallible. Required independence and expertise follow the harm model—for example model validation, domain risk, privacy, security, or legal review may own different claims.
 
-The enforcement point is the **model registry**, the same component that anchors [deployment and rollouts](./06-model-deployment-rollouts.md). The registry stores each model's lifecycle state — experimental, shadow, canary, production, deprecated, retired — and the promotion gate refuses to advance a high-tier model to production unless the registry records the required approval, complete lineage, and a passing evaluation against the tier's guardrails. This is the governance analogue of the training pipeline's promotion gate: the registry is the source of truth, and a model whose approval is "someone said yes in Slack" is not approved, because the gate cannot read Slack.
+The enforcement boundary spans the **model registry** and deployment controller, the same components that anchor [deployment and rollouts](./06-model-deployment-rollouts.md). The registry stores the model bundle's eligibility lifecycle—registered, evaluated, approved, deprecated, retired—while separate deployment records store environment and rollout state such as staged, shadow, canary, active, and draining. A high-tier bundle cannot become `approved` without the required lineage, evaluation, and authorization; the deployment controller then refuses production canary or active intent unless that approval lease is valid for the exact bundle and use context. This is the governance analogue of the training pipeline's promotion gate: a model whose approval is "someone said yes in Slack" is not approved, because neither controller can enforce Slack.
 
 The engineering implication is that approval must be a *state in the registry*, queryable and enforced, not an event in a human's memory. A small declarative policy, evaluated by the gate, is enough:
 
 ```yaml
-# Evaluated by the promotion gate before any tier>=high model serves traffic
-promote_to_production:
+# Evaluated before any tier>=high bundle receives production traffic
+authorize_production_deployment:
+  require_model_eligibility: approved
   require_lineage_contract: complete      # else: refuse (no contract, no registry entry)
   require_slice_metrics:    passing       # gated on pre-declared protected slices
   require_approval_from:     "risk-review" # a role distinct from the model's author
@@ -185,7 +212,8 @@ The scalable form of governance is a policy engine over registry metadata. The p
 governance_policy: regulated_model_promotion:v6
 applies_to:
   risk_tiers: [high, critical]
-  target_states: [canary, production]
+  target_environments: [production]
+  target_rollout_states: [canary, active]
 
 defaults:
   deny_unless_all_required_controls_pass: true
@@ -207,7 +235,7 @@ rules:
       - protected_class_proxy_reviewed
       - geography
       - new_customer
-    block_if_any_guardrail_regresses: true
+    evaluate_guardrails_against: declared_harm_and_noninferiority_limits
 
   operational_readiness:
     require_serving_contract_validation: true
@@ -236,7 +264,8 @@ The gate should return machine-readable denial reasons:
 {
   "decision": "deny",
   "model_version": "credit_limit_model:v42",
-  "target_state": "production",
+  "target_environment": "production",
+  "target_rollout_state": "canary",
   "failed_controls": [
     "evaluation.guardrail_slices.new_customer.regressed",
     "operational_readiness.kill_switch_tested_within_days.expired"
@@ -252,17 +281,17 @@ This shape matters operationally. A denial reason that points to a missing regis
 
 An approval gate is worthless if anyone can bypass it. Separation of duties only holds when the *permission* to promote, to edit a threshold, or to overwrite a feature definition is itself an enforced control. This is the access-control layer of governance, and it is the one teams most often leave implicit — every engineer has production credentials, and the gate is a convention rather than a constraint.
 
-The principle is that the blast radius of a change must scale with the risk tier. Editing the threshold of a critical credit model is a higher-privilege action than editing a song recommender, and the system should treat it that way: changes to high-tier models require credentials the author alone does not hold, every such change is attributed to an identity and written to the audit log, and the production policy a model serves is itself a versioned, access-controlled artifact — not a value an on-call engineer can quietly tweak at 2 a.m. The engineering implication is that *who changed what, when, and with whose approval* must be reconstructable for every consequential model, which makes access control a precondition for the audit trail rather than a separate concern. A registry that records approvals but lets anyone flip a model's state is recording fiction.
+The blast radius of a change should determine its privilege boundary. Model, feature, threshold, policy, fallback, and authorization changes all affect decisions and require attributed identities and least-privilege roles. High-consequence changes use dual control; production artifacts and policy bundles are signed by the release path; the serving plane verifies digest and signature before activation. A registry that records approvals but permits an unsigned threshold edit is recording fiction. Emergency access is narrow, time-bound, heavily logged, and automatically revoked rather than shared as a standing administrator credential.
 
 ---
 
 ## Explainability and Contestability: A System Requirement, Not a Model Property
 
-When a regulated decision goes against someone — a denied loan, a rejected job application, a flagged account — the law in much of the world grants them a right to an explanation and a path to contest it. **GDPR Article 22** (in force since 2018) gives individuals the right not to be subject to solely automated decisions with legal or similarly significant effects, and to obtain human intervention and contest the outcome. The **EU AI Act**, adopted in 2024 and phasing its high-risk obligations into 2026–2027, hardens this into concrete requirements for human oversight, transparency, and record-keeping on high-risk systems.
+Legal duties are jurisdiction- and use-specific. In the EU, **GDPR Article 22** addresses decisions based solely on automated processing that produce legal or similarly significant effects, subject to stated exceptions; where the contract or consent exceptions apply, Article 22(3) requires safeguards including human intervention, an opportunity to express a view, and contesting the decision. GDPR transparency duties also interact with Articles 13–15 and have been interpreted through case law and regulatory guidance. The **EU AI Act** imposes risk-management, data-governance, logging, transparency, and human-oversight duties for covered actors and systems on a phased schedule. These regimes overlap but are not interchangeable, and architecture is not a substitute for legal scoping.
 
-The engineering implication is the part teams miss: **explainability and contestability are system requirements, not model properties.** It is not enough that a model is "interpretable" in the abstract. The system must have logged enough — the model version, the inputs, the relevant feature attributions — to *reconstruct why this specific decision was made* when the affected person asks weeks later. And contestability requires a real human-in-the-loop path: a review queue, an override mechanism, and an appeal process that can reverse the decision. A SHAP value computed at decision time and discarded explains nothing later; the same value written to the audit log makes the decision contestable. Explainability that is not persisted is not a control.
+The engineering implication is that explanation and contestability are end-to-end capabilities. The system needs decision lookup, preserved policy and input context, an explanation appropriate to the audience, a review route, override authority, and downstream correction. Feature attribution can help describe model sensitivity, but it is not automatically a causal explanation, a legal reason, or evidence that the final policy action was justified. Persist the explanation method and version—or enough governed context to recompute it—and validate fidelity and stability for the actual model class.
 
-This reframes a research-flavored topic as an infrastructure one. The question is not "which interpretability method is most faithful" but "does the system retain, per decision, the artifacts needed to explain and reverse it" — and is that retention enforced, or does it depend on someone remembering to log it.
+The model output may also be only one input to the final action. A complete explanation distinguishes model score, deterministic eligibility rules, thresholds, missing-feature fallbacks, and human judgment. Otherwise the system explains the model while leaving the decision unexplained.
 
 ---
 
@@ -297,6 +326,8 @@ The workflow needs its own contract:
 
 An appeal system also needs capacity planning. If a critical model makes 1M decisions/day and 0.2% are appealed, that is 2,000 reviews/day. At 8 minutes/review, the workflow needs roughly 267 reviewer-hours/day before QA and escalation. If governance mandates a 14-day appeal SLA but staffing can handle only 500/day, the right conclusion is not "hire later"; it is that the automated decision system is not operationally ready at that decision volume.
 
+Human availability is not equivalent to meaningful oversight. The reviewer needs time, competence, independent evidence, authority to disagree, and a UI that does not anchor them on the model's conclusion. Measure queue age, overturn rate by slice, inter-reviewer consistency, sampled reviewer accuracy, and repeated rubber-stamping. Hide the model recommendation during an initial independent assessment where appropriate, then reveal it for reconciliation. Overrides create append-only events and corrected [label evidence](./10-label-ground-truth-systems.md); they never mutate the original decision record.
+
 ---
 
 ## Fairness as a Continuous, Gated Operational Concern
@@ -309,55 +340,60 @@ The gate needs numbers, so it is worth seeing what the standard metrics actually
 Group A (n=40,000): approval rate 34%   TPR (approved among truly-repaying) 0.81
 Group B (n=6,500):  approval rate 25%   TPR                                  0.68
 
-Disparate impact ratio  = 0.25 / 0.34 = 0.74     ← below the 0.80 "four-fifths rule"
+Selection-rate ratio    = 0.25 / 0.34 = 0.74
 Equal-opportunity gap   = 0.81 − 0.68 = 0.13     ← qualified members of B are
                                                     13 points less likely to be approved
 ```
 
-Both numbers gate differently. The disparate-impact ratio (the four-fifths rule from US employment law, widely borrowed as a screening threshold) compares raw selection rates and requires no labels, so it can run daily on decisions. The equal-opportunity gap conditions on the true outcome, so it is only computable after labels mature and inherits every label-delay caveat from [model monitoring](./04-model-monitoring.md) — which means a fairness gate needs *both*: a fast label-free screen and a slower, truer conditional metric. The uncomfortable mathematical fact governance must absorb is that the reasonable-sounding criteria conflict: when base rates differ across groups, a model cannot simultaneously be calibrated within each group and equalize false-positive and false-negative rates across them (Kleinberg et al., 2016; the COMPAS recidivism debate is this theorem playing out in public). Which criterion binds is therefore a *recorded policy decision* per model, not a computation — and the small-slice statistics need the same care as any [slice evaluation](./12-offline-evaluation-metrics.md): Group B's 6,500 decisions put a ±1-point confidence band on its TPR, so the gate must test against intervals, not point estimates, or it will flap.
+The selection-rate ratio needs no outcome labels and can be computed quickly; it measures a different quantity from equal opportunity, which conditions on a mature outcome. The “four-fifths” heuristic appears in the US Uniform Guidelines for Employee Selection Procedures; it is not a universal fairness definition, legal safe harbor, or appropriate threshold for unrelated domains. Conditional metrics inherit label delay and selective-label bias from [model monitoring](./04-model-monitoring.md). A governance policy must choose metrics from the harm model and legal context, record unavoidable tradeoffs among criteria, and evaluate uncertainty. Confidence intervals depend on the relevant denominators and event rates—not merely the total slice size—and gates need minimum evidence plus an escalation state rather than treating an underpowered slice as passing.
 
-Holding this at the system level — rather than inside the data-science fairness-metric debate — yields three concrete infrastructure requirements. First, **define the metric before deploy.** Disparate impact, equal opportunity, and calibration across groups can conflict, and which one matters is a decision to make deliberately and record, not to discover after an incident. Second, **measure it across protected slices continuously**, reusing the same [slice-monitoring](./04-model-monitoring.md) machinery that tracks quality regressions and the [experiment slice analysis](./08-online-experiments.md) that catches a launch that helps the average while harming a subgroup. Third, **gate on it**: a promotion that improves aggregate AUC while regressing a protected slice must be *blocked by the gate*, not merely noted in a dashboard nobody reads.
-
-The cautionary cases are concrete and well documented. The **Apple Card** launch in 2019 drew a New York regulator investigation after public reports that the algorithm offered women lower credit limits than men with similar finances. **Amazon scrapped an internal recruiting tool in 2018** after discovering it penalized résumés containing the word "women's," having learned from a decade of male-dominated hiring data. The **Dutch childcare-benefits scandal** (SyRI and the related fraud-detection systems, exposed around 2019–2021) saw an automated risk system wrongly accuse tens of thousands of families of fraud, disproportionately those with dual nationality, contributing to the resignation of the Dutch government in 2021. In every case the technical fairness flaw was downstream of a *governance* flaw: no enforced, continuous, slice-level measurement gating the system's decisions.
+At system level, fairness monitoring needs a versioned cohort definition, lawful and access-controlled handling of protected attributes, maturity and missingness state, uncertainty, and an action policy. Not every alert should blindly roll back: a data-quality failure may freeze promotion, a credible severe disparity may suspend automation, and a low-powered slice may route more cases to review while evidence accumulates. Aggregate performance never overrides a predeclared harm limit, but the control must distinguish “measured safe,” “measured unsafe,” and “not measurable yet.”
 
 ---
 
 ## Privacy and Data Governance
 
-A model is a function of its training data, and training data is where most regulatory and ethical exposure originates. Three governance concerns live here. **Provenance and consent**: the system must record where training data came from and whether its use is permitted for this purpose — the lineage contract from training pipelines, extended to legal basis. **PII in features**: sensitive attributes and their proxies (a ZIP code proxying race, a first name proxying gender) must be reviewed before they enter a feature set, because a model cannot be governed for fairness if no one knows it is consuming a protected proxy. **The right to deletion versus the model that memorized**: GDPR grants a right to erasure, but a model trained on a person's data may have *memorized* it, and deleting the row from the warehouse does not delete it from the weights. The engineering implication is that deletion must be a tracked, lineage-aware operation — knowing which models trained on a given record is the same forward-lineage *impact query* that training pipelines need for bad-data backfills, and a governance system without it can promise deletion it cannot deliver.
+A model is a derived data artifact. Governance must record source, purpose and legal basis or permission, transformations, retention, access, and onward use for each dataset snapshot. Sensitive attributes and plausible proxies require contextual review; protected attributes may also be necessary for disparity measurement, which argues for a separately controlled analysis path rather than pretending they do not exist.
+
+Deletion and objection requests need forward-lineage impact analysis: which raw records, label events, feature snapshots, training datasets, caches, and artifacts derived from the subject? The required response is jurisdiction- and context-specific; it may involve deleting source and cached data, excluding the record from future training, retraining, unlearning, or documenting why an exception applies. Row deletion alone does not remove memorized content from weights, while blind retraining can conflict with audit-retention duties. The system should surface the dependency graph and evidence so privacy and legal owners can make and execute the scoped decision.
 
 ---
 
 ## Incident Response and Accountability
 
-Every model in a regulated tier needs a named owner — not a team that has since dissolved, but an accountable individual or on-call rotation responsible for the model's harms. The **orphaned model** with no owner is one of the most common and most dangerous governance failures: it runs in production making consequential decisions, and when it goes wrong there is no one whose job it is to notice, explain, or stop it.
+Every governed model needs a named accountable owner or on-call rotation with authority to contain harm. An **orphaned model** can continue making consequential decisions after organizational ownership disappears, leaving no actor responsible for monitoring, explanation, or suspension.
 
 ML incidents demand a different playbook from service incidents because a model can be perfectly *healthy* — low latency, no errors — while causing real harm. The relevant severity scale is keyed to harm, not to system health.
 
-| Severity | Definition | Response |
+| Impact dimension | Classification input | Control consequence |
 |---|---|---|
-| Sev1 | Irreversible harm or legal violation | Kill switch, executive escalation, regulatory notification |
-| Sev2 | Significant financial or user harm | Rollback, incident review within 24h |
-| Sev3 | Detectable quality or fairness degradation | Investigate, canary rollback |
-| Sev4 | Drift or anomaly detected | Triage during business hours |
+| Irreversibility | Can the decision or disclosure be undone or compensated? | Stronger pre-authorized containment and approval |
+| Harm velocity | Affected decisions and expected loss per unit time | Shorter detection and mitigation objective |
+| Scope | Subjects, regions, tenants, downstream systems | Escalation, evidence preservation, and communication routes |
+| Legal/policy trigger | Applicable regime, actor role, event definition | Counsel/risk-owned notification decision and deadline |
+| Evidence confidence | Confirmed harm, credible signal, or monitor anomaly | Fail-safe containment versus bounded investigation |
 
-The decisive governance control here is **rollback**, and it must be wired the same way [deployment and rollouts](./06-model-deployment-rollouts.md) wires it: the system must be able to disable a model or revert to a known-good version *via configuration, in under a minute, without redeploying the service*. A governance program that can detect harm but cannot quickly stop it is incomplete. After containment comes the **post-incident review**, whose governing question is not "who erred" but "what gate or check would have caught this" — because the durable output of an incident is a new enforced control, not a new line in a document.
+Containment is a governance control and must follow the recovery objective derived from harm velocity. The serving control plane should suspend an authorization, route to a known-safe release, lower autonomy, or enter manual review without waiting for a rebuild. The target may be seconds for a high-rate irreversible action and longer for a low-rate advisory workflow; the requirement is evidence-backed and tested. Detection without a containment path merely timestamps harm.
 
 ---
 
 ## Governance Incident Workflow: Harm Signal to Enforced Control
 
-An ML governance incident should be handled like a reliability incident, but the incident clock starts from harm detection, not service failure. A healthy model server can be a Sev1 if it is producing illegal or harmful decisions.
+An ML governance incident clock starts from harm detection, not service failure. Workflow deadlines are policy data derived from impact class, harm velocity, contractual commitments, and applicable law; a static chapter cannot supply them.
 
 ```text
-T+00m  Harm signal detected: fairness guardrail breach, appeal spike, regulator inquiry, or incident report
-T+05m  Freeze rollout and preserve evidence bundle, prediction logs, feature snapshots, and active policy
-T+10m  Contain: pointer rollback, threshold fail-safe, kill switch, or route to human review
-T+30m  Scope impact: affected decisions, slices, time window, regions, and downstream actions
-T+2h   Notify accountable owner, risk/legal, support, and affected operations teams
-T+24h  Produce preliminary harm assessment and remediation plan
-T+7d   Complete post-incident review; convert finding into a new gate, monitor, or policy test
+DETECTED
+  -> TRIAGED             classify evidence, impact, owner, and authority
+  -> CONTAINING          freeze allocation; suspend or narrow decision authority
+  -> CONTAINED           preserve release/policy/data evidence and reconcile in-flight effects
+  -> SCOPING             identify affected decisions, subjects, regions, and downstream actions
+  -> NOTIFICATION_DECISION
+                         risk/legal owner records applicable duties, recipients, and deadlines
+  -> REMEDIATING         correct decisions/data/system and validate safe restoration
+  -> CLOSED              publish control changes, residual risk, and effectiveness evidence
 ```
+
+Each transition records actor, evidence bundle, policy revision, deadline, decision, and exceptions. Containment may begin before classification completes when expected loss from waiting exceeds the cost of a fail-safe. Notification is neither automatic for every anomaly nor optional when a scoped obligation applies; the responsible owner makes and records that determination against current authoritative requirements.
 
 The impact query should be prepared before the incident. During a real event, the team should fill parameters, not design joins:
 
@@ -391,15 +427,11 @@ The postmortem output is a pull request against the governance system: a new pol
 
 ---
 
-## The Regulatory Landscape, Mapped to Controls
+## Map Obligations to Evidence, Not Framework Names
 
-The point of surveying regulation is not legal completeness but recognition that the major regimes all map onto the controls above — they are demands for enforced infrastructure, not new categories of work.
+Regimes differ in scope, actor roles, definitions, and required evidence. **SR 11-7** applies to covered banking organizations' model risk management and emphasizes inventory, validation, governance, and ongoing monitoring. **GDPR** governs personal-data processing and includes, among many other provisions, Article 22's scoped rules for certain solely automated significant decisions. **Regulation (EU) 2024/1689, the EU AI Act**, applies progressively and assigns obligations by actor and system classification. The original text, subsequent amendments, official implementation timeline, sectoral law, and national enforcement all matter; dates should be checked against current official sources rather than copied into static policy code.
 
-- **SR 11-7** (US Federal Reserve / OCC, 2011) established model risk management for banking: independent validation, an inventory of models with owners, and ongoing monitoring. It is essentially a mandate for risk tiering, a model registry, and separation of duties — a decade before most ML teams adopted them.
-- **GDPR Article 22** (EU, 2018) maps onto explainability, contestability, the human-in-the-loop override path, and lineage dense enough to reconstruct a decision.
-- **The EU AI Act** (adopted 2024, high-risk obligations phasing in through 2026–2027) defines explicit risk tiers — prohibited, high-risk, limited, minimal — and mandates human oversight, transparency, data governance, and record-keeping for high-risk systems. Its tiering is the same impact-based framework above, given legal teeth, and its 2026 timeline is why these controls are moving from optional to mandatory for anyone serving EU users now.
-
-The engineering takeaway: a team that has already built enforced risk tiering, lineage, approval gates, slice monitoring, and rollback is most of the way to compliance with all three. A team that has only documents is not.
+The platform should not encode “GDPR compliant” as a Boolean. It should encode testable obligations and evidence: processing purpose, actor role, system classification, data-governance record, logging period, human-oversight design, conformity or validation artifact, information supplied to affected people, incident route, and responsible owner. Legal or risk specialists own the mapping from law to controls; engineering owns making those controls observable and enforceable. Shared controls reduce compliance work, but no generic registry or fairness dashboard establishes compliance by itself.
 
 ---
 
@@ -407,7 +439,7 @@ The engineering takeaway: a team that has already built enforced risk tiering, l
 
 The characteristic ways governance fails recur across organizations, and naming them is half of preventing them.
 
-**Governance-as-theater** is the root failure: controls that exist on paper but enforce nothing — a fairness threshold no gate checks, an approval that happens after launch, a model card that drifts from the deployed reality. The defense is to wire every required control into the deployment path so the system, not a human, enforces it.
+**Evidence/control divergence** occurs when an approved model card describes one use while an endpoint, threshold, or feature change creates another. Bind an expiring authorization to the complete release and use context; invalidate it on material change.
 
 **The unreconstructable decision** is the audit that cannot answer "why." A regulator or court asks why a person was denied, and the system cannot reconstruct the model version, inputs, and reasoning. The defense is the per-decision audit log, captured automatically and stored immutably.
 
@@ -417,54 +449,63 @@ The characteristic ways governance fails recur across organizations, and naming 
 
 **The orphaned model** runs in production with no owner, so no one notices, explains, or stops its harms. The defense is mandatory owner metadata, stale-model alerts, and a retirement path — a model without a retirement plan becomes permanent operational debt.
 
-**Rubber-stamp review** is the human gate that approves 99% of decisions because the queue is too deep and the SLA too tight. A review queue with 99% agreement is not a review queue; it is a latency tax. The defense is to treat human review as a service with SLOs — monitor reviewer accuracy against expert adjudication, bound queue depth, and rotate reviewers.
+**Nominal human oversight** places a rushed reviewer after the model without independent evidence or override authority. High agreement alone is not proof of rubber-stamping because easy cases may genuinely agree. Sample expert adjudication, time-to-review, reason diversity, slice-level overturns, and controlled tests of reviewer independence expose automation bias and capacity pressure.
+
+**Expired evidence with persistent authority** lets a release continue after its population, features, law, or controls have materially changed. Time-bound authorizations, dependency-change events, and periodic revalidation prevent “approved once” from becoming “approved forever.”
+
+**Audit-log exfiltration** turns rich decision reconstruction into a concentrated store of sensitive attributes and outcomes. Separate identifiers and sensitive snapshots, encrypt with scoped keys, audit reads, minimize retention, and test deletion/legal-hold behavior.
+
+**Break-glass permanence** uses an emergency bypass during an incident and never removes it. Exception state needs dual authorization, narrow scope, automatic expiry, compensating monitoring, and a mandatory review event.
 
 ---
 
-## Decision Framework: Risk Tier → Required Controls
+## Decision Framework
 
-Designing or reviewing an ML system's governance reduces to a short sequence of questions, each one a control the system must *enforce*, not a box a human ticks.
+Begin with a harm model and use context, then select a control portfolio. The tier is an index into that portfolio, not a substitute for reasoning.
 
-1. **What risk tier is this model**, by who is affected, reversibility, and regulatory exposure? The tier parameterizes everything below.
-2. **Can every production decision be reconstructed** — model version, training data, inputs — from recorded metadata alone? If not, the system is unauditable and ungovernable.
-3. **Does promotion to a regulated tier require enforced sign-off** from someone other than the author, with the registry as the source of truth? If not, there is no separation of duties.
-4. **For regulated decisions, is enough logged to explain and contest them**, with a real human-override and appeal path? If not, GDPR Article 22 and the EU AI Act are violated.
-5. **Is fairness measured continuously across pre-declared protected slices and gated on**, not checked once at launch?
-6. **Can the model be disabled or rolled back via config in under a minute**, without redeploying the service?
-7. **Can an affected person appeal a specific decision**, with a reviewer seeing the exact evidence bundle and override authority?
-8. **Can impact be queried during an incident** by model, policy, slice, endpoint, and time window without ad hoc log archaeology?
-9. **Does the model have a named owner and a retirement path?** An owner-less model is an incident waiting for no one to respond.
+| Control objective | Low consequence | High consequence or regulated context |
+|---|---|---|
+| Authority | Named owner and release provenance | Scoped, signed, expiring authorization with separation of duties |
+| Evidence | Reproducible evaluation and serving contract | Independent validation, uncertainty, protected slices, limitations, legal mapping |
+| Decision trace | Release and policy epoch | Governed input snapshot, complete action path, explanation method, tamper evidence |
+| Runtime boundary | Monitoring and rollback | Traffic/autonomy ceilings, fail-safe, kill switch, human intervention, appeal |
+| Detection | Service and quality signals | Harm, fairness, control health, appeals, audit samples, evidence freshness |
+| Response | Owner remediation | Containment objective, impact query, notification, correction/compensation workflow |
+| Lifecycle | Periodic ownership check | Material-change review, approval expiry, decommission and retention plan |
 
-A system that answers these with enforced controls is auditable, accountable, and reversible. A system that answers them with documents has governance theater, and the cost of that gap is paid by the people the model decides about — as Apple Card, Amazon, and the Dutch families learned.
+The strongest control should sit at the narrowest reliable enforcement point. Artifact integrity belongs at registry admission; use-purpose and traffic limits belong in release authorization; per-decision eligibility belongs in policy execution; slow outcome harm belongs in monitoring and incident state. Duplicating every control in every component creates inconsistency, while leaving a requirement only in a document creates no execution boundary.
+
+Three-valued evidence avoids a dangerous default: `PASS`, `FAIL`, and `INSUFFICIENT`. A sparse protected slice, delayed labels, or unavailable explanation test is not a pass. Policy decides whether insufficient evidence blocks promotion, caps autonomy, routes to review, or requires explicit time-bounded risk acceptance. That decision and its owner become part of the evidence bundle.
+
+Finally, test the controls themselves. Exercise rollback and authorization revocation, inject missing audit fields, verify that an unauthorized threshold is rejected, measure appeal capacity, and query a synthetic incident window. Governance is effective only when control health is observed and failures cause defined state transitions.
 
 ---
 
 ## Key Takeaways
 
-1. Governance is the system of *enforced controls* that makes ML auditable, accountable, and reversible — a control not wired into the deployment path is theater.
+1. Governance is a closed loop of context mapping, authorization, operation, measurement, response, and retirement—not a document set or a promotion checklist.
 2. Risk tiering by impact (who is affected, reversibility, regulatory exposure) is the core decision framework; it parameterizes every other control.
-3. Lineage is the foundation: you cannot govern what you cannot reconstruct, so every production decision must trace to a model version, its data, and its inputs.
+3. Decision traceability spans model and training lineage, release epoch, policy, actual inputs or governed snapshot, fallback state, and human action.
 4. Approval gates enforce separation of duties through the model registry — approval is a queryable state, not a memory.
 5. Production governance artifacts should be structured: model inventory, per-decision audit log, and immutable promotion evidence bundle.
-6. Explainability and contestability are *system* requirements: persist enough to explain and reverse a decision, and provide a real human-override path (GDPR Article 22, EU AI Act).
-7. Fairness is operational: declare the metric before deploy, measure it continuously across protected slices, and gate on it — never a one-time check.
-8. Rollback is a governance control; a system that detects harm but cannot stop it in under a minute is incomplete.
+6. Explanation and contestability require an end-to-end workflow; feature attribution alone is neither a causal explanation nor an appeal mechanism.
+7. Fairness controls need contextual metrics, lawful cohort data, uncertainty, mature labels, and an action for `INSUFFICIENT` evidence.
+8. Containment targets derive from harm velocity; authorization revocation, lower autonomy, rollback, and manual review must be tested against that objective.
 9. Governance incidents should produce new enforced controls — policy rules, metadata requirements, monitors, or runbooks — not only narrative postmortems.
 10. Every regulated model needs a named owner and a retirement path, or it becomes an unaccountable, permanent liability.
-11. SR 11-7, GDPR, and the EU AI Act (phasing in through 2026–2027) all map onto the same enforced controls — build the controls and compliance largely follows.
-12. Ungoverned ML has a documented cost: Apple Card (2019), Amazon's scrapped recruiting tool (2018), and the Dutch childcare-benefits scandal were governance failures before they were model failures.
+11. Regulations must be mapped to scoped, testable obligations and current official text; shared platform controls help but do not create a universal “compliant” state.
+12. Control health is itself observable: expired approvals, untested fallbacks, audit gaps, review backlogs, and permanent exceptions are governance incidents.
 
 ---
 
 ## References
 
 1. [SR 11-7: Guidance on Model Risk Management](https://www.federalreserve.gov/supervisionreg/srletters/sr1107.htm) — US Federal Reserve / OCC, 2011
-2. [EU AI Act — Official Text and Risk Classification](https://artificialintelligenceact.eu/) — adopted 2024, phased into 2026–2027
-3. [GDPR Article 22 — Automated Individual Decision-Making](https://gdpr-info.eu/art-22-gdpr/)
-4. [NIST AI Risk Management Framework](https://www.nist.gov/itl/ai-risk-management-framework)
-5. [Model Cards for Model Reporting](https://arxiv.org/abs/1810.03993) — Mitchell et al., 2019
-6. [Datasheets for Datasets](https://arxiv.org/abs/1803.09010) — Gebru et al., 2018
-7. [Hidden Technical Debt in Machine Learning Systems](https://proceedings.neurips.cc/paper_files/paper/2015/file/86df7dcfd896fcaf2674f757a2463eba-Paper.pdf) — Sculley et al., 2015
-8. [Amazon scraps secret AI recruiting tool that showed bias against women](https://www.reuters.com/article/us-amazon-com-jobs-automation-insight-idUSKCN1MK08G) — Reuters, 2018
-9. [Apple Card investigated after gender discrimination complaints](https://www.bloomberg.com/news/articles/2019-11-09/viral-tweet-about-apple-card-leads-to-probe-into-goldman-sachs) — Bloomberg, 2019
-10. [Dutch childcare benefits scandal / SyRI ruling](https://www.amnesty.org/en/latest/news/2021/10/xenophobic-machines-dutch-child-benefit-scandal/) — Amnesty International, 2021
+2. [Regulation (EU) 2024/1689 — Artificial Intelligence Act](https://eur-lex.europa.eu/eli/reg/2024/1689/oj) — official text
+3. [European Commission AI Act Implementation Timeline](https://ai-act-service-desk.ec.europa.eu/en/ai-act/eu-ai-act-implementation-timeline) — verify current application dates
+4. [Regulation (EU) 2016/679 — GDPR, Article 22 and Recital 71](https://eur-lex.europa.eu/eli/reg/2016/679/oj) — official text
+5. [NIST AI Risk Management Framework 1.0](https://nvlpubs.nist.gov/nistpubs/ai/NIST.AI.100-1.pdf)
+6. [Model Cards for Model Reporting](https://arxiv.org/abs/1810.03993) — Mitchell et al., 2019
+7. [Datasheets for Datasets](https://arxiv.org/abs/1803.09010) — Gebru et al., 2018
+8. [Hidden Technical Debt in Machine Learning Systems](https://proceedings.neurips.cc/paper_files/paper/2015/file/86df7dcfd896fcaf2674f757a2463eba-Paper.pdf) — Sculley et al., 2015
+9. [Uniform Guidelines on Employee Selection Procedures](https://www.ecfr.gov/current/title-29/subtitle-B/chapter-XIV/part-1607) — official US text for the four-fifths heuristic's scope

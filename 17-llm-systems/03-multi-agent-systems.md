@@ -4,7 +4,7 @@
 
 A multi-agent system is a distributed system whose workers happen to make probabilistic, context-dependent decisions. The hard problems are therefore not agent personas or conversational prompts. They are work decomposition, state ownership, message semantics, concurrency control, failure isolation, admission control, provenance, and determining whether the extra calls buy independent information.
 
-The strongest default architecture is an orchestrator with read-only workers. The orchestrator owns the goal, the dependency graph, budgets, authoritative state, and final commit; workers explore bounded subproblems and return typed evidence. Allow multiple writers only when their write sets are disjoint or when commits pass through explicit concurrency control. Use debate or voting only when agents receive meaningfully different evidence or inductive biases—five correlated samples do not constitute five independent experts.
+A robust starting topology inside one trust domain is an orchestrator with read-only workers. The orchestrator owns the goal, dependency graph, budgets, authoritative state, and final commit; workers explore bounded subproblems and return typed evidence. Multiple writers require enforced disjoint write sets or explicit concurrency control. Debate or aggregation buys evidence only when branches add meaningfully different information or failure modes—five correlated samples do not constitute five independent experts.
 
 Multi-agent execution is justified when the task contains parallel information acquisition or separable deliverables whose value exceeds duplicated context, coordination, synthesis, and tail-latency costs. It is usually the wrong answer for one tightly coupled code change, one coherent document, a latency-sensitive interaction, or any decision without a reliable verifier.
 
@@ -66,7 +66,7 @@ flowchart TD
     C -->|insufficient evidence| O
 ```
 
-This is the production default because it centralizes goal interpretation and commit authority. The orchestrator creates a dependency graph, assigns bounded work, and decides whether a worker result satisfies its contract. Workers should return claims, evidence references, confidence or uncertainty, actions attempted, and unresolved questions—not their entire transcript.
+This topology centralizes goal interpretation and commit authority. The orchestrator creates a dependency graph, assigns bounded work, and decides whether a worker result satisfies its contract. Workers return claims, evidence references, uncertainty, actions attempted, and unresolved questions—not their entire transcript.
 
 The orchestrator is both a bottleneck and a consistency boundary. Scale it by separating deterministic scheduling from model-based planning: code tracks node state, leases, deadlines, and budgets; a model proposes decomposition or replanning at explicit decision points. Requiring the model to rediscover the whole run state on every scheduling decision is expensive and makes replay unstable.
 
@@ -74,11 +74,13 @@ The orchestrator is both a bottleneck and a consistency boundary. Scale it by se
 
 A pipeline gives each stage one input and output contract. It is appropriate when transformations are ordered and stable, such as extract → normalize → generate → verify. It is not inherently multi-agent; using separate model personas does not change the topology.
 
-Pipeline reliability compounds. If stage \(i\) has an undetected semantic-error probability \(e_i\), the chance of at least one undetected error is approximately
+Under an independence approximation, if stage \(i\) has an undetected semantic-error probability \(e_i\), the chance of at least one undetected error is
 
 \[
 P(error) = 1 - \prod_i (1-e_i).
 \]
+
+Model stages often share source evidence and earlier artifacts, so their errors are dependent. Use the product only as an illustrative baseline; release evidence should estimate end-to-end outcomes or conditional error rates on complete traces.
 
 Version schemas, validate at boundaries, and retain source provenance so a later stage can distinguish a source fact from an earlier model's inference. Backtracking must be explicit: a verifier should invalidate the specific upstream artifact that failed, not merely append “try again” to the last prompt.
 
