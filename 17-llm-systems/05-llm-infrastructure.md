@@ -2,1364 +2,400 @@
 
 ## TL;DR
 
-Production LLM infrastructure spans model serving (continuous batching, PagedAttention, prefix caching, speculative decoding, prefill/decode disaggregation), caching (provider prompt caching first, semantic caching with care), structured outputs via constrained decoding, evaluation, cost optimization (cascades, quantization, batch tiers), and guardrails. The serving layer is dominated by two regimes — compute-bound prefill and memory-bandwidth-bound decode — and almost every optimization in the modern stack (vLLM, SGLang, TensorRT-LLM) is about keeping GPUs busy across that asymmetry. Measure TTFT, inter-token latency, and goodput under SLO, not just requests per second.
+LLM infrastructure is a deadline-aware, quota-constrained distributed serving system around expensive stateful accelerators and fallible external providers. The platform must turn a logical model request into an admitted, policy-checked, version-pinned execution; schedule prefill and decode without allowing long prompts to starve interactive traffic; stream results with cancellation; account for tokens and cost; and preserve a trace across gateways, retrieval, model servers, and tools.
+
+Separate the global **control plane**—model catalog, policy, evaluation evidence, rollout state, quotas, pricing, and placement—from regional **data planes**—admission, routing, caches, queues, inference pools, and streaming. A provider API and a self-hosted model should implement the same logical contract but retain different failure semantics. Provider fallback is not transparent if models differ in tokenization, context limits, tool schemas, safety behavior, or output distribution.
+
+Optimize for goodput: requests that meet the product's correctness, latency, and policy SLO per unit cost. Raw GPU utilization, tokens per second, or low API price can each improve while useful completion rate gets worse.
 
 ---
 
-## The Infrastructure Challenge
+## Begin with the Workload and SLO
+
+An infrastructure design is meaningful only for a specified workload distribution. Record at least:
+
+- arrival rate by tenant, endpoint, and traffic class;
+- input, cached-prefix, reasoning, and output token distributions;
+- context length and image/audio dimensions for multimodal traffic;
+- streaming versus batch behavior;
+- tool-call frequency and inter-step think time;
+- model and adapter mix;
+- deadline, time-to-first-token (TTFT), inter-token latency (ITL), and completion SLOs;
+- retry, cancellation, and disconnect rates;
+- data residency, retention, safety, and availability requirements.
+
+A chat request with 1,000 input tokens and 150 output tokens has a different resource shape from code generation with a 100,000-token repository prefix, offline document extraction, or an agent session that alternates short model bursts with long tool waits. Averages hide the tails that determine memory capacity and queueing.
+
+Define SLOs at the user-visible boundary. A provider's model latency excludes your queue, rate limiter, retrieval, moderation, network, parser, retries, and client rendering. For streaming, separate:
+
+\[
+TTFT = Q + L_{route} + L_{prefill} + L_{network-first},
+\]
+
+\[
+T_{complete} = TTFT + \sum_{j=1}^{T_{out}} ITL_j + L_{postprocess}.
+\]
+
+Goodput can be written as:
+
+\[
+G = \frac{\#\ requests\ completed\ within\ quality,\ policy,\ and\ latency\ bounds}
+{time \times cost\ unit}.
+\]
+
+This prevents the platform from declaring success after batching increases throughput but violates interactive TTFT, or after an aggressive fallback improves availability but lowers answer quality below the product threshold.
+
+## Reference Architecture
 
 ```mermaid
-graph TD
-    CH["LLM INFRASTRUCTURE CHALLENGES"]
-    CH --> LAT["LATENCY<br/>Model loading<br/>Inference<br/>Network"]
-    CH --> COST["COST<br/>Token costs<br/>GPU compute<br/>Overprovisioning"]
-    CH --> REL["RELIABILITY<br/>Rate limits<br/>API failures<br/>Model updates"]
-    CH --> SAF["SAFETY<br/>Harmful output<br/>Prompt injection<br/>Data leakage"]
-    CH --> EVAL["EVALUATION<br/>Quality drift<br/>Regressions<br/>A/B testing"]
-    CH --> SC["SCALE<br/>Traffic spikes<br/>Multi-region<br/>Concurrency"]
+flowchart TB
+    C[Clients / product services] --> E[Edge authentication<br/>request size and abuse limits]
+    E --> G[Regional AI gateway]
+    G --> A[Admission and quota]
+    A --> P[Policy + data classification]
+    P --> R[Capability-aware router]
+
+    R --> EXT[External provider adapters]
+    R --> HOST[Self-hosted inference pools]
+    HOST --> SCH[Deadline-aware scheduler]
+    SCH --> PF[Prefill workers]
+    SCH --> DC[Decode workers]
+
+    R --> CACHE[(Exact / prefix caches)]
+    R --> AUX[Embedding, rerank,<br/>moderation, tool services]
+    EXT --> S[Streaming multiplexer]
+    PF --> S
+    DC --> S
+    S --> C
+
+    CP[Global control plane<br/>catalog, rollout, evals, policy,<br/>quotas, placement, pricing] -.-> G
+    CP -.-> HOST
+    G --> OBS[(Traces, metrics, usage ledger)]
+    HOST --> OBS
 ```
 
----
+The edge rejects unauthenticated, malformed, or obviously oversized requests before expensive work. The gateway creates a stable generation ID, resolves the caller's product policy, reserves budget, selects a route, and owns the stream. Provider adapters translate the logical request into provider-specific APIs and normalize observable outcomes without pretending the models are equivalent.
 
-## Model Serving Architecture
+### Logical generation contract
 
-### Basic Serving Infrastructure
+A request contract should include:
 
-```mermaid
-graph TD
-    LB["Load Balancer"]
-    LB --> GW1["Gateway Server<br/>(FastAPI)"]
-    LB --> GW2["Gateway Server<br/>(FastAPI)"]
-    LB --> GW3["Gateway Server<br/>(FastAPI)"]
-
-    GW1 & GW2 & GW3 --> RQ["Request Queue<br/>(Redis)"]
-
-    RQ --> W1["Inference Worker<br/>(GPU Node)<br/>vLLM / TGI"]
-    RQ --> W2["Inference Worker<br/>(GPU Node)<br/>vLLM / TGI"]
-    RQ --> W3["Inference Worker<br/>(GPU Node)<br/>vLLM / TGI"]
+```text
+generation_id, tenant_id, principal_id, product/use_case
+requested capability and acceptable model set
+messages/content references, tool-schema versions, output schema
+max input/output/reasoning budgets
+deadline and traffic class
+data classification, residency, retention policy
+idempotency key, trace context, experiment assignment
 ```
 
-```python
-from fastapi import FastAPI, BackgroundTasks
-from pydantic import BaseModel
-from typing import Optional, List
-import asyncio
-import uuid
-
-app = FastAPI()
-
-class CompletionRequest(BaseModel):
-    prompt: str
-    model: str = "llama-3-70b"
-    max_tokens: int = 1024
-    temperature: float = 0.7
-    stream: bool = False
-
-class CompletionResponse(BaseModel):
-    id: str
-    choices: List[dict]
-    usage: dict
-
-class LLMGateway:
-    """Gateway service for LLM requests."""
-    
-    def __init__(self, config):
-        self.request_queue = RequestQueue(config.redis_url)
-        self.model_router = ModelRouter(config.models)
-        self.rate_limiter = RateLimiter(config.rate_limits)
-        self.cache = SemanticCache(config.cache_url)
-    
-    async def complete(self, request: CompletionRequest, user_id: str) -> CompletionResponse:
-        """Process completion request."""
-        
-        # Rate limiting
-        if not await self.rate_limiter.allow(user_id):
-            raise RateLimitExceeded()
-        
-        # Check cache
-        cached = await self.cache.get(request.prompt, request.model)
-        if cached:
-            return cached
-        
-        # Route to appropriate model/backend
-        backend = await self.model_router.route(request)
-        
-        # Queue request
-        request_id = str(uuid.uuid4())
-        result = await self.request_queue.enqueue_and_wait(
-            request_id=request_id,
-            backend=backend,
-            request=request
-        )
-        
-        # Cache result
-        await self.cache.set(request.prompt, request.model, result)
-        
-        return result
-
-
-class RequestQueue:
-    """Manages request queuing and batching."""
-    
-    def __init__(self, redis_url: str):
-        self.redis = Redis(redis_url)
-        self.pending = {}
-    
-    async def enqueue_and_wait(
-        self, 
-        request_id: str, 
-        backend: str, 
-        request: CompletionRequest,
-        timeout: float = 60.0
-    ) -> CompletionResponse:
-        """Enqueue request and wait for result."""
-        
-        # Create future for result
-        future = asyncio.Future()
-        self.pending[request_id] = future
-        
-        # Add to queue
-        await self.redis.lpush(f"queue:{backend}", {
-            "request_id": request_id,
-            "request": request.dict()
-        })
-        
-        try:
-            return await asyncio.wait_for(future, timeout)
-        except asyncio.TimeoutError:
-            raise InferenceTimeout()
-        finally:
-            del self.pending[request_id]
-    
-    async def on_result(self, request_id: str, result: dict):
-        """Called when inference completes."""
-        if request_id in self.pending:
-            self.pending[request_id].set_result(result)
-```
-
-### Continuous Batching with vLLM
-
-```python
-from vllm import LLM, SamplingParams
-from vllm.engine.async_llm_engine import AsyncLLMEngine
-import asyncio
-
-class InferenceWorker:
-    """Worker that runs model inference with continuous batching."""
-    
-    def __init__(self, model_name: str, gpu_memory_utilization: float = 0.9):
-        self.engine = AsyncLLMEngine.from_engine_args(
-            model=model_name,
-            gpu_memory_utilization=gpu_memory_utilization,
-            max_num_batched_tokens=8192,
-            max_num_seqs=256,  # Max concurrent sequences
-        )
-    
-    async def generate(
-        self,
-        prompt: str,
-        sampling_params: SamplingParams,
-        request_id: str
-    ) -> str:
-        """Generate completion with continuous batching."""
-        
-        results_generator = self.engine.generate(
-            prompt=prompt,
-            sampling_params=sampling_params,
-            request_id=request_id
-        )
-        
-        final_output = None
-        async for request_output in results_generator:
-            final_output = request_output
-        
-        return final_output.outputs[0].text
-    
-    async def stream_generate(
-        self,
-        prompt: str,
-        sampling_params: SamplingParams,
-        request_id: str
-    ):
-        """Stream tokens as they're generated."""
-        
-        results_generator = self.engine.generate(
-            prompt=prompt,
-            sampling_params=sampling_params,
-            request_id=request_id
-        )
-        
-        previous_text = ""
-        async for request_output in results_generator:
-            current_text = request_output.outputs[0].text
-            new_text = current_text[len(previous_text):]
-            previous_text = current_text
-            
-            if new_text:
-                yield new_text
-
-
-class BatchProcessor:
-    """Processes requests in optimized batches."""
-    
-    def __init__(self, worker: InferenceWorker, batch_size: int = 32):
-        self.worker = worker
-        self.batch_size = batch_size
-        self.request_buffer = asyncio.Queue()
-    
-    async def run(self):
-        """Main processing loop."""
-        while True:
-            batch = await self._collect_batch()
-            if batch:
-                await self._process_batch(batch)
-    
-    async def _collect_batch(self, timeout: float = 0.05) -> list:
-        """Collect requests into a batch."""
-        batch = []
-        
-        try:
-            # Wait for first request
-            first = await asyncio.wait_for(
-                self.request_buffer.get(),
-                timeout=timeout
-            )
-            batch.append(first)
-            
-            # Collect more requests without waiting
-            while len(batch) < self.batch_size:
-                try:
-                    req = self.request_buffer.get_nowait()
-                    batch.append(req)
-                except asyncio.QueueEmpty:
-                    break
-        except asyncio.TimeoutError:
-            pass
-        
-        return batch
-    
-    async def _process_batch(self, batch: list):
-        """Process a batch of requests concurrently."""
-        tasks = []
-        for request in batch:
-            task = asyncio.create_task(
-                self.worker.generate(
-                    prompt=request["prompt"],
-                    sampling_params=SamplingParams(**request["params"]),
-                    request_id=request["id"]
-                )
-            )
-            tasks.append((request, task))
-        
-        # Wait for all completions
-        for request, task in tasks:
-            try:
-                result = await task
-                await self._send_result(request["id"], result)
-            except Exception as e:
-                await self._send_error(request["id"], str(e))
-```
-
-### Inside a Modern Inference Engine
-
-LLM inference has two phases with opposite hardware profiles, and nearly every serving optimization exploits that asymmetry (the hardware-level why — roofline math, bandwidth ceilings, kernels — is derived in [GPU Inference Internals](./11-gpu-inference-internals.md)):
-
-```mermaid
-graph LR
-    subgraph PREFILL["PREFILL (compute-bound)"]
-        P["Process entire prompt<br/>in parallel<br/>→ determines TTFT"]
-    end
-    subgraph DECODE["DECODE (memory-bandwidth-bound)"]
-        D["One token per step,<br/>re-reads weights + KV cache<br/>→ determines inter-token latency"]
-    end
-    P -->|"KV cache<br/>(the bottleneck resource)"| D
-```
-
-**Continuous batching.** Requests join and leave the batch at *token* granularity instead of waiting for the slowest request in a static batch. This alone is why vLLM/TGI-class engines deliver an order of magnitude more throughput than naive serving — a finished sequence's slot is reused on the very next step.
-
-**PagedAttention.** The KV cache is allocated in fixed-size blocks with an indirection table, like virtual memory pages, instead of one contiguous buffer per request. This eliminates the memory fragmentation that previously capped batch sizes, and enables KV sharing between sequences (e.g., N samples from one prompt share the prompt's blocks).
-
-**Prefix caching (RadixAttention).** Requests that share a prompt prefix — same system prompt, same few-shot block, the entire history of an agent conversation — reuse the prefix's KV blocks instead of recomputing prefill. SGLang organizes the cache as a radix tree to maximize cross-request sharing. For agent and chat workloads, where each turn resends the whole transcript, prefix caching routinely cuts prefill work by 80–95%; it is the self-hosted counterpart of provider-side prompt caching. The routing and session-affinity decisions this creates for long-lived agent sessions are covered in [Agent Inference](./12-agent-inference.md).
-
-**Chunked prefill.** A long prompt's prefill is split into chunks and interleaved with ongoing decode steps, so one user's 100K-token prompt doesn't stall every other user's token stream. This is the standard fix for the prefill-vs-decode interference problem within a single replica.
-
-**Speculative decoding.** A cheap drafter (small model, extra decoding heads as in Medusa/EAGLE, or n-gram lookup) proposes k tokens; the target model verifies them in a single forward pass and accepts the longest correct run. Output is provably identical to normal decoding, but you get 2–3× lower inter-token latency when acceptance rates are high (code and structured text accept well; high-entropy creative text doesn't).
-
-**Disaggregated prefill/decode.** At datacenter scale, prefill and decode run on *separate GPU pools* sized independently, with KV caches streamed between them over NVLink/RDMA (DistServe, Mooncake — the architecture behind Kimi's serving stack). This stops the two phases from fighting over the same SLO: you scale prefill capacity for TTFT and decode capacity for tokens/sec, and a tiered KV store (HBM → DRAM → SSD) serves as a cluster-wide prefix cache — the hold-vs-release policy for that tiering during an agent's tool-execution waits is covered in [Agent Inference](./12-agent-inference.md).
-
-**Quantization.** FP8 weights+activations are near-lossless on current hardware and roughly double throughput versus BF16; INT4 weight-only (AWQ/GPTQ) halves memory again for latency-tolerant or memory-constrained deployments; KV-cache quantization (FP8) directly raises the achievable batch size, which is usually the binding constraint. Validate on your own evals — quantization loss concentrates in long-tail reasoning, not average-case perplexity.
-
-```python
-# What the knobs look like in practice (vLLM)
-from vllm import LLM
-
-llm = LLM(
-    model="meta-llama/Llama-3.3-70B-Instruct",
-    tensor_parallel_size=4,          # shard weights across 4 GPUs
-    gpu_memory_utilization=0.92,     # rest is headroom for activations
-    enable_prefix_caching=True,      # radix-style KV reuse across requests
-    enable_chunked_prefill=True,     # protect inter-token latency
-    quantization="fp8",              # weights + activations
-    kv_cache_dtype="fp8",            # bigger effective batch
-    speculative_config={             # draft-model speculation
-        "model": "meta-llama/Llama-3.2-1B-Instruct",
-        "num_speculative_tokens": 5,
-    },
-)
-```
-
-**The metrics that matter.** Throughput alone is meaningless for interactive serving. Track **TTFT** (time to first token — prefill + queueing), **TPOT/ITL** (time per output token), and **goodput**: requests per second that *meet their latency SLO*. A configuration that raises raw throughput 30% while pushing p95 TTFT past your SLO has negative value.
-
-### Structured Outputs and Constrained Decoding
-
-Production systems need valid JSON, not "mostly JSON." Modern engines enforce output structure *during decoding*: a grammar compiler (xgrammar, llguidance, Outlines) turns a JSON Schema into a token-level mask, and invalid tokens are simply never sampled. Guaranteed-valid output, near-zero overhead, no retry loops.
-
-```python
-from pydantic import BaseModel
-
-class Triage(BaseModel):
-    severity: str          # "P0" | "P1" | "P2"
-    component: str
-    needs_human: bool
-
-# vLLM / SGLang / OpenAI-compatible servers accept the schema directly
-response = client.chat.completions.create(
-    model="local-llama",
-    messages=[{"role": "user", "content": f"Triage this incident:\n{report}"}],
-    response_format={
-        "type": "json_schema",
-        "json_schema": {"name": "triage", "schema": Triage.model_json_schema(), "strict": True},
-    },
-)
-incident = Triage.model_validate_json(response.choices[0].message.content)
-```
-
-Use schema-constrained outputs for anything a program consumes; keep free text for humans. One caution: a constrained model *will* produce schema-valid garbage rather than express uncertainty — include an explicit `"unknown"`/`needs_human` escape hatch in the schema.
-
-### Model Routing
-
-```python
-from typing import Dict, List
-from dataclasses import dataclass
-
-@dataclass
-class ModelConfig:
-    name: str
-    endpoint: str
-    max_tokens: int
-    cost_per_1k_tokens: float
-    latency_p50_ms: int
-    capabilities: List[str]
-
-class ModelRouter:
-    """Routes requests to appropriate models."""
-    
-    def __init__(self, models: Dict[str, ModelConfig]):
-        self.models = models
-        self.health_checker = ModelHealthChecker()
-    
-    async def route(self, request: CompletionRequest) -> str:
-        """Select best model for request."""
-        
-        # Filter by capabilities
-        capable_models = [
-            name for name, config in self.models.items()
-            if self._can_handle(config, request)
-        ]
-        
-        # Filter by health
-        healthy_models = [
-            name for name in capable_models
-            if await self.health_checker.is_healthy(name)
-        ]
-        
-        if not healthy_models:
-            raise NoHealthyModelsAvailable()
-        
-        # Select based on strategy
-        return await self._select_model(healthy_models, request)
-    
-    def _can_handle(self, config: ModelConfig, request: CompletionRequest) -> bool:
-        """Check if model can handle request."""
-        return (
-            request.max_tokens <= config.max_tokens and
-            request.model in [config.name, "auto"]
-        )
-    
-    async def _select_model(
-        self, 
-        candidates: List[str], 
-        request: CompletionRequest
-    ) -> str:
-        """Select from candidate models."""
-        
-        # Cost-optimized selection
-        if request.model == "auto":
-            return min(
-                candidates,
-                key=lambda m: self.models[m].cost_per_1k_tokens
-            )
-        
-        # Specific model requested
-        if request.model in candidates:
-            return request.model
-        
-        # Fallback
-        return candidates[0]
-
-
-class ModelCascade:
-    """Route to cheaper models first, escalate if needed."""
-    
-    def __init__(self, models: List[ModelConfig], quality_threshold: float = 0.7):
-        # Sort by cost (cheapest first)
-        self.models = sorted(models, key=lambda m: m.cost_per_1k_tokens)
-        self.quality_threshold = quality_threshold
-        self.quality_estimator = QualityEstimator()
-    
-    async def complete(self, request: CompletionRequest) -> CompletionResponse:
-        """Try models in order of cost until quality threshold met."""
-        
-        for model in self.models:
-            response = await self._call_model(model, request)
-            
-            # Estimate quality
-            quality = await self.quality_estimator.estimate(
-                request.prompt,
-                response.choices[0]["text"]
-            )
-            
-            if quality >= self.quality_threshold:
-                return response
-            
-            # Log for analysis
-            logger.info(f"Model {model.name} quality {quality} below threshold")
-        
-        # Return last (most capable) model's response
-        return response
-```
-
----
-
-## Caching Strategies
-
-### Prompt Caching (Provider-Side) — Use This First
-
-Every major API provider caches the KV state of repeated prompt *prefixes* and bills cached tokens at roughly 10% of the fresh-input price (with cache writes at a small premium on some providers). Unlike semantic caching, this is exact, lossless, and provider-managed — there is no correctness risk, only an engineering requirement: **keep your prefixes byte-stable**.
-
-Rules that make prompt caching work:
-
-- Order context stable→volatile: system prompt and tool schemas first, session data next, the running conversation last.
-- Append-only message history. Editing, reordering, or re-rendering earlier turns invalidates the cache from that point on.
-- No timestamps, UUIDs, or per-request noise in the prefix. Inject volatile data at the end or via tool results.
-- Monitor `cached_tokens` from API usage fields as a first-class metric. For agentic workloads — which resend the full transcript every turn — cache hit rate is typically the largest cost lever in the entire system, far ahead of model choice.
-
-Most providers also offer a **batch tier** (50% discount for asynchronous, hours-latency processing) — route evals, backfills, and non-interactive pipelines there by default.
-
-### Semantic Cache
-
-```mermaid
-graph LR
-    Q["Query:<br/>What's the capital<br/>of France?"] --> EMB["Embed<br/>Query"]
-    EMB --> VS["Vector<br/>Search"]
-    VS --> SIM["Similar query found:<br/>France's capital?<br/>similarity: 0.95"]
-    SIM --> RET["Return Cached Response:<br/>The capital of France<br/>is Paris."]
-```
-
-Benefits: handles paraphrased queries, reduces API costs significantly, sub-millisecond response for cache hits.
-
-Caveats — semantic caching trades correctness for cost, so scope it deliberately: similarity ≥ 0.95 does **not** guarantee the same correct answer ("capital of France" vs "capital city of metropolitan France" is fine; "2023 revenue" vs "2024 revenue" is not). Partition the cache by user/tenant and model+parameter hash, keep TTLs short for anything time-sensitive, and restrict it to stateless, high-repetition query traffic — never cache across personalized context, and never use it for agent turns, where conversation state makes every request unique (that's what prompt caching is for).
-
-```python
-import hashlib
-from typing import Optional
-import numpy as np
-
-class SemanticCache:
-    """Cache LLM responses with semantic similarity matching."""
-    
-    def __init__(
-        self,
-        embedding_model,
-        vector_store,
-        kv_store,
-        similarity_threshold: float = 0.95,
-        ttl_seconds: int = 3600
-    ):
-        self.embedder = embedding_model
-        self.vector_store = vector_store
-        self.kv_store = kv_store  # Redis/Memcached
-        self.threshold = similarity_threshold
-        self.ttl = ttl_seconds
-    
-    async def get(
-        self, 
-        prompt: str, 
-        model: str,
-        params_hash: str = None
-    ) -> Optional[dict]:
-        """Try to get cached response."""
-        
-        # Try exact match first (faster)
-        exact_key = self._exact_key(prompt, model, params_hash)
-        exact_result = await self.kv_store.get(exact_key)
-        if exact_result:
-            return exact_result
-        
-        # Try semantic match
-        prompt_embedding = await self.embedder.embed(prompt)
-        
-        results = await self.vector_store.search(
-            embedding=prompt_embedding,
-            top_k=1,
-            filter={"model": model}
-        )
-        
-        if results and results[0].score >= self.threshold:
-            cache_key = results[0].metadata["cache_key"]
-            return await self.kv_store.get(cache_key)
-        
-        return None
-    
-    async def set(
-        self, 
-        prompt: str, 
-        model: str, 
-        response: dict,
-        params_hash: str = None
-    ):
-        """Cache a response."""
-        
-        cache_key = self._exact_key(prompt, model, params_hash)
-        
-        # Store response
-        await self.kv_store.set(cache_key, response, ex=self.ttl)
-        
-        # Store embedding for semantic search
-        prompt_embedding = await self.embedder.embed(prompt)
-        await self.vector_store.upsert([{
-            "id": cache_key,
-            "embedding": prompt_embedding,
-            "metadata": {
-                "model": model,
-                "cache_key": cache_key,
-                "prompt_preview": prompt[:100]
-            }
-        }])
-    
-    def _exact_key(self, prompt: str, model: str, params_hash: str = None) -> str:
-        """Generate exact match cache key."""
-        content = f"{model}:{prompt}:{params_hash or ''}"
-        return f"llm_cache:{hashlib.sha256(content.encode()).hexdigest()}"
-
-
-class TieredCache:
-    """Multi-tier caching strategy."""
-    
-    def __init__(self):
-        self.l1_cache = InMemoryCache(max_size=1000)  # Hot cache
-        self.l2_cache = RedisCache()  # Distributed cache
-        self.l3_cache = SemanticCache()  # Semantic matching
-    
-    async def get(self, prompt: str, model: str) -> Optional[dict]:
-        """Try caches in order."""
-        
-        # L1: In-memory (fastest)
-        key = self._key(prompt, model)
-        result = self.l1_cache.get(key)
-        if result:
-            return result
-        
-        # L2: Redis (fast)
-        result = await self.l2_cache.get(key)
-        if result:
-            self.l1_cache.set(key, result)  # Populate L1
-            return result
-        
-        # L3: Semantic (slower but handles variations)
-        result = await self.l3_cache.get(prompt, model)
-        if result:
-            # Populate upper tiers
-            self.l1_cache.set(key, result)
-            await self.l2_cache.set(key, result)
-            return result
-        
-        return None
-```
-
-### KV Cache Management
-
-```python
-class KVCacheManager:
-    """Manage KV cache for efficient inference."""
-    
-    def __init__(self, max_cache_tokens: int = 100000):
-        self.max_tokens = max_cache_tokens
-        self.cache = {}  # session_id -> KVCache
-        self.usage = {}  # session_id -> last_used
-    
-    def get_or_create(self, session_id: str, prefix_tokens: list) -> "KVCache":
-        """Get existing cache or create new one."""
-        
-        if session_id in self.cache:
-            return self.cache[session_id]
-        
-        # Evict if needed
-        self._evict_if_needed()
-        
-        # Create new cache
-        cache = KVCache(prefix_tokens)
-        self.cache[session_id] = cache
-        self.usage[session_id] = time.time()
-        
-        return cache
-    
-    def _evict_if_needed(self):
-        """Evict least recently used caches."""
-        total_tokens = sum(c.token_count for c in self.cache.values())
-        
-        while total_tokens > self.max_tokens and self.cache:
-            # Find LRU session
-            lru_session = min(self.usage, key=self.usage.get)
-            
-            total_tokens -= self.cache[lru_session].token_count
-            del self.cache[lru_session]
-            del self.usage[lru_session]
-    
-    def extend(self, session_id: str, new_tokens: list):
-        """Extend existing cache with new tokens."""
-        if session_id in self.cache:
-            self.cache[session_id].extend(new_tokens)
-            self.usage[session_id] = time.time()
-
-
-class PrefixCache:
-    """Cache common prompt prefixes."""
-    
-    def __init__(self, model_engine):
-        self.engine = model_engine
-        self.prefix_cache = {}  # prefix_hash -> computed_kv_cache
-    
-    def compute_prefix(self, prefix: str) -> str:
-        """Compute and cache KV state for prefix."""
-        prefix_hash = hashlib.sha256(prefix.encode()).hexdigest()[:16]
-        
-        if prefix_hash not in self.prefix_cache:
-            # Compute KV cache for prefix
-            kv_cache = self.engine.compute_kv_cache(prefix)
-            self.prefix_cache[prefix_hash] = kv_cache
-        
-        return prefix_hash
-    
-    def generate_with_prefix(
-        self, 
-        prefix_hash: str, 
-        continuation: str,
-        params: dict
-    ) -> str:
-        """Generate using cached prefix."""
-        
-        if prefix_hash not in self.prefix_cache:
-            raise ValueError("Prefix not found in cache")
-        
-        kv_cache = self.prefix_cache[prefix_hash]
-        
-        return self.engine.generate(
-            prompt=continuation,
-            kv_cache=kv_cache,
-            **params
-        )
-```
-
----
-
-## Evaluation & Testing
-
-### Automated Evaluation Pipeline
-
-```mermaid
-graph LR
-    TC["Test Cases"] --> RM["Run Model"]
-    RM --> SO["Score Outputs"]
-    TC --> CB["Compare to<br/>Baseline"]
-    SO --> CB
-    CB --> RR["Report Results<br/>Accuracy, Regressions,<br/>Latency, Cost"]
-```
-
-```python
-from dataclasses import dataclass
-from typing import List, Callable
-import json
-
-@dataclass
-class TestCase:
-    id: str
-    prompt: str
-    expected: str = None  # For exact match
-    criteria: List[str] = None  # For LLM-as-judge
-    tags: List[str] = None
-
-@dataclass
-class EvalResult:
-    test_id: str
-    passed: bool
-    score: float
-    latency_ms: float
-    tokens_used: int
-    details: dict
-
-class LLMEvaluator:
-    """Evaluate LLM outputs automatically."""
-    
-    def __init__(self, target_model, judge_model=None):
-        self.target = target_model
-        self.judge = judge_model or target_model
-    
-    async def run_eval(
-        self, 
-        test_cases: List[TestCase],
-        eval_functions: List[Callable] = None
-    ) -> List[EvalResult]:
-        """Run evaluation on test cases."""
-        
-        results = []
-        
-        for test in test_cases:
-            start = time.time()
-            
-            # Generate output
-            output = await self.target.generate(test.prompt)
-            
-            latency = (time.time() - start) * 1000
-            
-            # Evaluate
-            scores = {}
-            
-            # Exact match
-            if test.expected:
-                scores["exact_match"] = float(output.strip() == test.expected.strip())
-            
-            # LLM-as-judge
-            if test.criteria:
-                judge_scores = await self._llm_judge(
-                    test.prompt, 
-                    output, 
-                    test.criteria
-                )
-                scores.update(judge_scores)
-            
-            # Custom eval functions
-            if eval_functions:
-                for func in eval_functions:
-                    scores[func.__name__] = func(test.prompt, output)
-            
-            # Aggregate score
-            avg_score = sum(scores.values()) / len(scores) if scores else 0
-            
-            results.append(EvalResult(
-                test_id=test.id,
-                passed=avg_score >= 0.7,
-                score=avg_score,
-                latency_ms=latency,
-                tokens_used=output.usage.total_tokens,
-                details=scores
-            ))
-        
-        return results
-    
-    async def _llm_judge(
-        self, 
-        prompt: str, 
-        output: str, 
-        criteria: List[str]
-    ) -> dict:
-        """Use LLM to judge output quality."""
-        
-        judge_prompt = f"""Evaluate this LLM output against the criteria.
-
-Original prompt: {prompt}
-
-Output to evaluate: {output}
-
-Criteria to check:
-{json.dumps(criteria, indent=2)}
-
-For each criterion, score 0-1 and explain.
-Return JSON with criterion names as keys."""
-        
-        response = await self.judge.generate(
-            judge_prompt,
-            response_format={"type": "json_object"}
-        )
-        
-        return json.loads(response)
-
-
-class RegressionDetector:
-    """Detect quality regressions between model versions."""
-    
-    def __init__(self, baseline_results: List[EvalResult]):
-        self.baseline = {r.test_id: r for r in baseline_results}
-    
-    def compare(
-        self, 
-        new_results: List[EvalResult],
-        threshold: float = 0.05
-    ) -> dict:
-        """Compare new results to baseline."""
-        
-        regressions = []
-        improvements = []
-        
-        for result in new_results:
-            if result.test_id not in self.baseline:
-                continue
-            
-            baseline = self.baseline[result.test_id]
-            diff = result.score - baseline.score
-            
-            if diff < -threshold:
-                regressions.append({
-                    "test_id": result.test_id,
-                    "baseline_score": baseline.score,
-                    "new_score": result.score,
-                    "diff": diff
-                })
-            elif diff > threshold:
-                improvements.append({
-                    "test_id": result.test_id,
-                    "baseline_score": baseline.score,
-                    "new_score": result.score,
-                    "diff": diff
-                })
-        
-        return {
-            "regressions": regressions,
-            "improvements": improvements,
-            "regression_rate": len(regressions) / len(new_results),
-            "passed": len(regressions) == 0
-        }
-
-
-class ContinuousEval:
-    """Run evaluations continuously in production."""
-    
-    def __init__(self, evaluator: LLMEvaluator, sample_rate: float = 0.01):
-        self.evaluator = evaluator
-        self.sample_rate = sample_rate
-        self.metrics = PrometheusMetrics()
-    
-    async def maybe_evaluate(self, request: dict, response: dict):
-        """Sample and evaluate production traffic."""
-        
-        if random.random() > self.sample_rate:
-            return
-        
-        # Create test case from production request
-        test = TestCase(
-            id=f"prod_{request['id']}",
-            prompt=request["prompt"],
-            criteria=[
-                "Response is helpful and relevant",
-                "Response is factually accurate",
-                "Response follows safety guidelines"
-            ]
-        )
-        
-        # Evaluate
-        results = await self.evaluator.run_eval([test])
-        result = results[0]
-        
-        # Record metrics
-        self.metrics.record_eval_score(result.score)
-        self.metrics.record_latency(result.latency_ms)
-        
-        # Alert on low scores
-        if result.score < 0.5:
-            await self._alert_low_quality(request, response, result)
-```
-
----
-
-## Cost Optimization
-
-### Token Management
-
-```python
-from tiktoken import encoding_for_model
-
-class TokenManager:
-    """Manage token usage and costs.
-
-    Never hardcode prices — they change quarterly. Load a pricing table
-    from config, and model all four meters: fresh input, cached input
-    (~10% of fresh), output (often 4-5x input — thinking tokens bill as
-    output), and batch-tier discounts (~50%).
-    """
-
-    def __init__(self, pricing: dict[str, dict[str, float]]):
-        self.pricing = pricing  # per 1M tokens, from config/pricing.yaml
-        self.encoders = {}
-
-    def count_tokens(self, text: str, model: str) -> int:
-        """Count tokens in text."""
-        if model not in self.encoders:
-            self.encoders[model] = encoding_for_model(model)
-        return len(self.encoders[model].encode(text))
-
-    def estimate_cost(
-        self,
-        model: str,
-        input_tokens: int,
-        output_tokens: int,
-        cached_tokens: int = 0,
-        batch: bool = False,
-    ) -> float:
-        """Estimate cost for a request."""
-        p = self.pricing[model]
-        fresh = input_tokens - cached_tokens
-
-        cost = (
-            fresh * p["input"]
-            + cached_tokens * p.get("cached_input", p["input"] * 0.1)
-            + output_tokens * p["output"]
-        ) / 1_000_000
-
-        return cost * 0.5 if batch else cost
-    
-    def optimize_prompt(self, prompt: str, max_tokens: int) -> str:
-        """Trim prompt to fit token budget."""
-        # Implementation depends on use case
-        # Could use summarization, truncation, etc.
-        pass
-
-
-class BudgetManager:
-    """Manage spending budgets."""
-    
-    def __init__(self, redis_client):
-        self.redis = redis_client
-    
-    async def check_budget(
-        self, 
-        user_id: str, 
-        estimated_cost: float
-    ) -> bool:
-        """Check if user has budget for request."""
-        
-        key = f"budget:{user_id}"
-        current_spend = float(await self.redis.get(key) or 0)
-        limit = await self._get_limit(user_id)
-        
-        return current_spend + estimated_cost <= limit
-    
-    async def record_spend(self, user_id: str, cost: float):
-        """Record spending."""
-        key = f"budget:{user_id}"
-        await self.redis.incrbyfloat(key, cost)
-    
-    async def _get_limit(self, user_id: str) -> float:
-        """Get user's spending limit."""
-        # Could be from database, config, etc.
-        return 100.0  # Default $100/month
-
-
-class CostOptimizedPipeline:
-    """Pipeline that optimizes for cost."""
-    
-    def __init__(self, models: List[dict]):
-        # Sort models by cost (cheapest first)
-        self.models = sorted(models, key=lambda m: m["cost_per_1k"])
-        self.token_manager = TokenManager()
-    
-    async def complete(
-        self, 
-        prompt: str,
-        quality_threshold: float = 0.7,
-        max_cost: float = None
-    ) -> dict:
-        """Complete with cost optimization."""
-        
-        # Count against the target model's own tokenizer (or the provider's
-        # count-tokens endpoint) — tokenizers differ per family, and a
-        # mismatched count skews every cost estimate below.
-        input_tokens = self.token_manager.count_tokens(prompt, self.models[0]["name"])
-        
-        for model in self.models:
-            # Check cost constraint
-            estimated_cost = self.token_manager.estimate_cost(
-                model["name"],
-                input_tokens,
-                model.get("avg_output_tokens", 500)
-            )
-            
-            if max_cost and estimated_cost > max_cost:
-                continue
-            
-            # Try model
-            response = await self._call_model(model, prompt)
-            
-            # Check quality
-            quality = await self._estimate_quality(prompt, response)
-            
-            if quality >= quality_threshold:
-                return {
-                    "response": response,
-                    "model": model["name"],
-                    "cost": estimated_cost,
-                    "quality": quality
-                }
-        
-        # Fallback to best model
-        return await self._call_model(self.models[-1], prompt)
-```
-
----
-
-## Guardrails & Safety
-
-### Input/Output Filtering
-
-```mermaid
-graph LR
-    IN["Input"] --> IG["INPUT GUARDS<br/>Prompt injection<br/>Jailbreak detection<br/>Topic blocking<br/>Rate limiting<br/>PII redaction"]
-    IG --> LLM["LLM<br/>PROCESS"]
-    LLM --> OG["OUTPUT GUARDS<br/>PII detection<br/>Harmful content filter<br/>Factuality check<br/>Format validation<br/>Confidence threshold"]
-    OG --> OUT["Output"]
-```
-
-```python
-from abc import ABC, abstractmethod
-from typing import Tuple, Optional
-import re
-
-class Guard(ABC):
-    """Base class for guardrails."""
-    
-    @abstractmethod
-    async def check(self, text: str) -> Tuple[bool, Optional[str]]:
-        """Check text against guard.
-        Returns (passed, reason if failed)
-        """
-        pass
-
-class PromptInjectionGuard(Guard):
-    """Detect prompt injection attempts."""
-    
-    INJECTION_PATTERNS = [
-        r"ignore\s+(previous|above|all)\s+instructions",
-        r"disregard\s+(previous|above|all)",
-        r"you\s+are\s+now\s+(?:a|an)\s+\w+",
-        r"new\s+instructions:",
-        r"system\s*:\s*",
-        r"<\|.*?\|>",  # Special tokens
-    ]
-    
-    def __init__(self, llm_detector=None):
-        self.patterns = [re.compile(p, re.IGNORECASE) for p in self.INJECTION_PATTERNS]
-        self.llm_detector = llm_detector
-    
-    async def check(self, text: str) -> Tuple[bool, Optional[str]]:
-        # Pattern matching
-        for pattern in self.patterns:
-            if pattern.search(text):
-                return False, "Potential prompt injection detected"
-        
-        # LLM-based detection for sophisticated attacks
-        if self.llm_detector:
-            is_injection = await self.llm_detector.detect(text)
-            if is_injection:
-                return False, "LLM-detected prompt injection"
-        
-        return True, None
-
-
-class PIIGuard(Guard):
-    """Detect and redact PII."""
-    
-    PII_PATTERNS = {
-        "email": r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
-        "phone": r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b',
-        "ssn": r'\b\d{3}-\d{2}-\d{4}\b',
-        "credit_card": r'\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b',
-    }
-    
-    def __init__(self, mode: str = "block"):  # block, redact, or warn
-        self.mode = mode
-        self.patterns = {k: re.compile(v) for k, v in self.PII_PATTERNS.items()}
-    
-    async def check(self, text: str) -> Tuple[bool, Optional[str]]:
-        found_pii = []
-        
-        for pii_type, pattern in self.patterns.items():
-            if pattern.search(text):
-                found_pii.append(pii_type)
-        
-        if found_pii:
-            if self.mode == "block":
-                return False, f"PII detected: {', '.join(found_pii)}"
-            elif self.mode == "warn":
-                return True, f"Warning: PII detected: {', '.join(found_pii)}"
-        
-        return True, None
-    
-    def redact(self, text: str) -> str:
-        """Redact PII from text."""
-        for pii_type, pattern in self.patterns.items():
-            text = pattern.sub(f"[REDACTED_{pii_type.upper()}]", text)
-        return text
-
-
-class ContentModerationGuard(Guard):
-    """Filter harmful content."""
-    
-    def __init__(self, moderation_api):
-        self.api = moderation_api
-    
-    async def check(self, text: str) -> Tuple[bool, Optional[str]]:
-        result = await self.api.moderate(text)
-        
-        if result.flagged:
-            categories = [c for c, v in result.categories.items() if v]
-            return False, f"Content flagged: {', '.join(categories)}"
-        
-        return True, None
-
-
-class GuardrailsPipeline:
-    """Complete guardrails pipeline."""
-    
-    def __init__(self):
-        self.input_guards: List[Guard] = []
-        self.output_guards: List[Guard] = []
-    
-    def add_input_guard(self, guard: Guard):
-        self.input_guards.append(guard)
-    
-    def add_output_guard(self, guard: Guard):
-        self.output_guards.append(guard)
-    
-    async def process(
-        self, 
-        input_text: str,
-        llm_func: Callable
-    ) -> dict:
-        """Process request through guardrails."""
-        
-        # Input guards
-        for guard in self.input_guards:
-            passed, reason = await guard.check(input_text)
-            if not passed:
-                return {
-                    "blocked": True,
-                    "stage": "input",
-                    "guard": guard.__class__.__name__,
-                    "reason": reason
-                }
-        
-        # LLM call
-        output = await llm_func(input_text)
-        
-        # Output guards
-        for guard in self.output_guards:
-            passed, reason = await guard.check(output)
-            if not passed:
-                return {
-                    "blocked": True,
-                    "stage": "output",
-                    "guard": guard.__class__.__name__,
-                    "reason": reason,
-                    "original_output": output  # For debugging
-                }
-        
-        return {
-            "blocked": False,
-            "output": output
-        }
-
-
-# Usage
-pipeline = GuardrailsPipeline()
-pipeline.add_input_guard(PromptInjectionGuard())
-pipeline.add_input_guard(PIIGuard(mode="redact"))
-pipeline.add_output_guard(ContentModerationGuard(openai_moderation))
-pipeline.add_output_guard(PIIGuard(mode="block"))
-```
-
-### Rate Limiting
-
-```python
-from dataclasses import dataclass
-import time
-
-@dataclass
-class RateLimitConfig:
-    requests_per_minute: int
-    tokens_per_minute: int
-    requests_per_day: int
-    tokens_per_day: int
-
-class RateLimiter:
-    """Token and request rate limiting."""
-    
-    def __init__(self, redis_client, default_config: RateLimitConfig):
-        self.redis = redis_client
-        self.default_config = default_config
-    
-    async def check_and_consume(
-        self, 
-        user_id: str, 
-        tokens: int,
-        config: RateLimitConfig = None
-    ) -> Tuple[bool, dict]:
-        """Check rate limits and consume quota if allowed."""
-        
-        config = config or self.default_config
-        now = time.time()
-        minute_key = f"rl:{user_id}:minute:{int(now / 60)}"
-        day_key = f"rl:{user_id}:day:{int(now / 86400)}"
-        
-        # Get current usage
-        minute_requests = int(await self.redis.hget(minute_key, "requests") or 0)
-        minute_tokens = int(await self.redis.hget(minute_key, "tokens") or 0)
-        day_requests = int(await self.redis.hget(day_key, "requests") or 0)
-        day_tokens = int(await self.redis.hget(day_key, "tokens") or 0)
-        
-        # Check limits
-        if minute_requests >= config.requests_per_minute:
-            return False, {"reason": "requests_per_minute", "retry_after": 60}
-        
-        if minute_tokens + tokens > config.tokens_per_minute:
-            return False, {"reason": "tokens_per_minute", "retry_after": 60}
-        
-        if day_requests >= config.requests_per_day:
-            return False, {"reason": "requests_per_day", "retry_after": 86400}
-        
-        if day_tokens + tokens > config.tokens_per_day:
-            return False, {"reason": "tokens_per_day", "retry_after": 86400}
-        
-        # Consume quota
-        pipe = self.redis.pipeline()
-        pipe.hincrby(minute_key, "requests", 1)
-        pipe.hincrby(minute_key, "tokens", tokens)
-        pipe.expire(minute_key, 120)
-        pipe.hincrby(day_key, "requests", 1)
-        pipe.hincrby(day_key, "tokens", tokens)
-        pipe.expire(day_key, 172800)
-        await pipe.execute()
-        
-        return True, {
-            "remaining": {
-                "requests_minute": config.requests_per_minute - minute_requests - 1,
-                "tokens_minute": config.tokens_per_minute - minute_tokens - tokens,
-            }
-        }
-```
-
----
-
-## Monitoring & Observability
-
-```python
-from prometheus_client import Counter, Histogram, Gauge
-
-class LLMMetrics:
-    """Prometheus metrics for LLM infrastructure."""
-    
-    def __init__(self):
-        # Request metrics
-        self.requests_total = Counter(
-            "llm_requests_total",
-            "Total LLM requests",
-            ["model", "status"]
-        )
-        
-        self.request_latency = Histogram(
-            "llm_request_latency_seconds",
-            "Request latency",
-            ["model"],
-            buckets=[0.1, 0.5, 1, 2, 5, 10, 30, 60]
-        )
-        
-        # Token metrics
-        self.tokens_processed = Counter(
-            "llm_tokens_total",
-            "Total tokens processed",
-            ["model", "direction"]  # input/output
-        )
-        
-        # Cost metrics
-        self.cost_total = Counter(
-            "llm_cost_dollars",
-            "Total cost in dollars",
-            ["model"]
-        )
-        
-        # Cache metrics
-        self.cache_hits = Counter(
-            "llm_cache_hits_total",
-            "Cache hits",
-            ["cache_level"]
-        )
-        
-        self.cache_misses = Counter(
-            "llm_cache_misses_total",
-            "Cache misses"
-        )
-        
-        # Quality metrics
-        self.eval_scores = Histogram(
-            "llm_eval_score",
-            "Evaluation scores",
-            ["model", "eval_type"],
-            buckets=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
-        )
-        
-        # Safety metrics
-        self.guardrail_blocks = Counter(
-            "llm_guardrail_blocks_total",
-            "Requests blocked by guardrails",
-            ["guard_type", "stage"]
-        )
-    
-    def record_request(
-        self, 
-        model: str, 
-        status: str, 
-        latency: float,
-        input_tokens: int,
-        output_tokens: int,
-        cost: float
-    ):
-        self.requests_total.labels(model=model, status=status).inc()
-        self.request_latency.labels(model=model).observe(latency)
-        self.tokens_processed.labels(model=model, direction="input").inc(input_tokens)
-        self.tokens_processed.labels(model=model, direction="output").inc(output_tokens)
-        self.cost_total.labels(model=model).inc(cost)
-```
-
----
-
-## Trade-offs
-
-| Decision | Trade-off |
-|----------|-----------|
-| **Self-hosted vs API** | Control & cost vs complexity |
-| **Cache aggressiveness** | Speed & cost vs freshness |
-| **Guard strictness** | Safety vs utility |
-| **Model cascading** | Cost vs latency |
-| **Batch size** | Throughput vs latency |
-
----
+The response stream emits typed events such as `generation.started`, `content.delta`, `tool_call.proposed`, `usage.updated`, `generation.completed`, and `generation.failed`. A terminal event includes resolved model/provider revision where available, finish reason, input/output/cached/reasoning token accounting, safety/policy outcomes, and latency breakdown.
+
+Do not encode control state only as provider-specific JSON. The logical contract is versioned, and each adapter declares which capabilities it supports. Unsupported combinations fail at admission rather than degrading silently—for example, routing a strict JSON-schema request to a model that only approximately follows JSON.
+
+## Control Plane
+
+### Model and capability catalog
+
+The catalog maps a stable product capability to deployable targets. A target record includes:
+
+- provider/model identifier or immutable artifact digest;
+- tokenizer and context limits;
+- modalities, tool-calling, structured-output, and streaming capabilities;
+- region and data-handling constraints;
+- measured quality by evaluation slice;
+- latency and cost curves by input/output band;
+- safety policy compatibility;
+- rollout status, owner, and rollback target.
+
+Model aliases are conveniences, not reproducibility identifiers. Resolve an alias once per generation and record the outcome. Long-running agent sessions need an explicit migration policy: pin the session, migrate at a turn boundary, or allow per-turn routing while accepting behavioral drift.
+
+### Evaluation-gated rollout
+
+A model or serving-stack change affects output behavior even when the API schema is unchanged. Promotion should link to evaluation artifacts and move through offline, shadow, canary, and gradual traffic stages. Compare not only quality but tokenization, output length, tool-call selection, structured-output validity, refusal behavior, TTFT, ITL, error rate, and cost.
+
+Shadow traffic must respect data policy and does not create user-visible side effects. For agent requests, shadow only the model decision or run tools in read-only/simulated mode. A canary needs slice-aware abort conditions; global averages can hide a severe regression for one language, tenant, or tool.
+
+### Configuration publication
+
+Routing policy, quotas, and model deployments should be immutable revisions published through an atomic snapshot. Regional gateways cache a last-known-good snapshot and reject configurations whose schema or signature they cannot validate. Every generation records the control-plane revision it used.
+
+This prevents half-deployed configurations where a router sends traffic to a pool that has not loaded the corresponding adapter or tokenizer. Rollback changes a small alias to a known-good compatible snapshot; it does not reconstruct configuration manually during an incident.
+
+## Regional Data Plane
+
+### Admission control
+
+Admission is where the system protects latency and spend. Validate capability, policy, request size, deadline feasibility, tenant quota, and estimated resource reservation before joining an expensive queue.
+
+Reserve multiple dimensions:
+
+- request concurrency;
+- input, cached, reasoning, and output tokens;
+- provider currency or internal accelerator seconds;
+- tool calls and retrieval fan-out;
+- KV-cache memory for self-hosted serving.
+
+Token estimates are uncertain because output length and agent steps are unknown. Start with a policy cap and workload-conditioned estimate; update the reservation as usage streams; terminate or request additional authority before exceeding a hard budget. Reconcile the estimate with actual usage in an append-only ledger.
+
+Bound every queue. An unbounded queue does not increase capacity; it converts overload into requests that consume resources after their deadlines. Shed or degrade early by traffic class: reject batch work, reduce best-of-N, choose a smaller model, limit output, or return a retryable overload response. Never downgrade safety or tenant isolation.
+
+### Routing is constrained optimization
+
+Routing chooses a target subject to hard constraints, then optimizes a product objective:
+
+\[
+m^* = \arg\max_{m \in M_{eligible}}
+  \left[Q(m,x) - \lambda_L E[L|m,x] - \lambda_C E[C|m,x] - \lambda_R Risk(m,x)\right].
+\]
+
+`M_eligible` is filtered by capability, region, policy, context length, availability, and experiment. Predictions should use observed workload features and be calibrated by slice. A small model can handle easy traffic only if the router recognizes hard examples with adequate recall; otherwise savings are purchased with invisible quality loss.
+
+Use deterministic routing when requirements are crisp. A learned or LLM router may classify difficulty or intent, but policy constraints remain in code. Record candidate targets and the reason for selection so changes can be replayed and evaluated.
+
+### Fallback semantics
+
+Fallback is a product decision, not a generic retry. Classify failures:
+
+- transient connection or server failure before any output;
+- rate or quota rejection;
+- timeout before first token;
+- interrupted stream after partial output;
+- invalid structured output;
+- safety refusal;
+- semantic quality failure.
+
+A transient pre-output fault may retry the same target with jitter if deadline permits. Quota failure may route to a compatible target. Once tokens have reached the user, restarting on another model risks duplicated or contradictory content; the stream protocol must either resume from a supported checkpoint or terminate clearly. A safety refusal must not be bypassed automatically through a less restrictive model. Semantic failure needs a verifier-driven alternate strategy, not infrastructure retry.
+
+Fallback compatibility includes tokenizer, system instruction, tool protocol, schema support, context limit, safety policy, and data residency. Maintain a tested compatibility graph rather than one ordered list of models.
+
+## Self-Hosted Inference Data Path
+
+The detailed GPU mechanics are in [GPU Inference Internals](./11-gpu-inference-internals.md). At the platform level, distinguish two phases:
+
+- **Prefill** processes the input in parallel, is compute-intensive, creates the KV cache, and dominates TTFT for long prompts.
+- **Decode** generates one token per active sequence per step, repeatedly reads model weights and KV state, and is commonly memory-bandwidth-bound.
+
+Their different resource shapes motivate continuous batching, chunked prefill, or separate prefill/decode pools.
+
+### Request scheduler
+
+The scheduler operates on sequences, not HTTP requests. It tracks prompt tokens remaining, generated tokens, KV blocks, deadline, priority, tenant, adapter, cancellation, and sampling state. Continuous batching admits new sequences between decode iterations rather than waiting for a static batch to finish.
+
+Scheduling objectives conflict:
+
+- large batches improve device efficiency;
+- long prefills can block decode and inflate ITL;
+- short-request priority improves median latency but can starve long work;
+- grouping by adapter or model improves locality but delays rare variants;
+- prefix-cache affinity saves compute but may imbalance replicas.
+
+Use traffic classes with bounded fairness. Chunk long prefills so decode receives regular service. Reserve memory headroom for active KV growth and reject or preempt before out-of-memory. If preemption swaps or recomputes KV state, include that cost in admission and SLO models.
+
+### KV-cache management
+
+For a transformer with \(L\) layers, KV heads \(H_{kv}\), head dimension \(D\), sequence length \(S\), and \(b\) bytes per element, an approximate per-sequence KV footprint is:
+
+\[
+M_{KV} \approx 2 \times L \times H_{kv} \times D \times S \times b.
+\]
+
+The factor two stores keys and values. Tensor parallelism, page metadata, alignment, speculative branches, and implementation details change the physical amount. Since \(S\) grows during decode, admitting to current free memory without reserving future growth causes late OOM failures.
+
+Paged KV allocation reduces external fragmentation by assigning non-contiguous blocks and enables sharing for common prefixes or forked sequences. Prefix reuse requires an exact cache identity over token IDs and every state-affecting model option. Text equality is insufficient when templates, tool schemas, adapters, position handling, or multimodal inputs differ.
+
+### Model loading and placement
+
+Artifacts are content-addressed, signed, scanned, and accompanied by tokenizer, generation defaults, quantization metadata, adapter compatibility, and runtime requirements. A replica becomes ready only after weights load, kernels initialize, a warm-up generation passes, and the control plane confirms the expected digest.
+
+Placement considers accelerator type and topology, model parallelism, memory, regional demand, failure domains, and load time. Large models may take minutes to load, so autoscaling from zero cannot satisfy interactive bursts. Maintain warm capacity or route predictable batch traffic to absorb idle headroom.
+
+Rolling upgrades need surge capacity because old and new replicas coexist. Drain removes a replica from new admissions but lets active streams finish or migrate only if the runtime supports state transfer. Killing a pod with live KV state is an application-visible failure.
+
+### Parallelism and disaggregation
+
+Tensor parallelism shards each layer and requires frequent collectives; pipeline parallelism divides layers and introduces pipeline bubbles; expert parallelism routes mixture-of-experts tokens and can suffer load imbalance. Choose placement from interconnect topology, not only aggregate GPU count.
+
+Prefill/decode disaggregation places phases on separately tuned pools. It helps when workload mix and phase interference justify KV transfer overhead and operational complexity. Chunked-prefill systems instead co-schedule phases on the same workers. Benchmark both on actual context/output distributions; neither is universally superior.
+
+## Provider-API Infrastructure
+
+Using provider APIs replaces GPU operations with vendor dependency management. You still own:
+
+- per-project and per-model quota allocation;
+- regional routing and data-handling configuration;
+- timeout, retry, and stream parsing;
+- provider-specific token accounting and price changes;
+- model alias drift and deprecation;
+- safety/retention contract mapping;
+- idempotency of downstream tool effects;
+- quality and fallback evaluation.
+
+Use separate credentials and limits by environment and product, held in a secret manager. The gateway should expose no provider key to clients. Rate-limit before the provider, because discovering overload via paid rejected or timed-out requests is expensive.
+
+Provider status is an input, not proof. Circuit breakers open on local outcome windows by target and region. Avoid synchronized retries with exponential backoff and jitter, but respect the request's deadline—backoff that outlives the user is wasted work. A half-open probe uses low-volume safe traffic.
+
+Multi-provider designs reduce correlated business dependency only if application features are portable and capacity is pre-arranged. An untested fallback account with no quota is not redundancy. Periodically exercise failover with representative requests and verify quality, safety, tool calls, and accounting.
+
+## Streaming, Cancellation, and Idempotency
+
+The gateway owns the client stream even if the backend changes. It assigns monotonically ordered event sequence numbers, sends heartbeats where intermediaries have idle timeouts, applies backpressure, and records the terminal state. A slow client must not retain unlimited decoded tokens in memory; buffer to a bound and then pause, spill, or cancel according to protocol.
+
+Client disconnect propagates cancellation to the provider or inference server. Cancellation is best effort: already submitted accelerator work or provider generation may continue. Track post-cancellation tokens and spend, and prevent cancelled results from populating caches unless policy explicitly allows it.
+
+Idempotency keys identify a logical generation request, but replay semantics must be explicit. Returning a stored completed response is safe for deterministic product semantics even if sampling was nondeterministic originally. Joining a currently active stream requires retained event history and authorization equality. Starting a second generation with the same key is not idempotent.
+
+For tool-using models, the generation ID and tool-call ID are separate. Retrying a model request must not re-execute a tool effect unless the orchestrator's durable action state permits it.
+
+## Caching
+
+Caching exists at several layers:
+
+| Cache | Reuses | Principal risk |
+|---|---|---|
+| Exact response | Complete logical result | Stale policy/data; authorization mismatch; nondeterministic expectation |
+| Semantic response | Similar intent result | False equivalence and cross-tenant leakage |
+| Prompt/prefix KV | Prefill computation | Incorrect cache identity; memory pressure; replica imbalance |
+| Provider prompt cache | Provider-side prefix work | Vendor-specific accounting and retention semantics |
+| Retrieval/tool cache | Evidence or tool result | Freshness and permission changes |
+
+Exact keys include tenant/policy domain, tokenized messages, system prompt, tool schema, model/adapter revision, sampling settings, output schema, and relevant data snapshot. Prefix caches maximize hit rate when stable content comes first and per-request content comes last. Do not include secrets or user-specific data in a shared prefix domain.
+
+Cache admission should be value-aware. Large one-off prefixes can evict popular entries; use size-aware policies and tenant quotas. Report hit rate together with tokens or compute saved, because a high hit rate on tiny prompts may have little value.
+
+## Safety and Policy Architecture
+
+Safety is a sequence of enforceable boundaries:
+
+1. authenticate principal and product;
+2. classify data and permitted target set;
+3. validate request size, modalities, and content policy;
+4. restrict tools and retrieval by capability;
+5. constrain model output structure;
+6. inspect proposed high-impact actions before commit;
+7. log policy decisions and provide appeal/escalation paths.
+
+Use deterministic validators for schemas, allowlists, resource limits, and authorization. Classifiers and LLM judges can add semantic signals but require calibrated thresholds and failure behavior. A timeout in a safety dependency should fail according to risk tier, not automatically fail open for availability.
+
+Prompts cannot protect credentials or network access. Run untrusted code in an isolated environment; restrict egress; mint short-lived scoped credentials; and keep policy enforcement outside model-visible text. The [Harness Engineering](./09-harness-engineering.md) chapter develops this boundary.
+
+## Multi-Region and Disaster Recovery
+
+The control plane may be global, but generation data often must remain regional. Replicate signed configuration and non-sensitive model artifacts broadly; keep prompts, outputs, KV caches, and traces within allowed regions. Routing first filters legal residency, then considers health, capacity, latency, and cost.
+
+Active-active regional gateways avoid a global request bottleneck. Quotas require a consistency choice: strict global spend may use centrally leased token buckets, while low-latency regional quotas can overshoot by the amount leased to each region. State the bound explicitly.
+
+Self-hosted recovery objectives must account for artifact availability and model load time. Preserve a last-known-good artifact in each recovery region and test cold bootstrap. Provider-based recovery depends on independent endpoints, quota, and contractual data policy. Restore drills should replay real control-plane snapshots and synthetic generations, not merely confirm that backups exist.
+
+## Capacity and Cost Engineering
+
+For provider traffic, estimate cost from the joint input/output distribution, cache discount, reasoning usage, tool calls, and retries—not average request tokens:
+
+\[
+C = \sum_s \lambda_s
+  \left(E[T_{in,s}]c_{in} + E[T_{cached,s}]c_{cached}
+       + E[T_{out,s}]c_{out} + E[C_{tools,s}]\right).
+\]
+
+For self-hosting, model memory feasibility first, then goodput at the target SLO. Weight memory, KV capacity, interconnect, bandwidth, and scheduler behavior determine the feasible region. Benchmark the real prompt/output distribution with warm-up, concurrency sweeps, failures, and mixed traffic. Peak synthetic tokens/s is not capacity for an interactive SLO.
+
+Provision for normal headroom, failure-domain loss, rollout surge, and forecast error. Effective capacity after losing one node or zone must still serve priority traffic within its degradation policy. Autoscaling signals should include queue age, KV pressure, admission rejection, TTFT, and model-load backlog; GPU utilization alone reacts late or encourages saturation beyond the latency knee.
+
+Showback and chargeback use the immutable usage ledger. Attribute shared platform costs, failed attempts, cache savings, and reserved capacity consistently. Product teams need cost per successful task or user outcome, not only token totals.
+
+## Observability and Operations
+
+One trace should connect edge request, gateway admission, policy, routing, cache, provider/inference queue, prefill, decode, safety, tool calls, and stream completion. Use stable generation, session, and logical action IDs. OpenTelemetry's GenAI semantic conventions can provide a common vocabulary, but extend them with platform-specific queue, budget, rollout, and policy fields.
+
+Record:
+
+- requested capability and resolved target;
+- control-plane, prompt, tool-schema, and policy versions;
+- input/output/cached/reasoning tokens;
+- queue, prefill, TTFT, ITL, completion, and postprocess times;
+- admission, routing, fallback, retry, and finish reasons;
+- cache keys by hash and hit type;
+- safety decisions without indiscriminate sensitive payload logging;
+- cost estimate, actual usage, and ledger reconciliation;
+- cancellation time and work observed afterward.
+
+Service dashboards slice by target, region, tenant class, context band, output band, traffic class, and rollout. Track verified useful completion, availability, TTFT/ITL percentiles, queue age, fallback, schema validity, policy blocks, cost per success, KV pressure, preemption, cache value, and provider quota consumption.
+
+Incident response starts with a safe control surface: stop a rollout, disable one route, cap fan-out/output, drain a pool, lower batch admission, or force a known-good target. Every switch is authenticated, audited, scoped, expiring where appropriate, and tested before an incident.
+
+## Failure Modes
+
+**Optimizing utilization instead of goodput.** The fleet reaches 95% GPU use while queueing violates TTFT and cancellations waste decode. Capacity targets must be derived from useful SLO-compliant completions.
+
+**Unbounded admission.** Requests queue beyond their deadlines and continue consuming spend. Use bounded, deadline-aware queues and reject or degrade before expensive execution.
+
+**Transparent-fallback fiction.** A fallback target lacks the context length, tool schema, safety policy, or quality required by the request. Build and continuously test a compatibility graph.
+
+**Retrying partial streams.** A second model response is appended after the first emitted tokens, producing duplicates or contradictions. Define terminal interruption or supported resume semantics.
+
+**Safety failover bypass.** A refusal or policy timeout routes to a less restrictive model. Policy outcomes are not infrastructure availability failures.
+
+**Configuration split brain.** Gateways, pools, and adapters observe incompatible rollout revisions. Publish signed atomic snapshots and record their IDs per generation.
+
+**KV overcommit.** Admission accounts for current sequence length but not future decode or speculative branches. Reserve growth and reject before an unrecoverable OOM.
+
+**Long-prefill starvation.** Large prompts monopolize compute and increase ITL for active streams. Chunk prefills, isolate traffic classes, or disaggregate phases after measurement.
+
+**Autoscaling after saturation.** GPU utilization triggers scaling only once latency has collapsed, and replicas load too slowly. Scale on queue/KV forecasts and keep warm headroom.
+
+**Cache identity omission.** A prefix generated under one tool schema, adapter, tenant, or policy is reused under another. Key every state-affecting input and isolate security domains.
+
+**Alias drift without evidence.** A provider changes the model behind an alias and output behavior shifts invisibly. Pin where possible, continuously canary, and record resolved revisions and behavioral metrics.
+
+**Observability data leak.** Prompts, tool arguments, and outputs are copied into broad-access traces. Apply data classification, field-level redaction, sampling, tenant isolation, and retention controls.
+
+## Decision Framework
+
+### Provider API, self-hosting, or hybrid
+
+| Consideration | Provider API favors | Self-hosting favors |
+|---|---|---|
+| Demand | uncertain, bursty, many model experiments | sustained, predictable, high-volume workload |
+| Capability | frontier/proprietary features | open weights, custom runtime, adapters, deterministic artifact control |
+| Operations | small platform team | accelerator, kernel, scheduler, and SRE expertise |
+| Data/control | contract satisfies residency and retention | strict placement, network, or artifact requirements |
+| Economics | low utilization or rapid model churn | measured goodput gives lower total cost at required SLO |
+| Availability | vendor quota and regional dependency acceptable | capacity can be reserved across owned failure domains |
+
+Hybrid systems often use providers for frontier or burst traffic and self-hosted pools for stable high-volume paths. They still require a shared logical contract, evaluation, accounting, and explicit compatibility—not a lowest-common-denominator abstraction that hides important behavior.
+
+### Design sequence
+
+1. characterize workload distributions and user-visible SLOs;
+2. define capability, safety, data, and reproducibility constraints;
+3. specify logical generation and streaming contracts;
+4. design admission, quotas, deadlines, and degradation;
+5. choose eligible targets and measurable routing objective;
+6. define retry, fallback, cancellation, and idempotency semantics;
+7. for self-hosting, benchmark scheduler and memory feasibility on real traces;
+8. build evaluation-gated rollout, immutable usage accounting, and end-to-end traces;
+9. test zone/provider failure, quota exhaustion, configuration rollback, and cold recovery.
+
+Prefer the least operationally complex architecture that meets quality, policy, availability, latency, and cost requirements. Self-hosting for theoretical token price or multi-provider routing for an untested availability story adds infrastructure without necessarily adding product resilience.
+
+## Key Takeaways
+
+- LLM infrastructure is a deadline- and budget-aware serving system; admission and degradation matter as much as model execution.
+- Separate versioned global control state from regional request data planes and record the exact revision used for every generation.
+- Provider and self-hosted targets can share a logical contract, but fallback must preserve capabilities, policy, context, and quality.
+- Prefill, decode, KV memory, batching, and model placement create distinct scheduling constraints; plan capacity from goodput at the product SLO.
+- Streaming, cancellation, partial output, and tool idempotency require explicit protocol semantics.
+- Optimize cost per verified successful outcome and preserve an immutable, reconciled usage ledger.
+- Policy is enforced in gateways, tools, sandboxes, and commit paths—not by trusting prompt instructions.
 
 ## References
 
-- [vLLM: High-throughput LLM Serving](https://github.com/vllm-project/vllm) / [SGLang](https://github.com/sgl-project/sglang) — the dominant open serving engines
-- [Efficient Memory Management for LLM Serving with PagedAttention](https://arxiv.org/abs/2309.06180) — the vLLM paper
-- [DistServe: Disaggregating Prefill and Decoding](https://arxiv.org/abs/2401.09670) and [Mooncake: KVCache-centric Disaggregated Architecture](https://arxiv.org/abs/2407.00079)
-- [EAGLE: Speculative Sampling Requires Rethinking Feature Uncertainty](https://arxiv.org/abs/2401.15077) and [Medusa](https://arxiv.org/abs/2401.10774) — speculative decoding
-- [XGrammar: Flexible and Efficient Structured Generation](https://github.com/mlc-ai/xgrammar) / [Outlines](https://github.com/dottxt-ai/outlines) — constrained decoding
-- [Anthropic Prompt Caching](https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching) / [OpenAI Prompt Caching](https://platform.openai.com/docs/guides/prompt-caching)
-- [OpenTelemetry GenAI Semantic Conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) — standard trace/metric schema for LLM systems
-- [NeMo Guardrails](https://github.com/NVIDIA/NeMo-Guardrails) / [Guardrails AI](https://github.com/guardrails-ai/guardrails)
-- [LiteLLM](https://github.com/BerriAI/litellm) — multi-provider gateway, routing, budgets
+- [Orca: A Distributed Serving System for Transformer-Based Generative Models](https://www.usenix.org/conference/osdi22/presentation/yu) — iteration-level scheduling and selective batching
+- [Efficient Memory Management for Large Language Model Serving with PagedAttention](https://arxiv.org/abs/2309.06180) — paged KV-cache management and vLLM
+- [SGLang: Efficient Execution of Structured Language Model Programs](https://arxiv.org/abs/2312.07104) — structured generation runtime and prefix reuse
+- [DistServe: Disaggregating Prefill and Decoding for Goodput-optimized Large Language Model Serving](https://www.usenix.org/conference/osdi24/presentation/zhong-yinmin) — phase disaggregation
+- [Taming Throughput-Latency Tradeoff in LLM Inference with Sarathi-Serve](https://www.usenix.org/conference/osdi24/presentation/agrawal) — chunked prefills and stall-free scheduling
+- [FlashAttention-3: Fast and Accurate Attention with Asynchrony and Low-precision](https://arxiv.org/abs/2407.08608) — accelerator-aware attention kernels
+- [OpenTelemetry GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) — trace and metric vocabulary for generative AI systems
+- [NIST AI Risk Management Framework: Generative AI Profile](https://www.nist.gov/publications/artificial-intelligence-risk-management-framework-generative-artificial-intelligence) — generative-AI risk management guidance

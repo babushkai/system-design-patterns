@@ -174,6 +174,88 @@ For tasks longer than one context window, the harness owns continuity:
 
 Agent loops in production are long-running, stateful, failure-prone processes — the same problem shape as payment workflows, and the same solution applies: durable execution engines (Temporal-style) that persist each step, replay on crash, and resume from the last checkpoint. Tool calls become activities with retry policies; human approvals become signals; "the pod died at turn 37" stops being a lost task. If you're not adopting an engine, you still need its invariants: every turn persisted, every tool idempotent or compensatable, resume-from-checkpoint tested.
 
+## Orchestration as a Typed State Graph
+
+The diagrams above describe control flow, but a production orchestrator needs a more exact model. Treat every workflow or agent run as a graph of **logical nodes**, and every execution of a node as an **attempt**. A node is not merely a prompt. It is a contract:
+
+\[
+N = (I, O, P, S, R, C, B)
+\]
+
+where \(I\) and \(O\) are versioned input and output schemas, \(P\) is the precondition, \(S\) is the success predicate, \(R\) is the retry policy, \(C\) is the compensation or reconciliation procedure, and \(B\) is the node's resource budget. The model invocation is one implementation detail inside that contract. This distinction lets a model, a deterministic function, a human approval, and a remote tool participate in the same graph without pretending that they have the same failure semantics.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Ready
+    Ready --> Running: lease node attempt
+    Running --> Committed: validate output + append event
+    Running --> Retryable: transient failure
+    Running --> Uncertain: side effect may have happened
+    Retryable --> Ready: backoff + new attempt
+    Uncertain --> Reconciling: inspect external system
+    Reconciling --> Committed: effect confirmed
+    Reconciling --> Ready: effect absent
+    Running --> AwaitingApproval: policy requires human decision
+    AwaitingApproval --> Ready: approved signal
+    AwaitingApproval --> Cancelled: rejected / expired
+    Committed --> [*]
+    Cancelled --> [*]
+```
+
+Persist transitions in an append-only event log and derive the current state from those events or from a transactionally maintained projection. A useful identity hierarchy is `run_id -> node_id -> logical_action_id -> attempt_id`. Retries receive a new `attempt_id` but retain the `logical_action_id`, which is also the idempotency key sent to external tools. Without that separation, a timeout followed by retry can create two refunds, two tickets, or two deployments while the trace misleadingly presents them as one action.
+
+Control-plane decisions and data-plane effects should commit in a deliberate order. For a read-only model call, writing the result before advancing the graph is enough. For a side-effecting call, the orchestrator usually cannot atomically commit both its database transaction and a third-party API. It therefore needs one of three patterns: an idempotent remote operation, an outbox/inbox protocol, or reconciliation of an **uncertain** outcome. Treating a network timeout as evidence that an operation failed is a correctness bug.
+
+Branching introduces another semantic choice: what does a join mean? `all` requires every child to satisfy its success predicate; `any` accepts the first valid child and cancels or ignores the rest; `quorum(k)` waits for enough independent evidence; `best-of-n` requires a ranking function and a deterministic tie policy. The join policy belongs in persisted workflow state. If it exists only in a prompt such as “combine the best answers,” restart behavior and auditability are undefined.
+
+Cancellation is a propagated state transition, not process termination. Stop scheduling descendants, signal cancellable work, let non-cancellable external effects finish, and reconcile them before declaring the run cancelled. Compensation is similarly domain-specific: deleting an unpublished draft may reverse an action, while a sent email cannot be unsent and must instead be followed by a corrective action. “Rollback” is an unsafe abstraction unless every tool declares what reversal actually means.
+
+### Determinism and Replay
+
+Durable engines replay orchestration code to reconstruct decisions. Anything that can vary—wall-clock time, random numbers, model output, a feature flag, routing state—must be recorded as an event rather than recomputed during replay. The model call itself is never replay-deterministic. Persist its provider, model revision or alias resolution, request hash, response, finish condition, usage, and policy decision, then replay the recorded result. New orchestration code must be versioned so an old run does not encounter a branch that did not exist when it started.
+
+This produces a useful boundary: **orchestration should be deterministic over recorded nondeterministic events**. That invariant is what makes crash recovery testable rather than hopeful.
+
+## Reliability, Latency, and Cost Composition
+
+Orchestration patterns compose quality, latency, and cost differently. If a sequential chain has independent per-stage success probabilities \(p_i\), its first-order end-to-end success probability is
+
+\[
+P(\text{success}) = \prod_{i=1}^{n} p_i.
+\]
+
+A ten-stage chain whose stages each succeed 98% of the time succeeds only about 81.7% of the time before retries. Independence is optimistic: adjacent LLM stages often share the same mistaken premise, so correlated semantic failures make the actual result worse. Gates help only when they detect errors with sufficient recall and do not introduce many false rejections.
+
+For a sequential path, latency is approximately the sum of stage latencies plus queueing and retry time. For a parallel fork, completion latency is the maximum branch latency plus fork/join overhead:
+
+\[
+L_{\text{chain}} \approx \sum_i (Q_i + E_i), \qquad
+L_{\text{fork-all}} \approx \max_i(Q_i + E_i) + J.
+\]
+
+The tail of the maximum gets worse as the fan-out grows. Ten parallel workers may improve mean wall-clock time while making p99 latency dependent on the slowest provider call. Hedging can reduce the tail, but duplicates spend and must not duplicate side effects. Prefer bounded fan-out, per-child deadlines derived from the parent deadline, and partial-result semantics when the product can use them.
+
+Cost is additive across every attempted call, including discarded candidates, graders, retries, retrieval, tool execution, and context re-sent at each turn:
+
+\[
+C_{run} = \sum_{a \in attempts}
+  (t^{in}_a c^{in}_{m_a} + t^{out}_a c^{out}_{m_a} + c^{tool}_a + c^{infra}_a).
+\]
+
+Budget admission must happen before expensive fan-out. Each child receives a reservation; unused budget returns to the parent; overruns cannot silently borrow from unrelated runs. A max-turn count alone is insufficient because one turn may contain a large context, multiple tool calls, or a high reasoning budget. Track tokens, currency, wall time, external operations, and concurrency separately.
+
+Voting deserves special caution. If five samples share a model, prompt, retrieved context, and decoding regime, their errors are correlated; the textbook binomial majority-vote gain does not apply. Diversity must come from evidence sources, decomposition, model families, prompts, or independent execution paths. Even then, majority agreement establishes consensus, not truth. High-impact decisions need a ground-truth verifier or human authority.
+
+Evaluator–optimizer loops need a **progress measure**. Store rubric scores by dimension, require the next revision to address named defects, reject regressions on dimensions that previously passed, and terminate when improvement falls below a threshold. Otherwise the loop can oscillate between two stylistic variants while spending until its cap.
+
+## Human Control and Policy Boundaries
+
+Human review is most reliable when represented as a first-class state with a frozen evidence package: proposed action, diff from prior state, tool arguments, provenance, predicted impact, and the policy rule that requested approval. An approval should authorize that exact action digest, not a vague future intent. If the action changes after feedback, its digest changes and previous approval no longer applies.
+
+Policy enforcement belongs outside the model. The model may propose a route or claim that an action is safe; a policy service decides whether the authenticated principal, tenant, environment, data classification, and action parameters permit it. This prevents a retrieved document or tool response from “instructing” the agent to expand its own authority. The orchestrator should mint short-lived, least-privilege credentials for the selected tool call rather than place broad credentials in the model-visible environment.
+
+Pause and resume are also policy operations. A paused run must release compute leases while retaining durable state; secrets or signed URLs may expire and need re-issuance on resume; the policy must be evaluated again because permissions and environment state may have changed. A month-old approved plan is not automatically authorized to execute against today's production system.
+
 ---
 
 ## What Reasoning Models Changed
@@ -215,11 +297,45 @@ Composition is the norm: a router in front, an agent loop for the hard branch, p
 
 ## Failure Modes to Design Against
 
-- **Scaffold ossification.** A workflow tuned around last year's model becomes a ceiling on this year's. Re-run the "do we still need this step?" eval at every model upgrade; the best orchestration code is the code you get to delete.
-- **Grader drift.** LLM judges anchor to surface features (length, confidence) — calibrate against a labeled set; alarm when judge-vs-human agreement drops.
-- **Silent loop divergence.** Agents that retry the same failing action with cosmetic variations. Detect repeated tool-call signatures in the harness and force a strategy change or escalate.
-- **Budget-free autonomy.** Every loop needs max-turns, token, wall-clock, and spend ceilings, set from eval p95s — not from optimism.
-- **Coordination without shared state.** Parallel workers writing to the same artifact produce merge conflicts in semantics, not just in git. Partition by ownership (see [Multi-Agent Systems](./03-multi-agent-systems.md)).
+**Scaffold ossification** occurs when a workflow tuned around one model becomes a ceiling on its successor. A redundant extraction stage can add latency and lose information even after a newer model can perform the full task in one call. Re-run ablations—full workflow versus each simplified variant—during every model or prompt migration. Preserve a stage because it produces measured error containment, not because it appears architecturally sophisticated.
+
+**Grader drift and shared blindness** turn an evaluator into a confidence amplifier. LLM judges can anchor on length, fluent explanations, or the same false premise used by the generator. Calibrate each rubric dimension against blinded human labels, track disagreement by slice, and send objective claims to executable or retrieval-backed verifiers. A grader's `PASS` is an observation with a known error rate, not a proof.
+
+**Silent loop divergence** appears as repeated tool calls with cosmetically changed arguments, cyclic edits, or plans that grow without retiring work. Detect normalized action-signature repetition, unchanged environment state, score oscillation, and failure to reduce the open-goal set. The harness should force a strategy transition, request missing information, or terminate; another unconstrained retry is not recovery.
+
+**Ambiguous side effects** are the most dangerous retry failure. A tool times out after committing, the orchestrator marks the node failed, and a retry repeats the operation. Idempotency keys and reconciliation of uncertain attempts must be designed before enabling automatic retries on write tools.
+
+**Budget-free autonomy** converts a correctness bug into an unbounded resource incident. Parent deadlines and spend ceilings must be subdivided across children, and every retry or fan-out decision must reserve budget. Use observed workload distributions and product loss limits, not a convenient fixed number copied across tasks.
+
+**Coordination without ownership** lets parallel workers mutate the same artifact or external state from inconsistent snapshots. The result may be syntactically mergeable and semantically contradictory. Partition write sets, use optimistic version checks at commit, and make synthesis a controlled merge step; [Multi-Agent Systems](./03-multi-agent-systems.md) develops these consistency models.
+
+**Cancellation leakage** happens when the root run is reported cancelled while child jobs, provider streams, or tool operations continue. Propagate cancellation tokens, record which activities acknowledge them, and reconcile non-cancellable work. Otherwise a user sees a stopped workflow while costs and side effects continue in the background.
+
+## Decision Framework
+
+Start from the shape of uncertainty rather than from a fashionable agent pattern.
+
+| Design question | Architectural consequence |
+|---|---|
+| Can valid steps be enumerated before seeing the request? | Encode them as a workflow; use the model only inside bounded nodes. |
+| Is decomposition input-dependent but the final result cheaply verifiable? | Use orchestrator–workers or an agent loop with verifier-controlled commit. |
+| Are subtasks independent in both reads and writes? | Parallel sectioning is safe; otherwise establish ownership or serialize commits. |
+| Is failure transient, semantic, or an uncertain side effect? | Retry transient faults; revise strategy for semantic faults; reconcile uncertain effects. |
+| Does evaluation have lower entropy than generation? | An evaluator–optimizer loop may pay for itself; otherwise it compounds model opinion. |
+| Must a human authorize impact? | Persist an approval state bound to an exact action digest and revalidate on change. |
+| Is p99 latency strict? | Bound fan-out, stream partial results, route by deadline, and avoid slowest-child joins. |
+| Is spend strict? | Reserve hierarchical budgets before calls and degrade to cheaper bounded paths. |
+
+Build the minimum graph that passes offline evaluations and shadow traffic. Then add one control-flow feature at a time and measure its marginal quality gain, latency cost, spend, and new operational failure surface. A useful decision record names the alternative that was rejected, the workload slice that justified the chosen pattern, and the evidence required to remove it later.
+
+## Key Takeaways
+
+- An orchestration step is a typed, versioned state transition with explicit retry and side-effect semantics; a prompt alone is not a production node.
+- Workflow reliability multiplies across sequential stages, parallel latency inherits the slowest branch, and all attempted work contributes to cost.
+- Durable execution requires stable logical identities, recorded nondeterminism, idempotency or reconciliation, versioned replay, and propagated cancellation.
+- Voting and LLM grading reduce error only when their failures are sufficiently independent and calibrated against real ground truth.
+- Models propose actions; policy code controls authority, approvals bind to exact actions, and external effects determine what compensation can mean.
+- Choose autonomy only for uncertainty that code cannot enumerate and outcomes that the system can verify.
 
 ---
 

@@ -30,6 +30,28 @@ The numbers do not need to be exact at first. They need to be explicit. A wrong 
 
 ---
 
+## Capacity Is a Feasible Region, Not One Number
+
+A replica does not have a single capacity. It has a **capacity envelope** bounded simultaneously by compute, memory, memory bandwidth, host preprocessing, network, feature dependencies, and the latency SLO. A configuration that sustains 2,000 predictions/s may be invalid because its p99 is 300 ms; a configuration meeting 50 ms at batch one may be economically invalid because it uses only 8% of the accelerator. The useful capacity is the highest offered load for which *all* constraints remain true.
+
+```mermaid
+flowchart LR
+    WORK["Workload distribution<br/>arrival, shape, priority"] --> QUEUE["Admission + queue"]
+    QUEUE --> HOST["Host preprocess<br/>CPU + memory"]
+    HOST --> DEVICE["Accelerator<br/>FLOPs + HBM + bandwidth"]
+    DEVICE --> POST["Postprocess + log"]
+    FEATURES["Feature/cache dependencies"] --> HOST
+    QUEUE -. constrained by .-> SLO["Latency / deadline SLO"]
+    DEVICE -. constrained by .-> COST["Unit-cost budget"]
+    FEATURES -. constrained by .-> AVAIL["Availability budget"]
+```
+
+Benchmark the envelope as a surface, not a point. Sweep concurrency, batch wait, maximum batch, input-shape bucket, precision, model variant, and hardware. For each cell record achieved throughput, p50/p95/p99 queue and service time, memory high-water mark, errors, quality delta, power if available, and unit cost. Mark a cell feasible only if it meets every guardrail. The serving controller then chooses among feasible cells according to the product objective: minimum cost, minimum latency, or maximum goodput.
+
+The workload input to this exercise is a distribution. At minimum retain per-route arrival series at one-second or finer buckets, input shapes, feature count, model choice, output size, cacheability, tenant/priority, and correlation with external events. Independent averages erase the worst interaction. A promotion may simultaneously increase model compute by 20%, reduce cache hit rate, and expand the eligible population during the daily peak. Replaying joined production traces catches that combination; multiplying separate averages does not.
+
+---
+
 ## Serving Regimes Have Different Capacity Goals
 
 The first capacity decision is not hardware. It is serving regime.
@@ -111,6 +133,33 @@ Monitor:
 - GPU utilization and memory.
 
 CPU is not a saturation signal for GPU-bound inference.
+
+---
+
+## Queueing, Goodput, and the Utilization Knee
+
+Throughput counts completed work. **Goodput** counts work completed within its SLO and correctness constraints. If a fleet accepts 15,000 RPS but 30% time out after spending accelerator cycles, throughput can look impressive while useful capacity is only 10,500 RPS and the wasted work worsens the queue. Capacity tests should plot goodput against offered load and choose an operating point before the knee where queue delay rises sharply.
+
+For an idealized M/M/1 queue, mean queueing time is:
+
+```text
+utilization ρ = arrival_rate λ / service_rate μ
+mean time in system W = 1 / (μ - λ)
+```
+
+The model is not a faithful description of batched accelerator service, but it teaches the invariant: as `λ` approaches `μ`, delay diverges. Real ML service is worse in several ways—service time varies with input shape, batches couple requests, downstream fanout adds correlated tails, and retries add endogenous traffic. Kingman's approximation for a single general queue exposes why variance matters:
+
+```text
+Wq ≈ (ρ / (1 - ρ)) × ((Ca² + Cs²) / 2) × E[S]
+
+Ca = coefficient of variation of inter-arrival time
+Cs = coefficient of variation of service time
+E[S] = mean service time
+```
+
+Two fleets with the same average rate and service time can need very different headroom because one has bursty arrivals or long-tailed inputs. Shape bucketing reduces `Cs`; token/input limits bound it; admission control prevents one pathological request from occupying a batch and stretching every neighbor's latency. This is why “keep GPU utilization at 90%” is not a universal efficiency target. The correct target is the measured utilization immediately before SLO goodput bends, with margin for estimation error and failure.
+
+Retries must enter the model as load. If a dependency has 5% ambiguous failures and every request retries twice without a budget, offered work becomes approximately `λ × (1 + 0.05 + 0.05²)` before synchronized retry waves and timeouts are considered. At saturation, the extra work lowers success probability and creates more retries—a positive feedback loop. Capacity protection therefore includes retry budgets, deadlines propagated to queues, and rejection before expensive work when the remaining deadline cannot be met.
 
 ---
 
@@ -473,6 +522,33 @@ Training cluster:
 ```
 
 Headroom is a product feature. It is what turns a burst from an outage into a blip.
+
+---
+
+## Failure Domains and Effective Fleet Capacity
+
+Fleet size is constrained by placement. Suppose steady peak requires 24 replicas and the service spans three zones. Placing eight per zone has zero zone-failure headroom: losing one zone leaves 16. To survive one-zone loss without violating safe utilization, each remaining zone must be able to carry half the required load, so the fleet needs at least 12 per zone, or 36 total, before accounting for rolling deploys. If a deploy temporarily removes 10% of replicas, the policy needs still more or must prohibit deploys near peak.
+
+This is why a flat “30% headroom” rule can be wrong. Derive headroom from named events:
+
+```text
+required_healthy_capacity = peak_goodput / target_utilization
+provisioned_capacity >= required_healthy_capacity
+                       + largest_failure_domain
+                       + simultaneous_maintenance_or_rollout
+```
+
+Correlated resources matter. Twelve model replicas in one zone backed by a feature cache in another do not form two independent failure domains. GPU type may be unavailable in the failover region; a previous-model fallback may use the same incompatible feature version; spot nodes may all be reclaimed together. Draw the full dependency and quota topology, then test the loss, not only the replica count.
+
+Long procurement or quota lead times turn forecasting into architecture. Record a base, peak, launch, and failure scenario over the hardware lead-time horizon. Separate committed baseline from burst capacity and specify which demand can be delayed, downgraded, routed to an alternate model/hardware class, or rejected. Forecast error is inevitable; irreversible capacity with no degradation ladder makes it expensive.
+
+## Admission Control and Degradation Economics
+
+When offered load exceeds feasible capacity, the system must choose which work not to do. An unbounded queue makes that choice implicitly and badly: requests expire after consuming memory and perhaps compute. A bounded queue plus deadline-aware admission rejects work before its cost is sunk. Priority should be based on product semantics—checkout decisions before dashboard refreshes—not merely arrival order.
+
+Common degradation steps are: serve a smaller/distilled model, reuse a bounded-staleness prediction, omit expensive feature groups, switch personalization to a deterministic baseline, move synchronous work to async, or shed low-priority tenants according to an explicit fairness policy. Each step changes quality and possibly risk, so it is a versioned policy with evaluation evidence, not an infrastructure improvisation. A fraud system may fail closed for a high-risk amount and fall back to rules for a low-risk one; a recommender can safely return popular items. Capacity and product policy meet at this boundary.
+
+Measure the economic result as cost per **successful decision satisfying the SLO and quality policy**. Cheap outputs that time out, violate a guardrail, or are discarded by a downstream deadline are not savings. This denominator also makes fallback trade-offs visible: a smaller model may increase raw prediction volume per dollar but create enough business loss to be more expensive overall.
 
 ---
 

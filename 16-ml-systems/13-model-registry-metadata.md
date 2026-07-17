@@ -426,6 +426,26 @@ The alias *is* the active-model pointer from the consistency section — but not
 
 ---
 
+## Availability, Security, and Disaster Recovery
+
+The registry should be outside the hot prediction path. Serving workers resolve a deployment, fetch immutable artifacts, verify hashes, and continue from local state; a transient control-plane outage must not terminate healthy predictions. That separation does not make registry availability unimportant. An unavailable registry can block deploys, rollback, scale-out, node replacement, investigation, and policy changes—the exact operations needed during an incident.
+
+There are two materially different read paths. **Deployment reads** require current, strongly consistent lifecycle and pointer state. If the registry is partitioned, they fail closed rather than guessing which candidate is approved. **Serving bootstrap reads** can use a signed last-known-good deployment snapshot containing artifact hashes, serving contract, and active policy. This lets a replacement worker start during a control-plane outage without permitting a new deployment. The snapshot carries a monotonic generation or fencing token, and workers reject generations older than the one already applied; otherwise a delayed control-plane update can revert a fleet after a newer rollout.
+
+Authorization must be transition-aware. Permission to register an experiment is not permission to approve it; permission to approve is not permission to move production traffic; emergency rollback should not silently grant permission to lower a fraud threshold. Use workload identity for pipelines, short-lived operator credentials, separation of duties for high-risk transitions, and conditional policy over model risk, environment, state change, and organization. Treat artifact locations, training-data lineage, evaluation slices, and decision-log links as sensitive metadata. Even when model weights are public, the graph can reveal customer populations, proprietary sources, and known weaknesses.
+
+Backup and restore have an ordering contract. Restore transactional metadata and the append-only audit log, then verify that every referenced artifact, evaluation bundle, runtime image, schema, and rollback target exists and matches its hash. A database restore whose rows point to expired objects has recovered a catalog of broken promises. Periodically restore into an isolated environment and resolve a sample of active and retained versions all the way through model loading. A useful durability SLI is the fraction of production and rollback roots whose complete transitive artifact graph can be verified.
+
+## Retention, Reachability, and Retirement
+
+Deleting model artifacts by age is unsafe because age and operational value are different. The prior champion may be old and still be the only approved rollback. A model retired from traffic may be held to reconstruct a consequential decision years later. Conversely, thousands of failed experiments can disappear once no evaluation, report, or downstream model references them.
+
+Garbage collection is therefore graph reachability from explicit roots: active deployments, rollback targets, approved candidates, open experiments, incident evidence, legal holds, and retained decision logs. Unreachable objects enter quarantine, remain recoverable for a safety interval, and are checked again before physical deletion. Retirement should prevent new deployments, record the retention class, and clean dependencies in a safe order. Deleting a base model before its adapters, a feature schema before a retained serving contract, or a runtime image before a rollback window ends converts lineage into dangling references.
+
+Registry SLOs must describe control-plane truth rather than HTTP uptime alone: state-transition latency, active-pointer propagation, audit-event durability, percentage of roots with complete artifacts, restore success, stale ownership, and impact-query latency. A registry that returns `200 OK` while its provenance graph is incomplete is available only in the least useful sense.
+
+---
+
 ## Failure Modes
 
 **Artifact folder masquerading as registry** stores model files but not lineage, state, approvals, contracts, or deployments. Defense: metadata graph with enforced lifecycle transitions.
