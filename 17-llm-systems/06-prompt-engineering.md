@@ -28,6 +28,46 @@ Two structural tools carry most of the remaining weight:
 - **Delimiters** — XML-style tags (`<documents>`, `<user_query>`, `<rules>`) or fenced blocks — mark where each kind of content begins and ends. Models are explicitly trained on such structure; it is the cheapest reliability win available.
 - **Few-shot examples** show the desired judgment where description fails. Three well-chosen examples of tricky cases outperform three paragraphs describing them. Curate examples like test cases: diverse, edge-covering, and maintained — a stale example teaches a stale behavior. For pure output *formatting*, prefer schema enforcement (below) and spend examples on judgment instead.
 
+## Prompt Compilation and Request Identity
+
+Production code should not concatenate strings until a plausible prompt appears. Treat request construction as a compiler pipeline:
+
+```mermaid
+flowchart LR
+    S[Versioned prompt source] --> AST[Typed message/content AST]
+    V[Validated variables] --> AST
+    T[Versioned tool schemas] --> AST
+    O[Output schema] --> AST
+    AST --> POL[Trust and policy validation]
+    POL --> R[Provider-specific rendering]
+    R --> TOK[Tokenization and budget check]
+    TOK --> REQ[Canonical request + manifest]
+```
+
+The typed intermediate representation distinguishes trusted instructions, user content, retrieved evidence, tool results, images, and generated summaries. Variables are inserted as data nodes, not interpreted as template syntax. This prevents a document containing a closing delimiter or braces from changing the structure of the request. Provider adapters then render the same logical request into the provider's message and content-block format.
+
+Every invocation should retain a request manifest:
+
+```text
+prompt_source_version, renderer_version
+resolved_model_or_deployment, tokenizer_version
+ordered message/content hashes and trust labels
+tool name + schema versions
+output-schema version
+sampling and reasoning parameters
+context/memory/retrieval snapshot IDs
+policy revision and experiment assignment
+canonical rendered-request hash
+```
+
+This is the reproducibility boundary. “Prompt v14” is not enough if a changed template renderer reordered fields, a tool description drifted, memory injected a new entry, or a provider alias resolved differently.
+
+### Rendering invariants
+
+Canonical rendering makes caching and debugging tractable. Serialize structured blocks deterministically, normalize only where semantics allow it, and never include volatile request IDs or timestamps in the stable prefix. Validate required variables and reject unknown ones; silently dropping a field can remove a safety or product constraint. Compute token counts with the target tokenizer before admission because character limits do not predict model tokens across languages or code.
+
+Prompt templates need the same escaping discipline as HTML or SQL, but the goal is structural integrity rather than making hostile instructions harmless. Delimiting untrusted content prevents accidental boundary breakage; it does not grant security against a model that can still read the content. Authority remains enforced by the surrounding system.
+
 ---
 
 ## What Reasoning Models Changed
@@ -130,6 +170,31 @@ The minimum viable discipline:
 
 Automated prompt optimization (DSPy-style compilation, meta-prompting — asking a strong model to improve a prompt against failure examples) is increasingly practical, and it slots into exactly this machinery: optimizers are only trustworthy where a solid eval set defines "better." The eval set, not the prompt, is the durable asset — models change, prompts get regenerated, but a well-curated set of graded cases transfers across all of it.
 
+## Testing Prompt Programs
+
+Prompt tests have two layers. **Compiler tests** are deterministic: template variables, message order, escaping, canonical hashes, token budgets, tool-schema compatibility, and cache-prefix stability. Store rendered snapshots carefully—usually as hashes plus redacted fixtures—so tests do not turn sensitive production inputs into repository artifacts.
+
+**Behavior tests** are statistical. A case specifies input state, acceptable properties, forbidden behavior, evidence or tool expectations, and the slice it represents. Run multiple samples when decoding or provider behavior is stochastic. Report pass-rate confidence intervals and paired deltas against the current production pair `(model, prompt)`, rather than declaring a new prompt better from a handful of examples.
+
+Metamorphic tests are particularly valuable because many tasks lack a single reference answer. Examples include:
+
+- paraphrasing the user request should preserve the decision;
+- changing an irrelevant name should not change a classification;
+- removing decisive evidence should produce abstention or lower confidence;
+- inserting an instruction inside an untrusted document should not change tool authority;
+- reordering independent evidence should not reverse a factual answer;
+- changing tenant or role should change only the information and actions that policy permits.
+
+These relations reveal shortcut learning and prompt injection without requiring exact string matching.
+
+Tool-use tests simulate the full protocol: correct tool selected, arguments satisfy both schema and business preconditions, errors trigger bounded recovery, and a proposed side effect reaches the authorization gate exactly once. Evaluating only the final prose can hide a dangerous trajectory that happened to end well.
+
+### Migration and rollout
+
+A model migration is a joint prompt-compiler change. Begin with the simplest prompt that expresses the product contract, add back only instructions that repair measured failures, and compare output length, tool behavior, refusal, schema validity, latency, cache share, and cost. Shadow testing discovers behavior differences; a canary limits impact; a stable request-manifest ID makes rollback and incident correlation immediate.
+
+Online experiments need outcome metrics and guardrails. Engagement alone can reward verbosity or agreeable misinformation. Include user correction, escalation, groundedness, successful tool completion, latency, and cost. Preserve experiment assignment for a session so prompt behavior does not alternate mid-conversation.
+
 ---
 
 ## Failure Modes
@@ -147,6 +212,31 @@ Automated prompt optimization (DSPy-style compilation, meta-prompting — asking
 **Prompt-cache vandalism.** A well-meaning edit inserts per-request content at the top of the system prompt and quintuples inference cost overnight. Defense: stability-ordered anatomy and cached-token-share monitoring ([Context Management](./08-context-management.md)).
 
 **Model-update whiplash.** A provider model bump shifts behavior under a heavily-tuned prompt. Defense: pin model versions where offered, re-run the suite on every bump, and keep prompts at goal-altitude so they transfer.
+
+**Renderer drift.** The source prompt is unchanged but a serializer reorders content blocks or tool fields, breaking cache identity and behavior. Defense: version the compiler, canonicalize rendering, and record the final request manifest.
+
+**Template-structure injection.** Untrusted data is interpolated into a template in a way that closes a delimiter or creates a new message-like section. Defense: typed content nodes and provider rendering; remember that structural escaping complements but does not replace privilege separation.
+
+**Eval overfitting.** Repeated prompt edits optimize a small public suite while organic failures worsen. Defense: holdout sets, production-derived slices, periodic refresh, and online outcome guardrails.
+
+## Decision Framework
+
+Diagnose the failure class before editing prose:
+
+| Observed problem | First design lever |
+|---|---|
+| Malformed structure | Native schema/grammar enforcement and typed parsing |
+| Wrong factual knowledge | Retrieval or a source-of-truth tool, not a longer instruction |
+| Wrong style or stable judgment | Clear contract, representative examples, then fine-tuning if scale justifies it |
+| Wrong tool selected | Tool taxonomy, names, trigger descriptions, and eval cases |
+| Unauthorized action | Capability and policy boundary outside the model |
+| Long-task drift | Context lifecycle, plan state, compaction, and recitation |
+| High latency or cost | Stable prefix, token budget, routing, and simpler orchestration |
+| Model migration regression | Remove legacy scaffolding, run paired slice evals, canary the model-prompt pair |
+
+For each instruction, ask whether it is universal policy, request-specific context, an output type, a tool contract, or an evaluation criterion. Universal policy belongs in trusted configuration; request context in the current message or evidence packet; output types in schemas; executable capability in tool definitions and code; and nuanced acceptance criteria in the eval suite. Prompts become brittle when these concerns are collapsed into one growing system message.
+
+Choose few-shot examples when the desired distinction is easier to demonstrate than describe and the examples fit the stable token budget. Choose fine-tuning when many examples encode a stable behavior and the measured inference or reliability gain covers training and lifecycle cost. Choose deterministic code whenever the rule can be implemented exactly.
 
 ---
 

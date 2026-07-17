@@ -46,6 +46,18 @@ HOMEPAGE_SOURCES = [
     Path(".vitepress/theme/components/LandingPage.vue"),
 ]
 
+DEEP_SYSTEM_SECTIONS = [
+    Path("16-ml-systems"),
+    Path("17-llm-systems"),
+]
+DEEP_SYSTEM_REQUIRED_HEADINGS = [
+    re.compile(r"^## TL;DR$", re.MULTILINE),
+    re.compile(r"^## Failure Modes(?:\b|:)", re.MULTILINE),
+    re.compile(r"^## Decision Framework(?:\b|:)", re.MULTILINE),
+    re.compile(r"^## Key Takeaways$", re.MULTILINE),
+    re.compile(r"^## References$", re.MULTILINE),
+]
+
 
 def rel(path: Path) -> str:
     return str(path.relative_to(ROOT))
@@ -197,6 +209,34 @@ def validate_frontmatter(errors: list[str]) -> None:
             errors.append(f"{rel(path)}: frontmatter is missing a closing delimiter")
 
 
+def validate_deep_system_chapters(errors: list[str]) -> None:
+    """Keep the ML/LLM fieldbook chapters structurally consistent.
+
+    This intentionally checks only the durable reader contract. Topic-specific middle
+    sections remain free-form because a feature-store chapter and a GPU-inference
+    chapter should not be forced into an identical internal outline.
+    """
+
+    for section in DEEP_SYSTEM_SECTIONS:
+        for path in sorted((ROOT / section).glob("*.md")):
+            raw = path.read_text(encoding="utf-8")
+            prose = strip_fenced_code(raw)
+            positions: list[int] = []
+            for heading in DEEP_SYSTEM_REQUIRED_HEADINGS:
+                match = heading.search(prose)
+                if not match:
+                    errors.append(
+                        f"{rel(path)}: missing required heading matching {heading.pattern}"
+                    )
+                    break
+                positions.append(match.start())
+
+            if positions and positions != sorted(positions):
+                errors.append(
+                    f"{rel(path)}: required deep-system headings are out of order"
+                )
+
+
 def validate_book_workflow_paths(errors: list[str]) -> None:
     path = ROOT / ".github/workflows/build-book.yml"
     if not path.exists():
@@ -309,6 +349,7 @@ def main() -> int:
     validate_markdown_links(errors)
     validate_advertised_counts(errors, article_count)
     validate_frontmatter(errors)
+    validate_deep_system_chapters(errors)
     validate_book_workflow_paths(errors)
     validate_vitepress_workflow_links(errors)
     validate_generated_assets(errors)

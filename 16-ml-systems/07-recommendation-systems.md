@@ -291,7 +291,7 @@ Online metrics from controlled experiments are the real measure, but even here t
 
 ---
 
-## When to Use
+## Decision Framework: When to Use
 
 A recommendation system earns its considerable complexity when users face a large item space, relevance genuinely varies by user and context, and feedback can be logged and acted on safely. The funnel, the feedback loop, and the de-biasing machinery are all justified by scale and personalization need.
 

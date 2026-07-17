@@ -300,6 +300,40 @@ The anti-pattern is training directly from mutable production tables. It is fast
 
 ---
 
+## Publication Protocol: A Dataset Version Is a Transaction
+
+Materializing files is not the same as publishing a dataset. A distributed job may write thousands of partitions, retry some tasks, speculate duplicate tasks, or die after writing 99% of the output. If consumers discover data by listing a prefix, they can observe a mixture of attempts and treat a partial write as a complete version. The dataset platform therefore needs a commit protocol analogous to a database transaction:
+
+1. Allocate an immutable candidate ID and write into a private staging namespace.
+2. Write each object with an attempt-independent content key; verify its checksum after upload.
+3. Build the manifest from successful task commits, rejecting duplicate partition ownership and schema disagreement.
+4. Run dataset-level gates: expected partitions, row counts, uniqueness, label coverage, distribution checks, privacy policy, and split invariants.
+5. Persist lineage and the complete quality report alongside the manifest.
+6. Atomically create the published-version record that points to the manifest hash.
+7. Only after publication may aliases such as `candidate` or `latest-approved` move to the new immutable version.
+
+```text
+STAGING ──validate──▶ SEALED ──register lineage──▶ PUBLISHED ──approval──▶ ELIGIBLE
+   │                    │                              │
+   └── failed/expired ──┴──────────────▶ GARBAGE-COLLECTABLE
+```
+
+The only atomic operation required is small: a conditional insert or compare-and-swap of the metadata record. Petabytes of files can be written non-transactionally because none are visible as a dataset until that record commits. Readers resolve the version to one manifest and never list a mutable directory. If two builders race for the same logical version, only one metadata commit wins; the loser becomes an unreferenced candidate that the janitor can remove after a safety window.
+
+Garbage collection is a reachability problem, not an age query. Start from retained model versions, evaluation reports, legal holds, rollback policies, active experiments, and dataset aliases; traverse lineage to manifests and source snapshots; delete only objects not reachable from any retained root. “Delete every object older than 90 days” will eventually delete the only reconstructable input of a still-serving model. Conversely, “keep everything” creates unbounded cost and privacy exposure. Reachability plus explicit retention class makes the trade-off reviewable.
+
+## Dataset Observability and Service Levels
+
+A dataset platform has consumers and therefore needs service levels. Useful signals cover three different moments:
+
+- **Build health:** source watermark, partition completion, retry rate, bytes and rows processed, quality-gate failures, and time spent in each stage.
+- **Published artifact health:** manifest integrity, schema and semantic-contract status, split sizes, label coverage, class balance, duplicate/entity leakage, and lineage completeness.
+- **Consumption health:** time-to-first-byte, read throughput, missing/corrupt objects, cache hit rate, consumers per version, and failures to reconstruct a registered run.
+
+Freshness by itself is dangerous. A fresh but semantically broken dataset should not meet the SLO. Define *usable freshness*: the age of the newest snapshot that has passed every required quality and governance gate. Track publication lag from source event time separately from compute duration so responders can distinguish “upstream truth is late” from “our materialization is slow.” Periodically choose retained models and perform a dry reconstruction through dataset resolution, checksum validation, split loading, and a small training smoke test. That is the dataset equivalent of restoring a backup: the registry saying a snapshot exists is weaker evidence than successfully reading it.
+
+---
+
 ## Failure Modes
 
 **Query-as-version** is the root reproducibility failure: the team stores SQL text but not immutable source snapshots or output manifests. Rerunning the query returns a different dataset. Defense: snapshot source versions and materialize content-addressed manifests.

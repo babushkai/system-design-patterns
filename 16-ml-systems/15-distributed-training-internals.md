@@ -151,7 +151,73 @@ Example, 70B on 512 H100s (64 nodes):
 
 The knobs interact: raising PP eases memory but demands more microbatches (bubble) which raises the global batch toward its ceiling; raising TP shrinks per-GPU matmuls until they're too small to saturate the tensor cores. Finding the optimum is an afternoon of arithmetic plus a day of profiling, and it is genuinely worth it — published configs (Megatron-LM, Llama 3) are the right starting points, not the right answers, for your cluster's fabric.
 
-*(Two siblings worth knowing: **sequence/context parallelism** splits the sequence dimension for long-context training, and **expert parallelism** places MoE experts on different GPUs — same design logic, communication pattern is an all-to-all.)*
+```mermaid
+flowchart TB
+    subgraph DC["Training cluster"]
+      subgraph DP0["Data-parallel replica 0"]
+        subgraph PP0["Pipeline stage 0 / node 0"]
+          T00["TP rank 0"] --- T01["TP rank 1"] --- T07["TP rank 7"]
+        end
+        subgraph PP1["Pipeline stage 1 / node 1"]
+          T10["TP rank 0"] --- T11["TP rank 1"] --- T17["TP rank 7"]
+        end
+        PP0 -->|"activations / gradients"| PP1
+      end
+      subgraph DP1["Data-parallel replica 1"]
+        R1["same TP × PP shape"]
+      end
+      DP0 <-->|"gradient reduce / state sharding"| DP1
+    end
+```
+
+The diagram is a topology contract. High-frequency tensor collectives stay on the node's fastest fabric; pipeline boundaries cross nodes with one activation stream; data-parallel synchronization spans replicas and is overlapped with backward. A scheduler that assigns the right number of accelerators but maps these dimensions onto the wrong links can make a mathematically sensible plan unusable.
+
+## Collective Cost and Topology Mapping
+
+Collective communication follows an `α–β` model:
+
+```text
+time(message_bytes M) ≈ α × synchronization_rounds + β × bytes_transferred
+
+α = per-round latency and software synchronization cost
+β = inverse effective bandwidth (seconds/byte)
+```
+
+Large gradient buckets are bandwidth-bound, so ring all-reduce—with many rounds but near-optimal bytes—is effective. Tiny per-layer tensor-parallel messages can be latency-bound, so a tree or topology-specific collective may win despite moving different bytes. “The fabric is 400 Gb/s” is not an input to the model until benchmarked through the actual collective, message-size range, rank count, NIC/GPU direct-memory path, and concurrent traffic. Effective bandwidth can be far below line rate because PCIe topology, NUMA placement, switch oversubscription, routing, protocol overhead, or another job shares the path.
+
+Model a hierarchical all-reduce as two collectives, not one average link: reduce-scatter inside each node, inter-node collective among node representatives or shards, then all-gather inside the node. The slow fabric sees less traffic and the fast fabric absorbs the local expansion. Modern libraries choose algorithms dynamically, but the training team still needs per-bucket traces: a library cannot fix ranks placed across a split PCIe tree or an oversubscribed rack.
+
+Overlap is also a dependency graph, not a checkbox. A gradient bucket can launch only when every parameter in it has a gradient; a single late layer delays the whole bucket. Buckets that are too large expose little overlap, while buckets that are too small pay `α` repeatedly and increase launch overhead. Parameter order, bucket construction, backward graph, and network streams together determine whether the advertised communication is actually hidden. The decisive profile is a timeline showing kernels, collectives, input, and idle gaps on every rank—not a single utilization percentage.
+
+## Sequence, Context, and Expert Parallelism
+
+Long sequences create an activation problem even when parameters fit. **Sequence parallelism** shards operations whose inputs can be partitioned along tokens—layer normalization, dropout, and parts of attention/MLP processing—across tensor-parallel ranks, avoiding replicated activations. **Context parallelism** goes further and partitions the attention sequence itself. Each rank owns a span of queries and must obtain the keys/values needed to attend across the full context, commonly through ring-style exchange. The memory reduction is close to the context-parallel degree, but communication grows with activation size and the attention algorithm must preserve causal masking and numerical equivalence across partitions.
+
+The placement rule mirrors TP: context exchange happens every layer, so keep the group on fast links when possible. It is attractive when context length, rather than parameter state, is the limiting dimension; it is wasteful for short sequences where communication and smaller kernels dominate. Sequence packing matters too. Padding every example to the longest sequence in a batch can burn most FLOPs on padding, while naive packing can let tokens attend across document boundaries or leak examples. The attention mask and position IDs are part of training correctness, not loader optimization details.
+
+Mixture-of-experts models add **expert parallelism**. A router sends each token to a small top-k subset of experts, and ranks exchange token activations with an all-to-all before and after expert computation:
+
+```text
+tokens per rank
+  → router probabilities
+  → top-k expert assignments
+  → all-to-all dispatch
+  → local expert MLPs
+  → all-to-all combine
+  → weighted output
+```
+
+Unlike dense TP, communication volume depends on routing and can become imbalanced. One popular expert receives more tokens, fills its capacity, and becomes both a straggler and a quality problem if overflow tokens are dropped. Capacity factor reserves slots above the expected uniform load; auxiliary load-balancing loss encourages even routing; expert replication places hot experts more than once; token dropping or rerouting defines overload semantics. Each choice couples systems and learning behavior. A tight capacity factor saves memory but changes which tokens receive expert computation. An aggressive balancing loss protects throughput but may make the model choose less appropriate experts. Monitor per-expert token counts, dropped/rerouted tokens, dispatch bytes, all-to-all time, and expert utilization alongside training loss.
+
+For sparse models, distinguish **active parameters per token** from total stored parameters. Compute scales mainly with active experts, but memory and checkpoint size scale with total experts, and all-to-all scales with routed activation traffic. Capacity plans that use only active parameter count underestimate model load and recovery; plans that use total count for FLOPs overestimate compute. The two ledgers diverge more sharply than in a dense model.
+
+## Precision, Numerics, and Distributed Correctness
+
+Mixed precision is part of the parallel system. `bf16` has fp32's exponent range and usually avoids loss scaling; `fp16` has a narrower range and commonly needs dynamic loss scaling; fp8 paths require per-tensor or block scaling, delayed scale updates, and kernels/hardware that implement the assumed format. Master weights and optimizer states may remain fp32 even when matmuls use lower precision. Reductions accumulate values from many ranks, so accumulation dtype and reduction order affect error.
+
+Floating-point addition is not associative: `(a+b)+c` can differ from `a+(b+c)`. Changing world size, collective algorithm, bucket order, compiler fusion, or pipeline schedule can change rounding and therefore the exact trajectory. Reproducibility must declare its level: bitwise replay on identical topology, statistically equivalent training within tolerances, or only comparable final evaluation. Promising bitwise identity while allowing the collective tree and kernel set to change is incoherent.
+
+Numerical safety signals need rank-level provenance. Track loss scale, non-finite gradients, gradient norm before and after clipping, parameter/update norms, activation extrema, router statistics, and optimizer state health. A global mean can hide one rank producing corrupt values just before all-reduce spreads them everywhere. Sample per-rank checksums or known-answer kernels during burn-in, quarantine hardware with repeatable deviations, and record the exact topology and library versions in the training run. “Loss became NaN” is the final symptom; the useful signal is which tensor, rank, and step first violated its expected range.
 
 ---
 

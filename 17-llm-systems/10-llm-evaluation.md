@@ -77,6 +77,24 @@ Wire the suite as a gate on every change to prompts, model pins, retrieval index
 - **Respect the noise.** With 200 cases, an 89% → 91% "improvement" is likely nothing. Use paired comparisons on identical cases (McNemar/bootstrap CIs), set regression thresholds above the noise floor, and treat "no significant change" as a real verdict.
 - **Model-swap protocol:** new model versions (including provider-side silent updates — pin versions where offered) run the full suite plus a diff review of *changed* cases before rollout, behind a [flag](../15-deployment/02-feature-flags.md) with online comparison.
 
+### Measurement design
+
+An eval result is an estimate, not a property of a model in isolation. Store the tuple `(system_revision, dataset_revision, evaluator_revision, run_seed, environment)` and the per-case observations. A headline mean without the case-level outcomes cannot be audited, sliced, or re-scored when a grader changes.
+
+For a binary metric with observed pass rate \(\hat p\) over \(n\) independent cases, uncertainty is roughly \(\sqrt{\hat p(1-\hat p)/n}\), though clustered cases and repeated agent trials violate independence. Grouped bootstrap or hierarchical models are safer when cases share users, repositories, or documents. For paired system comparisons, use the same cases and seeds where possible; a discordant-pair analysis is more sensitive than comparing two unrelated means.
+
+Do not spend all evaluation budget on model selection. Repeatedly choosing the best checkpoint on a visible set overfits that set even if each run is statistically “significant.” Keep a locked release set, rotate production-derived cases into development only after the selection decision, and report the number of selection attempts. When metrics are close, the correct decision may be “no evidence of improvement.”
+
+### Judge calibration and disagreement
+
+Calibrate a judge by task slice, not one global agreement number. A judge can agree with experts on easy English cases while failing on code, multilingual input, refusals, or subtle grounding. Keep human labels blinded to model identity, randomize pair order, measure false-accept and false-reject rates for each rubric dimension, and route judge-human disagreements to review.
+
+Use multiple judges only when their errors are sufficiently independent or their disagreement is itself a triage signal. Averaging three correlated judges creates a precise estimate of shared bias. Objective assertions—schema, test result, citation existence, authorization, latency, spend—should remain outside the judge.
+
+### End-to-end versus component attribution
+
+An end-to-end regression can originate in data availability, retrieval candidate recall, prompt rendering, context assembly, model behavior, tool execution, policy, or the grader. Maintain component probes with fixed upstream artifacts: evaluate generation on a frozen evidence packet; evaluate retrieval against known source spans; evaluate the harness with a deterministic mock model; evaluate policy with adversarial tool proposals. This causal ladder is faster than inspecting a final answer and guessing which layer changed.
+
 ## Production: Observability and Online Evaluation
 
 Offline evals predict; production confirms. The same scoring machinery runs on live traffic:
@@ -89,14 +107,48 @@ Offline evals predict; production confirms. The same scoring machinery runs on l
 
 ---
 
-## Checklist
+## Failure Modes
 
-- [ ] Evaluator ladder: maximal level-1 assertions; calibrated (κ measured) judges; humans on disagreements
-- [ ] Dataset: seeded from real traffic, grown from failures, sliced by intent/language/tier, versioned with graders
-- [ ] Agents: k-trial runs, pass^k reported, trajectory metrics (tool errors, turns, unsafe attempts), cost per solved task
-- [ ] CI: eval gates on prompt/model/index/harness changes; significance testing, not vibes; model-swap protocol with pinning
-- [ ] Production: OTel GenAI traces, sampled online judging, implicit+explicit feedback capture wired to traces
-- [ ] The loop: trace → triage → promote-to-suite is a button, and someone's job
+**Benchmark theater.** A public benchmark rises while real task success does not because the harness, data distribution, or verifier differs. Treat public suites as diagnostics; make the production-shaped, versioned suite the release authority.
+
+**Judge drift.** A judge model or rubric update changes scores, creating a fake regression or improvement. Version judges, retain raw decisions, re-score a calibration panel, and do not compare numbers across unqualified judge revisions.
+
+**Leakage and contamination.** Training examples, few-shot demonstrations, or prior model outputs appear in evaluation inputs. Split by entity and time, scan near duplicates, and maintain provenance.
+
+**Averaging away harm.** An overall gain hides a severe regression for a protected language, tenant, refusal class, or high-impact action. Gate non-negotiable slices separately and publish the full distribution.
+
+**Pass-rate optimism.** One successful stochastic run is reported as capability. Use repeated trials and pass^k for reliability; report cost and tail latency alongside success.
+
+**Proxy optimization.** Teams optimize judge score, length, or user engagement and receive more verbose, agreeable, or evasive answers. Pair proxy metrics with expert labels and objective outcome checks.
+
+**Feedback selection bias.** Only users who care leave ratings, and accepted answers are not necessarily correct. Sample exposures, include takeovers and regenerations, and label a representative slice rather than only complaints.
+
+**Trace without promotion.** Failures are observable but never become regression cases. Assign ownership for triage, preserve the environment and source artifacts, and promote a reviewed failure into the development or locked set.
+
+## Decision Framework
+
+Use the cheapest evaluator that can make the decision trustworthy:
+
+| Need | Appropriate evidence |
+|---|---|
+| Protocol or safety invariant | Deterministic assertion and policy test |
+| Artifact correctness | Executable verifier, test suite, database state, or diff checker |
+| Groundedness or nuanced quality | Calibrated rubric judge plus human disagreement review |
+| High-impact or irreversible decision | Human authority with evidence package |
+| Agent reliability | Repeated trials, pass^k, trajectory and side-effect metrics |
+| Model/prompt/index migration | Paired slice evaluation, shadow traffic, canary, rollback |
+| Production drift | Trace-linked sampled scoring and outcome feedback |
+
+Choose the dataset before the grader, and the acceptance decision before tuning the system. If no evaluator can distinguish an improvement from a regression, the product requirement is underspecified; adding a more confident judge does not solve it. Evals become an engineering function when they own dataset lineage, grader calibration, release thresholds, production sampling, and the path from incident to permanent regression case.
+
+## Key Takeaways
+
+- An eval is a versioned measurement experiment over a dataset, evaluator, system revision, and environment—not a single score.
+- Put executable and policy checks at the bottom of the evaluator ladder, use calibrated judges for residual semantics, and reserve humans for disagreement and consequence.
+- Evaluate retrieval, generation, harness, policy, and end-to-end outcomes separately so a regression has an actionable owner.
+- Report slices, uncertainty, pass^k reliability, cost per solved task, and tail latency; means hide the failures users experience.
+- Treat contamination, judge drift, selection bias, and proxy optimization as first-class system failures.
+- Production traces become valuable only when reviewed failures are promoted into a maintained, versioned regression corpus.
 
 ---
 

@@ -29,6 +29,33 @@ Three observations drive the discipline:
 2. **The harness is the durable asset.** Models are swapped every few months; the eval suite, tool surface, and safety boundary persist. Build the harness so a model upgrade is a config change plus an eval run.
 3. **The harness is the security boundary.** The model is persuadable by anything it reads; the harness is not. Every guarantee you actually need (no exfiltration, no unapproved spend, no `rm -rf /`) must be enforced in harness code, never in prompt text.
 
+## The Harness as a Runtime
+
+Treat the harness as a small operating system for a probabilistic process. The model proposes an event; the runtime validates it, applies policy, executes an effect, records the result, and exposes a new state to the next turn.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Ready
+    Ready --> Thinking: admit turn
+    Thinking --> Proposed: model response persisted
+    Proposed --> Executing: typed tool calls pass policy
+    Proposed --> Waiting: approval or missing input
+    Proposed --> Finished: verifier accepts final artifact
+    Executing --> Observed: results normalized and journaled
+    Observed --> Thinking: append observation
+    Executing --> Failed: tool or policy failure
+    Failed --> Thinking: bounded recovery
+    Failed --> Waiting: human or external dependency
+    Waiting --> Ready: signal / user input
+    Thinking --> Compaction: context budget exceeded
+    Compaction --> Ready: summary validated against state
+    Finished --> [*]
+```
+
+The durable identity hierarchy is `session_id → run_id → turn_id → action_id → attempt_id`. A retry creates a new attempt but retains the logical action ID, which is the idempotency key for an external write. Persist the model request manifest, tool proposals, policy decisions, results, workspace revision, and verifier output before advancing state. This makes a crash a resume point rather than an excuse to repeat an uncertain side effect.
+
+The model is allowed to be nondeterministic; the runtime is not allowed to forget what happened. Record provider/model revision, prompt and tool-schema versions, input and output usage, finish reason, and policy snapshot. A replay uses recorded model responses for old turns and re-executes only explicitly safe, deterministic checks. Never replay a payment, deployment, or email merely because the process restarted.
+
 ---
 
 ## System Prompt Architecture
@@ -76,7 +103,7 @@ Context is the binding constraint and the dominant cost driver. The harness owns
 
 ### 1. Cache discipline
 
-Inference providers price cached input tokens at ~10% of fresh ones, and agents resend their entire history every turn — so cache hit rate is the single largest cost lever in agentic systems. Rules that follow:
+Many inference providers discount reusable input prefixes, and agents resend their history every turn. The exact price and eligibility vary, so the harness treats cache behavior as measured infrastructure rather than a fixed multiplier. Rules that follow:
 
 - **Append-only conversation.** Never rewrite or reorder earlier messages mid-session; any mutation invalidates the cache for everything after it.
 - **Stable prefix.** System prompt and tool schemas change only at deploy time. Timestamps, request IDs, and "current date" go at the *end* of context or in tool results, never the beginning.
@@ -84,7 +111,7 @@ Inference providers price cached input tokens at ~10% of fresh ones, and agents 
 
 ### 2. Budget accounting and compaction
 
-Track tokens per turn. At a threshold (~70–80% of the window, or earlier if cost demands), compact: a model call summarizes the transcript into decisions made, constraints discovered, file paths touched, current plan state, and open items — then the loop restarts with system prompt + summary + the most recent turns. Tool *outputs* are the first thing to drop (they're re-derivable: the agent can re-read a file; it cannot re-derive *why* it chose approach B). Test compaction explicitly in evals: a bad summarizer turns a 4-hour task into amnesia at hour two.
+Track tokens by context category and reserve space for the next model response, tool schemas, and safety metadata. Compact when projected growth crosses a workload-qualified threshold, not on a fixed turn count. A summary is accepted only after its goal, constraints, decisions, identifiers, open work, and side-effect receipts are checked against durable state. Tool outputs are usually pruned before decisions, but retain a reference and the fact that the result was observed. Test compaction explicitly in evals: a bad summarizer turns a four-hour task into amnesia at hour two.
 
 ### 3. Filesystem as memory
 
@@ -114,10 +141,8 @@ async def run(session: Session) -> Outcome:
 
         calls = response.tool_calls
         decisions = await asyncio.gather(*[gate(c, session.policy) for c in calls])
-        results = await asyncio.gather(*[
-            execute_in_sandbox(c) if d.approved else denial_result(c, d.reason)
-            for c, d in zip(calls, decisions)
-        ])                                           # parallel calls run in parallel
+        batches = conflict_aware_batches(calls, decisions, session.state)
+        results = await execute_batches(batches, session.state)
         session.append(response, normalize(results))  # uniform shape, budget-truncated
 
         if loop_detector.repeating(session):         # same call-signature N times
@@ -132,6 +157,12 @@ The details that matter:
 - **Interruptibility is a feature, not an edge case.** Humans steer mid-run; injected user messages must land between turns without corrupting tool-call/result pairing.
 - **Normalize tool results.** One envelope (status, content, truncation marker, timing) regardless of source — models handle uniform structure measurably better than ad-hoc strings.
 - **Detect loops in the harness.** Hash recent tool-call signatures; on repetition, inject steering or escalate. Models repeat failing actions with cosmetic variations; the harness sees the pattern before the model admits it.
+
+`asyncio.gather` is safe only after the runtime has classified read/write sets and external-effect semantics. Two read-only calls can run concurrently; two writes to one artifact need serialization or an optimistic revision check; a write and a read of the same resource need an explicit snapshot rule. The scheduler also propagates the parent deadline and reserves child budgets before launching work. Otherwise parallelism creates races while appearing to improve latency.
+
+### Durable workspace state
+
+Files are not automatically durable just because they are on disk. The harness records workspace revision, changed paths, command exit status, and artifact hashes at checkpoints. A resumed run either restores a known snapshot or explicitly continues from the current revision after checking for user changes. External repositories, databases, and cloud resources require receipts or reconciliation; a local checkout cannot prove that a deployment did not happen.
 
 ### Verification layer
 
@@ -157,6 +188,12 @@ graph LR
 - **Sandbox as default substrate.** Ephemeral container or microVM per session: workspace mounted read-write, host invisible, network egress through an allowlist proxy, CPU/memory/disk limits. Secrets live in a broker that injects them into tool *execution*, never into model-visible context.
 - **Prompt injection is unsolved; architect around it.** Anything the agent reads — web pages, issues, READMEs, tool output — may carry instructions. Tag tool results as data-not-directives, and structurally avoid the lethal trifecta: untrusted input + private data + an outward channel in one agent. If the product requires all three, the outward channel gets a human gate, always.
 - **Approval fatigue is a security bug.** If users see ten prompts per task, they will click "always allow" on the eleventh. Auto-approve the provably safe, batch the reviewable, and reserve interruptions for the handful of actions that are genuinely irreversible.
+
+### Capability attenuation
+
+The model should never receive a credential whose authority exceeds the current action. The gateway authenticates the human or service principal; the policy layer maps the requested effect to a capability; the sandbox broker mints a short-lived token scoped to resource, verb, tenant, and expiry. Tool output contains a receipt, not the secret used to obtain it. Approval binds to an action digest and base resource revision, so changing the recipient, command, or patch invalidates the approval.
+
+Policy checks run again at commit. A plan approved ten minutes ago may now target a changed branch, expired URL, revoked user, or different production environment. “The model already asked” is not an authorization cache.
 
 ---
 
@@ -187,7 +224,7 @@ Token spend is the unit economics of the product: instrument cost per *solved* t
 
 ---
 
-## Failure Taxonomy
+## Failure Modes
 
 | Failure | Symptom | Harness countermeasure |
 |---|---|---|
@@ -200,6 +237,26 @@ Token spend is the unit economics of the product: instrument cost per *solved* t
 | Injection compliance | Agent follows instructions from data | Provenance tagging; trifecta decomposition; outward-action gates |
 | Unverified success | "Done!" but tests fail | Verifier between `end_turn` and user-visible success |
 | Lost runs | Crash/timeout loses hours of work | Per-turn checkpointing; durable execution; resumability tests |
+| Stale side effect | Retry repeats an operation that may already have committed | Idempotency keys, receipts, reconciliation state |
+| Write race | Parallel calls overwrite or semantically contradict one another | Read/write sets, fencing, serialized commit |
+| Approval drift | Approved action changes before execution | Action digest and resource revision bound to approval |
+| Budget leakage | Child retries or tool loops spend outside parent limits | Hierarchical reservations and admission before launch |
+
+## Decision Framework
+
+Choose harness complexity from the consequence of failure and the shape of work:
+
+| Design question | Consequence |
+|---|---|
+| Is the task a fixed sequence with typed checks? | Use a workflow and keep model control local to bounded nodes. |
+| Can the environment verify progress after each action? | A bounded agent loop is viable; make the verifier the commit gate. |
+| Are actions read-only, reversible, or irreversible? | Increase sandboxing and approval strength as effect reversibility decreases. |
+| Are concurrent tool calls independent? | Parallelize only after read/write and snapshot analysis. |
+| Can a run outlive one process or context window? | Persist event state, workspace revisions, and idempotency/reconciliation data. |
+| Is quality judged by a reliable oracle? | Automate acceptance; otherwise route uncertainty to a human. |
+| Does the model see untrusted content and private data? | Remove an exfiltration channel or put outward effects behind a gate. |
+
+Build the smallest runtime that makes the desired guarantee enforceable. Add compaction, delegation, speculative execution, or adaptive routing only when a measured workload failure justifies it and the state/recovery semantics are written down. A harness is complete when another engineer can explain what happens after a timeout at every state transition.
 
 ---
 

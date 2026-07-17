@@ -2,1176 +2,361 @@
 
 ## TL;DR
 
-Multi-agent systems coordinate multiple LLM agents on tasks that exceed one context window or one line of investigation. The pattern that won in production is **orchestrator–workers**: a lead agent decomposes the task and spawns parallel subagents whose findings return compressed, while the orchestrator owns all writes. The decision rule is read-vs-write: parallelize *reading* (research, search, audit) freely; keep *writing* (code, documents, decisions) single-threaded, because context cannot be cheaply shared and conflicting partial views produce incoherent output. Expect multi-agent runs to cost an order of magnitude more tokens than chat — justified only when task value is high and the work genuinely parallelizes. Peer-to-peer, debate, and blackboard architectures remain useful as *evaluation* and research structures, not as production defaults.
+A multi-agent system is a distributed system whose workers happen to make probabilistic, context-dependent decisions. The hard problems are therefore not agent personas or conversational prompts. They are work decomposition, state ownership, message semantics, concurrency control, failure isolation, admission control, provenance, and determining whether the extra calls buy independent information.
+
+The strongest default architecture is an orchestrator with read-only workers. The orchestrator owns the goal, the dependency graph, budgets, authoritative state, and final commit; workers explore bounded subproblems and return typed evidence. Allow multiple writers only when their write sets are disjoint or when commits pass through explicit concurrency control. Use debate or voting only when agents receive meaningfully different evidence or inductive biases—five correlated samples do not constitute five independent experts.
+
+Multi-agent execution is justified when the task contains parallel information acquisition or separable deliverables whose value exceeds duplicated context, coordination, synthesis, and tail-latency costs. It is usually the wrong answer for one tightly coupled code change, one coherent document, a latency-sensitive interaction, or any decision without a reliable verifier.
 
 ---
 
-## When Multi-Agent Actually Wins (and When It Doesn't)
+## The Decision Before the Architecture
 
-Two influential, opposing field reports frame the design space:
+The phrase “multi-agent” conflates three different moves:
 
-- **Anthropic's research system** (orchestrator + parallel search subagents) beat a single-agent baseline by ~90% on breadth-first research queries — but consumed ~15× the tokens of a chat interaction. The economics only close when task value is high and the work is parallelizable reading.
-- **Cognition's "Don't Build Multi-Agents"** argues most multi-agent failures are context failures: each agent sees a slice, makes locally-reasonable but globally-conflicting decisions, and no message protocol fully transmits the unwritten context behind a decision. Their conclusion: prefer one continuous agent with full context — use compaction for length, not delegation.
+1. **Parallel sampling:** execute the same task several times and aggregate results.
+2. **Functional decomposition:** assign different roles such as retrieval, execution, and review.
+3. **Stateful delegation:** let one autonomous loop create and coordinate other autonomous loops.
 
-Both are right, about different workloads:
+They have different economics and failure modes. Parallel sampling buys diversity only to the extent that errors are uncorrelated. Functional decomposition is useful when boundaries have stable contracts. Stateful delegation extends effective context and search breadth but creates a distributed control plane.
 
-| Workload | Verdict | Why |
+A first-order value model is:
+
+\[
+V_{multi} = \Delta Q \cdot V_{outcome}
+            + \Delta T \cdot V_{time}
+            - C_{tokens}
+            - C_{tools}
+            - C_{coordination}
+            - E[L_{failure}],
+\]
+
+where \(\Delta Q\) is the measured quality improvement over the best single-agent baseline, \(\Delta T\) is useful wall-clock reduction, and \(E[L_{failure}]\) includes the expected loss from inconsistent or unauthorized actions. The system is worthwhile only when this quantity is positive on the actual workload distribution—not when an impressive best-case trace exists.
+
+### Workload shape matters
+
+| Workload | Likely architecture | Reason |
 |---|---|---|
-| Breadth-first research, multi-source search | **Parallelize** | Subtasks independent; results merge by summarization; errors don't compound across branches |
-| Large-scale audit/review (security pass over 200 files) | **Parallelize** | Read-only; findings are a union |
-| Writing code in one repo | **Single agent** (+ read-only subagents) | Write-write conflicts in semantics, not just git; shared context is the product |
-| One document, one decision, one design | **Single agent** | Decomposition costs more context than it saves |
-| Independent deliverables (3 services, 3 repos) | **Parallel single agents** | Not really multi-agent — partition by ownership, integrate via contracts |
+| Breadth-first research over independent sources | Orchestrator plus parallel researchers | Retrieval dominates; evidence can be unioned and deduplicated. |
+| Large read-only audit | Partitioned reviewers plus one synthesizer | Read sets overlap safely; findings retain file/source coordinates. |
+| One tightly coupled repository change | One writer, optional read-only investigators | Design intent and mutable state are shared; semantic merge conflicts dominate. |
+| Independent services with versioned interfaces | Owner per service plus contract/integration stage | Write sets are separable and integration has an executable boundary. |
+| Classification with weak single-sample accuracy | Ensemble only after correlation analysis | Voting may help, but shared errors can erase the theoretical gain. |
+| High-impact decision with no ground truth | Human decision support | More model opinions do not create authority or truth. |
 
-The synthesis used by current coding and research harnesses: **one orchestrator owns the goal, the plan, and every write; subagents are context firewalls for expensive reads**, returning ≤2K-token distillations instead of transcripts. Subagent value is context isolation first, wall-clock parallelism second — see [Harness Engineering](./09-harness-engineering.md).
+The most important baseline is not “one call.” It is the strongest single-agent system with the same tools, total compute budget, context management, and verifier. Otherwise a multi-agent design may appear superior merely because it received more tokens or better retrieval.
 
-Cost model to internalize: every agent re-reads its own growing transcript, so N agents ≠ N× one agent's cost — coordination overhead, duplicated context, and synthesis turns push real-world multiples to 10–20× single-agent token spend. Budget at design time, not after the invoice.
+## Architecture Topologies
 
----
-
-## The Problem with Single Agents
-
-Single agents hit fundamental limits when facing complex, multi-faceted tasks:
+### Orchestrator–worker
 
 ```mermaid
-graph LR
-    subgraph LIMITS["SINGLE AGENT LIMITATIONS"]
-        CW["Context Window<br/>Limits<br/>(FULL)"]
-        EB["Expertise Breadth<br/>Shallow across many<br/>vs. deep in few"]
-        TC["Task Complexity<br/>Sequential bottleneck<br/>on complex workflows"]
-    end
-
-    LIMITS -->|Solution| SOL["Divide and conquer<br/>with specialized agents"]
+flowchart TD
+    U[Goal] --> O[Orchestrator<br/>plan, ownership, budgets]
+    O --> D[(Durable run state)]
+    O --> W1[Worker A<br/>bounded read task]
+    O --> W2[Worker B<br/>bounded read task]
+    O --> W3[Worker C<br/>bounded read task]
+    W1 --> E[(Evidence store)]
+    W2 --> E
+    W3 --> E
+    E --> S[Synthesis and verification]
+    S --> C{Commit policy}
+    C -->|authorized| X[External effect]
+    C -->|insufficient evidence| O
 ```
 
----
+This is the production default because it centralizes goal interpretation and commit authority. The orchestrator creates a dependency graph, assigns bounded work, and decides whether a worker result satisfies its contract. Workers should return claims, evidence references, confidence or uncertainty, actions attempted, and unresolved questions—not their entire transcript.
 
-## Multi-Agent Architecture Patterns
+The orchestrator is both a bottleneck and a consistency boundary. Scale it by separating deterministic scheduling from model-based planning: code tracks node state, leases, deadlines, and budgets; a model proposes decomposition or replanning at explicit decision points. Requiring the model to rediscover the whole run state on every scheduling decision is expensive and makes replay unstable.
 
-### Pattern 1: Hierarchical (Supervisor) Architecture
+### Pipeline
 
-A supervisor agent coordinates specialized worker agents:
+A pipeline gives each stage one input and output contract. It is appropriate when transformations are ordered and stable, such as extract → normalize → generate → verify. It is not inherently multi-agent; using separate model personas does not change the topology.
 
-```mermaid
-graph TD
-    SUP["SUPERVISOR AGENT<br/>Task Decomposer + Router"]
-    SUP --> RES["RESEARCH AGENT<br/>Web search, Summarize, Cite"]
-    SUP --> CODE["CODE AGENT<br/>Write code, Debug, Test"]
-    SUP --> REV["REVIEW AGENT<br/>Code review, Security, Best practices"]
+Pipeline reliability compounds. If stage \(i\) has an undetected semantic-error probability \(e_i\), the chance of at least one undetected error is approximately
 
-    RES & CODE & REV --> AGG["AGGREGATED RESULT"]
+\[
+P(error) = 1 - \prod_i (1-e_i).
+\]
+
+Version schemas, validate at boundaries, and retain source provenance so a later stage can distinguish a source fact from an earlier model's inference. Backtracking must be explicit: a verifier should invalidate the specific upstream artifact that failed, not merely append “try again” to the last prompt.
+
+### Blackboard
+
+In a blackboard system, workers observe and contribute to shared structured state. This works for opportunistic search or constraint solving when partial results are independently useful. It fails when the blackboard is treated as a mutable text blob.
+
+Model the board as typed records with immutable revisions. A contribution contains a stable ID, author, base revision, claims, evidence, affected entities, and status. Writes use compare-and-swap or append-only events. A controller selects which pending contribution to evaluate next and prevents every worker from waking on every update—a feedback pattern that otherwise creates quadratic call growth.
+
+### Peer-to-peer and federated agents
+
+Peer-to-peer topology is appropriate across organizational or trust boundaries where no party owns the other agent's internals. Agents exchange tasks and artifacts through a versioned protocol, not shared process memory. Capability discovery, authentication, deadlines, status, cancellation, and artifact transfer matter more than natural-language conversation.
+
+At this boundary, assume at-least-once delivery, duplicated messages, clock skew, partial failure, incompatible schema versions, and independent policy. An agent's claim that work is complete is not a transaction commit in the caller's system. The caller validates the returned artifact and records its own state transition.
+
+### Debate, critique, and ensemble topologies
+
+Debate can expose competing assumptions when participants receive distinct evidence, roles, or constraints. If every participant sees the same prompt and model, repeated discussion often converges socially rather than epistemically: later agents copy fluent earlier claims, minority correct answers disappear, and token cost grows each round.
+
+Use a blind first round to preserve independence. Require evidence-addressed claims. Aggregate with a verifier that sees original artifacts, not just arguments. Stop after a fixed information gain or budget threshold. Debate should produce a decision record containing disagreements and evidence; consensus alone is not a correctness criterion.
+
+## The Core Control-Plane Model
+
+A multi-agent run is a directed acyclic graph until dynamic decomposition adds nodes. Cycles may represent revision, but every cycle needs a bounded termination rule. The durable entities are:
+
+- **Run:** original goal, principal, tenant, policy snapshot, global deadline, and budget.
+- **Task:** logical unit of work, input contract, dependencies, read/write sets, success predicate, and owner.
+- **Attempt:** one execution of a task with a lease, worker identity, start/end times, model/tool versions, and outcome.
+- **Artifact:** immutable, content-addressed output with schema and provenance.
+- **Claim:** an assertion linked to supporting or contradicting evidence.
+- **Commit:** authorized transition from proposed artifact or action to authoritative state.
+
+Use stable logical task IDs across retries and unique attempt IDs for each execution. A worker heartbeat renews a lease; lease expiry permits reassignment but does not prove the first attempt stopped. Results arriving after lease loss are marked late and may be used as evidence, but they cannot silently commit.
+
+### Dynamic decomposition
+
+An orchestrator may propose new tasks at runtime, but the scheduler should validate the proposal:
+
+- every task has a bounded objective and output schema;
+- dependencies exist and do not introduce an unintended cycle;
+- the task's estimated reservation fits remaining budget and deadline;
+- its requested tools are permitted for the run principal;
+- its read and write sets do not violate ownership rules;
+- its result has an identified consumer or verifier.
+
+This turns “spawn another agent” into an admission-controlled graph mutation. It also prevents recursive delegation storms in which workers create workers faster than results can be consumed.
+
+### Hierarchical budgets
+
+Global caps are insufficient. Let a parent task allocate reservations to children:
+
+\[
+B_{parent} \ge B_{self} + \sum_j B_{child,j} + B_{reserve}.
+\]
+
+Track token, currency, wall-clock, tool-operation, and concurrency budgets separately. Refund unused reservations when a child finishes. Do not let a retry bypass admission. A child can request more budget with an explanation and intermediate evidence; the parent may reallocate or terminate lower-value branches.
+
+Deadlines propagate similarly. A child deadline must leave enough time for aggregation, verification, and commit. If the root has 30 seconds remaining, starting a worker with a 30-second timeout guarantees an end-to-end miss.
+
+## State Ownership and Consistency
+
+Multi-agent correctness is primarily an ownership problem. Classify state by who may write it and how readers observe it.
+
+| State | Typical owner | Consistency requirement |
+|---|---|---|
+| Goal, plan, task graph | Orchestrator | Linearizable or single-writer revision history |
+| Worker scratch context | Worker | Private; disposable after result publication |
+| Evidence and artifacts | Producing worker, then immutable | Content-addressed; append-only metadata |
+| Shared derived view | Deterministic reducer | Rebuildable from events/artifacts |
+| User-facing draft | One designated writer | Optimistic version or serialized commits |
+| External side effects | Policy-authorized committer | Idempotency plus reconciliation |
+
+### The one-writer default
+
+One writer does not mean one model performs all work. Many workers can propose patches, sections, or actions; one owner validates and commits them against the latest base revision. This is equivalent to a database primary with speculative computation around it.
+
+For source code, a worker output should identify the base commit, affected symbols/files, patch, assumptions, and tests. Before commit, the owner checks that the base is current, applies the patch, runs integration verification, and rejects semantic conflicts. Git can merge lines while still violating one architectural invariant in two different ways; text merge success is not a consistency proof.
+
+### Partitioned writers
+
+Multiple writers are safe when ownership partitions are real and enforced. Define write sets at a semantic level: service/API ownership, database tables, document sections, or resource namespaces. Integration contracts must be versioned before parallel work begins. If workers discover a cross-boundary change, they emit a contract-change proposal and pause dependent commits rather than editing another owner's domain.
+
+Use fencing tokens with leases. Every commit includes the lease generation; a store rejects writes from a stale worker even if its process is still running. Optimistic concurrency (`expected_revision`) catches lost updates. Serializable transactions may be required for coupled state, but they do not resolve contradictory design intent; that still needs one decision owner.
+
+### Event sourcing and projections
+
+An append-only event stream gives replay, audit, and recovery, provided event semantics are versioned. Useful events include `TaskProposed`, `TaskAdmitted`, `AttemptStarted`, `ArtifactPublished`, `ClaimRetracted`, `ApprovalGranted`, and `CommitApplied`. Store the data necessary to reproduce deterministic state transitions, not raw chain-of-thought.
+
+Projections such as “current plan” or “open tasks” may lag. Commands that require strong consistency should validate against the authoritative stream version. Observability dashboards may use eventually consistent projections. Mixing these expectations creates bugs where a worker acts on a stale “open” task after it was cancelled.
+
+## Communication Semantics
+
+Natural language is suitable for task content, not protocol state. A message envelope should contain at least:
+
+```text
+message_id, schema_version, run_id, task_id, attempt_id
+sender, authenticated_principal, recipient
+kind, created_at, expires_at, correlation_id
+payload_ref_or_inline_payload, content_hash
+trace_context, priority, expected_base_revision
 ```
 
-```python
-from typing import Literal
-from pydantic import BaseModel
-import asyncio
-
-class TaskAssignment(BaseModel):
-    """Supervisor's decision on task routing."""
-    agent: Literal["researcher", "coder", "reviewer", "done"]
-    task_description: str
-    context: str
-    priority: int = 1
-
-class SupervisorAgent:
-    """Coordinates specialized worker agents."""
-    
-    def __init__(self, llm_client):
-        self.llm = llm_client
-        self.workers = {
-            "researcher": ResearchAgent(llm_client),
-            "coder": CodeAgent(llm_client),
-            "reviewer": ReviewAgent(llm_client),
-        }
-        self.conversation_history = []
-        self.task_results = {}
-    
-    async def run(self, user_request: str, max_iterations: int = 10) -> str:
-        """Main orchestration loop."""
-        self.conversation_history.append({
-            "role": "user",
-            "content": user_request
-        })
-        
-        for iteration in range(max_iterations):
-            # Supervisor decides next action
-            assignment = await self._decide_next_action()
-            
-            if assignment.agent == "done":
-                return await self._synthesize_final_response()
-            
-            # Delegate to appropriate worker
-            worker = self.workers[assignment.agent]
-            result = await worker.execute(
-                task=assignment.task_description,
-                context=assignment.context,
-                previous_results=self.task_results
-            )
-            
-            # Track results
-            self.task_results[f"{assignment.agent}_{iteration}"] = result
-            self.conversation_history.append({
-                "role": "assistant",
-                "content": f"[{assignment.agent}]: {result.summary}"
-            })
-        
-        return await self._synthesize_final_response()
-    
-    async def _decide_next_action(self) -> TaskAssignment:
-        """Supervisor LLM decides which agent to invoke next."""
-        system_prompt = """You are a supervisor coordinating a team of agents:
-        - researcher: Gathers information, searches web, analyzes documents
-        - coder: Writes, debugs, and tests code
-        - reviewer: Reviews code for quality, security, best practices
-        - done: All tasks complete, ready to deliver final response
-        
-        Based on the conversation and completed tasks, decide the next action.
-        Return a JSON with: agent, task_description, context, priority"""
-        
-        response = await self.llm.generate(
-            system=system_prompt,
-            messages=self.conversation_history,
-            response_format=TaskAssignment
-        )
-        return response
-    
-    async def _synthesize_final_response(self) -> str:
-        """Combine all worker results into coherent response."""
-        synthesis_prompt = f"""Synthesize the following agent outputs into 
-        a coherent final response:
-        
-        {self.task_results}
-        
-        Original request: {self.conversation_history[0]['content']}
-        """
-        return await self.llm.generate(synthesis_prompt)
-
-
-class ResearchAgent:
-    """Specialized agent for research tasks."""
-    
-    def __init__(self, llm_client):
-        self.llm = llm_client
-        self.tools = [WebSearchTool(), DocumentAnalyzer(), CitationManager()]
-    
-    async def execute(self, task: str, context: str, previous_results: dict):
-        system_prompt = """You are a research specialist. Your capabilities:
-        - Search the web for current information
-        - Analyze and summarize documents
-        - Provide properly cited sources
-        
-        Be thorough but concise. Always cite sources."""
-        
-        # ReAct loop for research
-        return await self._react_loop(system_prompt, task, context)
-```
-
-### Pattern 2: Peer-to-Peer Collaboration
-
-Agents communicate directly without central coordination:
-
-```mermaid
-graph TD
-    PLAN["PLANNER AGENT"] <-->|direct| EXEC["EXECUTOR AGENT"]
-    CRITIC["CRITIC AGENT"] <-->|direct| MEM["MEMORY AGENT"]
-
-    PLAN & EXEC & CRITIC & MEM <-->|MESSAGE BUS| BUS["Message Bus"]
-```
-
-Each agent can: broadcast messages to all, send direct messages, request help, vote on decisions
-
-```python
-import asyncio
-from dataclasses import dataclass
-from typing import Optional
-from enum import Enum
-
-class MessageType(Enum):
-    REQUEST = "request"
-    RESPONSE = "response"
-    BROADCAST = "broadcast"
-    VOTE_REQUEST = "vote_request"
-    VOTE = "vote"
-
-@dataclass
-class AgentMessage:
-    sender: str
-    recipient: Optional[str]  # None = broadcast
-    message_type: MessageType
-    content: dict
-    correlation_id: str
-
-class MessageBus:
-    """Central message broker for agent communication."""
-    
-    def __init__(self):
-        self.subscribers: dict[str, asyncio.Queue] = {}
-        self.message_history: list[AgentMessage] = []
-    
-    def register(self, agent_id: str) -> asyncio.Queue:
-        """Register an agent to receive messages."""
-        queue = asyncio.Queue()
-        self.subscribers[agent_id] = queue
-        return queue
-    
-    async def publish(self, message: AgentMessage):
-        """Publish a message to appropriate recipients."""
-        self.message_history.append(message)
-        
-        if message.recipient is None:
-            # Broadcast to all except sender
-            for agent_id, queue in self.subscribers.items():
-                if agent_id != message.sender:
-                    await queue.put(message)
-        else:
-            # Direct message
-            if message.recipient in self.subscribers:
-                await self.subscribers[message.recipient].put(message)
-
-
-class PeerAgent:
-    """Base class for peer-to-peer agents."""
-    
-    def __init__(self, agent_id: str, role: str, llm_client, message_bus: MessageBus):
-        self.agent_id = agent_id
-        self.role = role
-        self.llm = llm_client
-        self.bus = message_bus
-        self.inbox = message_bus.register(agent_id)
-        self.pending_requests: dict[str, asyncio.Future] = {}
-    
-    async def run(self):
-        """Main agent loop - process incoming messages."""
-        while True:
-            message = await self.inbox.get()
-            asyncio.create_task(self._handle_message(message))
-    
-    async def _handle_message(self, message: AgentMessage):
-        """Process incoming message based on type."""
-        if message.message_type == MessageType.REQUEST:
-            response = await self._process_request(message)
-            await self.send(
-                recipient=message.sender,
-                message_type=MessageType.RESPONSE,
-                content=response,
-                correlation_id=message.correlation_id
-            )
-        elif message.message_type == MessageType.RESPONSE:
-            if message.correlation_id in self.pending_requests:
-                self.pending_requests[message.correlation_id].set_result(message)
-        elif message.message_type == MessageType.BROADCAST:
-            await self._handle_broadcast(message)
-    
-    async def request(self, recipient: str, content: dict, timeout: float = 30) -> dict:
-        """Send request and wait for response."""
-        correlation_id = str(uuid.uuid4())
-        future = asyncio.Future()
-        self.pending_requests[correlation_id] = future
-        
-        await self.send(recipient, MessageType.REQUEST, content, correlation_id)
-        
-        try:
-            response = await asyncio.wait_for(future, timeout)
-            return response.content
-        finally:
-            del self.pending_requests[correlation_id]
-    
-    async def broadcast(self, content: dict):
-        """Broadcast message to all agents."""
-        await self.send(None, MessageType.BROADCAST, content, str(uuid.uuid4()))
-
-
-class PlannerAgent(PeerAgent):
-    """Plans and coordinates task execution."""
-    
-    async def _process_request(self, message: AgentMessage) -> dict:
-        if message.content.get("action") == "create_plan":
-            plan = await self._create_plan(message.content["task"])
-            
-            # Broadcast plan for feedback
-            await self.broadcast({
-                "action": "plan_proposal",
-                "plan": plan,
-                "request_feedback": True
-            })
-            
-            return {"status": "plan_created", "plan": plan}
-    
-    async def _create_plan(self, task: str) -> list[dict]:
-        response = await self.llm.generate(
-            system="You are a planning specialist. Break down tasks into steps.",
-            prompt=f"Create a plan for: {task}"
-        )
-        return response
-
-
-class CriticAgent(PeerAgent):
-    """Reviews and critiques other agents' outputs."""
-    
-    async def _handle_broadcast(self, message: AgentMessage):
-        if message.content.get("action") == "plan_proposal":
-            critique = await self._critique_plan(message.content["plan"])
-            
-            # Send critique back to planner
-            await self.send(
-                recipient=message.sender,
-                message_type=MessageType.RESPONSE,
-                content={"critique": critique},
-                correlation_id=message.correlation_id
-            )
-```
-
-### Pattern 3: Debate / Adversarial Pattern
-
-Multiple agents debate to improve output quality:
-
-```mermaid
-sequenceDiagram
-    participant P as Proposer
-    participant CH as Challenger
-    participant J as Judge
-
-    Note over P,CH: Round 1
-    P->>CH: Solution A is best
-    CH->>P: But what about X?
-
-    Note over P,CH: Round 2
-    P->>CH: Good point, refined solution
-    CH->>P: Still, Y remains unsolved
-
-    Note over P,CH: ... more rounds ...
-
-    P->>J: Final positions
-    CH->>J: Final positions
-    Note over J: Evaluates and decides winner
-    J->>P: Synthesized answer
-```
-
-```python
-class DebateSystem:
-    """Implements adversarial debate between agents."""
-    
-    def __init__(self, llm_client, num_rounds: int = 3):
-        self.llm = llm_client
-        self.num_rounds = num_rounds
-        self.proposer = DebateAgent("proposer", "advocate", llm_client)
-        self.challenger = DebateAgent("challenger", "critic", llm_client)
-        self.judge = JudgeAgent(llm_client)
-    
-    async def debate(self, topic: str) -> dict:
-        """Run a full debate on a topic."""
-        debate_history = []
-        
-        # Initial proposal
-        proposal = await self.proposer.make_argument(
-            topic=topic,
-            role="proposer",
-            history=[]
-        )
-        debate_history.append({"agent": "proposer", "argument": proposal})
-        
-        # Debate rounds
-        for round_num in range(self.num_rounds):
-            # Challenger responds
-            challenge = await self.challenger.make_argument(
-                topic=topic,
-                role="challenger",
-                history=debate_history
-            )
-            debate_history.append({"agent": "challenger", "argument": challenge})
-            
-            # Proposer responds
-            response = await self.proposer.make_argument(
-                topic=topic,
-                role="proposer",
-                history=debate_history
-            )
-            debate_history.append({"agent": "proposer", "argument": response})
-        
-        # Judge decides
-        verdict = await self.judge.evaluate(topic, debate_history)
-        
-        return {
-            "debate_history": debate_history,
-            "verdict": verdict,
-            "final_answer": verdict["synthesized_answer"]
-        }
-
-
-class DebateAgent:
-    """Agent that participates in debates."""
-    
-    ROLE_PROMPTS = {
-        "proposer": """You are advocating for your position. 
-        Make strong arguments, address counterpoints, and defend your stance.
-        Be persuasive but intellectually honest.""",
-        
-        "challenger": """You are challenging the proposal.
-        Find weaknesses, ask probing questions, propose alternatives.
-        Be critical but constructive."""
-    }
-    
-    async def make_argument(self, topic: str, role: str, history: list) -> str:
-        formatted_history = "\n".join([
-            f"{h['agent']}: {h['argument']}" for h in history
-        ])
-        
-        response = await self.llm.generate(
-            system=self.ROLE_PROMPTS[role],
-            prompt=f"""Topic: {topic}
-            
-            Debate so far:
-            {formatted_history}
-            
-            Make your next argument (2-3 paragraphs):"""
-        )
-        return response
-
-
-class JudgeAgent:
-    """Evaluates debate and synthesizes final answer."""
-    
-    async def evaluate(self, topic: str, history: list) -> dict:
-        formatted = "\n".join([f"{h['agent']}: {h['argument']}" for h in history])
-        
-        response = await self.llm.generate(
-            system="""You are an impartial judge evaluating a debate.
-            Consider the strength of arguments, evidence provided, and logical consistency.
-            Synthesize the best elements from both sides into a final answer.""",
-            prompt=f"""Topic: {topic}
-            
-            Full debate:
-            {formatted}
-            
-            Provide:
-            1. Analysis of each side's strongest points
-            2. Weaknesses in each position  
-            3. Your synthesized final answer combining the best insights""",
-            response_format=JudgeVerdict
-        )
-        return response
-```
-
-### Pattern 4: Assembly Line (Pipeline)
-
-Sequential processing with specialized stages:
-
-```mermaid
-graph LR
-    IN["Input"] --> INTAKE["INTAKE AGENT<br/>Parse & validate"]
-    INTAKE --> PROCESS["PROCESS AGENT<br/>Core transform"]
-    PROCESS --> REFINE["REFINE AGENT<br/>Polish & format"]
-    REFINE --> QUALITY["QUALITY AGENT<br/>Verify & check"]
-    QUALITY --> OUT["Output"]
-
-    QUALITY -.->|reject| REFINE
-    REFINE -.->|reject| PROCESS
-```
-
-Each stage: has specific responsibility, can reject/return to previous stage, adds metadata for next stage
-
-```python
-from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-
-@dataclass
-class PipelineContext:
-    """Carries data through the pipeline."""
-    original_input: str
-    current_data: any
-    stage_outputs: dict = field(default_factory=dict)
-    metadata: dict = field(default_factory=dict)
-    errors: list = field(default_factory=list)
-
-class PipelineStage(ABC):
-    """Base class for pipeline stages."""
-    
-    @abstractmethod
-    async def process(self, context: PipelineContext) -> PipelineContext:
-        pass
-    
-    @abstractmethod
-    def can_process(self, context: PipelineContext) -> bool:
-        pass
-
-
-class CodeGenerationPipeline:
-    """Assembly line for code generation."""
-    
-    def __init__(self, llm_client):
-        self.stages = [
-            RequirementsAgent(llm_client),
-            ArchitectureAgent(llm_client),
-            ImplementationAgent(llm_client),
-            TestingAgent(llm_client),
-            ReviewAgent(llm_client),
-        ]
-    
-    async def run(self, user_request: str) -> PipelineContext:
-        context = PipelineContext(
-            original_input=user_request,
-            current_data=user_request
-        )
-        
-        for stage in self.stages:
-            if not stage.can_process(context):
-                context.errors.append(f"Stage {stage.__class__.__name__} cannot process")
-                break
-            
-            context = await stage.process(context)
-            context.stage_outputs[stage.__class__.__name__] = context.current_data
-            
-            # Check for stage failures
-            if context.metadata.get("stage_failed"):
-                # Optionally retry or route to error handling
-                break
-        
-        return context
-
-
-class RequirementsAgent(PipelineStage):
-    """Extracts and clarifies requirements."""
-    
-    def __init__(self, llm_client):
-        self.llm = llm_client
-    
-    def can_process(self, context: PipelineContext) -> bool:
-        return isinstance(context.current_data, str)
-    
-    async def process(self, context: PipelineContext) -> PipelineContext:
-        response = await self.llm.generate(
-            system="""Extract structured requirements from the user request.
-            Identify: functional requirements, non-functional requirements,
-            constraints, and ambiguities that need clarification.""",
-            prompt=context.current_data,
-            response_format=Requirements
-        )
-        
-        context.current_data = response
-        context.metadata["requirements_extracted"] = True
-        return context
-
-
-class ArchitectureAgent(PipelineStage):
-    """Designs system architecture based on requirements."""
-    
-    async def process(self, context: PipelineContext) -> PipelineContext:
-        requirements = context.current_data
-        
-        response = await self.llm.generate(
-            system="""Design a system architecture based on requirements.
-            Include: components, interfaces, data flow, and technology choices.""",
-            prompt=f"Requirements: {requirements}",
-            response_format=Architecture
-        )
-        
-        context.current_data = response
-        context.metadata["architecture_designed"] = True
-        return context
-```
-
----
-
-## Communication Protocols
-
-### Interoperability Standards
-
-Two protocols cover the integration surface, and they're complementary, not competing:
-
-- **MCP (Model Context Protocol)** — connects an agent to *tools and context*: one server wraps a system (GitHub, Postgres, a browser), any MCP-capable agent uses it. Vertical integration: agent ↔ capabilities.
-- **A2A (Agent2Agent)** — connects *agents to agents* across vendors and frameworks: capability discovery via Agent Cards, task lifecycle management, opaque execution (agents collaborate without exposing internals). Horizontal integration: agent ↔ agent, now under the Linux Foundation.
-
-Inside a single product, you rarely need either between your own agents — a function call and a shared data structure beat a network protocol. Reach for A2A at organizational boundaries (another team's agent, another vendor's), the same way you'd reach for an API contract instead of a shared database. And regardless of transport, the hard problem remains semantic: a subagent that receives `task description` without the orchestrator's constraints and rejected-alternatives will make locally-sensible, globally-wrong choices. Pass decisions *and the reasons for them*.
-
-### Structured Message Format
-
-```python
-from pydantic import BaseModel
-from datetime import datetime
-from typing import Optional, Any
-
-class AgentMessage(BaseModel):
-    """Standardized message format for agent communication."""
-    
-    # Routing
-    message_id: str
-    correlation_id: Optional[str] = None  # For request-response pairing
-    sender_id: str
-    recipient_id: Optional[str] = None  # None = broadcast
-    
-    # Timing
-    timestamp: datetime
-    ttl_seconds: Optional[int] = None
-    
-    # Content
-    message_type: str  # "request", "response", "event", "command"
-    action: str        # Specific action requested
-    payload: dict[str, Any]
-    
-    # Context
-    conversation_id: str
-    parent_message_id: Optional[str] = None
-    
-    # Metadata
-    priority: int = 5  # 1-10, higher = more urgent
-    require_ack: bool = False
-
-
-class ConversationProtocol:
-    """Manages structured conversations between agents."""
-    
-    def __init__(self):
-        self.conversations: dict[str, list[AgentMessage]] = {}
-    
-    def start_conversation(self, initiator: str, topic: str) -> str:
-        """Start a new conversation thread."""
-        conv_id = str(uuid.uuid4())
-        self.conversations[conv_id] = []
-        return conv_id
-    
-    def add_message(self, message: AgentMessage):
-        """Add message to conversation history."""
-        if message.conversation_id in self.conversations:
-            self.conversations[message.conversation_id].append(message)
-    
-    def get_context(self, conversation_id: str, max_messages: int = 10) -> list:
-        """Get recent conversation context."""
-        return self.conversations.get(conversation_id, [])[-max_messages:]
-```
-
-### Shared Memory / Blackboard Pattern
-
-```mermaid
-graph TD
-    BB[("BLACKBOARD<br/>(Shared Memory)<br/>Problem State<br/>Partial Solutions<br/>Control Data")]
-
-    AA["AGENT A<br/>Specialist"] <-->|read/write| BB
-    AB["AGENT B<br/>Specialist"] <-->|read/write| BB
-    AC["AGENT C<br/>Specialist"] <-->|read/write| BB
-```
-
-```python
-from typing import Optional
-import asyncio
-from datetime import datetime
-
-class Blackboard:
-    """Shared memory space for multi-agent collaboration."""
-    
-    def __init__(self):
-        self._state: dict[str, Any] = {}
-        self._locks: dict[str, asyncio.Lock] = {}
-        self._subscribers: dict[str, list[callable]] = {}
-        self._history: list[dict] = []
-    
-    async def read(self, key: str) -> Optional[Any]:
-        """Read value from blackboard."""
-        return self._state.get(key)
-    
-    async def write(self, key: str, value: Any, writer_id: str):
-        """Write value to blackboard with locking."""
-        if key not in self._locks:
-            self._locks[key] = asyncio.Lock()
-        
-        async with self._locks[key]:
-            old_value = self._state.get(key)
-            self._state[key] = value
-            
-            # Record history
-            self._history.append({
-                "timestamp": datetime.now(),
-                "key": key,
-                "old_value": old_value,
-                "new_value": value,
-                "writer": writer_id
-            })
-            
-            # Notify subscribers
-            await self._notify(key, value, writer_id)
-    
-    def subscribe(self, key: str, callback: callable):
-        """Subscribe to changes on a key."""
-        if key not in self._subscribers:
-            self._subscribers[key] = []
-        self._subscribers[key].append(callback)
-    
-    async def _notify(self, key: str, value: Any, writer_id: str):
-        """Notify all subscribers of a change."""
-        for callback in self._subscribers.get(key, []):
-            await callback(key, value, writer_id)
-
-
-class BlackboardAgent:
-    """Agent that collaborates via blackboard."""
-    
-    def __init__(self, agent_id: str, blackboard: Blackboard, llm_client):
-        self.agent_id = agent_id
-        self.blackboard = blackboard
-        self.llm = llm_client
-        
-        # Subscribe to relevant keys
-        blackboard.subscribe("problem_state", self.on_state_change)
-        blackboard.subscribe("help_requests", self.on_help_request)
-    
-    async def on_state_change(self, key: str, value: Any, writer_id: str):
-        """React to problem state changes."""
-        if writer_id == self.agent_id:
-            return  # Ignore own writes
-        
-        # Check if we can contribute
-        contribution = await self._evaluate_contribution(value)
-        if contribution:
-            current = await self.blackboard.read("partial_solutions") or []
-            current.append({
-                "agent": self.agent_id,
-                "contribution": contribution
-            })
-            await self.blackboard.write("partial_solutions", current, self.agent_id)
-    
-    async def _evaluate_contribution(self, state: dict) -> Optional[dict]:
-        """Determine if agent can contribute to current state."""
-        response = await self.llm.generate(
-            system=f"You are a specialist in {self.specialty}. "
-                   "Evaluate if you can contribute to solving this problem.",
-            prompt=f"Current state: {state}\n\nCan you contribute? If so, what?"
-        )
-        return response if response.get("can_contribute") else None
-```
-
----
-
-## State Management
-
-### Distributed State with Event Sourcing
-
-```python
-from dataclasses import dataclass
-from typing import List
-from datetime import datetime
-import json
-
-@dataclass
-class AgentEvent:
-    """Immutable event representing a state change."""
-    event_id: str
-    agent_id: str
-    event_type: str
-    payload: dict
-    timestamp: datetime
-    version: int
-
-class EventStore:
-    """Persistent store for agent events."""
-    
-    def __init__(self, storage_backend):
-        self.storage = storage_backend
-        self.subscribers: list[callable] = []
-    
-    async def append(self, event: AgentEvent):
-        """Append event to store."""
-        await self.storage.save(event)
-        
-        # Notify subscribers
-        for subscriber in self.subscribers:
-            await subscriber(event)
-    
-    async def get_events(
-        self, 
-        agent_id: str = None,
-        event_type: str = None,
-        since: datetime = None
-    ) -> List[AgentEvent]:
-        """Query events with filters."""
-        return await self.storage.query(agent_id, event_type, since)
-    
-    async def rebuild_state(self, agent_id: str) -> dict:
-        """Rebuild agent state from events."""
-        events = await self.get_events(agent_id=agent_id)
-        state = {}
-        
-        for event in events:
-            state = self._apply_event(state, event)
-        
-        return state
-    
-    def _apply_event(self, state: dict, event: AgentEvent) -> dict:
-        """Apply event to state (reducer pattern)."""
-        if event.event_type == "task_started":
-            state["current_task"] = event.payload["task"]
-            state["status"] = "working"
-        elif event.event_type == "task_completed":
-            state["completed_tasks"] = state.get("completed_tasks", [])
-            state["completed_tasks"].append(event.payload)
-            state["status"] = "idle"
-        elif event.event_type == "error_occurred":
-            state["last_error"] = event.payload
-            state["status"] = "error"
-        
-        return state
-
-
-class StatefulAgent:
-    """Agent with event-sourced state management."""
-    
-    def __init__(self, agent_id: str, event_store: EventStore, llm_client):
-        self.agent_id = agent_id
-        self.event_store = event_store
-        self.llm = llm_client
-        self._state = None
-    
-    async def initialize(self):
-        """Rebuild state from event history."""
-        self._state = await self.event_store.rebuild_state(self.agent_id)
-    
-    async def execute_task(self, task: dict):
-        """Execute task with state tracking."""
-        # Emit start event
-        await self._emit_event("task_started", {"task": task})
-        
-        try:
-            result = await self._do_work(task)
-            await self._emit_event("task_completed", {
-                "task": task,
-                "result": result
-            })
-            return result
-        except Exception as e:
-            await self._emit_event("error_occurred", {
-                "task": task,
-                "error": str(e)
-            })
-            raise
-    
-    async def _emit_event(self, event_type: str, payload: dict):
-        """Emit and persist an event."""
-        event = AgentEvent(
-            event_id=str(uuid.uuid4()),
-            agent_id=self.agent_id,
-            event_type=event_type,
-            payload=payload,
-            timestamp=datetime.now(),
-            version=len(await self.event_store.get_events(self.agent_id)) + 1
-        )
-        await self.event_store.append(event)
-        
-        # Update local state
-        self._state = self.event_store._apply_event(self._state, event)
-```
-
----
-
-## Conflict Resolution
-
-### Voting and Consensus
-
-```python
-from enum import Enum
-from collections import Counter
-
-class VotingStrategy(Enum):
-    MAJORITY = "majority"
-    UNANIMOUS = "unanimous"
-    WEIGHTED = "weighted"
-    RANKED_CHOICE = "ranked_choice"
-
-class ConflictResolver:
-    """Resolves conflicts between agent outputs."""
-    
-    def __init__(self, strategy: VotingStrategy = VotingStrategy.MAJORITY):
-        self.strategy = strategy
-    
-    async def resolve(
-        self, 
-        question: str,
-        agent_responses: dict[str, Any],
-        weights: dict[str, float] = None
-    ) -> dict:
-        """Resolve conflicting agent responses."""
-        
-        if self.strategy == VotingStrategy.MAJORITY:
-            return self._majority_vote(agent_responses)
-        elif self.strategy == VotingStrategy.WEIGHTED:
-            return self._weighted_vote(agent_responses, weights)
-        elif self.strategy == VotingStrategy.RANKED_CHOICE:
-            return await self._ranked_choice(agent_responses)
-    
-    def _majority_vote(self, responses: dict[str, Any]) -> dict:
-        """Simple majority voting."""
-        # Normalize responses for comparison
-        normalized = {k: self._normalize(v) for k, v in responses.items()}
-        
-        # Count votes
-        vote_counts = Counter(normalized.values())
-        winner = vote_counts.most_common(1)[0]
-        
-        # Find original response
-        for agent_id, response in responses.items():
-            if self._normalize(response) == winner[0]:
-                return {
-                    "decision": response,
-                    "method": "majority_vote",
-                    "vote_count": winner[1],
-                    "total_votes": len(responses),
-                    "winning_agent": agent_id
-                }
-    
-    def _weighted_vote(
-        self, 
-        responses: dict[str, Any], 
-        weights: dict[str, float]
-    ) -> dict:
-        """Weighted voting based on agent expertise/reliability."""
-        scores = {}
-        
-        for agent_id, response in responses.items():
-            normalized = self._normalize(response)
-            weight = weights.get(agent_id, 1.0)
-            
-            if normalized not in scores:
-                scores[normalized] = {"score": 0, "response": response, "voters": []}
-            
-            scores[normalized]["score"] += weight
-            scores[normalized]["voters"].append(agent_id)
-        
-        # Find highest scored response
-        winner = max(scores.values(), key=lambda x: x["score"])
-        
-        return {
-            "decision": winner["response"],
-            "method": "weighted_vote",
-            "score": winner["score"],
-            "voters": winner["voters"]
-        }
-    
-    async def _ranked_choice(self, responses: dict[str, Any]) -> dict:
-        """Ranked choice voting with elimination rounds."""
-        # Each agent ranks all responses (including their own)
-        # Simulate by having an LLM rank them
-        pass
-    
-    def _normalize(self, response: Any) -> str:
-        """Normalize response for comparison."""
-        if isinstance(response, dict):
-            return json.dumps(response, sort_keys=True)
-        return str(response).lower().strip()
-
-
-class ConsensusBuilder:
-    """Builds consensus through iterative refinement."""
-    
-    def __init__(self, llm_client, max_rounds: int = 3):
-        self.llm = llm_client
-        self.max_rounds = max_rounds
-    
-    async def build_consensus(
-        self,
-        topic: str,
-        agent_positions: dict[str, str]
-    ) -> dict:
-        """Iteratively build consensus among agents."""
-        
-        positions = agent_positions.copy()
-        
-        for round_num in range(self.max_rounds):
-            # Check if consensus reached
-            if self._is_consensus(positions):
-                return {
-                    "consensus": True,
-                    "rounds": round_num + 1,
-                    "final_position": list(positions.values())[0]
-                }
-            
-            # Each agent considers others' positions
-            new_positions = {}
-            for agent_id, position in positions.items():
-                others = {k: v for k, v in positions.items() if k != agent_id}
-                
-                revised = await self._revise_position(
-                    agent_id, position, others, topic
-                )
-                new_positions[agent_id] = revised
-            
-            positions = new_positions
-        
-        # No full consensus - find common ground
-        return {
-            "consensus": False,
-            "rounds": self.max_rounds,
-            "final_positions": positions,
-            "common_ground": await self._find_common_ground(positions, topic)
-        }
-    
-    async def _revise_position(
-        self, 
-        agent_id: str, 
-        position: str, 
-        others: dict, 
-        topic: str
-    ) -> str:
-        """Agent revises position considering others' views."""
-        response = await self.llm.generate(
-            system=f"You are agent {agent_id}. Consider other perspectives "
-                   "and revise your position if you find merit in their arguments. "
-                   "Maintain your position if you believe you are correct.",
-            prompt=f"""Topic: {topic}
-            
-            Your current position: {position}
-            
-            Other agents' positions:
-            {json.dumps(others, indent=2)}
-            
-            Provide your revised position (or reaffirm your current one):"""
-        )
-        return response
-```
-
----
-
-## Real-World Example: Software Development Team
-
-```python
-class SoftwareDevTeam:
-    """Multi-agent system simulating a software development team."""
-    
-    def __init__(self, llm_client):
-        self.llm = llm_client
-        self.message_bus = MessageBus()
-        self.blackboard = Blackboard()
-        self.event_store = EventStore(InMemoryStorage())
-        
-        # Create specialized agents
-        self.agents = {
-            "product_manager": ProductManagerAgent(
-                "pm", self.message_bus, self.blackboard, llm_client
-            ),
-            "architect": ArchitectAgent(
-                "arch", self.message_bus, self.blackboard, llm_client
-            ),
-            "developer": DeveloperAgent(
-                "dev", self.message_bus, self.blackboard, llm_client
-            ),
-            "qa": QAAgent(
-                "qa", self.message_bus, self.blackboard, llm_client
-            ),
-            "tech_writer": TechWriterAgent(
-                "docs", self.message_bus, self.blackboard, llm_client
-            ),
-        }
-        
-        self.supervisor = TeamLeadAgent(
-            "lead", self.agents, self.message_bus, llm_client
-        )
-    
-    async def develop_feature(self, feature_request: str) -> dict:
-        """Complete feature development lifecycle."""
-        
-        # Phase 1: Requirements
-        await self.blackboard.write(
-            "feature_request", 
-            feature_request, 
-            "system"
-        )
-        
-        requirements = await self.supervisor.delegate(
-            agent="product_manager",
-            task="analyze_requirements",
-            input=feature_request
-        )
-        await self.blackboard.write("requirements", requirements, "pm")
-        
-        # Phase 2: Architecture
-        architecture = await self.supervisor.delegate(
-            agent="architect",
-            task="design_architecture",
-            input=requirements
-        )
-        
-        # Review architecture with debate
-        debate = DebateSystem(self.llm)
-        refined_arch = await debate.debate(
-            topic=f"Review architecture: {architecture}"
-        )
-        await self.blackboard.write("architecture", refined_arch, "arch")
-        
-        # Phase 3: Implementation
-        implementation = await self.supervisor.delegate(
-            agent="developer",
-            task="implement",
-            input={"requirements": requirements, "architecture": refined_arch}
-        )
-        
-        # Phase 4: Testing
-        test_results = await self.supervisor.delegate(
-            agent="qa",
-            task="test",
-            input=implementation
-        )
-        
-        # Iterate if tests fail
-        while not test_results["all_passed"]:
-            fixes = await self.supervisor.delegate(
-                agent="developer",
-                task="fix_bugs",
-                input=test_results["failures"]
-            )
-            test_results = await self.supervisor.delegate(
-                agent="qa",
-                task="test",
-                input=fixes
-            )
-        
-        # Phase 5: Documentation
-        docs = await self.supervisor.delegate(
-            agent="tech_writer",
-            task="document",
-            input={"code": implementation, "architecture": refined_arch}
-        )
-        
-        return {
-            "requirements": requirements,
-            "architecture": refined_arch,
-            "implementation": implementation,
-            "tests": test_results,
-            "documentation": docs
-        }
-```
-
----
-
-## Trade-offs
-
-| Approach | Pros | Cons |
-|----------|------|------|
-| **Hierarchical** | Clear control, easier debugging | Single point of failure, bottleneck |
-| **Peer-to-Peer** | Resilient, flexible | Complex coordination, potential chaos |
-| **Debate** | Higher quality outputs | Slow, expensive (multiple LLM calls) |
-| **Pipeline** | Simple, predictable | Rigid, no backtracking |
-| **Blackboard** | Flexible collaboration | Race conditions, complexity |
-
-### When to Use Multi-Agent Systems
-
-**Good fit:**
-- Complex tasks requiring diverse expertise
-- Tasks benefiting from multiple perspectives
-- Long-running workflows with distinct phases
-- Scenarios requiring checks and balances
-
-**Poor fit:**
-- Simple, single-step tasks
-- Latency-critical applications
-- Cost-sensitive environments
-- Tasks requiring strong consistency
-
----
+The payload is schema-validated and can include prose. The envelope supplies deduplication, routing, expiry, tracing, and concurrency checks.
+
+### Delivery guarantees
+
+Exactly-once delivery across queues and arbitrary tools is generally unattainable. Design for at-least-once messages with idempotent consumers:
+
+1. consume a message;
+2. insert its `message_id` into an inbox table and apply the local state transition in one transaction;
+3. write any outbound messages to an outbox in that transaction;
+4. asynchronously publish the outbox; duplicates are harmless.
+
+Ordering is usually per task or aggregate, not global. Include a sequence or expected revision. A response to a cancelled or superseded attempt remains auditable but cannot advance authoritative state.
+
+### Context transfer is lossy compression
+
+Delegation is a compression boundary. A good task packet includes the objective, why it exists, relevant constraints, accepted and rejected decisions, input artifact references, expected output, verifier, budget, and escalation conditions. It deliberately excludes irrelevant transcript history.
+
+The worker's return packet distinguishes:
+
+- observed facts with source coordinates;
+- inferences and their premises;
+- proposed changes;
+- uncertainty and missing evidence;
+- actions performed and their receipts;
+- a compact result intended for the parent context.
+
+This structure prevents “telephone game” provenance loss. The synthesizer can trace a claim back to source evidence instead of citing another model's summary as if it were primary evidence.
+
+### Backpressure and overload
+
+Every queue must be bounded. Admission considers tenant concurrency, worker-pool saturation, provider quotas, remaining deadline, and expected fan-out. When overloaded, shed low-value speculative branches, reduce ensemble size, route to a cheaper model, serialize work, or reject early. Letting the queue grow converts overload into expired work that still consumes tokens.
+
+Use weighted fair scheduling so a single research run cannot occupy the fleet. Reserve limited capacity for interactive traffic and recovery work. Per-tenant and per-run concurrency caps also bound correlated spend incidents caused by a malformed decomposition.
+
+## Scheduling and Straggler Control
+
+Parallel completion time is governed by the slowest required child. If child latencies are \(L_1, \ldots, L_n\), an `all` join observes \(\max L_i\). Fan-out therefore improves median time for divisible work but can worsen the tail.
+
+Mitigations depend on semantics:
+
+- use partial joins when missing branches reduce coverage rather than invalidate the answer;
+- split oversized tasks using observed cost, not equal item counts;
+- speculatively duplicate only idempotent, high-tail read tasks and accept the first valid result;
+- cancel redundant attempts and account for leaked provider work;
+- reserve synthesis time and stop admitting children near the deadline;
+- checkpoint long searches so a replacement worker resumes rather than starts over.
+
+Estimate task size from input tokens, number and type of tools, expected output, historical slice, and model tier. A model-generated estimate can be one feature, but scheduler decisions should be corrected by observed durations and token usage.
+
+## Reliability and Recovery
+
+Failures occur at four layers:
+
+1. **Infrastructure:** process loss, queue outage, provider timeout, quota rejection.
+2. **Protocol:** duplicate, stale, malformed, or unauthorized messages.
+3. **Semantic:** plausible but incorrect work, ignored constraint, incompatible outputs.
+4. **Coordination:** missing dependency, cyclic delegation, inconsistent commit, orphaned child.
+
+Retry only the first class automatically, plus explicitly idempotent protocol failures. Semantic failures require new evidence, a different strategy, or escalation. Retrying the same model with the same context is correlated sampling, not remediation.
+
+The parent records child lifecycle independently from a live connection. On orchestrator restart it reconstructs the graph, reclaims expired leases, polls remote operations whose outcome is uncertain, and schedules only tasks that remain admissible. Orphan detection links every running attempt to a live lease and run state. Cancellation walks the descendant graph, signals workers, and reconciles side effects that cannot be cancelled.
+
+### Sagas for external effects
+
+When several agents contribute to a business transaction, the orchestrator owns the saga. Each committed step declares an idempotency key and, where meaningful, a compensation. Compensation is not necessarily reversal: after publishing a notification, remediation may be another notification. The saga log records irreversible boundaries so policy can require approval before crossing them.
+
+## Security and Trust Boundaries
+
+An agent is not a principal merely because it has a name. Authority derives from the authenticated user or service, attenuated for the assigned task. The orchestrator issues short-lived capabilities scoped to a tool, resource, action, tenant, and expiration. Workers should not receive the orchestrator's broad credentials.
+
+Treat worker messages, retrieved documents, peer-agent cards, and tool output as untrusted data. None may modify system policy, grant capabilities, or alter destination routing through natural-language instructions. Validate schemas, enforce egress and resource allowlists, and isolate execution for untrusted code or files.
+
+Cross-agent privacy requires field-level data classification. A task packet should include only necessary fields; secrets remain in a tool-side vault and are referenced by opaque handles. Logs and traces must redact model inputs, tool arguments, and artifacts according to tenant and retention policy. Immutable provenance does not justify retaining sensitive content indefinitely—retain hashes and deletion tombstones where full payload retention is prohibited.
+
+Approvals bind to the action digest, resource version, principal, and expiry. A reviewer approving “send this draft” does not authorize a worker to change the recipient or regenerate the body afterward. Policy is re-evaluated at commit because privileges and external state may change during a long run.
+
+## Evaluation and Observability
+
+Evaluate the system at three levels.
+
+**Component evaluation** measures router accuracy, decomposition validity, worker contract fulfillment, evidence precision/recall, and verifier calibration. **Coordination evaluation** injects duplicate messages, stale results, worker death, quota exhaustion, delayed branches, and conflicting writes. **End-to-end evaluation** measures task success, human correction, side-effect correctness, latency, and spend on a representative workload.
+
+Compare against ablations:
+
+- best single agent with equal total token budget;
+- orchestrator without parallelism;
+- workers without role-specific prompts;
+- smaller fan-out;
+- no debate or no second review;
+- deterministic decomposition where available.
+
+This identifies which complexity produces marginal value. Report quality versus cost and latency as a Pareto frontier rather than one score.
+
+A trace should connect user request → run → task → attempt → model generation → tool call → artifact → claim → verifier → commit. Record model/provider resolution, prompt and tool-schema versions, token usage, cache status, queue and execution times, termination reason, retry cause, lease generation, and policy decisions. Do not store hidden reasoning; store observable actions, concise rationales where required, evidence, and state transitions.
+
+Operational metrics include:
+
+- useful completion rate and verified completion rate;
+- tasks, attempts, and retries per run;
+- fan-out and active-agent concurrency distributions;
+- queue wait, worker time, join wait, synthesis time, and end-to-end percentiles;
+- tokens and currency per successful run, not merely per call;
+- stale-result, duplicate-message, orphan-attempt, and write-conflict rates;
+- verifier disagreement, human override, and unsupported-claim rates;
+- cancellation acknowledgement and post-cancellation spend.
+
+Alerts should be slice-aware. A global completion rate can remain stable while one tenant, tool, language, or task type fails completely.
+
+## Failure Modes
+
+**Persona theater.** Several differently named agents use the same model, evidence, and prompt shape, so the architecture adds calls without independent capability. Ablations show whether specialization changes outcomes.
+
+**Context fragmentation.** Each worker makes a locally sensible decision without the constraints or rejected alternatives known by the parent. Task packets must carry decision context and workers must surface assumptions rather than invent them.
+
+**Semantic write conflicts.** Disjoint text edits encode incompatible design choices. Enforce one writer or semantic ownership, then run integration verification against the combined state.
+
+**Correlated consensus.** Multiple agents repeat the same false retrieved claim and voting increases confidence. Preserve blind independence, diversify evidence, and use ground-truth verifiers.
+
+**Delegation explosion.** Recursive spawning grows geometrically. Only the scheduler may admit tasks; depth, fan-out, concurrency, deadline, and spend budgets are hierarchical.
+
+**Stale worker commit.** A timed-out worker returns after replacement and overwrites newer state. Lease fencing and expected revisions reject the late commit.
+
+**Orphaned execution.** A parent cancels or crashes while children continue spending or causing effects. Durable parent-child state, propagated cancellation, and orphan reconciliation are required.
+
+**Natural-language protocol ambiguity.** “Done,” “approved,” or “retry” means different things to different agents. Protocol state uses enums and schemas; prose is payload.
+
+**Shared blackboard race.** Read-modify-write on a mutable collection loses contributions despite local locks in each process. Use transactional append, compare-and-swap, or an authoritative reducer.
+
+**Reviewer laundering.** A reviewer sees only the proposed summary, not primary evidence, and certifies the generator's framing. Verifiers access original artifacts and return evidence-addressed failures.
+
+**Tail amplification.** Required `all` joins wait for one pathological branch. Bound tasks, use partial semantics, and stop admitting work that cannot finish before the parent deadline.
+
+**Authority propagation.** A subagent inherits credentials beyond its assignment or treats another agent's instruction as authorization. Mint attenuated capabilities and enforce policy at the tool and commit boundaries.
+
+## Decision Framework
+
+Use multi-agent execution only after answering these questions with workload evidence:
+
+| Question | If yes | If no |
+|---|---|---|
+| Does the task contain independent information acquisition? | Parallel read-only workers may improve breadth or time. | Keep one continuous context. |
+| Can write ownership be partitioned by an enforceable contract? | Assign owners and integrate through versioned boundaries. | Use one writer. |
+| Are worker errors meaningfully independent? | Ensemble or debate may improve confidence. | More samples mainly multiply cost. |
+| Is there a verifier stronger or cheaper than generation? | Permit bounded autonomy before commit. | Keep a human decision boundary. |
+| Does task value cover coordination and duplicated context? | Size fan-out using the measured Pareto frontier. | Use a workflow or single call. |
+| Can the system recover from worker loss and ambiguous effects? | Long-running delegation is supportable. | Restrict to short, read-only tasks. |
+| Is tail latency compatible with the join policy? | Parallelize with deadlines and partial semantics. | Serialize or reduce fan-out. |
+
+Choose the topology from state semantics:
+
+- central authoritative goal and coupled output → orchestrator–worker;
+- stable ordered transformation → pipeline;
+- opportunistic independent contributions → versioned blackboard;
+- organizational boundary → federated peer protocol;
+- independent hypotheses plus external verifier → ensemble or debate.
+
+Then define ownership, logical identities, message delivery, budget propagation, cancellation, and observability before tuning prompts. If those fields cannot be written down precisely, adding more agents will make the system harder to reason about rather than more capable.
+
+## Key Takeaways
+
+- Multi-agent design is distributed-systems design: ownership, consistency, delivery, leases, backpressure, and recovery dominate personas.
+- Parallelize independent reads freely; serialize coupled writes unless write sets and integration contracts are enforceably separate.
+- Delegation is lossy context compression. Exchange typed task and evidence packets with provenance, not raw conversational summaries.
+- A scheduler—not an unconstrained model—admits dynamic tasks and subdivides deadlines, spend, tokens, tools, and concurrency.
+- At-least-once messaging, stale attempts, uncertain side effects, and cancellation leakage must be normal states in the design.
+- Consensus helps only when errors or evidence are sufficiently independent; agreement is not ground truth.
+- Evaluate every multi-agent topology against an equal-budget single-agent baseline and keep only complexity with measured marginal value.
 
 ## References
 
-- [How We Built Our Multi-Agent Research System](https://www.anthropic.com/engineering/built-multi-agent-research-system) - Anthropic; orchestrator–workers in production, with the token economics
-- [Don't Build Multi-Agents](https://cognition.ai/blog/dont-build-multi-agents) - Cognition; the context-sharing counterargument
-- [Agent2Agent (A2A) Protocol](https://a2a-protocol.org/) - cross-vendor agent interop, Linux Foundation
-- [Model Context Protocol](https://modelcontextprotocol.io/) - agent ↔ tools/context standard
-- [AutoGen: Enabling Next-Gen LLM Applications](https://arxiv.org/abs/2308.08155) - Microsoft Research
-- [MetaGPT: Multi-Agent Framework](https://arxiv.org/abs/2308.00352)
-- [Multi-Agent Debate Improves LLM Reasoning](https://arxiv.org/abs/2305.14325)
-- [LangGraph Documentation](https://langchain-ai.github.io/langgraph/) / [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/) - orchestration frameworks
+- [How We Built Our Multi-Agent Research System](https://www.anthropic.com/engineering/built-multi-agent-research-system) — orchestrator–worker research architecture and token economics
+- [Don't Build Multi-Agents](https://cognition.ai/blog/dont-build-multi-agents) — the context-sharing and coherence counterargument
+- [AutoGen: Enabling Next-Gen LLM Applications](https://arxiv.org/abs/2308.08155) — multi-agent conversation framework
+- [MetaGPT: Meta Programming for Multi-Agent Collaborative Framework](https://arxiv.org/abs/2308.00352) — role- and artifact-oriented collaboration
+- [Improving Factuality and Reasoning in Language Models through Multiagent Debate](https://arxiv.org/abs/2305.14325) — debate as an inference strategy
+- [Model Context Protocol specification](https://modelcontextprotocol.io/specification/) — agent-to-tool/context interoperability
+- [Agent2Agent Protocol specification](https://a2a-protocol.org/latest/specification/) — inter-agent task and artifact exchange
+- [Designing Data-Intensive Applications](https://dataintensive.net/) — logs, replication, consistency, and distributed coordination foundations
+- [Temporal documentation: durable execution](https://docs.temporal.io/) — replay, activities, retries, signals, and workflow versioning
