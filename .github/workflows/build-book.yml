@@ -298,7 +298,7 @@ jobs:
           
           cd build
           pandoc \
-            --from=markdown \
+            --from=markdown+tex_math_single_backslash \
             --to=pdf \
             --output=system-design-patterns.pdf \
             --pdf-engine=xelatex \
@@ -321,7 +321,7 @@ jobs:
           
           cd build
           pandoc \
-            --from=markdown \
+            --from=markdown+tex_math_single_backslash \
             --to=epub \
             --output=system-design-patterns.epub \
             --metadata-file=metadata.yaml \
