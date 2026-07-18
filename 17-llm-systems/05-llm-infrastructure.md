@@ -28,21 +28,21 @@ A chat request with 1,000 input tokens and 150 output tokens has a different res
 
 Define SLOs at the user-visible boundary. A provider's model latency excludes your queue, rate limiter, retrieval, moderation, network, parser, retries, and client rendering. For streaming, separate:
 
-\[
+$$
 TTFT = Q + L_{route} + L_{prefill} + L_{network-first},
-\]
+$$
 
-\[
+$$
 T_{complete} = TTFT + \sum_{j=1}^{T_{out}} ITL_j + L_{postprocess}.
-\]
+$$
 
 Goodput and cost efficiency are separate objectives:
 
-\[
+$$
 G = \frac{N_{qualified\ completions}}{time},
 \qquad
 E_C = \frac{N_{qualified\ completions}}{cost}.
-\]
+$$
 
 This prevents the platform from declaring success after batching increases throughput but violates interactive TTFT, or after an aggressive fallback improves availability but lowers answer quality below the product threshold.
 
@@ -151,10 +151,10 @@ Bound every queue. An unbounded queue does not increase capacity; it converts ov
 
 Routing chooses a target subject to hard constraints, then optimizes a product objective:
 
-\[
+$$
 m^* = \arg\max_{m \in M_{eligible}}
   \left[Q(m,x) - \lambda_L E[L|m,x] - \lambda_C E[C|m,x] - \lambda_R Risk(m,x)\right].
-\]
+$$
 
 `M_eligible` is filtered by capability, region, policy, context length, availability, and experiment. Predictions should use observed workload features and be calibrated by slice. A small model can handle easy traffic only if the router recognizes hard examples with adequate recall; otherwise savings are purchased with invisible quality loss.
 
@@ -201,13 +201,13 @@ Use traffic classes with bounded fairness. Chunk long prefills so decode receive
 
 ### KV-cache management
 
-For a transformer with \(L\) layers, KV heads \(H_{kv}\), head dimension \(D\), sequence length \(S\), and \(b\) bytes per element, an approximate per-sequence KV footprint is:
+For a transformer with $L$ layers, KV heads $H_{kv}$, head dimension $D$, sequence length $S$, and $b$ bytes per element, an approximate per-sequence KV footprint is:
 
-\[
+$$
 M_{KV} \approx 2 \times L \times H_{kv} \times D \times S \times b.
-\]
+$$
 
-The factor two stores keys and values. Tensor parallelism, page metadata, alignment, speculative branches, and implementation details change the physical amount. Since \(S\) grows during decode, admitting to current free memory without reserving future growth causes late OOM failures.
+The factor two stores keys and values. Tensor parallelism, page metadata, alignment, speculative branches, and implementation details change the physical amount. Since $S$ grows during decode, admitting to current free memory without reserving future growth causes late OOM failures.
 
 Paged KV allocation reduces external fragmentation by assigning non-contiguous blocks and enables sharing for common prefixes or forked sequences. Prefix reuse requires an exact cache identity over token IDs and every state-affecting model option. Text equality is insufficient when templates, tool schemas, adapters, position handling, or multimodal inputs differ.
 
@@ -296,15 +296,15 @@ Self-hosted recovery objectives must account for artifact availability and model
 
 ## Capacity and Cost Engineering
 
-For provider traffic, estimate cost rate from the joint distribution and every attempt, including retries and discarded candidates. Let \(\lambda_s\) be arrivals per unit time and express the fixed term over that same unit:
+For provider traffic, estimate cost rate from the joint distribution and every attempt, including retries and discarded candidates. Let $\lambda_s$ be arrivals per unit time and express the fixed term over that same unit:
 
-\[
+$$
 C_{rate} = \sum_s \lambda_s E\!\left[
       \sum_{a\in A_s}
       \left(T^{fresh}_{sa}c_f + T^{cached}_{sa}c_h
             + T^{output}_{sa}c_o + T^{reason}_{sa}c_r
             + C^{tools}_{sa}\right)\right] + C_{fixed,rate}.
-\]
+$$
 
 Fresh and cached input are disjoint in this ledger. If a provider includes reasoning in output accounting or applies tiered pricing, the versioned pricing adapter maps reported usage into mutually exclusive billable categories before aggregation.
 

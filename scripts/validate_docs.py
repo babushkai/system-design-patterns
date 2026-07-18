@@ -36,6 +36,8 @@ HTML_ROOT_HREF_RE = re.compile(r"""\shref=["'](/[^"'#?]*)["']""")
 LANDING_STAT_RE = re.compile(
     r"""\[\s*["'](\d+)["']\s*,\s*["'](Articles|記事)["']\s*\]"""
 )
+LEGACY_MATH_DELIMITER_RE = re.compile(r"\\[()\[\]]")
+INLINE_CODE_RE = re.compile(r"`+[^`\n]*`+")
 VITEPRESS_SOURCE_FILES = [
     Path(".vitepress/config.mts"),
     Path(".vitepress/theme/components/LandingPage.vue"),
@@ -237,6 +239,21 @@ def validate_deep_system_chapters(errors: list[str]) -> None:
                 )
 
 
+def validate_portable_math_delimiters(errors: list[str]) -> None:
+    """Keep equations portable across VitePress, GitHub, and Pandoc."""
+
+    for path in iter_markdown_files():
+        prose = strip_fenced_code(path.read_text(encoding="utf-8"))
+        for lineno, line in enumerate(prose.splitlines(), start=1):
+            line_without_code = INLINE_CODE_RE.sub("", line)
+            match = LEGACY_MATH_DELIMITER_RE.search(line_without_code)
+            if match:
+                errors.append(
+                    f"{rel(path)}:{lineno}: use $...$ or $$...$$ math delimiters "
+                    + f"instead of {match.group(0)}"
+                )
+
+
 def validate_book_workflow_paths(errors: list[str]) -> None:
     path = ROOT / ".github/workflows/build-book.yml"
     if not path.exists():
@@ -350,6 +367,7 @@ def main() -> int:
     validate_advertised_counts(errors, article_count)
     validate_frontmatter(errors)
     validate_deep_system_chapters(errors)
+    validate_portable_math_delimiters(errors)
     validate_book_workflow_paths(errors)
     validate_vitepress_workflow_links(errors)
     validate_generated_assets(errors)

@@ -22,16 +22,16 @@ They have different economics and failure modes. Parallel sampling buys diversit
 
 A first-order value model is:
 
-\[
+$$
 V_{multi} = \Delta Q \cdot V_{outcome}
             + \Delta T \cdot V_{time}
             - C_{tokens}
             - C_{tools}
             - C_{coordination}
             - E[L_{failure}],
-\]
+$$
 
-where \(\Delta Q\) is the measured quality improvement over the best single-agent baseline, \(\Delta T\) is useful wall-clock reduction, and \(E[L_{failure}]\) includes the expected loss from inconsistent or unauthorized actions. The system is worthwhile only when this quantity is positive on the actual workload distribution—not when an impressive best-case trace exists.
+where $\Delta Q$ is the measured quality improvement over the best single-agent baseline, $\Delta T$ is useful wall-clock reduction, and $E[L_{failure}]$ includes the expected loss from inconsistent or unauthorized actions. The system is worthwhile only when this quantity is positive on the actual workload distribution—not when an impressive best-case trace exists.
 
 ### Workload shape matters
 
@@ -74,11 +74,11 @@ The orchestrator is both a bottleneck and a consistency boundary. Scale it by se
 
 A pipeline gives each stage one input and output contract. It is appropriate when transformations are ordered and stable, such as extract → normalize → generate → verify. It is not inherently multi-agent; using separate model personas does not change the topology.
 
-Under an independence approximation, if stage \(i\) has an undetected semantic-error probability \(e_i\), the chance of at least one undetected error is
+Under an independence approximation, if stage $i$ has an undetected semantic-error probability $e_i$, the chance of at least one undetected error is
 
-\[
+$$
 P(error) = 1 - \prod_i (1-e_i).
-\]
+$$
 
 Model stages often share source evidence and earlier artifacts, so their errors are dependent. Use the product only as an illustrative baseline; release evidence should estimate end-to-end outcomes or conditional error rates on complete traces.
 
@@ -132,9 +132,9 @@ This turns “spawn another agent” into an admission-controlled graph mutation
 
 Global caps are insufficient. Let a parent task allocate reservations to children:
 
-\[
+$$
 B_{parent} \ge B_{self} + \sum_j B_{child,j} + B_{reserve}.
-\]
+$$
 
 Track token, currency, wall-clock, tool-operation, and concurrency budgets separately. Refund unused reservations when a child finishes. Do not let a retry bypass admission. A child can request more budget with an explanation and intermediate evidence; the parent may reallocate or terminate lower-value branches.
 
@@ -219,7 +219,7 @@ Use weighted fair scheduling so a single research run cannot occupy the fleet. R
 
 ## Scheduling and Straggler Control
 
-Parallel completion time is governed by the slowest required child. If child latencies are \(L_1, \ldots, L_n\), an `all` join observes \(\max L_i\). Fan-out therefore improves median time for divisible work but can worsen the tail.
+Parallel completion time is governed by the slowest required child. If child latencies are $L_1, \ldots, L_n$, an `all` join observes $\max L_i$. Fan-out therefore improves median time for divisible work but can worsen the tail.
 
 Mitigations depend on semantics:
 

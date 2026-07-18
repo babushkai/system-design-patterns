@@ -4,13 +4,13 @@
 
 LLM inference contains two resource regimes behind one API. *Prefill* processes many prompt tokens in parallel and often approaches the compute or attention-kernel roof; *decode* advances each active sequence by one token and is commonly constrained by weight and KV-cache traffic. The useful model is the roofline bound:
 
-\[
+$$
 t_{step} \ge \max\left(\frac{F}{\eta_c C_{peak}},
                          \frac{D_{HBM}}{\eta_b B_{HBM}},
                          \frac{D_{link}}{B_{link}}\right),
-\]
+$$
 
-where \(F\) is useful work, \(D\) is data movement, and the \(\eta\) terms capture the fact that an implementation never sustains every datasheet peak simultaneously. Batching, quantization, paged KV memory, specialized attention kernels, speculation, parallelism, and phase disaggregation change one or more terms in that bound. Capacity decisions should begin with this ledger and end with measured goodput on the real prompt, output, cache-hit, and concurrency distribution.
+where $F$ is useful work, $D$ is data movement, and the $\eta$ terms capture the fact that an implementation never sustains every datasheet peak simultaneously. Batching, quantization, paged KV memory, specialized attention kernels, speculation, parallelism, and phase disaggregation change one or more terms in that bound. Capacity decisions should begin with this ledger and end with measured goodput on the real prompt, output, cache-hit, and concurrency distribution.
 
 ---
 
@@ -58,9 +58,9 @@ Single-stream ceiling = bandwidth / bytes per token
 
 The quotient is an optimistic weight-only upper bound, not a guaranteed 48 tokens/s. KV reads, embedding/output layers, non-matrix operations, allocator metadata, kernel inefficiency, and clocks add traffic or reduce sustained bandwidth. An observed result above the naive bound signals that an assumption changed—weights were shared across a batch, compressed, cached at another level, sparsely activated, or not all bytes were read—not that the roofline was violated.
 
-**Decode at batch size B.** The same weight read now serves \(B\) sequences: FLOPs scale with \(B\), while weight bytes do not. With \(b_w\) bytes per stored weight, weight-only arithmetic intensity is \(2B/b_w\) FLOPs per byte. On the stated H100 example this reaches machine balance around \(B\approx295\) for both dense BF16 and dense FP8. This is not an admission target: KV reads, activation traffic, collectives, padding, and the latency SLO alter or preclude that crossover.
+**Decode at batch size B.** The same weight read now serves $B$ sequences: FLOPs scale with $B$, while weight bytes do not. With $b_w$ bytes per stored weight, weight-only arithmetic intensity is $2B/b_w$ FLOPs per byte. On the stated H100 example this reaches machine balance around $B\approx295$ for both dense BF16 and dense FP8. This is not an admission target: KV reads, activation traffic, collectives, padding, and the latency SLO alter or preclude that crossover.
 
-**Prefill.** Processing \(N\) prompt tokens performs approximately `2 × P × N` dense-model FLOPs while amortizing weight reads across tokens. Weight-only intensity therefore grows roughly with \(N\). Short or skinny prefills may remain launch- or bandwidth-limited, while long prompts introduce attention work and activation traffic that the simple parameter-count model omits. The important asymmetry is empirical: prefill and decode often occupy different roofline regions, so co-scheduling policy must control their interference.
+**Prefill.** Processing $N$ prompt tokens performs approximately `2 × P × N` dense-model FLOPs while amortizing weight reads across tokens. Weight-only intensity therefore grows roughly with $N$. Short or skinny prefills may remain launch- or bandwidth-limited, while long prompts introduce attention work and activation traffic that the simple parameter-count model omits. The important asymmetry is empirical: prefill and decode often occupy different roofline regions, so co-scheduling policy must control their interference.
 
 Speculative decoding is the same arithmetic exploited from another angle: a small draft model proposes k tokens, and the large model *verifies all k in one forward pass* — one weight read amortized over k tokens, exactly like batching, but within a single stream. That is why speculation helps most at low batch (spare compute everywhere) and fades at high batch (compute already spoken for).
 
@@ -68,7 +68,7 @@ Speculative decoding is the same arithmetic exploited from another angle: a smal
 
 ## The KV-Cache Ledger
 
-Attention requires every past token's key and value vectors. Engines cache those vectors so each new decode step projects only the new token instead of re-running the prior prefix. With caching, dense attention for one new token still scans a prefix of length \(S\), so attention work is linear in \(S\) per step and quadratic across a generated sequence. Re-running the full dense transformer over the growing prefix at every step adds repeated projection work and can make total attention work cubic in generated length. The cache therefore removes redundant computation; it does not make dense attention linear over the whole generation. It also competes with weights for both HBM *capacity* and HBM *bandwidth*.
+Attention requires every past token's key and value vectors. Engines cache those vectors so each new decode step projects only the new token instead of re-running the prior prefix. With caching, dense attention for one new token still scans a prefix of length $S$, so attention work is linear in $S$ per step and quadratic across a generated sequence. Re-running the full dense transformer over the growing prefix at every step adds repeated projection work and can make total attention work cubic in generated length. The cache therefore removes redundant computation; it does not make dense attention linear over the whole generation. It also competes with weights for both HBM *capacity* and HBM *bandwidth*.
 
 Per-token size for a grouped-query attention (GQA) model:
 
@@ -101,7 +101,7 @@ One layer, one head, N = 8,192, BF16:
   × 64 heads × 80 layers ≈ multiple TB per single forward pass. Unusable.
 ```
 
-FlashAttention tiles Q, K, and V into on-chip memory and computes softmax incrementally, avoiding materialization of the full \(N\times N\) score and probability matrices in HBM. The attention arithmetic remains quadratic in sequence length for dense attention; the gain comes from lower HBM I/O and better tiling, not from changing the algorithm to linear-time attention. Hardware-specific versions further overlap matrix and softmax work and support lower-precision paths.
+FlashAttention tiles Q, K, and V into on-chip memory and computes softmax incrementally, avoiding materialization of the full $N\times N$ score and probability matrices in HBM. The attention arithmetic remains quadratic in sequence length for dense attention; the gain comes from lower HBM I/O and better tiling, not from changing the algorithm to linear-time attention. Hardware-specific versions further overlap matrix and softmax work and support lower-precision paths.
 
 Two other kernel-level facts matter operationally:
 
@@ -114,12 +114,12 @@ Two other kernel-level facts matter operationally:
 
 For dense decode, a first-order step model is
 
-\[
+$$
 D_{step}(B,S) \approx W + B\,S\,K + D_{activation},
 \qquad F_{step}(B) \approx 2PB,
-\]
+$$
 
-where \(W\) is weight bytes, \(B\) active sequences, \(S\) their effective context length, and \(K\) KV bytes per token. Weight traffic amortizes with \(B\), while per-sequence KV traffic does not. Total throughput initially rises quickly, then approaches a compute, KV-bandwidth, or scheduler limit; per-stream inter-token latency can deteriorate throughout.
+where $W$ is weight bytes, $B$ active sequences, $S$ their effective context length, and $K$ KV bytes per token. Weight traffic amortizes with $B$, while per-sequence KV traffic does not. Total throughput initially rises quickly, then approaches a compute, KV-bandwidth, or scheduler limit; per-stream inter-token latency can deteriorate throughout.
 
 Continuous batching keeps the active set populated by admitting and retiring sequences at iteration boundaries. It improves utilization but introduces scheduling choices around priority, adapter locality, KV residency, and long prefills. The economic objective is accelerator cost divided by SLO-compliant output tokens, including rejected, preempted, and cancelled work. Hourly accelerator price and sustained efficiency are deployment inputs, not constants suitable for a universal example.
 
@@ -131,7 +131,7 @@ Benchmark across concurrency until the goodput curve reaches its knee. The selec
 
 Lower precision reduces stored bytes only to the extent that scales, zero points, grouping metadata, padding, and dequantization work permit. A native low-precision tensor-core path can reduce both memory traffic and arithmetic time; weight-only quantization primarily changes weight traffic and adds dequantization; KV quantization changes the context-dependent term. Consequently, the same artifact can accelerate low-batch decode while providing little gain—or a regression—for compute-bound prefill.
 
-For a \(b\)-bit weight representation, the ideal weight footprint is \(Pb/8\), but capacity planning uses the serialized artifact plus runtime workspaces. The ideal bandwidth speedup from halving \(W\) is bounded by the fraction of step time attributable to weight traffic. Once KV, collectives, sampling, or compute dominates, Amdahl's law caps the gain.
+For a $b$-bit weight representation, the ideal weight footprint is $Pb/8$, but capacity planning uses the serialized artifact plus runtime workspaces. The ideal bandwidth speedup from halving $W$ is bounded by the fraction of step time attributable to weight traffic. Once KV, collectives, sampling, or compute dominates, Amdahl's law caps the gain.
 
 The governing rule from [Model Serving](../16-ml-systems/03-model-serving.md) applies with extra force here: aggregate language-model loss can hide task- and slice-specific quantization damage. Precision, calibration data, grouping, outlier handling, kernels, and workload all affect the result. Treat each quantized model/runtime tuple as a new artifact and qualify task quality, safety, latency, memory, and fallback behavior ([LLM Evaluation](./10-llm-evaluation.md)).
 
@@ -155,9 +155,9 @@ Prefill and decode can interfere when co-scheduled: a large prefill occupies com
 
 The transfer is justified only when saved phase interference and independent placement exceed serialization, network, admission, and cache-management costs:
 
-\[
+$$
 t_{transfer} = \frac{D_{KV}}{\eta_n B_{network}} + t_{setup}.
-\]
+$$
 
 Layer-wise streaming can overlap transfer with decode startup. Tiered KV storage can avoid recomputation for reusable prefixes, but moves the bottleneck to lookup, network/storage bandwidth, eviction, and security-domain-aware cache identity.
 
