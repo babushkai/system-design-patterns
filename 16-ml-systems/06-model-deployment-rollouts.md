@@ -126,11 +126,11 @@ Some decisions, though, cannot be rolled back at all. A model that blocked a leg
 
 The registry owns artifact identity, lineage, compatibility, lifecycle eligibility, and the full release manifest ([Model Registry and ML Metadata](./13-model-registry-metadata.md)). Rollout owns an immutable **deployment binding** from that manifest digest to the threshold/decision policy, fallback, traffic eligibility, experiment allocation, rollback target and lease, and control-plane revision. Changing any member creates a new binding even if weights are unchanged.
 
-This distinction matters because many models emit a score while a policy maps that score to action. Reusing a numeric threshold after calibration or score-distribution change can alter both action volume and affected population. A paired shadow sample can define a rate-preserving migration baseline. If champion score CDF is \(F_b\), candidate CDF is \(F_c\), and incumbent threshold \(t_b\) yields action rate \(a_b=1-F_b(t_b)\), choose
+This distinction matters because many models emit a score while a policy maps that score to action. Reusing a numeric threshold after calibration or score-distribution change can alter both action volume and affected population. A paired shadow sample can define a rate-preserving migration baseline. If champion score CDF is $F_b$, candidate CDF is $F_c$, and incumbent threshold $t_b$ yields action rate $a_b=1-F_b(t_b)$, choose
 
-\[
+$$
 t_c = F_c^{-1}(1-a_b)
-\]
+$$
 
 as one candidate threshold. This preserves aggregate action rate on the paired sample, not entity-level decisions, calibration, expected loss, capacity, or slice rates. Promotion therefore evaluates the complete model-policy binding: paired flips, consequence-weighted outcomes, calibration, review/queue capacity, and critical slices. The baseline is useful precisely because it isolates population replacement that an unchanged overall rate would hide.
 

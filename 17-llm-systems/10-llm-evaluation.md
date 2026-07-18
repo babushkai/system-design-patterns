@@ -17,7 +17,7 @@ Conventional unit tests often assert one deterministic relation. LLM systems add
 - **Multi-component pipelines** — retrieval, prompts, tools, and the model each degrade independently; end-to-end scores alone can't localize a regression ([RAG evaluation](./04-rag-patterns.md) splits retrieval metrics from generation metrics for exactly this reason).
 - **Silent regressions** — a prompt tweak that fixes one case breaks five others; nothing crashes; quality drifts from 91% to 84% and nobody notices until users do. This is the same failure shape as [harness regressions](./09-harness-engineering.md) — invisible without a suite.
 
-The result is statistical and conditional: “system revision A has estimated loss \(L\) on population \(P\) under evaluator revision \(E\).” Change the population, judge, prompt, tool environment, or model resolution and it is a different experiment.
+The result is statistical and conditional: “system revision A has estimated loss $L$ on population $P$ under evaluator revision $E$.” Change the population, judge, prompt, tool environment, or model resolution and it is a different experiment.
 
 ## Evaluation Contract and Data Model
 
@@ -71,7 +71,7 @@ Return JSON: {"grounded": "PASS|FAIL", "complete": ..., "reasons": {...}}"""
 # Store criterion-level decisions and evidence references, not only one total score.
 ```
 
-Judge qualification is an operating-point decision. Measure sensitivity, specificity, false-accept cost, false-reject cost, and uncertainty by slice at the prevalence expected in use. Agreement statistics such as Cohen's \(\kappa\) describe concordance but do not reveal which dangerous failures are accepted. A safety gate may require high recall for violations and tolerate more human review; a low-risk style grader may optimize balanced error.
+Judge qualification is an operating-point decision. Measure sensitivity, specificity, false-accept cost, false-reject cost, and uncertainty by slice at the prevalence expected in use. Agreement statistics such as Cohen's $\kappa$ describe concordance but do not reveal which dangerous failures are accepted. A safety gate may require high recall for violations and tolerate more human review; a low-risk style grader may optimize balanced error.
 
 **Level 3: humans** resolve judgment-heavy or high-consequence cases and produce calibration labels. Define reviewer qualifications, instructions, evidence access, blinding, conflict-of-interest controls, and adjudication. Measure inter-rater agreement and preserve disagreements rather than forcing false consensus. Route judge uncertainty, novel slices, and judge–human disagreement here, while also maintaining a random sample that detects blind spots outside the uncertainty policy.
 
@@ -96,7 +96,7 @@ Single-response grading misses what makes agents hard. Add four dimensions:
 
 1. **Outcome and side effects.** Grade the final environment, artifact, external operations, and policy state. A plausible final message can hide a duplicate payment, leaked secret, or uncommitted change.
 2. **Trajectory.** Measure tool selection, invalid/unsafe proposals, redundant reads, retries, loop detection, human interventions, recovery, and evidence used. Apply hard gates only to trajectories whose undesirable behavior matters independently of outcome.
-3. **Repeated-run reliability.** If per-run success were independent with probability \(p\), all \(k\) repetitions succeeding has probability \(p^k\), while at least one success has probability \(1-(1-p)^k\). Real trials can share provider, retrieval, or environment failures, so report empirical repeated-run results and clustered uncertainty rather than relying on independence.
+3. **Repeated-run reliability.** If per-run success were independent with probability $p$, all $k$ repetitions succeeding has probability $p^k$, while at least one success has probability $1-(1-p)^k$. Real trials can share provider, retrieval, or environment failures, so report empirical repeated-run results and clustered uncertainty rather than relying on independence.
 4. **Efficiency.** Report tokens, currency, actions, accelerator/tool time, human review, and wall-clock per verified success. A higher pass rate can still leave the Pareto frontier if cost or tail latency grows beyond product value.
 
 Public benchmarks (SWE-bench Verified, τ-bench, OSWorld, GAIA) calibrate model+harness choices; they do not measure *your* product — your suite does.
@@ -111,7 +111,7 @@ Set a minimum detectable effect or non-inferiority margin from product value and
 
 An eval result is an estimate, not a property of a model in isolation. Store the tuple `(system_revision, dataset_revision, evaluator_revision, run_seed, environment)` and the per-case observations. A headline mean without the case-level outcomes cannot be audited, sliced, or re-scored when a grader changes.
 
-For a binary metric with observed pass rate \(\hat p\) over \(n\) independent cases, the plug-in standard error is \(\sqrt{\hat p(1-\hat p)/n}\); use Wilson or exact intervals rather than an unbounded normal interval at small \(n\) or extreme rates. Clustered cases and repeated agent trials violate independence, so grouped bootstrap or hierarchical models are safer when cases share users, repositories, or documents.
+For a binary metric with observed pass rate $\hat p$ over $n$ independent cases, the plug-in standard error is $\sqrt{\hat p(1-\hat p)/n}$; use Wilson or exact intervals rather than an unbounded normal interval at small $n$ or extreme rates. Clustered cases and repeated agent trials violate independence, so grouped bootstrap or hierarchical models are safer when cases share users, repositories, or documents.
 
 Do not spend all evaluation budget on model selection. Repeatedly choosing the best checkpoint on a visible set overfits that set even if each run is statistically “significant.” Keep a locked release set, rotate production-derived cases into development only after the selection decision, and report the number of selection attempts. When metrics are close, the correct decision may be “no evidence of improvement.”
 
@@ -149,7 +149,7 @@ The feedback loop is governed: trace → triage → root cause → reviewed case
 
 **Averaging away harm.** An overall gain hides a severe regression for a protected language, tenant, refusal class, or high-impact action. Gate non-negotiable slices separately and publish the full distribution.
 
-**Pass-rate optimism.** One successful stochastic run is reported as capability. Use repeated trials, retain the case and shared-failure clustering structure, and report all-trial and any-trial outcomes with cost and tail latency. Use \(p^k\) only as an explicitly independent reference model.
+**Pass-rate optimism.** One successful stochastic run is reported as capability. Use repeated trials, retain the case and shared-failure clustering structure, and report all-trial and any-trial outcomes with cost and tail latency. Use $p^k$ only as an explicitly independent reference model.
 
 **Proxy optimization.** Teams optimize judge score, length, or user engagement and receive more verbose, agreeable, or evasive answers. Pair proxy metrics with expert labels and objective outcome checks.
 

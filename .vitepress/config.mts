@@ -691,6 +691,7 @@ export default withMermaid({
   },
 
   markdown: {
+    math: true,
     lineNumbers: true,
     theme: {
       light: 'github-light',

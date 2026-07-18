@@ -34,10 +34,10 @@ A training proposal should state the target behavior, affected workload slices, 
 
 The artifact under test is the complete inference configuration:
 
-\[
+$$
 Behavior = f(base\ revision, adapter, chat\ template, system\ prompt,
              tools, decoding, retrieval, runtime).
-\]
+$$
 
 A tuned checkpoint cannot be qualified independently of its template and serving stack. A tokenizer change, altered stop token, different quantized base, or new tool schema can erase the apparent gain even if adapter bytes are unchanged.
 
@@ -51,7 +51,7 @@ The workhorse: continue training the model on `(input → desired output)` pairs
 
 ### LoRA and QLoRA: Parameter-Efficient Mechanics
 
-Full fine-tuning updates every selected base parameter and therefore holds or shards weights, gradients, optimizer state, and activations. **LoRA** freezes a base matrix \(W\) and learns a low-rank update \(BA\):
+Full fine-tuning updates every selected base parameter and therefore holds or shards weights, gradients, optimizer state, and activations. **LoRA** freezes a base matrix $W$ and learns a low-rank update $BA$:
 
 ```text
 h = Wx + (α/r)·B·A·x
@@ -73,17 +73,17 @@ SFT teaches the model what target outputs look like; preference methods fit rela
 
 Policy optimization with verifiable rewards uses executable or otherwise checkable outcomes instead of a learned preference score. It is attractive where rollouts can be sandboxed and reward cannot be cheaply gamed—formal answers, tests, or constrained environments. It introduces rollout infrastructure, variance, credit assignment, environment versioning, and reward-hacking risk. Compare it with rejection sampling or SFT on verified successes before operating an online RL loop.
 
-For a prompt \(x\), preferred response \(y_w\), rejected response \(y_l\), policy \(\pi_\theta\), and frozen reference \(\pi_{ref}\), DPO increases the relative log-probability margin of the preferred pair:
+For a prompt $x$, preferred response $y_w$, rejected response $y_l$, policy $\pi_\theta$, and frozen reference $\pi_{ref}$, DPO increases the relative log-probability margin of the preferred pair:
 
-\[
+$$
 \mathcal{L}_{DPO} = -\log \sigma \left(\beta
 \left[
 \log\frac{\pi_\theta(y_w|x)}{\pi_{ref}(y_w|x)}
 - \log\frac{\pi_\theta(y_l|x)}{\pi_{ref}(y_l|x)}
 \right]\right).
-\]
+$$
 
-The reference term restrains drift from the starting policy; \(\beta\) controls that trade-off. The equation also exposes a data requirement: a preference pair must express a meaningful distinction. If `chosen` and `rejected` differ in several dimensions—correctness, verbosity, tone, and formatting—the model cannot know which preference to learn. Capture rubric dimension and annotator rationale, balance response position, include close calls, and measure label agreement.
+The reference term restrains drift from the starting policy; $\beta$ controls that trade-off. The equation also exposes a data requirement: a preference pair must express a meaningful distinction. If `chosen` and `rejected` differ in several dimensions—correctness, verbosity, tone, and formatting—the model cannot know which preference to learn. Capture rubric dimension and annotator rationale, balance response position, include close calls, and measure label agreement.
 
 Preference optimization can exploit artifacts of the data collector. If annotators prefer longer answers, the policy learns length; if a judge model produced both labels and later grades the release, the apparent improvement can be self-agreement. Run dimension-specific human evaluation and objective checks outside the preference pipeline.
 
@@ -99,11 +99,11 @@ Distillation transfers behavior from a teacher or ensemble into a student on a b
 
 The break-even condition is volume-dependent:
 
-\[
+$$
 N_{break-even} =
 \frac{C_{data}+C_{training}+C_{eval}+C_{platform}+C_{refresh}}
 {C_{baseline/task}-C_{student/task}},
-\]
+$$
 
 provided the student satisfies every quality and safety gate. Include failed tasks and fallback-to-teacher cost in both per-task terms.
 
@@ -131,12 +131,12 @@ Publish training data as immutable manifests. A manifest references exact shards
 
 ### Mixture design
 
-The effective training distribution is controlled by sampling, not raw row counts. Let dataset \(D_j\) have sampling weight \(w_j\). The training objective is approximately
+The effective training distribution is controlled by sampling, not raw row counts. Let dataset $D_j$ have sampling weight $w_j$. The training objective is approximately
 
-\[
+$$
 \mathcal{L} = \sum_j w_j E_{(x,y)\sim D_j}[\ell(x,y)],
 \qquad \sum_j w_j = 1.
-\]
+$$
 
 A small high-weight slice can dominate learning; a huge low-weight safety slice may barely appear. Define weights from product importance and regression risk, then log realized example and token proportions. Sampling by examples overweights long conversations in tokens; sampling by tokens changes exposure again. Report both.
 
@@ -168,13 +168,13 @@ For full Adam training, budget model parameters, gradients, two optimizer moment
 - activation checkpointing trades recomputation for activation memory;
 - sequence/context parallelism addresses long-sequence activation pressure.
 
-LoRA reduces trainable optimizer state, but the frozen base, activations, and forward/backward compute remain. For a linear layer \(W \in \mathbb{R}^{d_{out}\times d_{in}}\), LoRA adds
+LoRA reduces trainable optimizer state, but the frozen base, activations, and forward/backward compute remain. For a linear layer $W \in \mathbb{R}^{d_{out}\times d_{in}}$, LoRA adds
 
-\[
+$$
 r(d_{in}+d_{out})
-\]
+$$
 
-trainable parameters instead of \(d_{in}d_{out}\). Total memory depends on target modules, rank, sequence length, batch, quantization, checkpointing, and runtime kernels; “fits on one GPU” is a measured configuration, not a property of QLoRA itself.
+trainable parameters instead of $d_{in}d_{out}$. Total memory depends on target modules, rank, sequence length, batch, quantization, checkpointing, and runtime kernels; “fits on one GPU” is a measured configuration, not a property of QLoRA itself.
 
 ### Sequence construction and loss semantics
 

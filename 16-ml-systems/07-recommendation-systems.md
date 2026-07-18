@@ -247,12 +247,12 @@ A recommender trained naively on its own logs degrades in characteristic, well-d
 
 Under a position-based examination model,
 
-\[
+$$
 P(C_i=1\mid x_i,k_i)
 =P(E_i=1\mid k_i,x_i)\,P(R_i=1\mid x_i),
-\]
+$$
 
-where click \(C_i\) requires examination \(E_i\) and relevance \(R_i\). A randomized position intervention can estimate examination propensity under the model's assumptions. Weighting clicked observations by inverse examination propensity can estimate a positive relevance term, but weighting the entire binary cross-entropy—including ambiguous non-clicks—does not by itself produce unbiased relevance risk. Alternatives include an explicitly fitted joint click/examination model, randomized pairwise learning-to-rank objectives, or direct policy-value estimation using the logged action propensity rather than position alone.
+where click $C_i$ requires examination $E_i$ and relevance $R_i$. A randomized position intervention can estimate examination propensity under the model's assumptions. Weighting clicked observations by inverse examination propensity can estimate a positive relevance term, but weighting the entire binary cross-entropy—including ambiguous non-clicks—does not by itself produce unbiased relevance risk. Alternatives include an explicitly fitted joint click/examination model, randomized pairwise learning-to-rank objectives, or direct policy-value estimation using the logged action propensity rather than position alone.
 
 Small propensities create extreme variance; clipping and self-normalization trade bias for stability, while doubly robust estimators still require overlap and a defensible outcome model. Report effective sample size and unsupported slices. Adding position as a predictive feature can improve logged-click prediction, but does not identify position-free relevance without intervention or additional assumptions.
 

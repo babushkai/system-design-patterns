@@ -197,11 +197,11 @@ BM25-style sparse retrieval rewards term overlap while correcting for document l
 
 Generate candidates independently and fuse ranks. Reciprocal rank fusion is robust when raw scores are incomparable:
 
-\[
+$$
 RRF(d) = \sum_{r \in retrievers} \frac{1}{k + rank_r(d)}.
-\]
+$$
 
-The constant \(k\) limits the effect of a first-place result. Learn weights only with enough labeled traffic and monitor by query slice; an average gain can hide severe regressions for identifiers or non-English text.
+The constant $k$ limits the effect of a first-place result. Learn weights only with enough labeled traffic and monitor by query slice; an average gain can hide severe regressions for identifiers or non-English text.
 
 ### Filters before similarity
 
@@ -219,21 +219,21 @@ Reranking inputs should include enough structural context to judge relevance but
 
 Top-ranked fragments often overlap or repeat one source. Deduplicate exact and near-duplicate content, group fragments by document/revision, and allocate source diversity according to the question. Maximal marginal relevance trades relevance against redundancy:
 
-\[
+$$
 MMR(d) = \lambda sim(d,q) - (1-\lambda)\max_{s \in S} sim(d,s).
-\]
+$$
 
 Diversity is not always desirable: a factual answer may need multiple adjacent fragments from one authoritative manual. Treat it as an evidence-allocation policy conditioned on query type.
 
 ## Evidence-Packet Assembly
 
-The context window is a finite evidence budget. Let candidate \(i\) have expected utility \(u_i\), token cost \(t_i\), and dependencies such as a required table header. Assembly resembles a constrained selection problem:
+The context window is a finite evidence budget. Let candidate $i$ have expected utility $u_i$, token cost $t_i$, and dependencies such as a required table header. Assembly resembles a constrained selection problem:
 
-\[
+$$
 \max_{S} \sum_{i \in S} u_i - redundancy(S)
 \quad \text{subject to} \quad
 \sum_{i \in S} t_i \le B.
-\]
+$$
 
 In practice, reserve tokens first for system instructions, user input, tool schema, and output. Allocate the remainder across evidence. Expand fragments to recover headings, definitions, or neighboring sentences; deduplicate; preserve source boundaries; and mark every item with a stable evidence ID.
 
@@ -293,10 +293,10 @@ Existence is sensitive. Result counts, similarity scores, document titles, and l
 
 Define an end-to-end latency budget:
 
-\[
+$$
 L = L_{auth} + L_{plan} + L_{retrieve} + L_{rerank}
   + L_{assemble} + L_{prefill} + L_{decode} + L_{verify}.
-\]
+$$
 
 Each stage needs a deadline and degradation semantics. If dense retrieval is down, sparse-only may be acceptable for error-code queries but harmful for paraphrases. If reranking times out, use fused candidates with lower confidence. If the corpus snapshot is unavailable, fail closed rather than query a partially built index. Encode these choices by product risk and query slice.
 
@@ -304,10 +304,10 @@ Capacity planning separates indexing and querying. Indexing load depends on sour
 
 Track cost per **grounded successful answer**:
 
-\[
+$$
 C_{success} = \frac{C_{ingestion} + C_{storage} + C_{query} + C_{generation} + C_{evaluation}}
 {N_{verified\ successful\ answers}}.
-\]
+$$
 
 A cheaper embedding that lowers recall may increase expensive generation retries and human escalation. Optimize the system objective, not one API line item.
 
@@ -318,7 +318,7 @@ A cheaper embedding that lowers recall may increase expensive generation retries
 End-to-end answer scores do not locate defects. Evaluate layers separately:
 
 1. **Corpus coverage:** does an authoritative revision containing the answer exist and parse correctly?
-2. **Candidate recall:** does sufficient evidence appear in top \(K\) before reranking?
+2. **Candidate recall:** does sufficient evidence appear in top $K$ before reranking?
 3. **Ranking:** how early and consistently does sufficient evidence appear?
 4. **Context utilization:** given correct evidence, does the model use it?
 5. **Groundedness:** are claims entailed by cited evidence?
