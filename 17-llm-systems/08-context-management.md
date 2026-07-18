@@ -12,14 +12,14 @@ The window is finite; attention and recall are non-uniform; input is repeatedly 
 
 Every request presents the model with one bounded sequence or equivalent ordered content structure: system instructions, tool definitions, conversation state, retrieved documents, the current message, and space reserved for the response. Advertised model limits continue to grow, but a large repository, long-running agent trace, or document corpus can still exceed them—and quality can degrade well before the hard limit.
 
-The budget must be allocated before optional material is selected. Let \(W_m\) be the qualified usable window for model \(m\), which may be below its protocol maximum. Feasibility requires
+The budget must be allocated before optional material is selected. Let $W_m$ be the qualified usable window for model $m$, which may be below its protocol maximum. Feasibility requires
 
-\[
+$$
 T_{instructions}+T_{tools}+T_{active\ state}+T_{evidence}+T_{history}
 +T_{current}+R_{output}+R_{variance} \le W_m.
-\]
+$$
 
-The first terms may have minimum reservations or hard inclusion rules; optional evidence and history compete only for what remains. \(R_{output}\) is a correctness reservation because truncation can cut a structured value or tool proposal. \(R_{variance}\) covers token-estimation error, input growth, and any model-specific accounting that shares the limit. The allocator stores both planned and actual use by class, then recalibrates reservations from truncation, overflow, and task-success data. There is no portable percentage: limits follow the joint distribution of model, renderer, tool set, language, task, and output contract.
+The first terms may have minimum reservations or hard inclusion rules; optional evidence and history compete only for what remains. $R_{output}$ is a correctness reservation because truncation can cut a structured value or tool proposal. $R_{variance}$ covers token-estimation error, input growth, and any model-specific accounting that shares the limit. The allocator stores both planned and actual use by class, then recalibrates reservations from truncation, overflow, and task-success data. There is no portable percentage: limits follow the joint distribution of model, renderer, tool set, language, task, and output contract.
 
 ## Context Assembly as a Materialized View
 
@@ -54,13 +54,13 @@ The canonical state remains the event log, artifacts, plan, and memory records. 
 
 ### Allocation as constrained selection
 
-Let item \(i\) have expected utility \(u_i\), token cost \(t_i\), freshness risk \(r_i\), and dependencies. Context selection approximates:
+Let item $i$ have expected utility $u_i$, token cost $t_i$, freshness risk $r_i$, and dependencies. Context selection approximates:
 
-\[
+$$
 \max_S \sum_{i\in S}(u_i-r_i)-redundancy(S)
 \quad \text{subject to} \quad
 T_{fixed}+\sum_{i\in S}t_i+T_{current}+T_{output}+T_{safety}\le W.
-\]
+$$
 
 Some items are mandatory rather than scored: system policy, current user intent, active constraints, tool result corresponding to an unresolved call, and evidence required for a cited claim. A dependency may require a table header with a selected row or an error message with the tool invocation that produced it. Greedy “top relevance per token” selection is a useful approximation only after these invariants are satisfied.
 
@@ -70,22 +70,22 @@ Use separate sub-budgets so one source cannot consume the window. Retrieval, his
 
 ## Token Economics: The Bill Is Shaped Like a Triangle
 
-Let turn \(i\) append \(d_i\) tokens and generate \(o_i\) tokens. Without pruning, total input processed over \(n\) turns is
+Let turn $i$ append $d_i$ tokens and generate $o_i$ tokens. Without pruning, total input processed over $n$ turns is
 
-\[
+$$
 T_{input}=\sum_{i=1}^{n}\sum_{j=1}^{i} d_j.
-\]
+$$
 
-If each turn adds roughly \(d\), this is \(d n(n+1)/2\): quadratic in turn count. A long agent can therefore spend far more reprocessing history than generating the final answer.
+If each turn adds roughly $d$, this is $d n(n+1)/2$: quadratic in turn count. A long agent can therefore spend far more reprocessing history than generating the final answer.
 
 Pricing and cache semantics differ by provider, model, deployment, and time, so retain variables rather than baking one multiplier into the architecture:
 
-\[
+$$
 C = c_f T_{fresh} + c_c T_{cached} + c_o T_{output}
     + c_r T_{reasoning} + C_{tools} + C_{storage}.
-\]
+$$
 
-In many offerings \(c_c < c_f\), while output or reasoning tokens may be priced differently from fresh input. The exact ratios are configuration data. Architecture should maximize correctly reusable prefixes, bound repeated context, and measure provider-reported usage. Batch or asynchronous pricing can change the optimal path for evaluation and enrichment, but it must not be assumed for an interactive SLO.
+In many offerings $c_c < c_f$, while output or reasoning tokens may be priced differently from fresh input. The exact ratios are configuration data. Architecture should maximize correctly reusable prefixes, bound repeated context, and measure provider-reported usage. Batch or asynchronous pricing can change the optimal path for evaluation and enrichment, but it must not be assumed for an interactive SLO.
 
 Caching also reduces prefill work and can improve TTFT, but only for eligible prefixes and warm cache state. Capacity planning must include cold-cache events, eviction, model routing, and regional failover. A cost model that assumes every repeated token is cached will fail during rollout or incident traffic.
 
@@ -105,7 +105,7 @@ Selection quality matters as much as placement. Marginal evidence consumes token
 
 Prefix reuse is a derived optimization over one rendered request revision. A cache entry is correct only when its identity includes the token sequence and every state-affecting input: resolved model and tokenizer, adapter, template/compiler revision, tool schemas, position handling, multimodal content, and the provider/runtime's cache domain. Text equality alone is insufficient if another hidden input changes activations.
 
-For request revisions \(r_a\) and \(r_b\), the reusable span is their longest compatible token prefix. Stable operator configuration and tool schemas therefore precede volatile per-turn content where the target protocol allows it. Canonical serialization prevents semantically irrelevant map order or whitespace changes from reducing reuse. Model migration, tool-set change, correction, minimization, and compaction create explicit divergence points; correctness and deletion obligations take precedence over preserving a cache hit.
+For request revisions $r_a$ and $r_b$, the reusable span is their longest compatible token prefix. Stable operator configuration and tool schemas therefore precede volatile per-turn content where the target protocol allows it. Canonical serialization prevents semantically irrelevant map order or whitespace changes from reducing reuse. Model migration, tool-set change, correction, minimization, and compaction create explicit divergence points; correctness and deletion obligations take precedence over preserving a cache hit.
 
 The context manifest records the eligible prefix, compatibility inputs, cache decision, and reported reused tokens. Comparing consecutive manifests distinguishes a legitimate revision from a volatile timestamp, request ID, nondeterministic serializer, or routing change inserted too early. Hit count alone is weak: report fresh and reused tokens, prefill work avoided, entry size, eviction, and tenant/policy domain. The serving-side residency and routing consequences belong to [Agent Inference](./12-agent-inference.md).
 
@@ -177,7 +177,7 @@ Session migration between models may alter chat templates, tool encodings, conte
 
 ## Compaction Correctness and Evaluation
 
-Compaction is a lossy state transformation and should have an acceptance contract. Given source event set \(E\) and compacted artifact \(S\), validate that \(S\) preserves:
+Compaction is a lossy state transformation and should have an acceptance contract. Given source event set $E$ and compacted artifact $S$, validate that $S$ preserves:
 
 - the latest goal and acceptance criteria;
 - active constraints, prohibitions, approvals, and unresolved questions;

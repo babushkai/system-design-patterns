@@ -134,11 +134,11 @@ Compacted prompts, files, and model messages are context representations, not th
 
 The diagrams above describe control flow, but a deployed orchestrator needs a more exact model. Treat every workflow or agent run as a graph of **logical nodes**, and every execution of a node as an **attempt**. A node is not merely a prompt. It is a contract:
 
-\[
+$$
 N = (I, O, P, S, R, C, B)
-\]
+$$
 
-where \(I\) and \(O\) are versioned input and output schemas, \(P\) is the precondition, \(S\) is the success predicate, \(R\) is the retry policy, \(C\) is the compensation or reconciliation procedure, and \(B\) is the node's resource budget. The model invocation is one implementation detail inside that contract. This distinction lets a model, a deterministic function, a human approval, and a remote tool participate in the same graph without pretending that they have the same failure semantics.
+where $I$ and $O$ are versioned input and output schemas, $P$ is the precondition, $S$ is the success predicate, $R$ is the retry policy, $C$ is the compensation or reconciliation procedure, and $B$ is the node's resource budget. The model invocation is one implementation detail inside that contract. This distinction lets a model, a deterministic function, a human approval, and a remote tool participate in the same graph without pretending that they have the same failure semantics.
 
 ```mermaid
 stateDiagram-v2
@@ -174,29 +174,29 @@ This produces a useful boundary: **orchestration should be deterministic over re
 
 ## Reliability, Latency, and Cost Composition
 
-Orchestration patterns compose quality, latency, and cost differently. If a sequential chain has independent per-stage success probabilities \(p_i\), its first-order end-to-end success probability is
+Orchestration patterns compose quality, latency, and cost differently. If a sequential chain has independent per-stage success probabilities $p_i$, its first-order end-to-end success probability is
 
-\[
+$$
 P(\text{success}) = \prod_{i=1}^{n} p_i.
-\]
+$$
 
 Under independence, a ten-stage chain whose stages each succeed 98% of the time succeeds about 81.7% of the time before retries. Shared evidence and model behavior invalidate that product: dependence can make all-stage success higher or lower than the independent estimate even when marginal stage rates are unchanged. Estimate joint or conditional outcomes on complete traces. Gates help only when they detect errors with sufficient recall and do not introduce excessive false rejection or recovery cost.
 
 For a sequential path, latency is approximately the sum of stage latencies plus queueing and retry time. For a parallel fork, completion latency is the maximum branch latency plus fork/join overhead:
 
-\[
+$$
 L_{\text{chain}} \approx \sum_i (Q_i + E_i), \qquad
 L_{\text{fork-all}} \approx \max_i(Q_i + E_i) + J.
-\]
+$$
 
 The tail of the maximum gets worse as the fan-out grows. Ten parallel workers may improve mean wall-clock time while making p99 latency dependent on the slowest provider call. Hedging can reduce the tail, but duplicates spend and must not duplicate side effects. Prefer bounded fan-out, per-child deadlines derived from the parent deadline, and partial-result semantics when the product can use them.
 
 Cost is additive across every attempted call, including discarded candidates, graders, retries, retrieval, tool execution, and context re-sent at each turn:
 
-\[
+$$
 C_{run} = \sum_{a \in attempts}
   (t^{in}_a c^{in}_{m_a} + t^{out}_a c^{out}_{m_a} + c^{tool}_a + c^{infra}_a).
-\]
+$$
 
 Budget admission must happen before expensive fan-out. Each child receives a reservation; unused budget returns to the parent; overruns cannot silently borrow from unrelated runs. A max-turn count alone is insufficient because one turn may contain a large context, multiple tool calls, or a high reasoning budget. Track tokens, currency, wall time, external operations, and concurrency separately.
 
