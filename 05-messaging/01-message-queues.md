@@ -1,800 +1,208 @@
-# Message Queues
+# Message Queue Architecture
 
-## TL;DR
+A message queue is a durable ownership-transfer mechanism for asynchronous work. Producers append an intent; one worker at a time receives a temporary claim; completion becomes final only when the queue records an acknowledgement. The core design problem is managing that state under crashes, overload, rebalancing, and retention—not choosing an SDK call.
 
-Message queues decouple producers and consumers, enabling asynchronous communication, load leveling, and fault tolerance. Key concepts: producers, consumers, brokers, acknowledgments. Choose based on ordering needs, throughput, durability, and exactly-once requirements. Popular options: RabbitMQ, Amazon SQS, Apache Kafka (log-based).
+This chapter owns queue mechanics: enqueue, claim/visibility, acknowledgement, partitioning, worker flow control, backlog, retention, and capacity. [Message Ordering](03-message-ordering.md) owns sequence guarantees, [Delivery Guarantees](04-delivery-guarantees.md) owns duplicate/loss boundaries, and [Poison-Message Quarantine](08-dead-letter-queues.md) owns failed-message repair.
 
----
+## Workload and contract
 
-## Why Message Queues?
+Define the API in state-machine terms:
 
-### Synchronous Problems
-
-```mermaid
-graph LR
-    A[Service A] -->|HTTP| B[Service B]
-```
-
-```
-Problems:
-  - A waits for B (latency)
-  - If B is down, A fails
-  - Spikes in A overwhelm B
-  - Tight coupling
-```
-
-### Queue Benefits
-
-```mermaid
-graph LR
-    A[Service A] -.-> Q[("Queue")] -.-> B[Service B]
-```
-
-```
-Benefits:
-  - A doesn't wait (async)
-  - If B is down, messages wait in queue
-  - Queue absorbs traffic spikes
-  - A and B don't know about each other
-```
-
----
-
-## Core Concepts
-
-### Components
-
-```mermaid
-graph LR
-    P[Producer] --> Q[("Queue<br/>(Broker)")] --> C[Consumer]
-```
-
-```
-Producer: Creates and sends messages
-Queue/Broker: Stores messages durably
-Consumer: Receives and processes messages
-```
-
-### Message Lifecycle
-
-```
-1. Producer sends message
-2. Broker acknowledges receipt (producer-side)
-3. Broker stores message durably
-4. Consumer fetches message
-5. Consumer processes message
-6. Consumer acknowledges (consumer-side)
-7. Broker removes message
-```
-
-### Message Structure
-
-```json
-{
-  "id": "msg-12345",
-  "timestamp": "2024-01-15T10:30:00Z",
-  "headers": {
-    "content-type": "application/json",
-    "correlation-id": "req-67890"
-  },
-  "body": {
-    "user_id": 123,
-    "action": "signup",
-    "email": "user@example.com"
-  }
-}
-```
-
----
-
-## Queue Types
-
-### Point-to-Point
-
-```mermaid
-graph LR
-    P[Producer] -.-> Q[("Queue")] -.-> A[Consumer A]
-    Q -.-> B[Consumer B<br/>different message]
-```
-
-```
-Each message delivered to exactly one consumer
-Used for: Task distribution, work queues
-```
-
-### Publish-Subscribe
-
-```mermaid
-graph LR
-    P[Producer] -.-> T[("Topic")] -.-> A[Consumer A<br/>copy]
-    T -.-> B[Consumer B<br/>copy]
-    T -.-> C[Consumer C<br/>copy]
-```
-
-```
-Each message delivered to all subscribers
-Used for: Event broadcasting, notifications
-```
-
-### Competing Consumers
-
-```mermaid
-graph LR
-    P[Producer] -.-> Q[("Queue")] -.-> C1[Consumer 1]
-    Q -.-> C2[Consumer 2]
-    Q -.-> C3[Consumer 3]
-```
-
-```
-Each message goes to one consumer
-Consumers process in parallel
-Used for: Load distribution, scaling
-```
-
----
-
-## Delivery Semantics
-
-### At-Most-Once
-
-```
-Producer: Send message, don't wait for ack
-Consumer: Process, don't ack
-
-Possible outcomes:
-  - Message delivered and processed ✓
-  - Message lost (never delivered) ✗
-  
-Use case: Metrics, logs where loss is acceptable
-```
-
-### At-Least-Once
-
-```
-Producer: Send, retry until acked
-Consumer: Process, then ack
-
-Possible outcomes:
-  - Message delivered once ✓
-  - Message delivered multiple times (retry after timeout)
-  
-Consumer must be idempotent!
-Use case: Most applications
-```
-
-### Exactly-Once
-
-```
-Very hard to achieve truly
-Usually: At-least-once + idempotent consumer
-
-Techniques:
-  - Deduplication by message ID
-  - Transactional outbox
-  - Kafka transactions
-
-Use case: Financial transactions
-```
-
----
-
-## Acknowledgments
-
-### Producer Acknowledgments
-
-```python
-# Fire and forget (at-most-once)
-producer.send(message)
-
-# Wait for broker ack (at-least-once)
-producer.send(message).get()  # Blocks until acked
-
-# Wait for replication (stronger durability)
-producer.send(message, acks='all').get()
-```
-
-### Consumer Acknowledgments
-
-```python
-# Auto-ack (dangerous - message may be lost)
-message = queue.get(auto_ack=True)
-process(message)  # If this fails, message lost
-
-# Manual ack (safer)
-message = queue.get(auto_ack=False)
-try:
-    process(message)
-    queue.ack(message)
-except Exception:
-    queue.nack(message)  # Requeue or dead letter
-```
-
-### Ack Timeout
-
-```
-Consumer gets message at T=0
-Timeout = 30 seconds
-
-If no ack by T=30:
-  Broker assumes consumer died
-  Message redelivered to another consumer
-  
-Choose timeout > max processing time
-```
-
----
-
-## Queue Patterns
-
-### Work Queue
-
-```python
-# Producer: Distribute tasks
-for task in tasks:
-    queue.send(task)
-
-# Consumers: Process in parallel
-while True:
-    task = queue.get()
-    result = process(task)
-    queue.ack(task)
+```text
+enqueue(queue, message_id, routing_key, payload_ref, not_before, expiry)
+claim(queue, worker, max_items, lease_duration) -> deliveries
+extend(delivery_token, lease_duration)
+ack(delivery_token)
+release(delivery_token, reason, not_before)
 ```
 
-### Request-Reply
+A delivery token binds queue, message, claim generation, worker, and lease. Acknowledging only by message ID lets an expired worker delete work now owned by another worker.
 
-```
-Request queue: client → service
-Reply queue: service → client
-
-Client:
-  1. Create temp reply queue
-  2. Send request with reply_to = temp queue
-  3. Wait on temp queue
-
-Service:
-  1. Get request from request queue
-  2. Process
-  3. Send response to reply_to queue
-```
+Specify separately:
 
-### Priority Queue
+- durability required before enqueue acknowledgement;
+- maximum accepted payload and whether payloads are inline or referenced;
+- time-to-visible for immediate and scheduled messages;
+- claim/visibility semantics and maximum extension;
+- backlog retention and message expiry;
+- partitioning/routing and fairness policy;
+- behavior when the queue is full or its control plane is unavailable;
+- whether approximate depth and age metrics are sufficient.
 
-```python
-# High priority messages processed first
-queue.send(critical_task, priority=10)
-queue.send(normal_task, priority=5)
-queue.send(low_task, priority=1)
+The queue contract should not promise that a handler’s external effect happens once. Acknowledgement and side-effect ambiguity are end-to-end concerns covered in the delivery chapter.
 
-# Consumer always gets highest priority first
-```
+## State and invariants
 
----
+A durable queue tracks:
 
-## Popular Message Queues
+| State | Purpose |
+|---|---|
+| message record | immutable ID, routing key, payload reference, enqueue time, expiry |
+| availability state | ready, scheduled, claimed, acknowledged, quarantined, expired |
+| claim generation | fences late acknowledgement or extension |
+| partition position | append/scan location or priority/time bucket |
+| consumer membership | worker identity, capacity, liveness, assignment |
+| retention checkpoints | lowest data still required by consumers and repair policy |
 
-### RabbitMQ
+The design enforces these invariants:
 
-```
-Protocol: AMQP
-Model: Broker-centric, exchanges + queues
-
-Features:
-  - Flexible routing (direct, topic, fanout)
-  - Message TTL
-  - Dead letter exchanges
-  - Plugins ecosystem
-
-Best for: Complex routing, enterprise messaging
-```
+**Accepted work is reconstructable.** Once the durability contract is acknowledged, a permitted failure cannot erase the message or all replicas of its payload.
 
-### Amazon SQS
+**At most one current claim generation.** Multiple workers can observe redelivery across time, but only the latest unexpired generation can acknowledge or extend that claim.
 
-```
-Model: Managed queue service
-
-Standard Queue:
-  - At-least-once delivery
-  - Best-effort ordering
-  - Unlimited throughput
-
-FIFO Queue:
-  - Exactly-once processing
-  - Strict ordering (within group)
-  - 3,000 msg/sec limit
-
-Best for: AWS-native, managed simplicity
-```
+**A claim is a lease, not ownership.** If the worker disappears, the queue can make the message eligible again without consulting the dead process.
 
-### Apache Kafka
+**Acknowledged work is not normally claimable.** Retained bytes may remain for audit or compaction, but serving state excludes them.
 
-```
-Model: Distributed log
-
-Features:
-  - Persistent storage (replay)
-  - Partitioned for parallelism
-  - Consumer groups
-  - High throughput
-
-Best for: Event streaming, large scale
-```
+**Retention does not outrun recovery.** The queue does not delete data still required by an active claim, configured replay window, replica recovery, or quarantine evidence.
 
-### Redis Streams
+**Admission is bounded.** Producers cannot consume unbounded disk simply because consumers are slow.
 
-```
-Model: Append-only log in Redis
-
-Features:
-  - Consumer groups
-  - Message IDs
-  - Trimming by size/time
-  - Fast (in-memory)
-
-Best for: Simple streaming, already using Redis
-```
+## Data plane and control plane
 
----
+The **data plane** appends messages, replicates records, indexes ready/scheduled state, issues claims, validates claim generations, records acknowledgements, and streams payloads. Its hot path should use a cached versioned queue assignment rather than a global metadata lookup per message.
 
-## Sizing and Capacity
+The **control plane** creates queues, defines durability/retention/quotas, assigns partitions and replicas, manages consumer membership, publishes encryption/schema policy, and coordinates movement. Nodes continue on a pinned assignment during a short control-plane outage, but reject unsafe mutations when their partition epoch is stale.
 
-### Throughput Planning
+Separate queue metadata from message payloads. Large payloads amplify replication, memory, and redelivery cost. A claim-check design places an immutable encrypted object in durable storage and queues a content-addressed reference plus integrity digest. Publication must not expose the reference before the object is durable, and retention must not delete the object while any message or replay can reference it.
 
-```
-Expected load:
-  Peak messages: 10,000/sec
-  Avg message size: 1 KB
-  Retention: 7 days
-
-Calculations:
-  Throughput: 10,000 × 1 KB = 10 MB/sec
-  Daily storage: 10 MB/sec × 86,400 = 864 GB/day
-  Total storage: 864 × 7 = 6 TB
-```
+## Claim and acknowledgement protocol
 
-### Consumer Scaling
+For a work-table design, claiming is one transaction:
 
-```
-Processing time per message: 100ms
-Required throughput: 1,000 msg/sec
-
-Consumers needed:
-  1000 msg/sec × 0.1 sec = 100 concurrent
-  With 10 consumers: 10 parallel each
-  
-Add consumers until throughput met
-```
+1. select eligible rows in a bounded partition/time order while skipping rows locked by other claimers;
+2. update each row from `ready` to `claimed` with worker ID, lease deadline, and incremented claim generation;
+3. return payload references and signed delivery tokens;
+4. commit before the worker begins effects.
 
----
+A log-based queue may leave the record immutable and store delivery state in a separate subscription/consumer cursor plus in-flight map. The invariant is the same: current claim state must survive coordinator failure.
 
-## Monitoring
+Visibility timeout is a recovery detector. Too short and slow healthy work is delivered concurrently; too long and a dead worker stalls recovery. Use task-specific initial leases plus bounded heartbeats/extensions. A worker extends only while making progress and stops extending before it loses local authority. The broker caps total lease lifetime so a wedged worker cannot hide work forever.
 
-### Key Metrics
+Acknowledgement includes the latest claim generation. If claim 8 expires and worker B receives claim 9, a late `ack(claim=8)` is rejected. This protects the queue record. It does not fence an external database or payment effect; that boundary needs idempotency or a downstream fencing key.
 
-```
-Queue depth:
-  Number of messages waiting
-  Growing = consumers too slow
-
-Consumer lag:
-  Time/messages behind producer
-  Growing = falling behind
-
-Message age:
-  Oldest unprocessed message
-  High = potential SLA breach
-
-Throughput:
-  Messages/second in and out
-  Compare to capacity
-
-Error rate:
-  Failed processing / total
-  Trigger alerts > threshold
-```
+Batch claims reduce round trips but increase invisible work, memory, and recovery delay. A worker should claim according to available execution slots, not prefetch thousands while only ten can run. Track claimed-but-not-started age separately from execution time.
 
-### Alerting Rules
-
-```yaml
-alerts:
-  - name: QueueDepthHigh
-    condition: queue_depth > 10000
-    for: 5m
-    
-  - name: ConsumerLagHigh
-    condition: consumer_lag > 1h
-    for: 10m
-    
-  - name: MessageAgeOld
-    condition: oldest_message_age > 30m
-    for: 5m
-    
-  - name: ProcessingErrors
-    condition: error_rate > 1%
-    for: 5m
-```
+## Ready, delayed, and priority structures
 
----
-
-## Error Handling
-
-### Retry Strategies
-
-```python
-def process_with_retry(message, max_retries=3):
-    for attempt in range(max_retries):
-        try:
-            process(message)
-            return True
-        except TransientError:
-            delay = exponential_backoff(attempt)
-            time.sleep(delay)
-        except PermanentError:
-            send_to_dead_letter(message)
-            return False
-    
-    # Max retries exceeded
-    send_to_dead_letter(message)
-    return False
-```
+A single FIFO list is insufficient when messages can be delayed, expire, or carry priority. Common structures are:
 
-### Dead Letter Queue
-
-```mermaid
-graph TD
-    MQ[("Main Queue")] -.-> C[Consumer] --> S[Success]
-    C --> F[Failure<br/>after retries]
-    F --> DLQ[("Dead Letter Queue")]
-    DLQ --> R[Manual review / alerting]
-```
+- append log plus per-partition consumer positions for streaming workloads;
+- ready queue plus time-ordered delayed structure;
+- time buckets or timing wheel for large scheduled populations;
+- bounded priority bands, each with fairness and aging;
+- database work table with indexes on `(state, not_before, partition)`.
 
----
+Moving scheduled messages into ready state must be idempotent. A crash between removal from a delay structure and insertion into ready cannot lose the message. Keep the authoritative record in one store and derive readiness, or transact the move.
 
-## Best Practices
+Strict priority can starve normal work. Use weighted service, reserved capacity, or age promotion. Priority is an admission/scheduling policy, not a field that workers independently interpret. Backfills and retries need separate budgets so they cannot crowd out new work.
 
-### Message Design
+## Partitioning and consumer assignment
 
-```
-1. Include correlation ID for tracing
-2. Add timestamp for debugging
-3. Keep messages small (< 256 KB typically)
-4. Use schema versioning
-5. Include message type for routing
-```
+Partitions are the unit of storage placement and parallelism. Hash routing balances arbitrary keys; entity routing keeps related work together; tenant routing supports isolation but creates skew. Ordering consequences belong to the ordering chapter.
 
-### Idempotent Consumers
-
-```python
-def process_message(message):
-    # Check if already processed
-    if is_processed(message.id):
-        return  # Skip duplicate
-    
-    # Process
-    result = do_work(message)
-    
-    # Mark as processed (atomically with work if possible)
-    mark_processed(message.id)
-```
+Partition count limits maximum useful parallelism and affects metadata, file handles, recovery, and fan-out. More partitions are not free. Use many logical/virtual buckets mapped to physical partitions when rebalancing is expected, but pin the mapping version into each routing decision so producers and consumers agree.
 
-### Graceful Shutdown
-
-```python
-def shutdown_handler(signal, frame):
-    # Stop accepting new messages
-    consumer.stop_consuming()
-    
-    # Wait for in-flight messages
-    consumer.wait_for_current()
-    
-    # Cleanup
-    consumer.close()
-    sys.exit(0)
-
-signal.signal(signal.SIGTERM, shutdown_handler)
-```
+Consumer assignment is epoch-based. A coordinator publishes `(group, partition, owner, epoch)`. During rebalance, the old owner stops claiming, drains or releases in-flight messages according to policy, and checkpoints before the new owner starts. If the system cannot guarantee a clean handoff, it must tolerate overlapping delivery while fencing stale acknowledgements.
 
----
+Hot partitions require better routing or isolated capacity, not merely more consumers: one partition may allow only limited concurrent claims or one ordered lane. Split a hot tenant/entity only if its semantic scope permits it. Otherwise apply per-key admission and expose that key as the bottleneck.
 
-## Queue Internals
+## Worker flow control and overload
 
-### Storage Engines
+The queue is a buffer, not infinite capacity. Apply backpressure at three boundaries:
 
-```
-RabbitMQ:
-  - Erlang Mnesia database for metadata (exchanges, queues, bindings)
-  - Messages stored in per-queue message stores on disk
-  - Lazy queues: messages go straight to disk, reducing RAM usage
-  - Classic queues: messages held in RAM, paged to disk under memory pressure
-  - Quorum queues (recommended): Raft-based replicated log on disk
-
-Kafka:
-  - Append-only log segments stored as files on disk
-  - Each partition = ordered sequence of segment files
-  - Segment rolls over at configurable size (default 1 GB) or time
-  - Index files map offset → position in segment for fast lookups
-  - Zero-copy sendfile() for efficient consumer reads directly from page cache
-
-SQS:
-  - Distributed redundant storage across multiple AZs
-  - Messages replicated to multiple hosts before send returns
-  - No user-visible storage engine — fully managed black box
-  - Standard queues: messages stored in hash-based shards
-  - FIFO queues: messages partitioned by MessageGroupId
-
-Redis Streams:
-  - Radix tree of listpack-encoded entries in memory
-  - AOF / RDB persistence to disk (same as any Redis data)
-  - XTRIM caps stream length to bound memory usage
-```
+- producer admission based on stored bytes, oldest age, and tenant quota;
+- broker-to-worker flow based on free execution slots and bytes;
+- worker concurrency based on downstream saturation and deadline budget.
 
-### Message Lifecycle Details
+Queue depth alone is ambiguous. Ten million tiny messages may be cheap; ten thousand large or slow tasks may represent days of work. Track **work backlog** using estimated service cost and **age of oldest eligible message**. Service estimates can be learned by message class and updated from observations.
 
-```
-produced → stored → delivered → processing → acknowledged → deleted
-
-Timing breakdown (typical at-least-once):
-  1. Producer serializes message                      ~1 ms
-  2. Network round-trip to broker                     ~1-5 ms
-  3. Broker persists to disk / replicates             ~1-10 ms
-  4. Broker returns producer ack                      ~0 ms (included in 3)
-  5. Consumer polls or receives push                  ~1-50 ms (depends on polling interval)
-  6. Consumer processes business logic                 ~10-1000 ms (application-dependent)
-  7. Consumer sends ack to broker                     ~1-5 ms
-  8. Broker marks message consumed / deletes          ~1 ms
-```
+When consumers fall behind, retries and lease expirations can create positive feedback. Stop speculative prefetch, lengthen leases only for demonstrably progressing tasks, reduce producer acceptance for low-priority classes, and protect downstream services with concurrency budgets. Scaling workers into a saturated database makes the incident worse.
 
-### Visibility Timeout (SQS)
+## Retention, compaction, and payload lifecycle
 
-```
-Consumer A receives message at T=0
-  → Message becomes INVISIBLE to other consumers
-  → Visibility timeout = 30s (default)
-
-If Consumer A acks (DeleteMessage) before T=30:
-  → Message permanently removed ✓
-
-If Consumer A crashes or takes too long:
-  → At T=30, message becomes VISIBLE again
-  → Consumer B can now receive it
-  → Result: message processed twice — consumer must be idempotent
-
-Tuning:
-  - Too short: messages reappear while still being processed → duplicates
-  - Too long: failed messages take forever to retry
-  - Use ChangeMessageVisibility to extend mid-processing for long tasks
-```
+Work queues can remove acknowledged records after a repair/audit window; log queues retain by time/size independently of acknowledgement. Define retention from replay, incident investigation, legal, and cost requirements. “Keep forever” is not an operational plan.
 
-### Prefetch and QoS (RabbitMQ)
+Deletion proceeds from a watermark: all required replicas have the segment; no live claim or replay window needs it; quarantine references are preserved; snapshots/checkpoints cover recovery; payload references have no remaining owners. Compaction by message key is not equivalent to queue acknowledgement and can erase intermediate work, so use it only for state-like streams whose contract permits replacement.
 
-```python
-# basic_qos controls how many unacked messages a consumer can hold in buffer
-channel.basic_qos(prefetch_count=10)
+External payloads need reference accounting or expiry derived from the queue’s maximum retention plus safety margin. A periodic reconciliation compares live message references with objects and detects both missing payloads and orphaned cost.
 
-# prefetch_count too HIGH (e.g., 1000):
-#   - Consumer buffers 1000 messages in memory → OOM risk
-#   - Other consumers starved (all messages sitting in one consumer's buffer)
-#   - If consumer crashes, 1000 messages need redelivery
+## Capacity and cost model
 
-# prefetch_count too LOW (e.g., 1):
-#   - Consumer processes one, round-trips for next → network-bound
-#   - Throughput tanks due to idle time between messages
+Consider an illustrative queue:
 
-# Rule of thumb:
-#   prefetch = consumer_throughput × network_round_trip_time
-#   Example: 100 msg/sec × 0.05 sec RTT = 5
-#   Start with 10-20, benchmark, adjust
-```
+- peak 25,000 enqueues/s;
+- average encoded record 1.6 KiB including metadata;
+- three replicas;
+- consumer service time averages 18 ms with a measured coefficient of variation;
+- peak producer burst lasts 20 minutes at 25,000/s while consumers sustain 19,000/s;
+- target worker utilization 60%.
 
----
+Logical ingress is about `25,000 * 1.6 KiB = 39 MiB/s`; three replicas write roughly 117 MiB/s before log, index, checksum, and compaction amplification. One day of unreclaimed replicated ingress is about 9.9 TiB, so retention and disk reserve dominate broker sizing.
 
-## Queue Selection Guide
+The burst adds `(25,000 - 19,000) * 1,200 = 7.2 million` messages. At the post-burst surplus drain rate, if consumers are raised to 23,000/s while ingress returns to 19,000/s, drain time is `7.2M / 4,000 = 1,800 seconds`, or 30 minutes. Capacity planning needs this recovery interval, not only steady state.
 
-### Decision Table
+At 18 ms mean service time, 25,000/s consumes 450 concurrent worker-seconds. At 60% target utilization, plan about 750 execution slots before failure reserve. Validate with the actual service-time tail and downstream limits; Little’s Law relates average in-flight work to throughput and residence time but does not promise acceptable tails.
 
-```
-┌──────────────────┬──────────┬────────────┬──────────┬───────────────┐
-│ Criteria         │ Kafka    │ RabbitMQ   │ SQS      │ Redis Streams │
-├──────────────────┼──────────┼────────────┼──────────┼───────────────┤
-│ Ordering         │ Per-     │ Per-queue  │ FIFO:    │ Per-stream    │
-│                  │ partition│ (FIFO)     │ per-group│ (global)      │
-├──────────────────┼──────────┼────────────┼──────────┼───────────────┤
-│ Delivery         │ At-least │ At-least   │ At-least │ At-least once │
-│ guarantee        │ -once*   │ -once      │ -once    │               │
-├──────────────────┼──────────┼────────────┼──────────┼───────────────┤
-│ Throughput       │ Millions │ ~50K       │ Unlimited│ ~100K msg/s   │
-│ (msg/sec)        │ msg/s    │ msg/s      │ (std)    │ (single node) │
-├──────────────────┼──────────┼────────────┼──────────┼───────────────┤
-│ Replay /         │ Yes      │ No         │ No       │ Yes (while    │
-│ rewind           │ (native) │            │          │ retained)     │
-├──────────────────┼──────────┼────────────┼──────────┼───────────────┤
-│ Operational      │ High     │ Medium     │ None     │ Low (if Redis │
-│ complexity       │          │            │ (managed)│ already runs) │
-├──────────────────┼──────────┼────────────┼──────────┼───────────────┤
-│ Cost model       │ Infra /  │ Infra /    │ Per-     │ Infra /       │
-│                  │ managed  │ managed    │ request  │ managed       │
-├──────────────────┼──────────┼────────────┼──────────┼───────────────┤
-│ Message TTL      │ By       │ Per-msg /  │ Max 14   │ XTRIM or      │
-│                  │ retention│ per-queue  │ days     │ MAXLEN        │
-└──────────────────┴──────────┴────────────┴──────────┴───────────────┘
-
-* Kafka supports exactly-once with idempotent producer + transactions
-```
+## Concrete failure trace: lease shorter than execution
 
-### When to Choose What
+A media task normally takes 40 seconds, but its visibility lease is 30 seconds. Worker A starts and remains healthy. At 30 seconds the queue exposes the message; worker B receives claim generation 12 while A still holds generation 11. Both upload the result. A’s late acknowledgement is correctly rejected, yet the duplicate external upload already occurred.
 
-```
-Choose Kafka when:
-  - Throughput exceeds 100K msg/sec
-  - Consumers need to replay historical events
-  - Event streaming / event sourcing architecture
-  - Multiple independent consumer groups read same data
-
-Choose RabbitMQ when:
-  - Complex routing logic (topic, headers, fanout exchanges)
-  - Priority queues needed
-  - Low per-message latency matters (sub-ms possible)
-  - Request-reply messaging pattern is core
-
-Choose SQS when:
-  - Running on AWS and want zero operational burden
-  - Serverless architecture (Lambda triggers from SQS)
-  - Simple point-to-point work queues
-  - Budget is per-request (pay only for what you use)
-
-Choose Redis Streams when:
-  - Redis is already in the stack (no new infra)
-  - Use case is simple with moderate throughput
-  - Want consumer groups without Kafka's complexity
-  - Acceptable to lose data if Redis restarts without persistence
-```
+Containment reduces concurrency for that task class and uses a safe longer lease. Repair identifies duplicate outputs through the message/effect idempotency key. Prevention adds progress-based extension, a bound on claimed-but-not-started time, claim-generation propagation to the effect service, and a test that pauses a worker across lease expiry. The queue behaved according to its contract; the end-to-end effect protocol was incomplete.
 
----
+## Operations and observability
 
-## Backpressure and Flow Control
+Observe by queue, partition, tenant, message class, and consumer group:
 
-### The Core Problem
+- enqueue/claim/ack/release rates and latency;
+- ready, scheduled, claimed, quarantined, and expired counts and bytes;
+- oldest ready age, service-time distribution, and predicted drain time;
+- claim expirations, extensions, stale-token rejections, and redeliveries;
+- producer admission/rejection and quota use;
+- worker free slots, prefetch, claimed-not-started age, and downstream saturation;
+- partition skew, reassignment epoch, replica lag, recovery ETA, and disk reserve;
+- payload fetch failures, missing objects, and orphaned objects.
 
-```
-Producer rate: 10,000 msg/sec
-Consumer rate:  2,000 msg/sec
-Queue growth:   8,000 msg/sec accumulating
-
-Unbounded queue:
-  After 1 hour: 28.8 million messages queued
-  At 1 KB each: 28.8 GB memory/disk consumed
-  Eventually: OOM crash, disk full, cascading failure
-
-Bounded queue:
-  Queue hits max size → producer must choose:
-    a) Block (wait for space)        — adds backpressure upstream
-    b) Drop new messages             — data loss, acceptable in some cases
-    c) Drop oldest messages          — ring-buffer style, latest wins
-```
+Runbooks cover growing backlog, hot partition, full disk, stuck scheduled mover, consumer rebalance loop, mass lease expiry, corrupt payload, and control-plane outage. Drills should use production-sized backlogs; empty-queue failover proves little.
 
-### Backpressure by Queue Technology
+## Security and isolation
 
-```
-RabbitMQ flow control:
-  - Memory alarm triggers at configurable threshold (default 40% of RAM)
-  - When triggered: all publishing connections BLOCKED
-  - Disk alarm: triggers when free disk < limit (default 50 MB)
-  - Connection-level credit flow: channels throttle producers automatically
-  - Visible in management UI as "blocking" / "blocked" connection state
-
-Kafka (no backpressure by design):
-  - Log-based: producer always appends, never blocked by consumer speed
-  - Consumer lag grows silently — partition log retains messages
-  - Broker disk fills up if retention + lag exceeds capacity
-  - Producer can be throttled via broker quotas (bytes/sec per client)
-  - max.block.ms: producer blocks if broker buffer is full (network-level only)
-
-SQS (no backpressure):
-  - Messages accumulate without limit (standard queues)
-  - No feedback mechanism to slow producers
-  - Messages expire after retention period (default 4 days, max 14)
-  - Cost grows linearly with accumulated messages
-
-Redis Streams:
-  - MAXLEN / MINID caps stream size, oldest entries evicted
-  - No built-in producer blocking — application must implement
-  - Memory pressure handled by Redis maxmemory-policy (eviction)
-```
+Authenticate producers and consumers separately and authorize queue, tenant, operation, and message type. A worker that can claim should not automatically be allowed to purge, replay, or inspect every payload. Delivery tokens are unguessable, scoped, short-lived capabilities.
 
-### Monitoring Consumer Lag
+Validate envelope size, headers, delay, expiry, routing-key length, and payload reference before expensive work. Encrypt transport and durable records; isolate encryption keys and storage partitions where tenant or residency policy requires it. Queue metrics and traces must not expose raw payloads or sensitive routing keys.
 
-```
-Consumer lag = latest produced offset − last consumed offset
-
-Health thresholds (adjust per use case):
-  ┌───────────┬───────────────┬──────────────┬──────────────┐
-  │ Severity  │ Kafka lag     │ RabbitMQ     │ SQS          │
-  │           │ (offsets)     │ (queue depth)│ (approx msg) │
-  ├───────────┼───────────────┼──────────────┼──────────────┤
-  │ Healthy   │ < 1,000       │ < 1,000      │ < 1,000      │
-  │ Warning   │ 1K - 100K     │ 1K - 10K     │ 1K - 50K     │
-  │ Critical  │ > 100K        │ > 10K        │ > 50K        │
-  └───────────┴───────────────┴──────────────┴──────────────┘
-
-If lag is growing steadily:
-  1. Scale consumers horizontally (add instances)
-  2. Optimize processing time per message
-  3. Increase prefetch / batch size
-  4. If none work: throttle producers or shed load
-```
+Control-plane changes—retention reduction, purge, replay, quota, consumer identity—need review, audit, and staged activation. Purge and bulk redrive are destructive operations with separate privileges and dry-run counts.
 
----
+## Verification strategy
 
-## Production Operations
+- model-test random enqueue/claim/extend/expire/ack transitions against a simple state machine;
+- kill brokers after every append/replication/publication boundary and verify acknowledged durability;
+- partition coordinators and workers to verify assignment epochs and stale-token rejection;
+- pause workers across lease expiry and validate duplicate-effect defenses;
+- load-test measured message-size/service-time distributions, hot partitions, and downstream saturation;
+- fill disks and stall replicas while checking admission and retention watermarks;
+- reconcile inline/external payloads after expiry, quarantine, and replay;
+- fuzz malformed envelopes, oversized headers, and unauthorized operations.
 
-### Queue Depth and Message Age Monitoring
+## Decision framework
 
-```
-Queue depth (messages waiting to be consumed):
-  - Stable depth: consumers keeping up — healthy
-  - Sustained growth: consumers falling behind — ACTION NEEDED
-  - Sawtooth pattern: batch producers + consumers — usually fine
-
-Oldest message age:
-  - Measures worst-case processing delay
-  - If age > SLA target: you are already breaching commitments
-  - Kafka: consumer_lag_offsets × avg_time_between_messages
-  - SQS: ApproximateAgeOfOldestMessage CloudWatch metric
-  - RabbitMQ: head_message_timestamp via management API
-```
+Use a work queue when one logical worker should perform each item and buffering isolates producers from consumers. Use pub-sub when multiple independent subscriptions need the same event. Use a durable workflow engine when work contains timers, multi-step state, compensation, or human waits; see [Durable Execution](../18-workflow-job-systems/04-durable-execution-workflow-engines.md).
 
-### Consumer Group Management
-
-```bash
-# Kafka: check consumer group lag
-kafka-consumer-groups.sh --bootstrap-server localhost:9092 \
-  --describe --group my-consumer-group
-
-# Kafka: reset offsets (careful — reprocesses messages)
-kafka-consumer-groups.sh --bootstrap-server localhost:9092 \
-  --group my-consumer-group --topic my-topic \
-  --reset-offsets --to-earliest --execute
-
-# RabbitMQ management UI (default port 15672):
-#   Connections tab: client IPs, state, channels per connection
-#   Channels tab: prefetch, unacked count, message rates
-#   Queues tab: depth, incoming/deliver rates, consumer count
-
-# SQS: check queue attributes
-aws sqs get-queue-attributes --queue-url <url> \
-  --attribute-names ApproximateNumberOfMessages \
-                    ApproximateNumberOfMessagesNotVisible \
-                    ApproximateAgeOfOldestMessage
-```
+Choose the queue design by answering:
 
-### Capacity Planning
+1. What is durably accepted, and which failures may lose it?
+2. What is the claim/lease state machine and stale-token fence?
+3. How do payload size, service-time tail, and downstream limits shape flow control?
+4. What partition key and consumer assignment contain skew?
+5. How much burst backlog can be stored, and how long will it take to drain?
+6. What retention/replay/quarantine requirements delay reclamation?
+7. How are duplicate effects, poison data, tenant isolation, and destructive operations verified?
 
-```
-Formula:
-  storage_needed = message_rate × avg_message_size × retention_period
-
-Example:
-  5,000 msg/sec × 2 KB × 7 days
-  = 5,000 × 2,048 × 604,800
-  = 6.2 TB (before replication)
-
-  With replication factor 3: 18.6 TB
-
-Budget for:
-  - Peak rate (not average) for headroom
-  - Replication overhead
-  - Index / metadata overhead (~10-15% for Kafka)
-  - Growth margin (plan for 2x current volume)
-```
+## References
 
----
-
-## Key Takeaways
-
-1. **Queues decouple systems** - Async, resilient, scalable
-2. **At-least-once is common** - Requires idempotent consumers
-3. **Ack after processing** - Not before
-4. **Monitor queue depth** - Early warning of problems
-5. **Use dead letter queues** - Handle permanent failures
-6. **Size for peak load** - Queues absorb spikes
-7. **Plan message schema** - Include ID, timestamp, type
-8. **Graceful shutdown** - Don't lose in-flight messages
+- [Amazon SQS: Visibility Timeout](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-visibility-timeout.html)
+- [RabbitMQ: Consumer Acknowledgements and Publisher Confirms](https://www.rabbitmq.com/docs/confirms)
+- [Apache Kafka: Design](https://kafka.apache.org/documentation/#design)
+- [PostgreSQL: SELECT, SKIP LOCKED](https://www.postgresql.org/docs/current/sql-select.html)
+- [John D. C. Little: A Proof for the Queuing Formula L = λW](https://doi.org/10.1287/opre.9.3.383)
+- [CloudEvents Specification](https://github.com/cloudevents/spec)

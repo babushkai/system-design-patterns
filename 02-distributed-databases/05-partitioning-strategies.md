@@ -1,556 +1,221 @@
 # Partitioning Strategies
 
-## TL;DR
+Partitioning maps one logical key space onto independently placeable units. The choice determines which requests are single-partition, which become distributed operations, where hot spots form, and how much state must move when capacity changes. A good partition function is therefore part of the data model and query contract—not a storage detail added after launch.
 
-Partitioning (sharding) splits data across multiple nodes to scale beyond a single machine. Key strategies: hash partitioning for uniform distribution, range partitioning for efficient range queries. Consistent hashing minimizes rebalancing. Hotspots are the enemy. Choose partitioning key carefully—it determines what queries are efficient and which require scatter-gather.
+This chapter owns **logical partition boundaries, key-to-partition routing, and replica-placement primitives**. [Database Sharding](../06-scaling/03-database-sharding.md) owns the application and operational workflow for introducing shards, moving live data, cutover, rollback, and organizational ownership. [Secondary Indexes](./06-secondary-indexes.md) owns index placement, while [Distributed Transactions](./07-distributed-transactions.md) owns atomic work that crosses the resulting boundaries.
 
----
+## Workload contract
 
-## Why Partition?
+Start with the operations, not with hash versus range. For every high-volume request, identify:
 
-### Single Node Limits
+- the routing key known before execution;
+- equality, prefix, and range predicates;
+- joins or constraints that touch another entity;
+- per-key and per-tenant request distributions, including the hottest key;
+- data size and growth distribution;
+- ordering and locality requirements;
+- the failure domains across which replicas must be placed.
 
-```
-Data volume:    > 10 TB (exceeds disk)
-Query load:     > 100K QPS (CPU bound)
-Write load:     > 50K WPS (disk I/O bound)
-Memory:         > 1 TB (RAM limit)
-```
-
-### Benefits of Partitioning
-
-```
-Before:
-  [Single Node] ← All queries, all data
-
-After:
-  [Node 1] ← data A-M, queries for A-M
-  [Node 2] ← data N-Z, queries for N-Z
-  
-Capacity: 2x data, 2x queries
-Add more nodes → linear scaling
-```
-
----
-
-## Partitioning Methods
-
-### Range Partitioning
-
-Assign consecutive key ranges to partitions.
-
-```
-Partition 1: A-F    [aardvark, apple, ... , fox]
-Partition 2: G-L    [giraffe, house, ... , lion]
-Partition 3: M-R    [monkey, nest, ... , rabbit]
-Partition 4: S-Z    [snake, tree, ... , zebra]
-```
-
-**Advantages:**
-- Range queries efficient (scan one partition)
-- Keys are naturally ordered
-
-**Disadvantages:**
-- Prone to hotspots (common prefixes)
-- Manual rebalancing often needed
-
-**Example: Time-series data**
-```
-Partition by date:
-  2024-01: Partition 1
-  2024-02: Partition 2
-  2024-03: Partition 3  ← hot (current month)
-
-Problem: Current month gets all writes
-Solution: Compound key (sensor_id, timestamp)
-```
-
-### Hash Partitioning
-
-Hash the key, assign to partition based on hash.
-
-```
-partition = hash(key) mod N
-
-Example:
-  hash("user_123") = 8742
-  8742 mod 4 = 2
-  → Partition 2
-```
+A partition key is successful when the important operations can name a small, bounded set of partitions. Uniform bytes alone are insufficient. Hashing every row evenly can turn a tenant query into a cluster-wide scan; placing an entire tenant together can make one large tenant exceed a node.
 
-**Advantages:**
-- Even distribution (good hash = uniform)
-- No hotspots from sequential keys
+The contract should state a fan-out budget. “Most requests are single-partition; reporting may scan all partitions” is actionable. “The database is sharded” says nothing about cost.
 
-**Disadvantages:**
-- Range queries inefficient (all partitions)
-- Adding nodes reshuffles many keys
+## State and invariants
 
-**Hash function properties:**
-```
-Requirements:
-  - Deterministic (same key → same hash)
-  - Uniform distribution
-  - Fast computation
-
-Examples:
-  - MD5 (slow, cryptographic)
-  - MurmurHash (fast, good distribution)
-  - xxHash (very fast)
-```
-
-### Consistent Hashing
-
-Map both keys and nodes to a ring.
-
-```
-        0°
-        │
-   ┌────┼────┐
-   │    │    │
-270°────┼────90°
-   │    │    │
-   └────┼────┘
-        │
-       180°
-
-Nodes: N1 at 30°, N2 at 120°, N3 at 250°
-Key K: hash(K) = 100°
-  → Goes to next node clockwise: N2 (120°)
-```
-
-**Adding a node:**
-```
-Before: N1(30°), N2(120°), N3(250°)
-Add N4 at 200°
-
-Only keys between 120°-200° move to N4
-Other partitions unchanged
-```
-
-**Virtual nodes:**
-```
-Each physical node → multiple positions on ring
-  N1: [30°, 100°, 220°]
-  N2: [50°, 130°, 280°]
-  
-Benefits:
-  - More even distribution
-  - Smoother rebalancing
-  - Handle heterogeneous hardware
-```
-
----
+A production partitioned system needs more state than `hash(key) mod N`:
 
-## Choosing a Partition Key
-
-### Single-Key Partitioning
-
-```
-Users table → partition by user_id
+- a **partition function** mapping a key to a logical partition or ordered range;
+- a stable partition ID independent of its current machine;
+- an authoritative map from partition ID to replica set and current write authority;
+- a metadata epoch or generation;
+- per-partition state such as `ACTIVE`, `SPLITTING`, `MOVING`, or `MERGING`;
+- placement constraints describing region, zone, rack, hardware class, or tenant policy;
+- a progress frontier for copy and catch-up during changes.
 
-Query: SELECT * FROM users WHERE user_id = 123
-  → Goes to one partition ✓
+The central invariants are:
 
-Query: SELECT * FROM users WHERE email = 'x@y.com'
-  → Scatter to all partitions ✗
-```
+1. At one metadata epoch, every legal key maps to exactly one logical partition.
+2. Range boundaries have neither gaps nor unintended overlap.
+3. A request is evaluated by an owner authorized for the request's epoch or is rejected/redirected.
+4. A placement satisfies the configured replica count and failure-domain constraints.
+5. Publishing a new map does not make writes acknowledged by the old owner disappear.
 
-### Compound Keys
+Stable logical partitions separate two decisions: `key -> partition` and `partition -> machine`. This two-stage mapping lets operators move a bounded unit without changing every key's hash function and lets routing metadata name partitions rather than individual records.
 
-```
-CREATE TABLE posts (
-  user_id INT,
-  post_id INT,
-  content TEXT,
-  PRIMARY KEY ((user_id), post_id)
-);
-
-user_id = partition key
-post_id = clustering key (sort within partition)
-
-Query: SELECT * FROM posts WHERE user_id = 123
-  → One partition, sorted by post_id ✓
-
-Query: SELECT * FROM posts WHERE user_id = 123 AND post_id > 100
-  → One partition, range scan ✓
-```
+## Partitioning primitives
 
-### Key Design Guidelines
+### Hash partitioning into fixed logical buckets
 
-| Access Pattern | Good Key | Bad Key |
-|----------------|----------|---------|
-| User's data | user_id | email |
-| Time-series | (device_id, date) | timestamp |
-| Orders | (customer_id, order_id) | order_date |
-| Chat messages | (room_id, message_time) | sender_id |
+Compute `bucket = H(key) mod P`, where `P` is a stable logical bucket count, then place buckets on machines through metadata. A suitable non-adversarial hash spreads independent keys and makes equality lookup direct.
 
----
+The important word is **logical**. If `P` is the number of machines, adding a machine changes the modulus and relocates roughly `N/(N+1)` of uniformly hashed keys when growing from `N` to `N+1`; almost all traffic and storage participate. If `P` is a larger stable bucket count, growth moves selected buckets instead. The cost is metadata and granularity: too few buckets limit balancing; too many add per-bucket state, files, consensus groups, and scheduling work.
 
-## Handling Hotspots
+Hash partitioning destroys key order across buckets. A range predicate whose routing key is absent must scatter or use another index. It also cannot split one indivisible hot key; hashing distributes many keys, not traffic within a key.
 
-### The Problem
+### Consistent and rendezvous hashing
 
-```
-Celebrity user: 10M followers
-  - All posts by this user → one partition
-  - All reads of their posts → one partition
-  - That partition is overwhelmed
-
-Sequential key: order_id auto-increment
-  - All new orders → highest partition
-  - Write hotspot
-```
+Consistent hashing places keys and node tokens in a circular hash space; a key belongs to the next eligible token. In an ideal balanced ring, adding one equal-capacity node moves approximately `1/(N+1)` of keys rather than remapping nearly everything. Virtual nodes create more placement samples per physical node and support heterogeneous capacity, but each token also increases metadata, movement concurrency, and operational surface.
 
-### Mitigation Strategies
+Rendezvous hashing scores each `(key, node)` pair and chooses the highest-scoring eligible nodes. It avoids ring traversal and directly produces an ordered replica preference, but evaluating every node is expensive without hierarchy or candidate sets. Both methods need explicit failure-domain filtering: three top scores on one rack are not three independent replicas.
 
-**Add random prefix:**
-```
-Original key: user_123
-Prefixed key: {0-9}_user_123  (random prefix)
+Consistent hashing minimizes expected movement under membership change; it does not guarantee balanced bytes or QPS when values and access frequencies are skewed.
 
-Reads: scatter to 10 partitions, aggregate
-Writes: distributed across 10 partitions
+### Range partitioning
 
-Trade-off: Single-key queries become scatter-gather
-```
+Range partitioning stores adjacent keys together:
 
-**Time bucketing:**
+```text
+[-infinity, g) -> range 17
+[g, n)         -> range 42
+[n, +infinity) -> range 63
 ```
-Instead of: partition by user_id
-Use: partition by (user_id, time_bucket)
 
-time_bucket = hour or day
+It preserves ordered scans, prefix locality, and sequential prefetch. A large range can split at a chosen boundary, and neighboring small ranges can merge. Bigtable's tablets and CockroachDB's ranges are examples of this primitive.
 
-Hot user's data spread across time buckets
-Recent data in few buckets (queryable)
-Old data in many buckets (archived)
-```
+Range partitioning exposes the write distribution. Monotonic timestamps or sequence numbers concentrate new writes at the rightmost range. Lexicographic prefixes can concentrate one tenant or popular domain. Splitting helps only if the hot workload spans separable keys; a single hot row remains one serialization point.
 
-**Read replicas per partition:**
-```
-Hot partition → more read replicas
-Route reads to replicas
-Writes still go to primary
-```
+Boundary selection can be size-based, sample-based, or load-aware. Equal key-space widths are rarely equal in bytes or QPS. A split policy must consider write rate, read rate, storage bytes, and the ability to place the children independently.
 
----
+### Directory partitioning
 
-## Rebalancing
+A directory explicitly maps an entity to a partition: `tenant_37 -> partition 912`. It supports exceptions, tenant moves, and heterogeneous placement without encoding every rule in the hash. It also creates a metadata service and cache-coherence problem. Directory availability, map versioning, stale-routing behavior, and bootstrap become part of the request path.
 
-### When to Rebalance
+Directories are especially useful for tenant or cell placement, where policy matters more than perfect uniformity. They are less attractive for billions of individually mapped rows unless the directory itself is hierarchically partitioned.
 
-```
-Triggers:
-  - Node added
-  - Node removed
-  - Load imbalance detected
-  - Data growth uneven
-```
+### Composite and hybrid schemes
 
-### Fixed Partition Count
+Many systems compose primitives:
 
-```
-Create more partitions than nodes:
-  100 partitions for 10 nodes (10 each)
-
-Add node:
-  Move some partitions to new node
-  (10 partitions → new node)
-
-Partition boundaries never change
-Simple, predictable
-```
+- hash tenant ID, then sort by time inside the tenant bucket;
+- directory-map a tenant to a cell, then range-partition within the cell;
+- range-partition an ordered key space, then replicate each range with consensus;
+- add a bounded write stripe `(entity_id, stripe)` and sort within each stripe.
 
-### Dynamic Partitioning
+The first key components choose placement; later components choose order within the partition. A write stripe relieves one aggregate hot spot only by making reads fan out across the stripes. That is a deliberate exchange, not a free salting trick.
 
-```
-Partition grows too large → split
-Partition shrinks → merge with neighbor
-
-Example (HBase):
-  Region grows > 10 GB → split
-  Parent: [A-M]
-  Children: [A-G], [H-M]
-```
+## Routing and ownership changes
 
-### Partition-Proportional Nodes
+### Versioned routing
 
-```
-Each node gets fixed number of partitions
-New node → steal partitions from existing nodes
-More nodes → smaller partitions
-
-Cassandra approach:
-  Each node: 256 virtual nodes
-  Add node: 256 new vnodes, take data from neighbors
-```
+Clients, routers, or coordinator nodes cache the partition map. Every routed request should carry the map epoch or target partition ID. The receiver checks authority:
 
-### Minimizing Movement
+- if current, execute;
+- if stale but safely forwardable, redirect with newer metadata;
+- if ownership is ambiguous during transition, reject with a retryable error rather than accept under the wrong generation.
 
-```
-Goal: Move minimum data when rebalancing
+An unversioned cache can continue sending writes to an old owner indefinitely. A redirect loop is also possible when two routers alternately advertise stale maps, so responses should carry a monotonic epoch and clients must never downgrade it.
 
-Consistent hashing: O(K/N) keys move
-  K = total keys
-  N = number of nodes
+### Split and merge state machine
 
-Naive hash mod: O(K) keys move
-  Almost everything moves!
-```
+A safe range split separates data preparation from authority publication:
 
----
+1. choose a boundary and durable split identity;
+2. create child state from a consistent parent snapshot;
+3. capture writes after that snapshot through a log or dual-application protocol;
+4. bring children to the parent's cutover frontier;
+5. atomically publish the new map/epoch and fence parent writes;
+6. retain redirect and rollback metadata until old routers drain;
+7. delete obsolete parent state only after no reader or rollback path references it.
 
-## Query Routing
+The metadata operation must appear atomic even when copying bytes is not. Merge is the reverse problem and must preserve both children through one publication point. The end-to-end live migration runbook belongs in [Database Sharding](../06-scaling/03-database-sharding.md); the invariant here is that a map epoch names one authoritative partitioning of the key space.
 
-### Client-Side Routing
+### Replica placement
 
-```
-Client knows partition map
-Client sends request directly to correct partition
-
-┌────────┐
-│ Client │──────knows partition map
-└────┬───┘
-     │  partition_for(user_123) = Node 2
-     ▼
-┌─────────┐
-│ Node 2  │
-└─────────┘
-
-Pros: No extra hop
-Cons: Client must track partition changes
-```
+Partitioning determines the unit; placement chooses its replicas. A policy such as “three replicas” is incomplete without topology. State constraints in terms of failures to survive: one host, one rack, one zone, or one region. Then verify the selected replica set and its quorum can make progress after that correlated failure.
 
-### Routing Tier
+Placement also determines latency. Put the write authority near writers while ensuring the required acknowledgement set fits the durability policy. Moving a lease or leader without moving replicas changes latency but not storage placement; moving a replica changes data risk and network cost.
 
-```
-All requests → Router → Correct partition
+## Failure traces
 
-┌────────┐     ┌────────┐     ┌─────────┐
-│ Client │ ──► │ Router │ ──► │ Node N  │
-└────────┘     └────────┘     └─────────┘
+### Stale router during a split
 
-Pros: Clients are simple
-Cons: Extra network hop, router can be bottleneck
-```
+1. Range `[a,z)` splits into `[a,m)` and `[m,z)` at epoch 51.
+2. A router cached epoch 50 and sends write `t` to the parent.
+3. If the parent still accepts while a child also accepts, two histories form.
+4. If the parent silently drops the write, acknowledged data is lost.
 
-### Coordinator Node
+The parent must validate the epoch and either forward through a protocol that preserves ordering or reject with epoch 51. Child activation and parent fencing are one correctness transition.
 
-```
-Any node can receive request
-Node forwards to correct partition (or handles locally)
-
-┌────────┐     ┌─────────┐     ┌─────────┐
-│ Client │ ──► │ Node 1  │ ──► │ Node 3  │
-└────────┘     │(coordinator)  │(partition owner)
-               └─────────┘     └─────────┘
-
-Pros: Any node is entry point
-Cons: Extra hop if wrong node
-```
+### Hot key hidden by balanced bytes
 
-### Partition Discovery
+1. One million keys distribute evenly over 100 partitions.
+2. One key receives 40% of requests.
+3. Storage dashboards show equal bytes, but its partition saturates CPU and queueing delay grows.
+4. Adding nodes moves cold partitions and leaves the indivisible key hot.
 
-```
-Approach 1: ZooKeeper / etcd
-  - Nodes register partition ownership
-  - Clients/routers watch for changes
-
-Approach 2: Gossip protocol
-  - Nodes share partition knowledge
-  - Eventually consistent
-  
-Approach 3: Central metadata service
-  - Dedicated service tracks partitions
-  - Single source of truth
-```
+The remedy is an application-level operation split, caching/replication for reads, or a deliberate striped representation—not another hash function.
 
----
+### Correlated replica placement
 
-## Cross-Partition Operations
+1. Three replicas are placed on three hosts but in one rack.
+2. The rack switch fails.
+3. The partition loses every copy despite meeting replica count.
 
-### Scatter-Gather Queries
+Placement validation must reason about shared risk, not host identity alone.
 
-```
-Query: SELECT COUNT(*) FROM users WHERE age > 30
-
-All partitions:
-  [P1] → count: 1000
-  [P2] → count: 1500
-  [P3] → count: 800
-  [P4] → count: 1200
-  
-Coordinator aggregates: 4500
-```
+### Scatter-gather tail amplification
 
-**Performance:**
-```
-Latency = max(partition latencies) + aggregation
-Throughput limited by slowest partition
+1. A request fans out to 40 partitions and waits for all results.
+2. Thirty-nine finish quickly; one is in compaction or recovery.
+3. End-to-end latency equals the slowest required branch plus aggregation.
 
-One slow partition → slow query
-```
+If one branch latency has CDF `F(t)` and branches were independent, all 40 finish by `t` with probability `F(t)^40`. Real branches often share network and storage, making correlation worse than this model. Fan-out turns rare local tails into common request tails.
 
-### Cross-Partition Joins
+## Capacity and cost model
 
-```
-Orders partitioned by customer_id
-Products partitioned by product_id
-
-SELECT o.*, p.name
-FROM orders o
-JOIN products p ON o.product_id = p.id
-WHERE o.customer_id = 123
-
-Strategy 1: Broadcast join
-  Send all products to order partition
-  
-Strategy 2: Shuffle join
-  Repartition both tables by join key
-  
-Strategy 3: Denormalize
-  Store product name in orders table
-```
+Let `D` be logical data bytes, `Q` request rate, `P` logical partitions, and `N` machines. `D/P` and `Q/P` are only means. Capacity planning must use high-percentile and maximum partition bytes/QPS, plus the hottest individual key.
 
-### Cross-Partition Transactions
+For a request touching `f` partitions:
 
-```
-Transfer $100 from Account A (Partition 1) to Account B (Partition 2)
-
-Requires distributed transaction:
-  1. Start transaction on both partitions
-  2. Debit A, credit B
-  3. Two-phase commit
-
-Expensive and complex
-Consider: same-partition transfers only
+```text
+network requests ~= f
+intermediate bytes = sum(result bytes from each partition)
+latency >= max(required branch latencies) + coordination
 ```
 
----
+If each required partition is independently available with probability `a`, request availability is approximately `a^f`. Independence is an optimistic simplification, but it makes the design pressure clear: broad fan-out narrows the success window.
 
-## Partitioning in Practice
-
-### PostgreSQL (Declarative Partitioning)
-
-```sql
--- Range partitioning
-CREATE TABLE orders (
-    id SERIAL,
-    order_date DATE,
-    customer_id INT
-) PARTITION BY RANGE (order_date);
-
-CREATE TABLE orders_2024_q1 PARTITION OF orders
-    FOR VALUES FROM ('2024-01-01') TO ('2024-04-01');
-
--- Hash partitioning
-CREATE TABLE users (
-    id INT,
-    name TEXT
-) PARTITION BY HASH (id);
-
-CREATE TABLE users_p0 PARTITION OF users
-    FOR VALUES WITH (MODULUS 4, REMAINDER 0);
-```
+Moving a partition of size `S` has a lower-bound copy time:
 
-### Cassandra
-
-```sql
-CREATE TABLE posts (
-    user_id uuid,
-    post_time timestamp,
-    content text,
-    PRIMARY KEY ((user_id), post_time)
-) WITH CLUSTERING ORDER BY (post_time DESC);
-
--- user_id is partition key (hashed)
--- post_time is clustering key (sorted within partition)
+```text
+copy_time >= S / min(source_read_rate, network_rate, destination_write_rate)
 ```
 
-### MongoDB
+Catch-up traffic, checksums, replication, foreground interference, and throttling make actual time longer. Growing from `N` to `N+1` equal-capacity nodes ideally moves about `D/(N+1)` bytes with balanced consistent hashing or stable buckets. Range skew and placement constraints can require more.
 
-```javascript
-// Enable sharding
-sh.enableSharding("mydb")
+Choose `P` by balancing:
 
-// Hash-based sharding
-sh.shardCollection("mydb.users", { _id: "hashed" })
+- enough units to distribute maximum bytes and QPS after failures;
+- enough spare units to use future machines;
+- small enough movement units to meet recovery time;
+- not so many that metadata, files, consensus groups, heartbeats, and schedulers dominate.
 
-// Range-based sharding
-sh.shardCollection("mydb.logs", { timestamp: 1 })
-```
-
----
-
-## Anti-Patterns
+There is no universal bucket count. Model the per-partition fixed cost from the actual engine and test the largest planned map.
 
-### Uneven Partition Sizes
-
-```
-Problem:
-  Partition A: 100 GB
-  Partition B: 10 GB
-  Partition C: 500 GB ← overloaded
-
-Causes:
-  - Poor key distribution
-  - Natural data skew
-  
-Solutions:
-  - Better key choice
-  - Salting keys
-  - Dynamic splitting
-```
+## Operations, migration, and testing
 
-### Monotonic Keys
+Monitor bytes, reads, writes, CPU, queue time, compaction/recovery work, and replica lag **per partition**, with maxima and skew coefficients—not only node averages. Also track routing-epoch misses, redirects, split duration, copy backlog, unavailable placement constraints, and time to restore the desired replica set.
 
-```
-Problem:
-  key = timestamp or auto_increment
-  All new data → last partition
-
-Solutions:
-  - Hash the key
-  - Prepend random bytes
-  - Use compound key with better distribution
-```
+Before changing a partition function, build an offline mapping diff: how many keys and bytes move, which queries change fan-out, which partitions become hottest, and how rollback maps new writes. Shadow-route sampled production keys to compare old and new ownership without executing writes.
 
-### Too Few Partitions
+Property tests should prove range coverage with no gaps/overlaps, deterministic hash/rendezvous results across language implementations, replica diversity, and monotonic metadata epochs. Fault tests should pause old owners during cutover, lose map invalidations, duplicate copy-log entries, crash after metadata publication, and restore from every state-machine phase. Load tests need Zipfian keys and a single extreme hot key; uniform random traffic hides the failures partitioning is meant to manage.
 
-```
-Problem:
-  4 partitions, want 10 nodes
-  Cannot distribute evenly
-  
-Solution:
-  Create many partitions upfront (e.g., 256)
-  Distribute across available nodes
-  Room to grow
-```
+## Decision framework
 
-### Cross-Partition Access as Primary Pattern
+1. Which request fields are known before routing, and how many partitions does each critical operation touch?
+2. Does order/range locality matter more than uniform placement?
+3. What are the maximum key, tenant, and partition QPS and bytes—not only averages?
+4. Can one hot key be subdivided without breaking its invariant or order?
+5. What metadata epoch fences an old owner during split, move, and merge?
+6. How much data moves for one node addition or failure, and how long can catch-up take?
+7. Do replica placements survive the named correlated failure while retaining quorum?
+8. Is operational online resharding mature enough for this logical scheme?
 
-```
-Problem:
-  Most queries span all partitions
-  No benefit from partitioning
-
-Solutions:
-  - Reconsider partition key
-  - Denormalize data
-  - Accept scatter-gather cost
-```
+## Primary references
 
----
-
-## Key Takeaways
-
-1. **Hash for distribution, range for queries** - Choose based on access patterns
-2. **Consistent hashing reduces movement** - Essential for large-scale systems
-3. **Partition key is critical** - Determines query efficiency
-4. **Hotspots kill performance** - Use salting, time bucketing
-5. **Rebalancing is expensive** - Plan partition count upfront
-6. **Scatter-gather has overhead** - Design to minimize cross-partition queries
-7. **Cross-partition transactions are hard** - Avoid if possible
-8. **More partitions = more flexibility** - But more coordination overhead
+- [Karger et al., *Consistent Hashing and Random Trees* (STOC 1997)](https://www.akamai.com/site/en/documents/research-paper/consistent-hashing-and-random-trees-distributed-caching-protocols-for-relieving-hot-spots-on-the-world-wide-web.pdf)
+- [DeCandia et al., *Dynamo: Amazon's Highly Available Key-value Store* (SOSP 2007)](https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf)
+- [Chang et al., *Bigtable: A Distributed Storage System for Structured Data* (OSDI 2006)](https://storage.googleapis.com/gweb-research2023-media/pubtools/4443.pdf)
+- [Curino et al., *Schism: a Workload-Driven Approach to Database Replication and Partitioning* (VLDB 2010)](https://www.vldb.org/pvldb/vol3/R76.pdf)
+- [Adya et al., *Slicer: Auto-Sharding for Datacenter Applications* (OSDI 2016)](https://www.usenix.org/system/files/conference/osdi16/osdi16-adya.pdf)
+- [Taft et al., *CockroachDB: The Resilient Geo-Distributed SQL Database* (SIGMOD 2020)](https://www.cockroachlabs.com/pdf/cockroachdb-the-resilient-geo-distributed-sql-database-sigmod-2020.pdf)

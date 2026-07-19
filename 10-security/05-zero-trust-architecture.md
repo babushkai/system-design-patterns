@@ -1,645 +1,600 @@
-# Zero Trust Architecture
+# Zero-Trust Service and Workload Architecture
 
 ## TL;DR
 
-Zero Trust replaces perimeter-based security ("trust the internal network") with "never trust, always verify." Every request is authenticated and authorized regardless of network location. Identity becomes the new perimeter.
+Zero trust is an authorization architecture, not a product and not “put mTLS everywhere.” Network location is treated as a weak signal. Every access decision binds an authenticated principal, workload, device or runtime posture, requested action, resource, tenant, and policy revision; enforcement occurs at a boundary that the caller cannot bypass.
+
+A production design needs:
+
+- cryptographic human and workload identity with short-lived credentials;
+- explicit trust domains and federation;
+- policy decision and enforcement points with versioned, fail-safe state;
+- sender-constrained or channel-bound credentials where replay matters;
+- resource-level authorization at the service that owns the resource;
+- control-plane distribution that tolerates stale state without silently widening access;
+- continuous observability, credential rotation, break-glass governance, and recovery.
+
+The goal is not to make every request suspicious forever. It is to replace ambient, transitive trust with a verifiable request contract and a bounded failure mode.
 
 ---
 
-## The Problem with Perimeter Security
+## 1. Threat Model and Access Contract
 
-### Traditional Model (Castle and Moat)
+Assume an attacker may:
+
+- reach internal network addresses;
+- compromise one user account, device, workload, proxy, or CI runner;
+- steal a bearer token or static secret;
+- exploit a trusted service as a confused deputy;
+- replay an old request;
+- alter control-plane configuration;
+- move laterally through broad service credentials;
+- abuse a support or break-glass path;
+- target a stale region during policy or key rollout.
+
+An access decision is:
+
+```text
+decision = authorize(
+  subject_identity,
+  workload_identity,
+  device_or_runtime_posture,
+  requested_action,
+  resource_identity,
+  tenant,
+  credential_binding,
+  request_context,
+  policy_revision
+)
+```
+
+Authentication establishes which principal or workload presented a credential. Authorization determines whether that identity may perform this action on this resource. The canonical user authentication lifecycle is in [Authentication Systems](./01-authentication-fundamentals.md); policy models are in [Authorization at Scale](./07-authorization-patterns.md).
+
+### 1.1 Core invariants
+
+1. **No ambient authority:** being on a subnet, cluster, VPN, or host does not by itself grant application access.
+2. **Unforgeable identity:** accepted identity is cryptographically verified against an intended trust domain.
+3. **Audience and resource binding:** a credential issued for service A is not silently accepted by service B.
+4. **Least privilege:** permissions name allowed actions and resources, not a broad network zone.
+5. **Tenant binding:** identity, policy, cache keys, and resource lookup agree on tenant scope.
+6. **Complete enforcement:** every path to protected state crosses an enforcement point.
+7. **Fail-safe degradation:** missing or invalid identity/policy does not widen access.
+8. **Monotonic revocation posture:** a stale evaluator cannot reactivate an explicitly revoked principal beyond the declared staleness budget.
+9. **Auditable decision:** an operator can identify subject, resource, action, policy revision, and reason without logging secrets.
+10. **Bounded credential lifetime:** compromise has an expiration and rotation path.
+
+---
+
+## 2. Planes and Trust Boundaries
 
 ```mermaid
-graph TD
-    Internet[INTERNET - Untrusted] --> FW[Firewall]
-    FW --> InternalNet
-
-    subgraph InternalNet["INTERNAL NETWORK (Trusted)"]
-        SA[Server A] --- SB[Server B] --- Database
-        Alice[User Alice] --- SA
-        Bob[User Bob] --- SB
-    end
+flowchart LR
+    U[Human principal] --> IDP[Identity provider]
+    W[Workload] --> WA[Local workload identity agent]
+    D[Device/runtime posture] --> PS[Posture service]
+    IDP --> TOK[Credential/token service]
+    WA --> TOK
+    PS --> PDP[Policy decision point]
+    TOK --> PEP[Policy enforcement point]
+    PDP --> PEP
+    CP[Policy administration and distribution] --> PDP
+    PEP --> S[Resource service]
+    S --> DB[(Protected state)]
+    S --> AUDIT[(Decision and access audit)]
 ```
 
-```
-Problem: Once inside the perimeter, everything trusts everything
-- Compromised laptop → access to all internal systems
-- Lateral movement is trivial
-- VPN = keys to the kingdom
-```
+The **identity plane** attests principals and workloads and issues short-lived credentials.
 
-### Why Perimeter Security Fails
+The **policy control plane** stores policy, compiles it, validates changes, distributes revisions, and records provenance.
 
-1. **Cloud adoption**: Resources span multiple networks
-2. **Remote work**: Users connect from anywhere
-3. **BYOD**: Personal devices on corporate networks
-4. **Supply chain attacks**: Trusted vendors compromised
-5. **Insider threats**: Malicious or compromised insiders
-6. **Sophisticated attackers**: Perimeter will eventually be breached
+The **enforcement/data plane** authenticates the channel or request, obtains/evaluates policy, and gates the operation.
+
+The **resource plane** owns fine-grained facts that generic gateways cannot know: record owner, current tenant, object classification, workflow state, or relationship.
+
+Do not collapse these into a single “zero-trust proxy” box. A gateway can enforce coarse ingress policy, while the owning service enforces resource-specific authorization. If a service accepts a bypass path directly, the gateway is only advisory.
 
 ---
 
-## Zero Trust Principles
+## 3. Identity Sources
 
-### Core Tenets
+### 3.1 Human identity
 
+Human sessions normally originate at an identity provider and carry:
+
+- stable subject identifier;
+- issuer and audience;
+- authentication time and assurance;
+- session or token identity;
+- organization/tenant membership;
+- bounded claims needed by the relying party.
+
+Do not encode a complete, long-lived permission graph into a token. Authorization can change before token expiry, and token size/claim exposure grow with every consumer. Use short-lived tokens for stable identity/assurance and query or cache current policy where required.
+
+### 3.2 Workload identity
+
+Static API keys and shared client secrets make rotation and attribution weak. Prefer runtime-issued identity derived from attested execution properties:
+
+```text
+node attestation
+  -> trusted local agent
+  -> workload selectors
+  -> short-lived workload credential
+  -> mTLS or signed request
 ```
-1. Never Trust, Always Verify
-   - No implicit trust based on network location
-   - Every request is fully authenticated and authorized
 
-2. Assume Breach
-   - Design as if attackers are already inside
-   - Minimize blast radius of any compromise
+Selectors might include cluster, namespace, service account, image digest, process identity, or cloud instance identity. The selector set is an authorization input to issuance; accepting only a caller-provided service name would let any process self-assert.
 
-3. Least Privilege Access
-   - Minimum permissions needed for the task
-   - Just-in-time and just-enough access
+SPIFFE models a workload identity as a URI in a trust domain and delivers short-lived X.509 or JWT identity documents through a local Workload API. The local endpoint is security-sensitive: a neighboring process that can impersonate selectors or access another workload's credential can assume its identity.
 
-4. Verify Explicitly
-   - Use all available data points for decisions
-   - Identity, device, location, behavior, data sensitivity
-```
+### 3.3 Trust domains
 
-### Zero Trust Architecture
+A trust domain is a root of identity authority, not merely a DNS suffix. Separate domains when administrative control, environment, regulatory boundary, or security posture differs.
 
-```mermaid
-graph TD
-    UD[User Device] --> PDP[Policy Decision Point]
-    PDP --> PE["Policy Engine<br/>Identity<br/>Device health<br/>Context<br/>Risk score"]
-    PE -->|Continuously evaluated| PEP[Policy Enforcement Point]
+Federation publishes which roots and identities another domain accepts. It does not imply universal trust between all identities. Authorization still maps federated identities to explicit resources/actions.
 
-    subgraph Protected Resources
-        PEP --> ServiceA[Service A]
-        PEP --> DB[("DB")]
-    end
-```
+Avoid one global root whose compromise authenticates every environment. Equally, avoid so many roots that rotation and policy become unmanageable. Model trust-domain failure as a blast-radius decision.
 
 ---
 
-## Identity as the Perimeter
+## 4. Credential Forms and Binding
 
-### Strong Identity Verification
+### 4.1 Mutual TLS
 
-```python
-class ZeroTrustAuthenticator:
-    def authenticate(self, request):
-        # 1. Verify user identity
-        user_identity = self.verify_user_identity(request)
-        if not user_identity:
-            return AuthResult.DENIED, "Invalid user credentials"
-        
-        # 2. Verify device identity and health
-        device_identity = self.verify_device(request)
-        if not device_identity.is_managed:
-            return AuthResult.STEP_UP_REQUIRED, "Unmanaged device"
-        
-        if not device_identity.is_compliant:
-            return AuthResult.DENIED, "Device not compliant"
-        
-        # 3. Check context (location, time, behavior)
-        context = self.evaluate_context(request, user_identity)
-        
-        # 4. Calculate risk score
-        risk_score = self.calculate_risk_score(
-            user_identity, 
-            device_identity, 
-            context
-        )
-        
-        # 5. Make access decision based on policy
-        return self.policy_engine.evaluate(
-            user_identity,
-            device_identity,
-            context,
-            risk_score,
-            request.resource
-        )
+mTLS authenticates both ends of a connection and protects transport. A workload certificate should include a stable workload identity, short validity, and a chain to the intended trust domain.
+
+Connection authentication is not request authorization. A proxy may multiplex requests from many users over one authenticated workload connection. The downstream must distinguish “gateway workload called me” from “user X requested action Y,” and must verify any propagated user context rather than trust an arbitrary header.
+
+### 4.2 Bearer tokens
+
+A bearer token can be replayed by whoever possesses it. Limit:
+
+- audience;
+- scope/resource;
+- lifetime;
+- issuer;
+- accepted algorithms and keys;
+- where it may be logged or stored.
+
+Bearer credentials are often necessary across proxies and heterogeneous systems, but their replay boundary must be explicit.
+
+### 4.3 Sender-constrained credentials
+
+Bind a token to a key the client proves it possesses. OAuth mTLS certificate-bound tokens, for example, carry confirmation material associated with the client certificate. A stolen token alone is then insufficient.
+
+Binding adds lifecycle coupling: certificate rotation and token refresh must overlap correctly, TLS termination must preserve proof, and intermediaries cannot silently substitute identities. Model these operational costs before selecting it.
+
+### 4.4 Signed request envelopes
+
+For asynchronous queues or multi-hop workflows, a connection-bound identity may be gone when work executes. A signed envelope can bind:
+
+```text
+issuer workload
+original principal
+tenant
+audience
+action
+resource reference
+request digest
+issued_at / expires_at
+nonce or operation identity
+policy context reference
+signature
 ```
 
-### Device Trust
-
-```
-Device Trust Levels:
-
-Level 0 - Unknown Device
-├── No access to sensitive resources
-├── Limited functionality
-└── Prompted to enroll device
-
-Level 1 - Known Device
-├── Device registered
-├── Basic security checks pass
-└── Access to standard resources
-
-Level 2 - Managed Device
-├── MDM enrolled
-├── Security policies enforced
-├── Encryption verified
-└── Access to sensitive resources
-
-Level 3 - Compliant Device
-├── All of Level 2
-├── Up-to-date patches
-├── No malware detected
-├── Hardware attestation
-└── Access to highly sensitive resources
-```
-
-### Device Health Checks
-
-```python
-class DeviceHealthChecker:
-    def check_device_health(self, device):
-        checks = {
-            'os_version': self.check_os_version(device),
-            'patch_level': self.check_patch_level(device),
-            'encryption': self.check_disk_encryption(device),
-            'firewall': self.check_firewall_enabled(device),
-            'antivirus': self.check_antivirus_status(device),
-            'jailbreak': self.check_not_jailbroken(device),
-            'screen_lock': self.check_screen_lock(device),
-        }
-        
-        # All checks must pass for compliant status
-        is_compliant = all(checks.values())
-        
-        return DeviceHealthResult(
-            is_compliant=is_compliant,
-            checks=checks,
-            last_checked=datetime.utcnow()
-        )
-```
+The consumer validates signature, audience, expiry, replay/idempotency semantics, and authorization against current resource state. Do not forward an end-user bearer token into a queue with retention longer than its intended exposure.
 
 ---
 
-## Micro-Segmentation
+## 5. Policy Decision and Enforcement
 
-### Network Segmentation
+### 5.1 PEP placement
 
-```mermaid
-graph LR
-    subgraph Flat["Traditional Flat Network"]
-        direction LR
-        FWeb[Web] --- FApp[App] --- FDB[DB] --- FAdmin[Admin] --- FUser[User]
-    end
+| Enforcement point | Knows well | Cannot safely own alone |
+|---|---|---|
+| Edge gateway | external identity, route, coarse tenant, abuse signals | record ownership and domain state |
+| Service proxy/sidecar | workload identities, method, connection | application object semantics |
+| Application middleware | route/action, principal context | every resource fact unless passed |
+| Domain service | resource state, relationships, invariants | fleet-wide ingress abuse |
+| Database policy | row/tenant ownership | user intent and cross-service workflow |
+
+Defense in depth is useful only when layers have clear ownership. Repeating the same coarse role check in three places creates drift; enforcing coarse ingress, workload admission, and resource authorization at their natural boundaries creates complementary controls.
+
+### 5.2 Local versus remote policy decisions
+
+Local evaluation:
+
+- avoids an RPC on every request;
+- survives policy-service outage;
+- requires versioned policy distribution and bounded staleness.
+
+Remote evaluation:
+
+- centralizes complex/current facts;
+- simplifies immediate revocation;
+- adds latency, availability, and fan-out dependencies.
+
+A hybrid is common: compiled stable policy locally, with remote lookup for high-risk or highly dynamic facts. The application owns fallback. A generic policy client must not silently convert “PDP unavailable” into allow.
+
+### 5.3 Decision cache
+
+If decisions are cached, the key must include all semantic inputs:
+
+```text
+subject
+workload/caller
+tenant
+action
+resource or policy-relevant resource version
+assurance/posture class
+policy revision
 ```
 
-```mermaid
-graph LR
-    subgraph Segmented["Micro-segmented Network"]
-        Web -->|only 443| App -->|only 8080| DB[("DB<br/>only 5432")]
-        Admin
-        JumpHost[Jump Host]
-        Logs
-    end
-```
-
-```
-Each segment has explicit allow rules, default deny
-```
-
-### Service-Level Segmentation
-
-```yaml
-# Service mesh policy (e.g., Istio)
-apiVersion: security.istio.io/v1beta1
-kind: AuthorizationPolicy
-metadata:
-  name: payment-service-policy
-  namespace: production
-spec:
-  selector:
-    matchLabels:
-      app: payment-service
-  rules:
-  - from:
-    - source:
-        principals: ["cluster.local/ns/production/sa/order-service"]
-    to:
-    - operation:
-        methods: ["POST"]
-        paths: ["/api/v1/payments"]
-  - from:
-    - source:
-        principals: ["cluster.local/ns/production/sa/admin-service"]
-    to:
-    - operation:
-        methods: ["GET"]
-        paths: ["/api/v1/payments/*"]
-```
+Caching only `user_id + permission` can leak across tenant or object boundaries. Bound TTL by revocation requirements and resource-state volatility. Negative and positive decisions may need different budgets.
 
 ---
 
-## Continuous Verification
+## 6. Policy Control Plane
 
-### Session Reevaluation
+A policy change is production code. Use:
 
-```python
-class ContinuousVerification:
-    def __init__(self):
-        self.verification_interval = 300  # 5 minutes
-    
-    async def monitor_session(self, session):
-        while session.is_active:
-            # Reevaluate trust factors
-            current_risk = await self.evaluate_current_risk(session)
-            
-            if current_risk > session.allowed_risk_threshold:
-                # Risk increased - take action
-                if current_risk > CRITICAL_THRESHOLD:
-                    await self.terminate_session(session)
-                elif current_risk > HIGH_THRESHOLD:
-                    await self.require_step_up_auth(session)
-                else:
-                    await self.reduce_permissions(session)
-            
-            await asyncio.sleep(self.verification_interval)
-    
-    async def evaluate_current_risk(self, session):
-        factors = {
-            'location_change': await self.check_location_anomaly(session),
-            'behavior_anomaly': await self.check_behavior_anomaly(session),
-            'device_health': await self.check_device_health(session.device),
-            'threat_intel': await self.check_threat_intelligence(session),
-            'time_anomaly': self.check_time_anomaly(session),
-        }
-        
-        return self.calculate_composite_risk(factors)
+```text
+DRAFT
+  -> VALIDATED
+  -> REVIEWED
+  -> COMPILED
+  -> PUBLISHED
+  -> OBSERVED
+  -> SUPERSEDED
 ```
 
-### Behavior Analytics
+An immutable policy revision contains:
 
-```python
-class UserBehaviorAnalytics:
-    def analyze_request(self, user, request):
-        baseline = self.get_user_baseline(user)
-        
-        anomalies = []
-        
-        # Location analysis
-        if not self.is_typical_location(user, request.ip):
-            anomalies.append(AnomalyType.UNUSUAL_LOCATION)
-        
-        # Time analysis
-        if not self.is_typical_time(user, request.timestamp):
-            anomalies.append(AnomalyType.UNUSUAL_TIME)
-        
-        # Access pattern analysis
-        if self.is_unusual_resource_access(user, request.resource):
-            anomalies.append(AnomalyType.UNUSUAL_RESOURCE)
-        
-        # Volume analysis
-        if self.is_unusual_volume(user, request.timestamp):
-            anomalies.append(AnomalyType.UNUSUAL_VOLUME)
-        
-        # Velocity analysis (impossible travel)
-        if self.is_impossible_travel(user, request):
-            anomalies.append(AnomalyType.IMPOSSIBLE_TRAVEL)
-        
-        return RiskAssessment(anomalies=anomalies)
-    
-    def is_impossible_travel(self, user, request):
-        last_location = self.get_last_location(user)
-        if not last_location:
-            return False
-        
-        current_location = self.geolocate(request.ip)
-        distance = self.calculate_distance(last_location, current_location)
-        time_diff = request.timestamp - last_location.timestamp
-        
-        # Speed > 1000 km/h is physically impossible
-        speed = distance / (time_diff.total_seconds() / 3600)
-        return speed > 1000
+```text
+policy_revision
+schema_version
+source_digest
+compiled_digest
+target_services
+required_evaluator_version
+created_by
+approved_by
+created_at
+change_reason
+previous_revision
+signature
 ```
+
+### 6.1 Publication
+
+1. parse and type-check policy;
+2. validate referenced actions/resources/attributes;
+3. reject cycles or excessive evaluation complexity;
+4. run unit, regression, and semantic-diff tests;
+5. publish content-addressed compiled artifacts;
+6. advance an environment pointer with compare-and-swap;
+7. evaluators fetch, verify, compile/load, and atomically activate;
+8. report active revision and errors.
+
+Push notifications reduce latency; polling repairs missed events. Evaluators reject rollback to an older revision unless an explicit signed rollback command authorizes it.
+
+### 6.2 Staleness classes
+
+Not every decision needs the same freshness:
+
+| Class | Example | Stale behavior |
+|---|---|---|
+| Static service allowlist | service A may call method B | last known good within hours |
+| Tenant membership | user belongs to organization | minutes or session-bound |
+| Privileged role revocation | production admin removed | seconds, remote check if needed |
+| Emergency deny | compromised workload blocked | near-immediate, fail closed beyond budget |
+
+Declare staleness in policy metadata. “Eventually consistent authorization” without a bound is not a security requirement.
 
 ---
 
-## BeyondCorp Model (Google's Implementation)
+## 7. Credential Issuance and Rotation
 
-### Architecture
+### 7.1 Bootstrap
 
-```mermaid
-graph TD
-    Internet[INTERNET] --> Proxy["Access Proxy<br/>(Identity-Aware)"]
-    Proxy --> DI[Device Inventory]
-    Proxy --> UDB[User Database]
-    Proxy --> AP[Access Policy]
-    DI --> TE["Trust Engine<br/>(Continuous Assessment)"]
-    UDB --> TE
-    AP --> TE
-    TE --> IS["Internal Services<br/>(No VPN needed)"]
+The first credential cannot authenticate itself. Bootstrap depends on an attested local or platform identity:
+
+- cloud instance/workload identity;
+- orchestrator service account plus node attestation;
+- TPM or hardware identity;
+- signed workload artifact and trusted launcher;
+- pre-provisioned enrollment credential with narrow one-time use.
+
+Map bootstrap evidence to a workload identity through controlled registration. Protect the registration API; it decides which runtime facts can become which identity.
+
+### 7.2 Rotation overlap
+
+For certificates/roots:
+
+```text
+publish new trust root
+  -> issue credentials under old and/or new chain
+  -> wait until verifiers trust new root
+  -> switch issuance
+  -> observe old-chain usage reach zero
+  -> remove old root after maximum credential lifetime + margin
 ```
 
-### Key Components
+Removing an old root before all credentials rotate causes an outage. Trusting a compromised old root indefinitely preserves attacker access. Track both safety windows explicitly.
 
-```
-1. Device Inventory
-   - Every device has unique certificate
-   - Device properties tracked centrally
-   - Health status continuously updated
+### 7.3 Revocation versus short lifetime
 
-2. User/Group Database  
-   - SSO integration
-   - Group memberships
-   - Job functions and access levels
+Short-lived credentials reduce reliance on large revocation lists, but issuance must stop quickly and verifiers must reject beyond expiry. For immediate compromise response, combine:
 
-3. Access Proxy
-   - All access goes through proxy
-   - Terminates TLS
-   - Enforces authentication
-   - Makes policy decisions
+- disabling registration/issuance;
+- emergency deny policy;
+- connection draining;
+- revocation/status where supported;
+- key rotation;
+- workload quarantine.
 
-4. Access Control Engine
-   - Combines all trust signals
-   - Evaluates against policies
-   - Returns allow/deny decisions
-
-5. Trust Inference Pipeline
-   - Continuously calculates trust levels
-   - Incorporates threat intelligence
-   - Updates in near-real-time
-```
+Connection pools can outlive credential rotation. Define whether an authenticated connection remains valid until close or is periodically reauthorized.
 
 ---
 
-## Implementation Strategy
+## 8. Capacity and Availability
 
-### Phase 1: Identify and Catalog
+Assume:
 
-```
-1. Identify all resources
-   - Applications (internal and SaaS)
-   - Data stores
-   - Infrastructure
-   - APIs
+- 180,000 requests per second;
+- 2 local policy evaluations per request;
+- 0.4 percent require a remote high-risk decision;
+- remote PDP p99 service time is 12 ms;
+- target remote-PDP utilization is 60 percent;
+- one PDP replica sustains 500 concurrent evaluations.
 
-2. Catalog users and devices
-   - User inventory
-   - Device inventory
-   - Service accounts
+Local evaluation rate:
 
-3. Map access patterns
-   - Who accesses what
-   - From where
-   - How often
-
-4. Classify data sensitivity
-   - Public
-   - Internal
-   - Confidential
-   - Restricted
+```text
+180,000 * 2 = 360,000 evaluations/s
 ```
 
-### Phase 2: Strengthen Identity
+Remote request rate:
 
-```
-1. Implement strong authentication
-   - MFA everywhere
-   - Passwordless where possible
-   - Hardware security keys for privileged users
-
-2. Deploy device trust
-   - Device certificates
-   - MDM/endpoint management
-   - Device health attestation
-
-3. Establish identity source of truth
-   - Single identity provider
-   - Unified directory
-   - Automated provisioning/deprovisioning
+```text
+180,000 * 0.004 = 720 requests/s
 ```
 
-### Phase 3: Micro-Segmentation
+Expected in-flight remote work at p99 is roughly:
 
-```
-1. Segment networks
-   - Define security zones
-   - Implement network policies
-   - Deploy next-gen firewalls
-
-2. Implement service mesh
-   - mTLS between services
-   - Service-to-service authorization
-   - Traffic encryption
-
-3. Deploy application-level controls
-   - Web application firewall
-   - API gateway with auth
-   - Database access controls
+```text
+720/s * 0.012 s = 8.64 requests
 ```
 
-### Phase 4: Continuous Monitoring
+That suggests concurrency is easy, but averages hide bursts and dependency fan-out. Size from measured distributions and regional failure headroom, not the arithmetic alone. More important: the remote PDP is on a high-risk request path, so provision N-minus-one capacity, bound deadlines, and define fail-closed behavior.
 
+Control-plane fan-out scales with evaluators. A 4 MiB policy snapshot sent every minute to 10,000 processes is:
+
+```text
+4 MiB * 10,000 / 60 s = 667 MiB/s
 ```
-1. Deploy SIEM
-   - Aggregate security logs
-   - Correlation rules
-   - Alerting
 
-2. Implement UEBA
-   - Baseline normal behavior
-   - Detect anomalies
-   - Risk scoring
-
-3. Automate response
-   - Automated containment
-   - Session termination
-   - Access revocation
-```
+Use content digests, regional relays, compressed artifacts, jittered polling, and deltas with full-snapshot repair. Keep local evaluation artifacts immutable and atomically replaceable.
 
 ---
 
-## Zero Trust for APIs
+## 9. Multi-Region and Federation
 
-### API Gateway as Policy Enforcement Point
+Identity and policy have different authority requirements:
 
-```python
-class ZeroTrustAPIGateway:
-    async def handle_request(self, request):
-        # 1. Authenticate caller (user or service)
-        identity = await self.authenticate(request)
-        if not identity:
-            return Response(401, "Authentication required")
-        
-        # 2. Validate device/client
-        client_trust = await self.evaluate_client_trust(request)
-        if client_trust.level < MINIMUM_TRUST_LEVEL:
-            return Response(403, "Client trust level insufficient")
-        
-        # 3. Evaluate context
-        context = await self.build_context(request, identity, client_trust)
-        
-        # 4. Check authorization
-        authz_decision = await self.policy_engine.authorize(
-            identity,
-            request.resource,
-            request.action,
-            context
-        )
-        
-        if not authz_decision.allowed:
-            return Response(403, authz_decision.reason)
-        
-        # 5. Log for audit
-        await self.audit_log.record(request, identity, authz_decision)
-        
-        # 6. Forward to backend
-        response = await self.forward_to_backend(request, identity)
-        
-        # 7. Inspect response (DLP)
-        await self.inspect_response(response, identity, context)
-        
-        return response
-```
+- one globally ordered policy revision per environment;
+- regional distribution and local evaluation;
+- trust-domain roots scoped by environment/administration;
+- explicit federation bundles;
+- workload home region or globally unique identity;
+- region-local emergency deny capability with audited convergence.
 
-### Service-to-Service Authentication
+If regions accept independent concurrent policy writes, conflict resolution must preserve deny semantics and rule ordering. Last-write-wins can remove a security restriction because of clock or replication order. Prefer a single logical policy authority or disjoint ownership.
 
-```python
-# Using SPIFFE/SPIRE for workload identity
-class ServiceIdentity:
-    def __init__(self, spire_client):
-        self.spire = spire_client
-    
-    async def get_identity(self):
-        # Workload gets identity from SPIRE agent
-        svid = await self.spire.fetch_x509_svid()
-        return svid
-    
-    async def call_service(self, target_service, request):
-        # Get our identity
-        svid = await self.get_identity()
-        
-        # Create mTLS connection
-        ssl_context = ssl.create_default_context()
-        ssl_context.load_cert_chain(
-            certfile=svid.cert_chain,
-            keyfile=svid.private_key
-        )
-        
-        # Make request with mTLS
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"https://{target_service}/api",
-                json=request,
-                ssl=ssl_context
-            ) as response:
-                return await response.json()
-```
+Regional isolation needs last-known-good identity bundles and policy, but also a maximum isolation duration. After it, high-risk access fails closed or enters a documented break-glass procedure.
+
+Federation maps identities, not permissions. A partner identity `spiffe://partner.example/service/a` should receive only explicitly mapped access in the local domain.
 
 ---
 
-## Challenges and Trade-offs
+## 10. Network Segmentation Still Matters
 
-### Performance Impact
+Zero trust does not mean “the network is irrelevant.” Segmentation:
 
-```
-Challenge: Every request requires multiple checks
-- Identity verification
-- Device health check  
-- Policy evaluation
-- Context analysis
+- removes unreachable attack paths;
+- limits credential-testing and scanning;
+- contains data exfiltration;
+- protects control-plane endpoints;
+- reduces accidental cross-environment access.
 
-Mitigation:
-- Cache trust decisions (with short TTL)
-- Use efficient policy engines (e.g., OPA)
-- Distribute policy enforcement points
-- Asynchronous verification where acceptable
-```
+The difference is that reachability is not sufficient authority. Use network policy as one layer, cryptographic workload identity for authentication, and resource policy for authorization.
 
-### User Experience
-
-```
-Challenge: Additional authentication friction
-
-Mitigation:
-- Risk-based authentication (step-up when needed)
-- SSO reduces authentication prompts
-- Passwordless authentication
-- Transparent device authentication
-- Remember trusted devices (within policy)
-```
-
-### Legacy Systems
-
-```
-Challenge: Older systems don't support modern auth
-
-Mitigation:
-- Place proxy/gateway in front
-- Implement identity bridging
-- Gradual migration plan
-- Segment legacy systems more strictly
-```
-
-### Complexity
-
-```
-Challenge: Significant increase in system complexity
-
-Mitigation:
-- Incremental implementation
-- Strong automation
-- Comprehensive monitoring
-- Clear documentation
-- Training for ops teams
-```
+Egress is often the forgotten half. An exploited workload with broad outbound network access can exfiltrate data or call arbitrary effectors. Apply destination allowlists, DNS/service identity, proxy policy, and per-workload egress credentials.
 
 ---
 
-## Metrics and Monitoring
+## 11. Failure Traces
 
-### Key Metrics
+### 11.1 Proxy trusts an unsigned identity header
 
-```python
-class ZeroTrustMetrics:
-    def __init__(self):
-        self.metrics = {
-            # Authentication metrics
-            'auth_attempts': Counter(),
-            'auth_failures': Counter(),
-            'mfa_challenges': Counter(),
-            
-            # Authorization metrics
-            'access_granted': Counter(),
-            'access_denied': Counter(),
-            'policy_violations': Counter(),
-            
-            # Device metrics
-            'compliant_devices': Gauge(),
-            'non_compliant_devices': Gauge(),
-            'unknown_devices': Gauge(),
-            
-            # Risk metrics
-            'high_risk_sessions': Gauge(),
-            'anomaly_detections': Counter(),
-            'session_terminations': Counter(),
-            
-            # Performance
-            'policy_eval_latency': Histogram(),
-            'auth_latency': Histogram(),
-        }
-```
+1. Gateway authenticates users and normally injects `X-User-ID`.
+2. Internal service is also reachable directly.
+3. Caller supplies its own header.
+4. Service authorizes as another user.
 
-### Dashboards
+**Prevention:** remove caller-provided identity headers at the boundary, cryptographically bind propagated identity, and close bypass paths.
 
-```
-Zero Trust Dashboard:
+### 11.2 mTLS grants transitive authority
 
-  Access Overview (Last 24h)
-  Granted: 45,231 (↑ 5%)  |  Denied: 1,247 (↓ 12%)  |  Step-up: 892 (↑ 23%)
+1. Service A's certificate is valid.
+2. Service A is compromised.
+3. Every downstream accepts any action from A because “mTLS passed.”
+4. Attacker reads or mutates unrelated tenants.
 
-  Device Compliance: 85% Compliant
-  Risk Score Distribution: Low 75% | Medium 18% | High 7%
-```
+**Prevention:** mTLS authenticates workload A; downstream still authorizes action/resource/tenant and propagated principal.
+
+### 11.3 Policy outage widens access
+
+1. Remote PDP times out.
+2. SDK catches the error and defaults to `allow` for availability.
+3. An attacker creates PDP load and bypasses policy.
+
+**Prevention:** decision-class-specific fail-safe default, local last-known-good policy, deadlines, and circuit isolation.
+
+### 11.4 Stale allow survives revocation
+
+1. Administrator access is revoked.
+2. One region misses the policy update.
+3. Cached allow remains valid for an hour.
+4. Revoked account changes production.
+
+**Prevention:** freshness class for privileged access, active revision telemetry, short cache bound, and remote/current check for sensitive actions.
+
+### 11.5 Root rotation partitions the fleet
+
+1. Issuer begins signing with a new root.
+2. Some proxies have not received the bundle.
+3. New credentials fail in those paths.
+4. Retry traffic amplifies the outage.
+
+**Prevention:** trust-new-before-issue, observed convergence, dual-chain overlap, and staged rotation.
+
+### 11.6 Cross-tenant decision cache
+
+1. Cache key contains user and action but not tenant/resource.
+2. User is admin in tenant A.
+3. Cached allow is reused in tenant B.
+
+**Prevention:** complete semantic cache key and property tests for tenant separation.
+
+### 11.7 Identity agent is a local confused deputy
+
+1. Any container on a node can reach a workload identity endpoint.
+2. Agent selects identity from caller-provided metadata.
+3. Malicious workload requests a privileged identity.
+
+**Prevention:** local endpoint isolation and attested selector matching based on trusted runtime facts.
 
 ---
 
-## References
+## 12. Observability and Incident Response
 
-- [NIST SP 800-207: Zero Trust Architecture](https://csrc.nist.gov/publications/detail/sp/800-207/final)
-- [Google BeyondCorp Papers](https://cloud.google.com/beyondcorp)
-- [Microsoft Zero Trust](https://www.microsoft.com/en-us/security/business/zero-trust)
-- [CISA Zero Trust Maturity Model](https://www.cisa.gov/zero-trust-maturity-model)
-- [Forrester Zero Trust Model](https://www.forrester.com/report/the-definition-of-modern-zero-trust/RES176317)
+Identity-plane signals:
+
+- issuance/renewal rate, latency, and rejection reason;
+- credential age and expiry headroom;
+- selector/attestation mismatch;
+- active chain/root distribution;
+- unexpected identity on node/namespace;
+- issuance after disable request.
+
+Policy-plane signals:
+
+- mutation, validation, approval, and publication outcomes;
+- evaluator active revision distribution;
+- stale/error/not-ready evaluator count;
+- semantic decision diff during rollout;
+- emergency deny propagation latency;
+- rollback/downgrade attempts.
+
+Enforcement signals:
+
+- allow/deny/error by action and coarse resource class;
+- authentication and audience/binding failures;
+- policy evaluation latency and cache result;
+- bypass-path probes;
+- cross-region/federation use;
+- break-glass activation and duration.
+
+Avoid principal IDs, resource IDs, and arbitrary policy attributes as metric labels. Put high-cardinality evidence in access-controlled audit logs with sampling/retention rules.
+
+Incident response needs a rehearsed sequence:
+
+1. identify compromised principal/workload/trust domain;
+2. block issuance and publish emergency deny;
+3. drain or quarantine active workloads/connections;
+4. rotate affected credentials/roots;
+5. search audit evidence for resource access and lateral movement;
+6. repair policy/registration cause;
+7. restore through ordinary versioned publication;
+8. remove emergency state only after verification.
+
+---
+
+## 13. Migration Path
+
+Do not begin by enforcing every service-to-service edge.
+
+1. Inventory callers, workloads, resources, and bypass paths.
+2. Issue workload identities in observe-only mode.
+3. Build an edge graph from authenticated telemetry.
+4. Define action/resource vocabulary and policy ownership.
+5. Enforce on a low-risk service with a tested fail-safe path.
+6. Move from broad service allowlists to method and resource authorization.
+7. Replace static credentials and shared secrets.
+8. Add high-risk freshness and sender binding.
+9. segment network/egress based on observed required paths;
+10. remove legacy credentials and unauthenticated endpoints.
+
+Observe-only data is evidence, not policy. Existing traffic may include compromise, obsolete integrations, or overbroad access. Require owners to justify edges before converting them to allows.
+
+Use policy semantic diffs: replay privacy-scrubbed access requests under old and proposed revisions and review newly allowed and newly denied sets. Canary enforcement by service/tenant and retain an audited rollback revision.
+
+---
+
+## 14. Verification
+
+1. **Identity tests:** wrong issuer, audience, trust domain, expiry, signature, and key binding.
+2. **Policy tests:** allow/deny vectors, missing attributes, resource versions, and tenant separation.
+3. **Path tests:** direct-to-service, alternate ports, admin endpoints, queues, jobs, and database access.
+4. **Control-plane fault tests:** missed update, corrupt artifact, rollback, stale region, and invalid compiler version.
+5. **Rotation tests:** new root trust before issuance, old root removal, long-lived connection behavior.
+6. **Cache tests:** complete key, stale revocation, negative/positive TTL, cross-tenant properties.
+7. **Load tests:** cold evaluator start, policy fan-out, remote PDP overload, and denial storms.
+8. **Federation tests:** unknown domain, expired bundle, identity collision, and overbroad mapping.
+9. **Break-glass game day:** activate, scope, observe, expire, and review emergency access.
+10. **Adversarial tests:** header spoofing, token replay, confused deputy, SSRF/egress, and compromised workload lateral movement.
+
+The strongest test is end-to-end: demonstrate that a principal can reach an intended resource and that changing network location, forging headers, replaying credentials, or calling through an unintended workload does not widen authority.
+
+---
+
+## 15. Decision Framework
+
+Use this architecture when internal reachability is broad, workloads are dynamic, credentials need automated rotation, multiple trust domains interact, or compromise of one workload must not grant transitive access.
+
+Before adding a component, answer:
+
+1. Which attacker capability or ambient trust does it remove?
+2. What identity is authenticated, and how was it bootstrapped?
+3. What exact action/resource/tenant is authorized?
+4. Which enforcement paths can bypass the check?
+5. How stale may identity, policy, posture, and revocation become?
+6. Does the credential need sender binding?
+7. What happens when issuer, PDP, policy distribution, or trust bundle is unavailable?
+8. How are credentials and roots rotated without partitioning the fleet?
+9. Which data appears in decision/audit telemetry?
+10. How is emergency access bounded and expired?
+
+Do not call an architecture zero trust merely because it uses a mesh, proxy, VPN replacement, or short-lived certificate. The defining property is that each protected action is authorized from verified identity and current resource context at a non-bypassable boundary, with explicit failure semantics.
+
+---
+
+## Primary References
+
+- [NIST SP 800-207: Zero Trust Architecture](https://csrc.nist.gov/pubs/sp/800/207/final)
+- [SPIFFE Identity and Verifiable Identity Document Specification](https://spiffe.io/docs/latest/spiffe-specs/spiffe-id/)
+- [SPIFFE Workload API Specification](https://spiffe.io/docs/latest/spiffe-specs/spiffe_workload_api/)
+- [RFC 8705: OAuth 2.0 Mutual-TLS Client Authentication and Certificate-Bound Access Tokens](https://www.rfc-editor.org/rfc/rfc8705)
+- [RFC 9700: Best Current Practice for OAuth 2.0 Security](https://www.rfc-editor.org/rfc/rfc9700)
+- [Google Research: BeyondCorp—A New Approach to Enterprise Security](https://research.google/pubs/beyondcorp-a-new-approach-to-enterprise-security/)
+
+---
+
+## Related Chapters
+
+- [Authentication Systems](./01-authentication-fundamentals.md)
+- [OAuth 2.0 and OpenID Connect](./02-oauth2-openid-connect.md)
+- [Authorization at Scale](./07-authorization-patterns.md)
+- [Encryption Patterns](./06-encryption.md)
+- [Service Mesh Data and Control Planes](../12-service-mesh/03-sidecar-pattern.md)
+- [Multi-Tenancy Patterns](../06-scaling/12-multi-tenancy.md)

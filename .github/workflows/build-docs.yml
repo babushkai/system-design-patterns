@@ -35,6 +35,11 @@ jobs:
       - name: Build documentation
         run: npm run docs:build
 
+      - name: Validate rendered site
+        run: |
+          python scripts/validate_built_site.py
+          grep -q 'USD 100' .vitepress/dist/01-foundations/01-acid-transactions.html
+
       - name: Download PDF from nightly release
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:

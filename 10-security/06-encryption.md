@@ -1,652 +1,473 @@
-# Encryption Patterns
+# Cryptographic Key and Data-Protection Architecture
 
 ## TL;DR
 
-Encryption protects data confidentiality. Use TLS for data in transit, AES-256 for data at rest, and understand key management is the hardest part. Encryption without proper key management is security theater.
+Encryption is not a box labeled “AES” between an application and a database. It is a distributed protocol whose correctness depends on data classification, authenticated metadata, nonce allocation, key hierarchy, authorization to use keys, recoverability, rotation, and the lifetime of every plaintext copy.
+
+A production design normally separates:
+
+- **bulk data encryption** with an authenticated-encryption algorithm such as AES-GCM or ChaCha20-Poly1305;
+- **key wrapping** through a key-encryption key (KEK) held by a KMS or HSM;
+- **short-lived data-encryption keys** (DEKs) scoped to a tenant, object, shard, epoch, or other explicit blast radius;
+- **transport protection** with TLS 1.3, which is distinct from stored-data protection and application authorization;
+- **key policy and lifecycle** in a control plane, away from the high-volume data path;
+- **versioned ciphertext envelopes** that preserve the algorithm, key reference, nonce, authenticated context, and migration state needed to decrypt safely years later.
+
+The central invariant is stronger than “an attacker cannot read the ciphertext”: an unauthorized party must be unable to read **or undetectably modify** protected data, while an authorized recovery process must still be able to interpret every retained version for its declared lifetime.
 
 ---
 
-## Encryption Fundamentals
+## 1. Start with the Protection Contract
 
-### Symmetric vs. Asymmetric
+Cryptography can only enforce a stated boundary. Before selecting a primitive, identify:
 
+- the data class: public, internal, confidential, credential, regulated, or customer-managed;
+- the attacker: stolen disk, database reader, backup operator, cloud administrator, compromised application process, neighboring tenant, network observer, or malicious client;
+- when plaintext is permitted: client only, trusted service memory, analytics enclave, support workflow, or nowhere after ingestion;
+- required integrity and provenance, not only confidentiality;
+- retention, legal hold, export, deletion, and disaster-recovery obligations;
+- acceptable outage behavior when a key service or trust root is unavailable.
+
+An example record contract is:
+
+```text
+protect(
+  plaintext,
+  tenant_id,
+  resource_id,
+  schema_version,
+  classification,
+  key_scope,
+  crypto_policy_revision
+) -> versioned_ciphertext_envelope
 ```
-Symmetric Encryption (AES):
-- Same key encrypts and decrypts
-- Fast, efficient for large data
-- Challenge: How to share the key securely?
+
+The corresponding open operation must verify the same semantic context. A blob copied from tenant A into a row owned by tenant B must not decrypt merely because both rows happen to use the same key.
+
+### 1.1 System invariants
+
+1. **Authenticated encryption:** protected content is confidential and tampering is detected before plaintext is released.
+2. **Nonce uniqueness:** a nonce is never reused with the same AEAD key. Random generation is acceptable only when collision probability stays within a reviewed bound.
+3. **Context binding:** tenant, resource, schema, purpose, and key version are authenticated as associated data where substitution matters.
+4. **Separated authority:** reading a database or object store does not automatically grant permission to use its wrapping keys.
+5. **Least-privilege key use:** a workload can decrypt only the scopes and purposes it owns.
+6. **Versioned interpretation:** algorithm and envelope changes are explicit; decryption never guesses.
+7. **Recoverable retention:** every retained ciphertext has a tested path to required key material, including backups and regional failover.
+8. **Bounded destruction:** deleting a key is irreversible only after dependent backups, replicas, legal holds, and derived data have been accounted for.
+9. **No silent downgrade:** unsupported algorithms, versions, malformed nonces, or missing authentication tags fail closed.
+10. **Observable use, secret-safe logs:** key operations and failures are attributable without logging plaintext, DEKs, tokens, or raw ciphertext unnecessarily.
+
+---
+
+## 2. Use Primitives for Their Actual Contract
+
+### 2.1 Authenticated encryption
+
+Use an established AEAD construction. AES-GCM is widely accelerated and standardized; ChaCha20-Poly1305 is often attractive when AES hardware acceleration is absent. Both produce ciphertext plus an authentication tag and accept **additional authenticated data** (AAD) that is authenticated but not encrypted.
+
+```text
+(ciphertext, tag) = AEAD.Seal(DEK, nonce, plaintext, AAD)
+plaintext         = AEAD.Open(DEK, nonce, ciphertext, AAD, tag)
 ```
+
+Do not use unauthenticated encryption modes for application records. Encryption without integrity can allow bit manipulation, padding oracles, or cross-record substitution.
+
+AAD is useful for values required to interpret or locate a record but whose integrity must be coupled to it:
+
+```text
+aad = canonical_encode({
+  tenant_id,
+  resource_type,
+  resource_id,
+  schema_version,
+  crypto_purpose,
+  key_version
+})
+```
+
+Canonical encoding matters. If the writer and reader serialize the same fields differently, legitimate data becomes undecryptable. Store or derive a stable AAD schema identifier.
+
+### 2.2 Nonce allocation is state management
+
+With AES-GCM, reusing a nonce under the same key can reveal relationships between plaintexts and undermine authentication. “Generate 12 random bytes” is not an architectural explanation; it is a probabilistic allocator.
+
+For uniformly random 96-bit nonces, the approximate collision probability after $n$ encryptions is:
+
+$$
+P_{collision} \approx \frac{n(n-1)}{2 \cdot 2^{96}}
+$$
+
+At $n=2^{32}$ encryptions under one key, this approximation is roughly $2^{-33}$. A system with a much stricter risk budget should rotate earlier or use a construction and library with a reviewed deterministic counter/allocation scheme. A counter requires crash-safe uniqueness across writers: typically a writer identifier plus local counter, disjoint leased ranges, or a single-writer key scope. Restoring a virtual-machine snapshot must not rewind the counter while retaining the key.
+
+Never invent a nonce scheme inside each service. Put the rule in the crypto library and make maximum messages/bytes per key part of policy.
+
+### 2.3 Hashes, passwords, MACs, and signatures are different
+
+| Need | Primitive | Important property |
+|---|---|---|
+| Detect accidental corruption | checksum/hash | not keyed; not proof against an attacker |
+| Store a password verifier | Argon2id, scrypt, bcrypt, or PBKDF2 under an approved policy | salted and intentionally expensive |
+| Authenticate data between shared-key parties | HMAC | all verifiers can also forge |
+| Prove origin across trust boundaries | digital signature | private signer, public verification |
+| Keep data secret and tamper-evident | AEAD | key and nonce discipline required |
+
+Password hashing is intentionally one-way; data encryption is reversible. A plain fast hash of a password is not a password verifier. A signature does not hide its message. A checksum is not a MAC.
+
+### 2.4 Public-key encryption and hybrid encryption
+
+Public-key operations are normally used to establish or wrap symmetric key material, not encrypt a large payload directly. In a hybrid construction, a sender derives or generates a content-encryption key, encrypts bulk data symmetrically, and encapsulates that key for the recipient. HPKE standardizes a modern public-key hybrid construction.
+
+This is related to but distinct from cloud-style **envelope encryption**, where a KMS-controlled KEK wraps a randomly generated DEK. Do not use the terms interchangeably: envelope encryption describes a key hierarchy and operational boundary; hybrid public-key encryption describes how recipients obtain a symmetric context.
+
+---
+
+## 3. Envelope Encryption Architecture
+
+Calling a remote KMS for every 4 KiB record is usually slow, expensive, and an availability hazard. The KMS should protect a key hierarchy; local audited code should perform high-volume AEAD operations.
 
 ```mermaid
-graph LR
-    Alice -->|Encrypt with Key| Ciphertext
-    Ciphertext -->|Decrypt with Key| Plaintext
-    Alice ---|Shared Key| Bob
+flowchart LR
+    CP[Key-policy control plane] --> KMS[KMS / HSM]
+    APP[Authorized workload] -->|GenerateDataKey or unwrap| KMS
+    KMS -->|plaintext DEK over protected channel| APP
+    KMS -->|wrapped DEK| APP
+    APP -->|AEAD with DEK| ENV[Ciphertext envelope]
+    ENV --> STORE[(Database / object store / backup)]
+    AUDIT[(Immutable key-use audit)] <-->|metadata only| KMS
+    APP -->|zeroize or bounded cache| DEAD[Expired DEK]
 ```
 
+Typical write path:
+
+1. Resolve the crypto policy and KEK reference for the tenant and purpose.
+2. Obtain a fresh DEK or a permitted cached DEK scoped to a bounded encryption epoch.
+3. Allocate a unique nonce.
+4. Canonically encode AAD.
+5. AEAD-encrypt the plaintext.
+6. Persist the ciphertext, tag, nonce, wrapped DEK or DEK reference, key version, algorithm suite, and envelope version atomically.
+7. Remove plaintext and expired key material from reachable memory as far as the runtime permits.
+
+Typical read path:
+
+1. Parse the envelope with strict length and version limits.
+2. Authorize the caller for the record and the key purpose.
+3. Resolve and unwrap the DEK through an allowed KEK version.
+4. Reconstruct AAD from authoritative context.
+5. Verify and decrypt in one AEAD operation.
+6. Release plaintext only after tag verification.
+
+### 3.1 A durable ciphertext envelope
+
+```text
+EnvelopeV2 {
+  envelope_version
+  algorithm_suite
+  kek_uri
+  kek_version
+  encrypted_dek
+  nonce
+  aad_schema
+  ciphertext
+  authentication_tag
+  created_at
+}
 ```
-Asymmetric Encryption (RSA, ECC):
-- Public key encrypts, private key decrypts
-- Slower, used for key exchange and signatures
-- Anyone can encrypt, only private key holder decrypts
+
+The KEK URI should identify a stable logical key and an immutable version. Avoid storing secrets in the envelope. `tenant_id` may be stored outside the envelope and supplied as AAD; if stored inside, it remains public metadata and still must be authenticated.
+
+The parser is part of the security boundary. Cap every variable-length field, reject duplicate or unknown critical fields, and authenticate format-critical metadata. “Try AES, then try the legacy cipher” creates downgrade and oracle behavior.
+
+---
+
+## 4. Key Hierarchy and Lifecycle
+
+### 4.1 Scope is a blast-radius decision
+
+A common hierarchy is:
+
+```text
+root / HSM trust material
+  -> regional or environment KEK
+      -> tenant-and-purpose KEK or logical KMS key
+          -> object, shard, or epoch DEK
+              -> ciphertext records
 ```
+
+Finer scopes reduce exposure and make selective destruction possible, but increase metadata, KMS operations, cache cardinality, and recovery complexity. One DEK per record gives strong isolation but may make reads KMS-bound unless wrapped DEKs are cached carefully. One DEK for an entire database is operationally easy but makes nonce allocation and compromise blast radius unacceptable for many systems.
+
+Choose scope from:
+
+- maximum plaintext exposed by one DEK;
+- maximum messages or bytes allowed by the AEAD policy;
+- revocation and deletion granularity;
+- number of simultaneous active keys the service can safely cache;
+- KMS throughput during cold start and regional recovery.
+
+### 4.2 State machine
+
+Treat a key version as durable state:
 
 ```mermaid
-graph LR
-    Alice["Alice<br/>(Public Key)"] -->|"Encrypt with Bob's public key"| Ciphertext
-    Ciphertext -->|"Decrypt with Bob's private key"| Plaintext
-    Plaintext --- Bob["Bob<br/>(Private Key)"]
+stateDiagram-v2
+    [*] --> Pending
+    Pending --> EncryptDecrypt: approved and distributed
+    EncryptDecrypt --> DecryptOnly: successor active
+    DecryptOnly --> Disabled: retention elapsed
+    Disabled --> DecryptOnly: controlled recovery
+    Disabled --> DestroyScheduled: dependencies proven absent
+    DestroyScheduled --> Destroyed: waiting period elapsed
+    Destroyed --> [*]
 ```
 
-### Hybrid Encryption (How TLS Works)
+`EncryptDecrypt` means new ciphertext may reference this version. `DecryptOnly` supports old data but cannot create more dependency. `Disabled` is reversible and useful as a safety stage. `Destroyed` must be treated as permanent.
 
-```
-1. Asymmetric exchange of symmetric key
-2. Symmetric encryption for actual data
-```
+Every transition should record actor, reason, policy, approval, inventory snapshot, and affected scopes. Emergency compromise rotation may skip normal timing but must not skip dependency accounting.
 
-```mermaid
-sequenceDiagram
-    participant Client
-    participant Server
+### 4.3 Rotation, rewrapping, and re-encryption
 
-    Client->>Server: Request server cert
-    Server-->>Client: Server public key
-    Client->>Client: Generate random symmetric key
-    Client->>Client: Encrypt with server's public key
-    Client->>Server: Encrypted symmetric key
-    Server->>Server: Decrypt with private key
-    Client<-->Server: Symmetric encrypted data exchange
-```
+These operations solve different problems:
+
+- **Rotate KEK:** create a new KEK version for future wrapping.
+- **Rewrap:** unwrap a DEK with the old KEK and wrap the same DEK with the new KEK; bulk ciphertext stays unchanged.
+- **Rotate DEK:** use a new DEK for new writes.
+- **Re-encrypt:** decrypt bulk data and encrypt it with a new DEK or algorithm suite.
+
+Rewrapping is cheaper and limits exposure to an old KEK, but does not help if a DEK was compromised. Re-encryption is required for a compromised DEK, nonce-policy failure, algorithm migration, or changed isolation scope.
+
+Run migration as resumable, idempotent work. Store source and target versions, compare-and-swap the envelope, rate-limit against foreground traffic, and verify counts plus sampled decryptions before disabling old material. Readers generally need dual-read capability during the migration; writers should switch once, not oscillate between versions.
 
 ---
 
-## Data in Transit (TLS)
+## 5. KMS and HSM as a Control Boundary
 
-### TLS 1.3 Handshake
+A KMS manages logical keys, policy, versions, audit, and cryptographic operations. An HSM provides tamper-resistant execution and protection for high-value key material. A managed KMS may itself be backed by HSMs; the terms describe different layers, not competing algorithms.
 
-```mermaid
-sequenceDiagram
-    participant Client
-    participant Server
+Key policy should bind:
 
-    Client->>Server: ClientHello (cipher suites, DH key share, versions)
-    Server-->>Client: ServerHello (selected cipher, DH key share, certificate, Finished)
-    Note over Client, Server: Both derive symmetric keys
-    Client->>Server: Finished
-    Client<-->Server: Encrypted Application Data
-```
+- workload identity and environment;
+- permitted operation: encrypt, decrypt, wrap, unwrap, sign, or administer;
+- tenant/purpose conditions where supported;
+- region and network path;
+- separation between use and administration;
+- break-glass approvals and time bounds.
 
-### TLS Configuration Best Practices
+The service that can update key policy should not automatically be able to read production ciphertext. The database administrator should not automatically be a KMS decrypt principal. CI should not receive production decrypt permission because it deploys the service.
 
-```python
-import ssl
+### 5.1 Plaintext DEK cache
 
-def create_secure_ssl_context():
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    
-    # Minimum TLS 1.2, prefer 1.3
-    context.minimum_version = ssl.TLSVersion.TLSv1_2
-    context.maximum_version = ssl.TLSVersion.TLSv1_3
-    
-    # Strong cipher suites only
-    context.set_ciphers(
-        'ECDHE+AESGCM:DHE+AESGCM:ECDHE+CHACHA20:DHE+CHACHA20'
-    )
-    
-    # Load certificate chain
-    context.load_cert_chain(
-        certfile='/path/to/cert.pem',
-        keyfile='/path/to/key.pem'
-    )
-    
-    # Enable certificate verification for client connections
-    context.verify_mode = ssl.CERT_REQUIRED
-    context.check_hostname = True
-    
-    return context
-```
+A bounded local DEK cache can remove KMS latency from the hot path, but it changes the threat model. Define:
 
-### mTLS (Mutual TLS)
+- maximum residence time;
+- maximum uses and bytes;
+- maximum entries and memory;
+- process and host isolation;
+- eviction and best-effort zeroization;
+- behavior after revocation;
+- whether crash dumps, swap, tracing, or profiling can capture key material.
 
-Both client and server present certificates.
-
-```mermaid
-sequenceDiagram
-    participant A as Service A<br/>(Cert + Key + CA)
-    participant B as Service B<br/>(Cert + Key + CA)
-
-    A->>B: 1. Present cert, verify B's cert
-    B->>A: 2. Present cert, verify A's cert
-    A<-->B: 3. Encrypted communication
-```
-
-```
-Use cases:
-- Service mesh (Istio, Linkerd)
-- Zero trust architectures
-- API security between trusted services
-```
+Cache entries must be keyed by immutable key version plus scope and purpose, not a friendly alias whose target can rotate. Do not persist plaintext DEKs to disk to “survive KMS outages.”
 
 ---
 
-## Data at Rest
+## 6. Transport Encryption Is a Different Layer
 
-### Encryption Layers
+TLS 1.3 protects a connection against network observation and active tampering when certificate and hostname validation succeed. Its normal ephemeral (EC)DHE handshakes provide forward secrecy: later compromise of a certificate private key does not reveal previously recorded sessions. Session resumption, ticket-key rotation, termination points, and exported logs still affect the real boundary.
 
-```mermaid
-graph TD
-    AL["Application Layer<br/>Field-level encryption<br/>Encrypt SSN, credit card before storing<br/>Application manages keys"]
-    DL["Database Layer<br/>Transparent Data Encryption (TDE)<br/>Database encrypts data files<br/>Transparent to application"]
-    SL["Storage Layer<br/>Full Disk Encryption (FDE)<br/>Encrypts entire disk/volume<br/>Protects against physical theft"]
+mTLS adds client-certificate authentication. It identifies the peer workload or client associated with the channel; it does **not** decide whether that identity may update a particular invoice. Resource authorization remains a separate check described in [Authorization at Scale](./07-authorization-patterns.md).
 
-    AL --> DL --> SL
+Map the plaintext path explicitly:
+
+```text
+client -> edge TLS termination -> proxy hop -> service -> database driver
 ```
 
-### Application-Level Encryption
+“TLS enabled” can still leave plaintext between an ingress and a service, inside debug capture, or at an unexpected load balancer. Conversely, encrypting each application field does not authenticate the service endpoint or hide traffic metadata.
 
-```python
-from cryptography.fernet import Fernet
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-import os
-
-class FieldEncryption:
-    """Encrypt sensitive fields before database storage"""
-    
-    def __init__(self, key: bytes):
-        # AES-256 requires 32-byte key
-        assert len(key) == 32
-        self.aesgcm = AESGCM(key)
-    
-    def encrypt(self, plaintext: str) -> bytes:
-        """Encrypt with random nonce"""
-        nonce = os.urandom(12)  # 96-bit nonce for GCM
-        ciphertext = self.aesgcm.encrypt(
-            nonce,
-            plaintext.encode(),
-            associated_data=None
-        )
-        # Return nonce + ciphertext (need nonce for decryption)
-        return nonce + ciphertext
-    
-    def decrypt(self, data: bytes) -> str:
-        """Decrypt, extracting nonce from data"""
-        nonce = data[:12]
-        ciphertext = data[12:]
-        plaintext = self.aesgcm.decrypt(
-            nonce,
-            ciphertext,
-            associated_data=None
-        )
-        return plaintext.decode()
-
-# Usage
-encryption = FieldEncryption(key=os.urandom(32))
-
-# Before storing
-encrypted_ssn = encryption.encrypt("123-45-6789")
-db.store(user_id, encrypted_ssn)
-
-# When retrieving
-encrypted_data = db.get(user_id)
-ssn = encryption.decrypt(encrypted_data)
-```
-
-### Searchable Encryption
-
-Problem: Can't search encrypted data without decrypting.
-
-```python
-# Approach 1: Deterministic encryption for exact match
-import hashlib
-import hmac
-
-class SearchableEncryption:
-    def __init__(self, search_key: bytes, encryption_key: bytes):
-        self.search_key = search_key
-        self.encryption = FieldEncryption(encryption_key)
-    
-    def store(self, plaintext: str):
-        # Create searchable blind index
-        blind_index = hmac.new(
-            self.search_key,
-            plaintext.lower().encode(),
-            hashlib.sha256
-        ).hexdigest()[:16]  # Truncate to limit leakage
-        
-        # Store encrypted value + blind index
-        return {
-            'encrypted': self.encryption.encrypt(plaintext),
-            'search_index': blind_index
-        }
-    
-    def search(self, search_term: str):
-        # Generate same blind index
-        blind_index = hmac.new(
-            self.search_key,
-            search_term.lower().encode(),
-            hashlib.sha256
-        ).hexdigest()[:16]
-        
-        # Search by blind index
-        return db.find({'search_index': blind_index})
-
-# Trade-off: Leaks equality (same plaintext = same index)
-```
+Certificate lifecycle is a control plane: issuance, trust-bundle distribution, renewal, revocation posture, overlap, and clock tolerance. Prefer short-lived automated workload credentials over static certificates copied into images. The workload-identity architecture is covered in [Zero-Trust Service and Workload Architecture](./05-zero-trust-architecture.md).
 
 ---
 
-## Key Management
+## 7. Choose the Plaintext Boundary Deliberately
 
-### Key Hierarchy
+| Pattern | Protects against | Does not protect against | Operational consequence |
+|---|---|---|---|
+| Disk/volume encryption | lost media, raw snapshot theft | authorized database or host process | transparent; coarse key scope |
+| Database or object-store server-side encryption | storage-layer media access | privileged service/database reads | simple, useful baseline |
+| Application field encryption | database dumps, some operators, cross-service access | compromised authorized application process | schema/query/migration complexity |
+| Client-side/end-to-end encryption | server plaintext access | compromised endpoint, metadata leakage | server cannot freely search, rank, transform, or recover |
 
-```mermaid
-graph TD
-    MK["Master Key<br/>(KEK - Key Encrypting Key)"]
-    MK -->|Encrypts| DEK1["Data Key 1 (DEK)"]
-    MK -->|Encrypts| DEK2["Data Key 2 (DEK)"]
-    MK -->|Encrypts| DEK3["Data Key 3 (DEK)"]
-    DEK1 -->|Encrypts data| CA[("Customer A<br/>data")]
-    DEK2 -->|Encrypts data| CB[("Customer B<br/>data")]
-    DEK3 -->|Encrypts data| CC[("Customer C<br/>data")]
-```
+Layering can be appropriate because the boundaries differ. It is not meaningful to count “three layers of encryption” without stating which principal each layer excludes.
 
-### Envelope Encryption
+Application-level encryption changes the data model. Equality search may require a separate keyed token or deterministic construction with explicit leakage; range queries and full-text search generally reveal more or require specialized cryptography. Never substitute ordinary deterministic AEAD without analyzing frequency leakage and chosen-plaintext attacks. Prefer minimizing searchable sensitive fields, using a segregated tokenization service, or redesigning the query.
 
-```python
-class EnvelopeEncryption:
-    """
-    1. Generate unique data key for each encryption
-    2. Encrypt data with data key
-    3. Encrypt data key with master key
-    4. Store encrypted data + encrypted data key
-    """
-    
-    def __init__(self, kms_client):
-        self.kms = kms_client
-    
-    def encrypt(self, plaintext: bytes, master_key_id: str) -> dict:
-        # 1. Generate data key (KMS returns plaintext + encrypted versions)
-        data_key_response = self.kms.generate_data_key(
-            KeyId=master_key_id,
-            KeySpec='AES_256'
-        )
-        
-        plaintext_key = data_key_response['Plaintext']
-        encrypted_key = data_key_response['CiphertextBlob']
-        
-        # 2. Encrypt data with plaintext key
-        aesgcm = AESGCM(plaintext_key)
-        nonce = os.urandom(12)
-        ciphertext = aesgcm.encrypt(nonce, plaintext, None)
-        
-        # 3. Securely delete plaintext key from memory
-        # (In practice, use secure memory handling)
-        del plaintext_key
-        
-        # 4. Return encrypted data + encrypted key
-        return {
-            'ciphertext': nonce + ciphertext,
-            'encrypted_data_key': encrypted_key
-        }
-    
-    def decrypt(self, encrypted_bundle: dict) -> bytes:
-        # 1. Decrypt data key using KMS
-        data_key = self.kms.decrypt(
-            CiphertextBlob=encrypted_bundle['encrypted_data_key']
-        )['Plaintext']
-        
-        # 2. Decrypt data
-        ciphertext = encrypted_bundle['ciphertext']
-        nonce = ciphertext[:12]
-        actual_ciphertext = ciphertext[12:]
-        
-        aesgcm = AESGCM(data_key)
-        plaintext = aesgcm.decrypt(nonce, actual_ciphertext, None)
-        
-        del data_key
-        return plaintext
-```
-
-### Key Rotation
-
-```python
-class KeyRotation:
-    """
-    Key rotation strategy:
-    1. Generate new key version
-    2. New encryptions use new key
-    3. Old data still decryptable with old key
-    4. Gradually re-encrypt old data
-    5. Retire old key after all data migrated
-    """
-    
-    def __init__(self, kms):
-        self.kms = kms
-    
-    def rotate_master_key(self, key_id: str):
-        # Create new key version (old version still usable)
-        self.kms.rotate_key(KeyId=key_id)
-    
-    def re_encrypt_data(self, encrypted_bundle: dict, 
-                        old_key_id: str, new_key_id: str) -> dict:
-        # Decrypt with old key
-        plaintext = self.decrypt(encrypted_bundle, old_key_id)
-        
-        # Encrypt with new key
-        new_bundle = self.encrypt(plaintext, new_key_id)
-        
-        return new_bundle
-    
-    def batch_re_encrypt(self, table_name: str, 
-                         old_key_id: str, new_key_id: str):
-        """Re-encrypt table in batches"""
-        cursor = None
-        
-        while True:
-            # Get batch of records
-            records, cursor = db.scan(
-                table_name, 
-                limit=100, 
-                cursor=cursor
-            )
-            
-            if not records:
-                break
-            
-            for record in records:
-                new_encrypted = self.re_encrypt_data(
-                    record['encrypted_data'],
-                    old_key_id,
-                    new_key_id
-                )
-                
-                db.update(
-                    table_name,
-                    record['id'],
-                    {'encrypted_data': new_encrypted}
-                )
-```
+Client-side encryption transfers recovery, sharing, device synchronization, and key loss to the product. If the server can reset the key unilaterally, the design is not end-to-end against that server.
 
 ---
 
-## Cloud KMS Services
+## 8. Multi-Tenant, Multi-Region, Backup, and Deletion Design
 
-### AWS KMS
+Per-tenant logical keys make access policy and audit clearer and can reduce blast radius. They do not by themselves prevent cross-tenant reads: tenant identity must also bind application authorization, storage lookup, AAD, cache keys, and KMS policy.
 
-```python
-import boto3
+For multi-region operation, decide whether keys are:
 
-class AWSKMS:
-    def __init__(self):
-        self.client = boto3.client('kms')
-    
-    def create_key(self, description: str):
-        response = self.client.create_key(
-            Description=description,
-            KeyUsage='ENCRYPT_DECRYPT',
-            KeySpec='SYMMETRIC_DEFAULT',  # AES-256-GCM
-            MultiRegion=False
-        )
-        return response['KeyMetadata']['KeyId']
-    
-    def encrypt(self, key_id: str, plaintext: bytes):
-        response = self.client.encrypt(
-            KeyId=key_id,
-            Plaintext=plaintext,
-            EncryptionAlgorithm='SYMMETRIC_DEFAULT'
-        )
-        return response['CiphertextBlob']
-    
-    def decrypt(self, ciphertext: bytes):
-        response = self.client.decrypt(
-            CiphertextBlob=ciphertext,
-            EncryptionAlgorithm='SYMMETRIC_DEFAULT'
-        )
-        return response['Plaintext']
-    
-    def generate_data_key(self, key_id: str):
-        """Generate data key for envelope encryption"""
-        response = self.client.generate_data_key(
-            KeyId=key_id,
-            KeySpec='AES_256'
-        )
-        return {
-            'plaintext': response['Plaintext'],
-            'encrypted': response['CiphertextBlob']
-        }
-```
+- independently generated per region, requiring region-specific ciphertext and failover transforms;
+- replicated as a managed multi-region logical key;
+- wrapped under regional KEKs while retaining a tenant DEK;
+- reachable through a home-region key service.
 
-### HashiCorp Vault
+Each choice trades sovereignty and blast radius against recovery time and cross-region dependency. Test a failover with the primary KMS endpoint unavailable, not merely with an application region disabled.
 
-```python
-import hvac
+Backups create long-lived cryptographic dependencies. Inventory both ciphertext and the exact key versions needed to restore it. Restoring last year's database while only today's key metadata is available is a failed backup. Conversely, retaining old KEKs forever can defeat a deletion promise.
 
-class VaultEncryption:
-    def __init__(self, vault_url: str, token: str):
-        self.client = hvac.Client(url=vault_url, token=token)
-    
-    def encrypt(self, key_name: str, plaintext: str):
-        """Use Vault's transit secrets engine"""
-        response = self.client.secrets.transit.encrypt_data(
-            name=key_name,
-            plaintext=base64.b64encode(plaintext.encode()).decode()
-        )
-        return response['data']['ciphertext']
-    
-    def decrypt(self, key_name: str, ciphertext: str):
-        response = self.client.secrets.transit.decrypt_data(
-            name=key_name,
-            ciphertext=ciphertext
-        )
-        return base64.b64decode(response['data']['plaintext']).decode()
-    
-    def rotate_key(self, key_name: str):
-        """Rotate encryption key"""
-        self.client.secrets.transit.rotate_key(name=key_name)
-    
-    def rewrap_data(self, key_name: str, ciphertext: str):
-        """Re-encrypt with latest key version without exposing plaintext"""
-        response = self.client.secrets.transit.rewrap_data(
-            name=key_name,
-            ciphertext=ciphertext
-        )
-        return response['data']['ciphertext']
-```
+**Crypto-shredding** deletes key material so ciphertext becomes computationally inaccessible. It is only as strong as the inventory: plaintext exports, caches, replicas, search indexes, logs, analytics tables, and backups outside that hierarchy remain. Use a disabled waiting state and dependency proof before destruction. Legal hold may explicitly prohibit destruction.
 
 ---
 
-## Hashing vs. Encryption
+## 9. Capacity and Cost Model
 
-```
-Encryption (Reversible):
-- Plaintext ──[key]──► Ciphertext ──[key]──► Plaintext
-- Use for: Data you need to read later
+Consider an illustrative workload—not a vendor price claim:
 
-Hashing (One-way):
-- Plaintext ──────────► Hash
-- Cannot reverse: Hash ───X───► Plaintext
-- Use for: Passwords, integrity verification
-
-# Password storage
-password_hash = bcrypt.hashpw(password, bcrypt.gensalt())
-
-# Data integrity
-file_hash = hashlib.sha256(file_content).hexdigest()
-# Verify: recalculate hash and compare
+```text
+write rate                   = 40,000 records/s
+average protected payload   = 4 KiB
+read rate                    = 120,000 records/s
+active tenant-purpose scopes = 20,000
+KMS unwrap latency           = 8 ms p95 (assumption)
+DEK cache TTL                = 10 min
 ```
 
-### HMAC for Authentication
+Direct KMS encryption would require 40,000 remote cryptographic operations per second and put KMS availability in every write. Envelope encryption performs bulk AEAD locally.
 
-```python
-import hmac
-import hashlib
+If one cached DEK exists per active scope and each scope is touched at least once per TTL, the steady unwrap load is approximately:
 
-def create_signed_url(url: str, secret_key: bytes, expiry: int) -> str:
-    """Create URL with HMAC signature"""
-    message = f"{url}|{expiry}"
-    signature = hmac.new(
-        secret_key,
-        message.encode(),
-        hashlib.sha256
-    ).hexdigest()
-    
-    return f"{url}?expires={expiry}&signature={signature}"
+$$
+\frac{20{,}000}{600\ seconds} \approx 33.3\ unwraps/s
+$$
 
-def verify_signed_url(url: str, secret_key: bytes) -> bool:
-    """Verify URL signature"""
-    # Parse URL and extract signature
-    parsed = parse_url(url)
-    provided_signature = parsed['signature']
-    expiry = parsed['expires']
-    base_url = parsed['base_url']
-    
-    # Check expiry
-    if int(expiry) < time.time():
-        return False
-    
-    # Verify signature
-    message = f"{base_url}|{expiry}"
-    expected_signature = hmac.new(
-        secret_key,
-        message.encode(),
-        hashlib.sha256
-    ).hexdigest()
-    
-    return hmac.compare_digest(provided_signature, expected_signature)
-```
+Cold start is different. If 200 new instances simultaneously encounter 5,000 hot scopes, a naive cache warm-up can request up to one million unwraps. Add randomized startup, single-flight per key version, bounded concurrency, and workload-aware prewarming. Model regional recovery as a burst, not a steady average.
+
+Local crypto CPU is also measurable. At 40,000 × 4 KiB, writes process about 156 MiB/s before replication and read decryptions. Benchmark the exact library, CPU architecture, record sizes, buffer copying, and concurrency. Large objects should use a reviewed streaming/chunked construction with unique per-chunk nonces and authenticated ordering; do not concatenate independent chunks without binding object ID, chunk index, and final length.
+
+Track:
+
+- KMS operations and latency by key purpose and region;
+- cache hit rate, entries, and maximum key age;
+- bytes and messages per DEK;
+- encryption/decryption CPU and allocation rate;
+- migration backlog and old-version population;
+- backup key-version coverage.
 
 ---
 
-## Common Pitfalls
+## 10. Concrete Failure Traces
 
-### 1. ECB Mode (Don't Use)
+### 10.1 Snapshot rollback reuses a nonce
 
-```mermaid
-graph TD
-    A1[A] -->|Encrypt| X1[X1]
-    B1[B] -->|Encrypt| X2[X2]
-    A2[A] -->|Encrypt| X1b[X1]
-    C1[C] -->|Encrypt| X3[X3]
-```
+1. A writer allocates nonces from an in-memory counter.
+2. The virtual machine snapshot captures counter 8,000 and the active DEK.
+3. The writer advances to 12,000 and emits ciphertext.
+4. A rollback restores counter 8,000 with the same DEK.
+5. The next 4,000 operations reuse nonce/key pairs.
 
-```
-ECB: Same plaintext block = same ciphertext block!
-Problem: Patterns in plaintext visible in ciphertext
-Solution: Use GCM, CBC with random IV, or CTR mode
-```
+Recovery is not “restart with a higher number” unless the maximum is durable and trustworthy. Retire the affected DEK, stop new writes, determine the exposure window, re-encrypt affected data, and treat authenticity as suspect. Prevention requires crash-safe allocation or a fresh key whenever allocator state may rewind.
 
-### 2. Reusing Nonces
+### 10.2 KMS outage becomes a fleet outage
 
-```python
-# CATASTROPHIC with GCM/CTR modes
-key = os.urandom(32)
-nonce = b'static_nonce'  # WRONG!
+1. A regional KMS endpoint is unreachable.
+2. Existing instances continue on cached DEKs.
+3. Autoscaling starts empty instances during the same incident.
+4. New instances cannot decrypt configuration or customer records and fail readiness.
+5. Load concentrates on old instances until their caches expire.
 
-# If same nonce used twice with same key:
-# XOR of ciphertexts = XOR of plaintexts
-# This completely breaks confidentiality
+Design an explicit degraded mode: bounded cache extension for pre-authorized low-risk reads, write rejection, region failover, or complete fail-closed. Do not improvise by persisting plaintext keys. Alert on time-to-cache-expiry and test the policy.
 
-# CORRECT: Always use random nonce
-nonce = os.urandom(12)  # New random nonce per encryption
-```
+### 10.3 Cross-tenant ciphertext substitution
 
-### 3. Not Authenticating Ciphertext
+1. Two tenants use the same coarse DEK.
+2. An internal bug reads a ciphertext blob through an unscoped object key.
+3. The decrypt call supplies no tenant-bound AAD.
+4. Authentication succeeds because the ciphertext is valid under the shared DEK.
+5. Tenant B receives tenant A's plaintext.
 
-```python
-# Encryption without authentication (vulnerable to tampering)
-cipher = AES.new(key, AES.MODE_CBC, iv)
-ciphertext = cipher.encrypt(plaintext)
-# Attacker can flip bits in ciphertext!
+Storage authorization and tenant-scoped keys help, but binding tenant and resource identifiers into AAD makes this substitution cryptographically fail.
 
-# Use authenticated encryption (AES-GCM)
-aesgcm = AESGCM(key)
-ciphertext = aesgcm.encrypt(nonce, plaintext, associated_data)
-# Tampering detected during decryption
-```
+### 10.4 Early key destruction breaks recovery
 
-### 4. Hardcoded Keys
+1. Online records are rewrapped to KEK version 9.
+2. A query confirms no version-8 envelopes in the primary database.
+3. Version 8 is destroyed.
+4. Six months later, disaster recovery restores a backup containing version-8 wrapped DEKs.
+5. The backup is intact but unrecoverable.
 
-```python
-# NEVER do this
-ENCRYPTION_KEY = "my-super-secret-key-12345"
-
-# Load from secure source
-ENCRYPTION_KEY = os.environ.get('ENCRYPTION_KEY')
-# Or use KMS
-ENCRYPTION_KEY = kms.get_key('production/encryption')
-```
+Destruction gates must query backup catalogs, regional replicas, archives, and legal-hold snapshots, then execute a restore drill before the waiting period ends.
 
 ---
 
-## Compliance Considerations
+## 11. Operations, Observability, and Verification
 
-### PCI-DSS Requirements
+### 11.1 Safe telemetry
 
-```
-For credit card data:
-□ Use strong cryptography (AES-256)
-□ Document key management procedures
-□ Implement key rotation
-□ Protect keys from unauthorized access
-□ Maintain audit logs of key usage
-□ Split knowledge for key custodians
-```
+Record key reference/version, operation, workload identity, policy decision, region, latency, result class, and correlation ID. Avoid plaintext, raw DEKs, full ciphertext, passwords, and bearer credentials. Hashing a low-entropy secret before logging it may still permit guessing.
 
-### GDPR Requirements
+Useful alerts include:
 
-```
-For personal data:
-□ Encryption as appropriate technical measure
-□ Pseudonymization where possible
-□ Consider encryption for data portability
-□ Key management supports right to erasure
-```
+- authentication-tag failures above a tiny baseline;
+- decrypt attempts from an unexpected workload or region;
+- disabled/deprecated key use;
+- rapid growth in bytes or messages under one DEK;
+- KMS denial, throttling, or latency correlated across the fleet;
+- stalled rewrap/re-encryption backlog;
+- backups whose required key versions are absent from recovery inventory;
+- policy changes outside the deployment and approval path.
+
+Tag failures are security and integrity signals, not records to skip silently.
+
+### 11.2 Test the protocol, not just round trips
+
+A useful verification suite includes:
+
+- known-answer vectors from the primitive specification;
+- mutation tests for ciphertext, tag, nonce, algorithm, key version, and every AAD field;
+- cross-tenant and cross-resource substitution tests;
+- nonce uniqueness under concurrency, crash, retry, snapshot restore, and failover;
+- property tests over all supported envelope versions;
+- dual-read migration and rollback tests;
+- KMS unavailable, throttled, stale-policy, and permission-revoked fault injection;
+- backup restore using historical key versions in an isolated environment;
+- negative IAM tests proving unauthorized workloads cannot unwrap;
+- memory, logs, traces, crash dumps, and support tooling checks for plaintext leakage.
+
+Review the library and configuration against an approved cryptographic profile. Application teams should consume a narrow, versioned API such as `seal(scope, context, plaintext)` rather than choosing raw algorithms and nonces at call sites.
 
 ---
 
-## Best Practices Checklist
+## 12. Decision Framework
 
-```
-Algorithm Selection:
-□ AES-256-GCM for symmetric encryption
-□ RSA-2048+ or ECC P-256+ for asymmetric
-□ SHA-256 or SHA-3 for hashing
-□ Argon2 or bcrypt for passwords
+Use server-side storage encryption as a baseline, then add application or client-side protection only for a stated attacker and product constraint.
 
-Key Management:
-□ Use a KMS (cloud or Vault)
-□ Implement key hierarchy
-□ Automate key rotation
-□ Never hardcode keys
-□ Audit key access
+Choose the key scope by answering:
 
-Implementation:
-□ Use authenticated encryption (GCM)
-□ Never reuse nonces
-□ Use cryptographic random number generator
-□ Verify library is maintained and audited
-□ Keep dependencies updated
+1. What is the maximum acceptable disclosure if one DEK or workload is compromised?
+2. How quickly must a tenant, purpose, or record become undecryptable?
+3. Which queries and transformations require plaintext?
+4. What KMS rate and recovery burst does the hierarchy produce?
+5. Can every retained backup be restored throughout its retention window?
+6. Can operations explain which principal used which key version for which purpose?
+7. What happens to reads and writes during KMS, policy, clock, or regional failure?
+8. How will algorithm and envelope versions migrate without a flag day?
 
-Transit:
-□ TLS 1.2+ only
-□ Strong cipher suites
-□ Certificate validation
-□ HSTS enabled
-
-At Rest:
-□ Encrypt sensitive fields
-□ Consider storage-layer encryption
-□ Envelope encryption for scalability
-□ Secure key storage separate from data
-```
+Reject a design that says only “AES-256 at rest and TLS in transit.” It names primitives but leaves the attacker, integrity contract, key custody, plaintext boundary, nonce state, recovery path, and failure behavior undefined.
 
 ---
 
 ## References
 
-- [OWASP Cryptographic Storage Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Cryptographic_Storage_Cheat_Sheet.html)
-- [NIST Cryptographic Standards](https://csrc.nist.gov/projects/cryptographic-standards-and-guidelines)
-- [AWS KMS Best Practices](https://docs.aws.amazon.com/kms/latest/developerguide/best-practices.html)
-- [HashiCorp Vault Documentation](https://www.vaultproject.io/docs)
-- [Practical Cryptography for Developers](https://cryptobook.naktrace.com/)
+- [RFC 5116: An Interface and Algorithms for Authenticated Encryption](https://www.rfc-editor.org/rfc/rfc5116) — AEAD interface and nonce requirements
+- [NIST SP 800-38D: Galois/Counter Mode](https://csrc.nist.gov/pubs/sp/800/38/d/final) — GCM construction and invocation constraints
+- [FIPS 197: Advanced Encryption Standard](https://csrc.nist.gov/pubs/fips/197/final) — AES specification
+- [RFC 8439: ChaCha20 and Poly1305 for IETF Protocols](https://www.rfc-editor.org/rfc/rfc8439) — ChaCha20-Poly1305
+- [RFC 8446: The Transport Layer Security Protocol Version 1.3](https://www.rfc-editor.org/rfc/rfc8446) — TLS 1.3 handshake and key schedule
+- [RFC 9180: Hybrid Public Key Encryption](https://www.rfc-editor.org/rfc/rfc9180) — standardized hybrid public-key construction
+- [NIST SP 800-57 Part 1: Recommendation for Key Management](https://csrc.nist.gov/pubs/sp/800/57/pt1/r5/final) — key lifecycle and protection guidance
+- [OWASP Cryptographic Storage Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Cryptographic_Storage_Cheat_Sheet.html) — application threat-model and implementation guidance
+- [AWS KMS Cryptographic Details](https://docs.aws.amazon.com/kms/latest/cryptographic-details/intro.html) and [Google Cloud envelope encryption](https://cloud.google.com/kms/docs/envelope-encryption) — concrete managed-key hierarchy designs

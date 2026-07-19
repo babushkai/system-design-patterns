@@ -1,15 +1,23 @@
 # System Design Patterns
 
-A hyper-detailed, framework-agnostic repository of system design patterns, concepts, and real-world case studies.
+A framework-agnostic system design fieldbook built around production contracts, protocol mechanics, failure recovery, capacity models, and evidence from papers and operating systems.
 
 > "Most system design resources are unorganized and overly simple. This repository aims to change that."
 
 ## Philosophy
 
-1. **Depth over breadth** - Each topic explored to its logical conclusion
-2. **Framework-agnostic** - Patterns described independently of technologies  
-3. **First-principles thinking** - Derive solutions from constraints
-4. **Honest tradeoffs** - Every decision has costs; we make them explicit
+1. **Contracts before components** - Start with invariants and observable promises
+2. **Depth over breadth** - Follow mechanisms through overload, failure, recovery, and migration
+3. **Single-owner chapters** - Cross-reference neighboring concepts instead of repeating generic checklists
+4. **Framework-agnostic reasoning** - Use products as evidence, not as the architecture
+5. **Quantitative honesty** - Source reported figures and label illustrative assumptions
+6. **Verifiable decisions** - Include failure traces, observability, rollout, and tests
+
+Evidence labels used throughout the fieldbook:
+
+- **Documented** - A cited primary source states the behavior for its named version or publication scope.
+- **Inference** - The conclusion follows from stated mechanisms and assumptions; it is not attributed to an undisclosed deployment.
+- **Reference design** - A reusable architecture proposed by this book; thresholds and worked numbers remain illustrative until measured.
 
 
 ## Table of Contents
@@ -20,8 +28,7 @@ A hyper-detailed, framework-agnostic repository of system design patterns, conce
 - [CAP Theorem](01-foundations/03-cap-theorem.md)
 - [Consistency Models](01-foundations/04-consistency-models.md)
 - [Distributed Time](01-foundations/05-distributed-time.md)
-- [Failure Modes](01-foundations/06-failure-modes.md)
-- [Network Partitions](01-foundations/07-network-partitions.md)
+- [Failure Semantics, Detection, and Recovery Boundaries](01-foundations/06-failure-modes.md)
 - [Idempotency](01-foundations/08-idempotency.md)
 - [Distributed Locks](01-foundations/09-distributed-locks.md)
 - [Capacity Planning and Estimation](01-foundations/10-capacity-planning.md)
@@ -36,7 +43,7 @@ A hyper-detailed, framework-agnostic repository of system design patterns, conce
 - [Distributed Transactions](02-distributed-databases/07-distributed-transactions.md)
 - [Consensus Algorithms](02-distributed-databases/08-consensus-algorithms.md)
 - [Leader Election](02-distributed-databases/09-leader-election.md)
-- [Data Modeling for Access Patterns](02-distributed-databases/10-data-modeling.md)
+- [Workload-Driven Data Modeling and Derived Projections](02-distributed-databases/10-data-modeling.md)
 
 ### Part 3: Storage Engines
 - [B-Trees](03-storage-engines/01-b-trees.md)
@@ -46,26 +53,23 @@ A hyper-detailed, framework-agnostic repository of system design patterns, conce
 - [Bloom Filters](03-storage-engines/05-bloom-filters.md)
 - [Column-Oriented Storage](03-storage-engines/06-column-storage.md)
 - [Data Encoding](03-storage-engines/07-data-encoding.md)
-- [Object Storage Internals](03-storage-engines/08-object-storage.md)
+- [Object Storage Architecture and Commit Protocols](03-storage-engines/08-object-storage.md)
 
 ### Part 4: Caching
-- [Cache Strategies](04-caching/01-cache-strategies.md)
-- [Cache Invalidation](04-caching/02-cache-invalidation.md)
-- [Distributed Caching](04-caching/03-distributed-caching.md)
-- [Cache Stampede](04-caching/04-cache-stampede.md)
-- [Multi-Tier Caching](04-caching/05-multi-tier-caching.md)
-- [Cache Warming](04-caching/06-cache-warming.md)
+- [Cache Semantics and Economics](04-caching/01-cache-strategies.md)
+- [Cache Invalidation and Coherence](04-caching/02-cache-invalidation.md)
+- [Distributed Cache Internals](04-caching/03-distributed-caching.md)
+- [Cache Stampede, Cold Start, and Warming](04-caching/04-cache-stampede.md)
 
 ### Part 5: Messaging
-- [Message Queues](05-messaging/01-message-queues.md)
-- [Pub/Sub Systems](05-messaging/02-pub-sub.md)
+- [Message Queue Architecture](05-messaging/01-message-queues.md)
+- [Publish-Subscribe Architecture](05-messaging/02-pub-sub.md)
 - [Message Ordering](05-messaging/03-message-ordering.md)
-- [Delivery Guarantees](05-messaging/04-delivery-guarantees.md)
-- [Event Sourcing](05-messaging/05-event-sourcing.md)
-- [CQRS](05-messaging/06-cqrs.md)
-- [Outbox Pattern](05-messaging/07-outbox-pattern.md)
-- [Dead Letter Queues](05-messaging/08-dead-letter-queues.md)
-- [Saga Pattern](05-messaging/09-saga-pattern.md)
+- [Delivery Guarantees and Effect Boundaries](05-messaging/04-delivery-guarantees.md)
+- [Event Sourcing and Domain Logs](05-messaging/05-event-sourcing.md)
+- [CQRS and Projection Architecture](05-messaging/06-cqrs.md)
+- [Transactional Outbox, Inbox, and CDC Publication](05-messaging/07-outbox-pattern.md)
+- [Poison-Message Quarantine and Redrive](05-messaging/08-dead-letter-queues.md)
 
 ### Part 6: Scaling
 - [Load Balancing](06-scaling/01-load-balancing.md)
@@ -79,18 +83,15 @@ A hyper-detailed, framework-agnostic repository of system design patterns, conce
 - [Multi-Region Architecture](06-scaling/09-multi-region-architecture.md)
 - [Retries, Timeouts, and Hedging](06-scaling/10-retries-timeouts-hedging.md)
 - [Cell-Based Architecture and Shuffle Sharding](06-scaling/11-cell-based-architecture.md)
-- [Multi-Tenancy Patterns](06-scaling/12-multi-tenancy.md)
+- [Multi-Tenant Isolation and Tenant Lifecycle Architecture](06-scaling/12-multi-tenancy.md)
 - [DNS and Connection Management](06-scaling/13-dns-and-connection-management.md)
 - [Network Transport Internals](06-scaling/14-network-transport-internals.md)
 
 ### Part 7: Real-Time Systems
-- [Polling](07-real-time/01-polling.md)
-- [Long Polling](07-real-time/02-long-polling.md)
-- [Server-Sent Events](07-real-time/03-server-sent-events.md)
-- [WebSockets](07-real-time/04-websockets.md)
+- [Client Delivery Transports](07-real-time/01-polling.md)
 - [WebRTC](07-real-time/05-webrtc.md)
 - [Presence Systems](07-real-time/06-presence.md)
-- [CRDTs and Collaborative Editing](07-real-time/07-crdts-collaborative-editing.md)
+- [Collaborative Document Replication and CRDT Sync Engines](07-real-time/07-crdts-collaborative-editing.md)
 
 ### Part 8: Case Studies
 - [Twitter Timeline](08-case-studies/01-twitter.md)
@@ -125,51 +126,49 @@ A hyper-detailed, framework-agnostic repository of system design patterns, conce
 - [Attention Is All You Need](09-whitepapers/15-attention-transformers.md) (2017)
 
 ### Part 10: Security
-- [Authentication Fundamentals](10-security/01-authentication-fundamentals.md)
+- [Authentication Systems](10-security/01-authentication-fundamentals.md)
 - [OAuth 2.0 and OpenID Connect](10-security/02-oauth2-openid-connect.md)
-- [JSON Web Tokens (JWT)](10-security/03-jwt-tokens.md)
-- [API Security](10-security/04-api-security.md)
-- [Zero Trust Architecture](10-security/05-zero-trust-architecture.md)
-- [Encryption Patterns](10-security/06-encryption.md)
+- [JOSE and JSON Web Token Verification](10-security/03-jwt-tokens.md)
+- [API Threat Boundaries and Abuse Resistance](10-security/04-api-security.md)
+- [Zero-Trust Service and Workload Architecture](10-security/05-zero-trust-architecture.md)
+- [Cryptographic Key and Data-Protection Architecture](10-security/06-encryption.md)
 - [Authorization at Scale](10-security/07-authorization-patterns.md)
 
-### Part 11: Observability
-- [Distributed Tracing](11-observability/01-distributed-tracing.md)
-- [Metrics and Monitoring](11-observability/02-metrics-monitoring.md)
-- [Logging](11-observability/03-logging.md)
-- [Alerting](11-observability/04-alerting.md)
-- [SLOs and Error Budgets](11-observability/05-slos-error-budgets.md)
+### Part 11: Observability and Operations
+- [Distributed Tracing and Telemetry Pipelines](11-observability/01-distributed-tracing.md)
+- [Metrics Systems and Monitoring](11-observability/02-metrics-monitoring.md)
+- [Production Logging Architecture](11-observability/03-logging.md)
+- [Alert Evaluation and Notification](11-observability/04-alerting.md)
+- [SLOs and Error-Budget Control](11-observability/05-slos-error-budgets.md)
 - [FinOps and Cost Engineering](11-observability/06-finops-cost-engineering.md)
-- [Incident Management and Postmortems](11-observability/07-incident-management.md)
+- [Incident Command and Learning](11-observability/07-incident-management.md)
 
-### Part 12: Service Mesh
-- [Service Discovery](12-service-mesh/01-service-discovery.md)
-- [API Gateway](12-service-mesh/02-api-gateway.md)
-- [Sidecar Pattern](12-service-mesh/03-sidecar-pattern.md)
-- [API Design Patterns](12-service-mesh/04-api-design-patterns.md)
+### Part 12: Service Connectivity and APIs
+- [Service Discovery and Control-Plane State](12-service-mesh/01-service-discovery.md)
+- [Edge Gateway and API Mediation](12-service-mesh/02-api-gateway.md)
+- [Service Mesh Data and Control Planes](12-service-mesh/03-sidecar-pattern.md)
+- [API Design and Evolution](12-service-mesh/04-api-design-patterns.md)
 
 ### Part 13: Data Pipelines
-- [Batch Processing](13-data-pipelines/01-batch-processing.md)
-- [Stream Processing](13-data-pipelines/02-stream-processing.md)
-- [Lambda and Kappa Architecture](13-data-pipelines/03-lambda-kappa-architecture.md)
-- [Change Data Capture](13-data-pipelines/04-change-data-capture.md)
-- [Lakehouse and Open Table Formats](13-data-pipelines/05-lakehouse-table-formats.md)
+- [Batch Execution: DAGs, Shuffle, and Safe Reprocessing](13-data-pipelines/01-batch-processing.md)
+- [Stream Execution: Time, State, Recovery, and Backpressure](13-data-pipelines/02-stream-processing.md)
+- [Change Data Capture: Snapshot, Tail, Apply, and Repair](13-data-pipelines/04-change-data-capture.md)
+- [Lakehouse Table Formats: Snapshots, Commits, and Maintenance](13-data-pipelines/05-lakehouse-table-formats.md)
 
 ### Part 14: Search Systems
-- [Inverted Indexes](14-search-systems/01-inverted-indexes.md)
-- [Full-Text Search](14-search-systems/02-full-text-search.md)
-- [Vector Search](14-search-systems/03-vector-search.md)
-- [Ranking Algorithms](14-search-systems/04-ranking-algorithms.md)
-- [Search Relevance Tuning](14-search-systems/05-search-relevance-tuning.md)
+- [Search Index Architecture and Internals](14-search-systems/01-inverted-indexes.md)
+- [Lexical Query Execution](14-search-systems/02-full-text-search.md)
+- [Vector Retrieval Systems](14-search-systems/03-vector-search.md)
+- [Ranking and Evaluation Systems](14-search-systems/04-ranking-algorithms.md)
 - [Typeahead and Autocomplete](14-search-systems/06-typeahead-autocomplete.md)
 
 ### Part 15: Deployment
-- [Deployment Strategies](15-deployment/01-deployment-strategies.md)
-- [Feature Flags](15-deployment/02-feature-flags.md)
+- [Progressive Delivery and Deployment Strategies](15-deployment/01-deployment-strategies.md)
+- [Feature-Flag Control Planes](15-deployment/02-feature-flags.md)
 - [Database Schema Migrations](15-deployment/03-database-migrations.md)
-- [CI/CD and GitOps](15-deployment/04-cicd-gitops.md)
-- [Disaster Recovery](15-deployment/05-disaster-recovery.md)
-- [Migration Strategies](15-deployment/06-migration-strategies.md)
+- [Software Delivery Control Planes and GitOps Reconciliation](15-deployment/04-cicd-gitops.md)
+- [Disaster Recovery and Data Reconstruction](15-deployment/05-disaster-recovery.md)
+- [Service and Platform Migration](15-deployment/06-migration-strategies.md)
 
 ### Part 16: ML Systems
 - [ML System Fundamentals](16-ml-systems/01-ml-system-fundamentals.md) — control planes, training/serving parity, maturity model
@@ -189,37 +188,37 @@ A hyper-detailed, framework-agnostic repository of system design patterns, conce
 - [Distributed Training Internals](16-ml-systems/15-distributed-training-internals.md) — parallelism topologies, collectives, ZeRO/FSDP, MFU, failure math, checkpointing
 
 ### Part 17: LLM Systems
-- [Agent Fundamentals](17-llm-systems/01-agent-fundamentals.md)
-- [Orchestration Patterns](17-llm-systems/02-orchestration-patterns.md)
-- [Multi-Agent Systems](17-llm-systems/03-multi-agent-systems.md)
-- [RAG Patterns](17-llm-systems/04-rag-patterns.md)
-- [LLM Infrastructure](17-llm-systems/05-llm-infrastructure.md)
-- [Prompt Engineering](17-llm-systems/06-prompt-engineering.md)
-- [Fine-Tuning Patterns](17-llm-systems/07-fine-tuning-patterns.md)
-- [Context Management](17-llm-systems/08-context-management.md)
-- [Harness Engineering](17-llm-systems/09-harness-engineering.md)
-- [LLM Evaluation and Observability](17-llm-systems/10-llm-evaluation.md)
-- [GPU Inference Internals](17-llm-systems/11-gpu-inference-internals.md)
-- [Agent Inference](17-llm-systems/12-agent-inference.md)
+- [Agent Fundamentals](17-llm-systems/01-agent-fundamentals.md) — durable loops, action identity, authority, evidence, and bounded autonomy
+- [Orchestration Patterns](17-llm-systems/02-orchestration-patterns.md) — deterministic workflows versus adaptive branches, typed state graphs, latency and cost composition
+- [Multi-Agent Systems](17-llm-systems/03-multi-agent-systems.md) — delegation, shared state, message semantics, scheduling, and correlated failure
+- [RAG Patterns](17-llm-systems/04-rag-patterns.md) — corpus publication, authorization-aware retrieval, evidence packets, grounded generation, and citation provenance
+- [LLM Infrastructure](17-llm-systems/05-llm-infrastructure.md) — gateway and model control planes, regional admission/routing/streaming, provider and self-hosted fleets
+- [Prompt Engineering](17-llm-systems/06-prompt-engineering.md) — versioned request compilation, structured outputs, tool schemas, prompt-injection test boundaries
+- [Fine-Tuning Patterns](17-llm-systems/07-fine-tuning-patterns.md) — method choice, dataset/release identity, serving adapters, privacy and evaluation
+- [Context Management](17-llm-systems/08-context-management.md) — context revisions, compaction, memory, token budgets, and concurrency
+- [Harness Engineering](17-llm-systems/09-harness-engineering.md) — action transactions, permission boundaries, sandbox/secret broker, recovery and rollout
+- [LLM Evaluation and Observability](17-llm-systems/10-llm-evaluation.md) — estimands, datasets, calibrated evaluators, uncertainty, traces and production feedback
+- [GPU Inference Internals](17-llm-systems/11-gpu-inference-internals.md) — phase rooflines, KV/device memory, kernels, parallelism, and accelerator isolation
+- [Agent Inference](17-llm-systems/12-agent-inference.md) — multi-turn session scheduling, KV residency, cache-aware routing, fan-out and task-level goodput
 
 ### Part 18: Workflow & Job Systems
-- [Workflow System Fundamentals](18-workflow-job-systems/01-workflow-system-fundamentals.md)
-- [Background Jobs and Worker Pools](18-workflow-job-systems/02-background-jobs-worker-pools.md)
-- [Distributed Cron and Scheduling](18-workflow-job-systems/03-distributed-cron-scheduling.md)
-- [Durable Execution and Workflow Engines](18-workflow-job-systems/04-durable-execution-workflow-engines.md)
-- [DAG Orchestration](18-workflow-job-systems/05-dag-orchestration.md)
-- [Retry, Idempotency, and Compensation](18-workflow-job-systems/06-retry-idempotency-compensation.md)
-- [Priority Queues, Fairness, and Backpressure](18-workflow-job-systems/07-priority-fairness-backpressure.md)
-- [Leases, Heartbeats, and Recovery](18-workflow-job-systems/08-leases-heartbeats-recovery.md)
-- [Workflow Observability and Replay](18-workflow-job-systems/09-workflow-observability-replay.md)
+- [Workflow System Fundamentals](18-workflow-job-systems/01-workflow-system-fundamentals.md) — workload taxonomy, durable state model, ownership and engine selection
+- [Background Jobs and Worker Pools](18-workflow-job-systems/02-background-jobs-worker-pools.md) — queue/worker contracts, acknowledgement, concurrency and overload
+- [Distributed Scheduling and Timer Services](18-workflow-job-systems/03-distributed-cron-scheduling.md) — timer state, claiming, misfires, recurrence, sharding and clock semantics
+- [Durable Execution and Workflow Engines](18-workflow-job-systems/04-durable-execution-workflow-engines.md) — event histories, deterministic replay, commands, signals and versioning
+- [DAG Orchestration](18-workflow-job-systems/05-dag-orchestration.md) — dependency graphs, artifact readiness, backfills and critical-path execution
+- [Effect Commit Protocols for Workflows](18-workflow-job-systems/06-retry-idempotency-compensation.md) — ambiguous effects, inbox/outbox, idempotency, reconciliation and compensation
+- [Priority Queues, Fairness, and Backpressure](18-workflow-job-systems/07-priority-fairness-backpressure.md) — admission, quotas, starvation bounds and tenant scheduling
+- [Leases, Heartbeats, and Recovery](18-workflow-job-systems/08-leases-heartbeats-recovery.md) — attempt ownership, fencing, timeout detection and reassignment
+- [Workflow Observability and Replay](18-workflow-job-systems/09-workflow-observability-replay.md) — history/attempt correlation, stuck-state diagnosis, replay and forensic evidence
 
-### Part 19: Compound Engineering
-- [Compound Engineering Fundamentals](19-compound-engineering/01-compound-engineering-fundamentals.md)
-- [Coding Agent Tool Design](19-compound-engineering/02-coding-agent-tool-design.md)
-- [Agent Context Engineering](19-compound-engineering/03-agent-context-engineering.md)
-- [AI-Native Software Architecture](19-compound-engineering/04-ai-native-software-architecture.md)
-- [Quality Engineering with AI Agents](19-compound-engineering/05-quality-engineering-with-ai-agents.md)
-- [Compound Development Workflows](19-compound-engineering/06-compound-development-workflows.md)
+### Part 19: Engineering Systems for Coding Agents
+- [Coding Agent Platform Fundamentals](19-compound-engineering/01-compound-engineering-fundamentals.md)
+- [Tool and Runtime Contracts for Coding Agents](19-compound-engineering/02-coding-agent-tool-design.md)
+- [Repository Context and Policy Plane](19-compound-engineering/03-agent-context-engineering.md)
+- [Repository Architecture for Safe Agentic Change](19-compound-engineering/04-ai-native-software-architecture.md)
+- [Verification and Governance for Agentic Change](19-compound-engineering/05-quality-engineering-with-ai-agents.md)
+- [Parallel Development and Integration](19-compound-engineering/06-compound-development-workflows.md)
 
 ## Notation
 

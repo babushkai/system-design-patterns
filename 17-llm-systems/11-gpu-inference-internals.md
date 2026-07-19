@@ -184,6 +184,31 @@ Benchmark with the workload's joint prompt/output/context/concurrency distributi
 
 ---
 
+## Multi-Tenant Isolation and Accelerator State
+
+The device ledger is also a data-classification ledger. Weights and adapters are intellectual-property artifacts; prompts, embeddings, activations, sampled logits, and KV pages can contain customer-derived state; kernels and collective buffers move that state through device memory, host-pinned memory, peer links, and optional cache tiers.
+
+Temporal sharing inside one process/runtime is an efficiency boundary, not independent tenant isolation. The serving engine must bind every KV/page/prefix allocation to tenant, model, adapter, context revision, and allocation generation; validate ownership on lookup and free; prevent stale directory entries from returning reassigned pages; and keep debug/profiler/core-dump paths outside untrusted tenants. A length or cache-hit side channel may still expose sensitive workload metadata even when payload bytes do not cross.
+
+For mutually untrusted workloads, choose an isolation domain from the actual threat model: dedicated devices/nodes, supported hardware partitions, or virtual machines with qualified accelerator isolation. NVIDIA documents that MIG assigns separate memory-system paths and compute resources to GPU instances on supported hardware. That improves fault/QoS and memory isolation, but host kernel, driver, orchestration, image supply chain, management privileges, network/storage, and telemetry remain shared control surfaces. A container namespace alone should not be described as a hardware security boundary.
+
+Placement and teardown are lifecycle operations:
+
+```text
+admit tenant/security domain
+  -> allocate qualified device or partition
+  -> load verified model/runtime artifacts
+  -> serve with domain-bound KV and telemetry
+  -> drain and fence new work
+  -> delete/demote cache objects and revoke directory generations
+  -> perform the platform's qualified reset/sanitization transition
+  -> reassign only after verification
+```
+
+If the platform cannot state what reset or isolation guarantee applies to a device generation and sharing mode, do not reuse it across a stronger trust boundary. Encrypting off-device KV protects storage/transport only when keys, tenant-bound authenticated metadata, deletion, and cache generations are correct. [Agent Inference](./12-agent-inference.md) owns distributed KV identity/residency; [LLM Infrastructure](./05-llm-infrastructure.md) owns tenant admission and fleet placement. This chapter owns how device/runtime sharing changes the hardware ledger and isolation assumptions.
+
+---
+
 ## Failure Modes
 
 **KV pressure cascades.** Memory fills with cached sequences → the scheduler preempts one, evicting its KV → the sequence later resumes with a full re-prefill → which adds compute load and evicts someone else. Symptom: throughput collapses and TTFT spikes under load that "should fit." Diagnose preemption and recomputation, tighten admission or residency, and compare added capacity with a separately qualified lower-precision KV/runtime path.
@@ -197,6 +222,8 @@ Benchmark with the workload's joint prompt/output/context/concurrency distributi
 **Long-context surprise.** A feature raises average context from 4K to 64K; per-token KV traffic grows 16×, the decode ceiling drops, and the fleet sized for 4K saturates. Context-length distribution is a first-class capacity input, same as QPS.
 
 **Straggler experts.** In MoE serving, a hot expert (or a slow GPU hosting one) gates every token in the all-to-all; p99 latency degrades fleet-wide. Requires per-expert load metrics and redundant placement of hot experts.
+
+**Stale KV page reuse.** A page is returned to the allocator, reassigned to another security domain, and an old cache-directory generation still references it. The result can be incorrect attention state or cross-tenant disclosure. Use generation-fenced allocators and directories, ownership checks at dereference, qualified teardown, and adversarial reuse tests under eviction and worker restart.
 
 ---
 
@@ -236,5 +263,6 @@ Benchmark with the workload's joint prompt/output/context/concurrency distributi
 - Leviathan et al. — *Fast Inference via Speculative Decoding* (2023)
 - Dong et al. — *XGrammar: Flexible and Efficient Structured Generation* (2024)
 - [NVIDIA H100 specifications](https://www.nvidia.com/en-us/data-center/h100/) and [NVIDIA H200 specifications](https://www.nvidia.com/en-us/data-center/h200/) — worked-example hardware inputs and sparsity footnotes
+- [NVIDIA Multi-Instance GPU User Guide](https://docs.nvidia.com/datacenter/tesla/mig-user-guide/latest/) — supported hardware partitioning, memory paths, deployment, reset, and management boundaries
 - MLPerf Inference results (mlcommons.org); vLLM, SGLang, TensorRT-LLM documentation
 - [Attention & Transformers](../09-whitepapers/15-attention-transformers.md) — the architecture this chapter serves

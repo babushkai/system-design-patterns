@@ -1,638 +1,215 @@
 # Consistency Models
 
-## TL;DR
+A consistency model is a contract over histories: given concurrent invocations, responses, failures, and replication, which results may a client observe? “Strong,” “eventual,” and a database consistency-level name are not adequate specifications. The contract must name its scope, ordering relation, failure outcome, and whether it covers one object, a session, or a transaction.
 
-Consistency models define what guarantees a distributed system provides about the order and visibility of operations. Stronger models (linearizability) are easier to reason about but expensive. Weaker models (eventual consistency) offer better performance but require careful application design.
+This chapter owns client-observable models—linearizable, sequential, causal, PRAM/session, bounded-staleness, and eventual/convergent behavior—their composition, mechanisms, and verification. [CAP Theorem](./03-cap-theorem.md) applies linearizability to one partitioned read/write object. [ACID Transactions](./01-acid-transactions.md) owns database isolation and invariant enforcement; [Conflict Resolution](../02-distributed-databases/04-conflict-resolution.md) owns merge algebra and CRDT mechanics.
 
----
+## Start with histories, not product labels
 
-## Why Consistency Models Matter
+An operation has an invocation and a matching response. Its interval lies between them. A history records operations from all clients; each client’s **program order** is the order of its own calls. Operation `a` precedes `b` in real time when `a` responds before `b` is invoked. Overlapping operations are concurrent and may be ordered either way by many models.
 
-In a single-node system, operations happen in a clear order. In distributed systems:
-- Nodes have different views of data at any moment
-- Network delays cause operations to arrive out of order
-- Failures mean some nodes miss updates
+For a register, a legal sequential history returns the value of the latest preceding write. A queue, set, compare-and-set register, and transaction have different sequential specifications. A consistency model selects which concurrent histories are equivalent to or compatible with such legal behavior.
 
-A consistency model is a contract between the system and application:
-- **System promise**: "Here's what ordering guarantees you can rely on"
-- **Application requirement**: "Here's what ordering I need for correctness"
+Timeouts matter. An invocation without a successful response may have taken effect. A checker may complete a pending operation with a compatible response or omit it, according to the model; the application still needs idempotency and outcome lookup. Recording only successful calls erases the histories most likely to expose a failover bug.
 
----
+Every stated model needs four coordinates:
 
-## The Consistency Spectrum
-
-```mermaid
-graph TD
-    S["<b>Strongest</b>"]
-    A["Strict Consistency<br/><i>Theoretical - requires instantaneous global updates</i>"]
-    B["Linearizability<br/><i>Single object, real-time ordering</i>"]
-    C["Sequential Consistency<br/><i>Global order, but not real-time</i>"]
-    D["Causal Consistency<br/><i>Only causally related ops ordered</i>"]
-    E["Read-Your-Writes<br/><i>See your own writes</i>"]
-    F["Monotonic Reads<br/><i>Never go backwards</i>"]
-    G["Eventual Consistency<br/><i>Eventually all see same value</i>"]
-    W["<b>Weakest</b>"]
-
-    S --> A --> B --> C --> D --> E --> F --> G --> W
+```text
+scope:       key, object, partition, table, session, transaction, or database
+operations:  read/write, CAS, range, batch, transaction, side effect
+ordering:    real-time, program, causal, prefix, version, or none
+liveness:    when writes propagate and what happens if dependencies are unreachable
 ```
 
----
+Consistency and liveness are separate. A service can preserve linearizability by never responding. Eventual convergence needs assumptions such as eventual delivery and no new writes. Availability behavior during communication loss is covered in [CAP Theorem](./03-cap-theorem.md).
 
-## Linearizability
+## The models are not one total ladder
 
-### Definition
+Some guarantees imply others for the same object and operation set, but the useful models live on different axes. Session guarantees constrain one client. Causal consistency constrains dependency order. Bounded staleness constrains age or version distance. Transaction isolation constrains groups of reads and writes. A simple strongest-to-weakest spectrum hides those scope differences.
 
-Every operation appears to take effect atomically at some point between its start and end. All operations have a global order respecting real-time.
+### Linearizability: one legal order that respects real time
 
-```mermaid
-sequenceDiagram
-    participant A as Client A
-    participant Sys as System
-    participant B as Client B
+A history is linearizable if its completed operations—and a permissible completion of some pending operations—can be placed in a legal sequential order that:
 
-    A->>Sys: write(x, 1)
-    Note over Sys: linearization point
-    Sys-->>A: ack
-    B->>Sys: read(x)
-    Sys-->>B: x = 1
+1. preserves each operation’s result under the object specification; and
+2. preserves real-time precedence between non-overlapping operations.
+
+If `write(x,1)` returns before another client invokes `read(x)`, that read returns `1` or a later value. If the read overlaps the write, either old or new may be legal. Linearizability does not require synchronized wall clocks; real-time order comes from invocation and response intervals.
+
+Linearizability is **local**: a system is linearizable if each object is linearizable, assuming operations truly act on those objects. This compositional property makes per-key checking scalable. It does not make two separate key operations an atomic transaction or preserve an application invariant spanning them.
+
+Common mechanisms are one fenced write authority, a consensus log with leader/read barriers, or an atomic-register quorum protocol that queries and writes back ordered versions. A quorum equation alone is insufficient. A leader lease supports local reads only while its timing and fencing assumptions remain valid; otherwise the leader must confirm authority. [Consensus Algorithms](../02-distributed-databases/08-consensus-algorithms.md#linearizable-reads) covers those protocols.
+
+### Sequential consistency: program order without real-time order
+
+Sequential consistency requires one legal total order containing every process’s operations in that process’s program order. It does **not** require that total order to respect real-time precedence across processes.
+
+```text
+real time:  client A write(x,1) returns ----- client B read(x) begins
+
+sequentially consistent explanation may order:
+            client B read(x)->0 ; client A write(x,1)
+linearizability may not, because the calls do not overlap
 ```
 
-### Properties
+This can be useful when all participants consume one ordered log but external response timing is not part of the abstraction. Unlike linearizability, sequential consistency is not generally local: independently valid per-object sequential orders may be impossible to combine while preserving every process’s program order. A system must define the shared ordering domain.
 
-1. **Recency**: Reads return most recent write
-2. **Real-time ordering**: If op A completes before op B starts, A appears before B
-3. **Single-copy illusion**: System behaves as if there's one copy
+### Causal consistency: preserve dependencies, not one total order
 
-### Implementation Approaches
+The happens-before relation includes a client’s program order, reads-from edges (a write precedes a read that observes it), and transitive closure. Under causal consistency, every observer sees causally related writes in that order. Concurrent writes have no causal edge and may be observed in different orders unless an additional convergence/arbitration rule is specified.
 
-**Single leader with synchronous replication:**
-```
-Client → Leader → [sync write to followers] → ack to client
-```
+```text
+w1: publish post
+r1: another client reads that post
+w2: publish reply after r1
 
-**Consensus (Raft, Paxos):**
-```
-Client → Leader → [majority agreement] → commit → ack
+w1 -> r1 -> w2, so no observer may expose w2 without the required w1.
 ```
 
-**Compare-and-swap registers:**
-```
-CAS(expected, new) → atomic read-modify-write
-```
+Implementations carry dependency metadata, such as version vectors, dotted versions, or compact partition/session frontiers. A replica delays visibility until predecessors are applied or routes the request to a replica whose frontier dominates the token. Lamport timestamps provide an order consistent with causality but cannot by themselves distinguish concurrency; a scalar timestamp is not a complete dependency set.
 
-### Cost of Linearizability
+“Causal+” is used for causal visibility plus convergent conflict handling, but exact definitions vary. State the concrete visibility and arbitration rules. The merge laws and metadata-reclamation boundary belong in [Conflict Resolution](../02-distributed-databases/04-conflict-resolution.md).
 
-| Aspect | Impact |
-|--------|--------|
-| Latency | Must wait for coordination |
-| Availability | Cannot respond during partition |
-| Throughput | Single serialization point |
+### PRAM and the four session guarantees
 
-### When You Need It
+PRAM/FIFO consistency makes every process’s writes visible to others in that writer’s program order; writes from different processes may be interleaved differently. It does not automatically preserve a write that depends on something the writer read.
 
-- Distributed locks
-- Leader election
-- Unique constraint enforcement
-- Financial transactions
+Session guarantees constrain a sequence of operations associated with one client context:
 
----
+- **Read your writes:** a read reflects the session’s preceding writes.
+- **Monotonic reads:** later reads include at least the write set reflected by earlier reads; the session does not go backward.
+- **Monotonic writes:** the system orders a session’s writes after its preceding writes.
+- **Writes follow reads:** a write is ordered after the writes reflected by preceding session reads.
 
-## Sequential Consistency
+Together, these make roaming among replicas much less surprising, but they are not global linearizability. “Sticky session” is only a fragile implementation if that replica is lost or lags after failover. A portable session token should encode the required progress/dependencies and be integrity-protected, tenant-bound, bounded in size, and available across devices if the product promises continuity there.
 
-### Definition
+### Consistent prefix and bounded staleness
 
-All operations appear to execute in some sequential order, and each processor's operations appear in program order. But this order doesn't need to match real-time.
+Consistent-prefix reads expose only a prefix of an ordered history: a reader may be behind but does not see entry 12 without required entry 11. This is useful for replicated logs and follower reads. It says nothing about how far behind the prefix is.
 
-```mermaid
-sequenceDiagram
-    participant A as Node A
-    participant B as Node B
-    participant C as Node C
+Bounded staleness adds a measurable limit, such as at most `K` committed versions or at most `T` time behind a declared authority. A version bound is often easier to establish from replication state than a time bound. Time-based bounds require a trustworthy relationship between commit timestamps and real time plus bounded replication measurement. On breach, the API must wait, route elsewhere, or return a typed “freshness unavailable” result; silently serving older data violates the contract.
 
-    A->>A: write(x, 1)
-    C->>C: read(x) → ?
-    B->>B: write(x, 2)
+### Eventual consistency and convergence
 
-    Note over A,C: Sequential consistency allows:<br/>read(x) → 1 (order: write(1), read, write(2))<br/>read(x) → 2 (order: write(2), read, write(1))<br/>But NOT: reading 1, then 2, then 1 again
-```
+“Eventual consistency” is incomplete unless the liveness assumptions and convergence rule are stated. A useful decomposition is:
 
-### Difference from Linearizability
+- **eventual delivery/visibility:** every accepted update eventually reaches each in-scope live replica after communication recovers;
+- **convergence:** replicas receiving the same relevant updates eventually reach equivalent state;
+- **termination:** local operations complete under the specified failure conditions.
 
-Linearizability: Real-time order matters
-Sequential: Only program order per process matters
+Strong eventual consistency additionally requires replicas that have incorporated the same update set to be equivalent regardless of delivery order. CRDTs can supply this when their algebra and delivery assumptions hold. A last-writer-wins register may converge through a total tie-broken order while silently discarding concurrent intent. Eventual propagation alone does not choose either rule.
 
-```
-Real time:
-  Process 1: write(x,1) completes at t=10
-  Process 2: read(x) starts at t=15
+## Transactional isolation is a separate axis
 
-Linearizable: read must return 1
-Sequential: read might return old value if "read" is ordered before "write"
-```
+Linearizability concerns individual object operations. **Serializability** asks whether committed transactions are equivalent to some serial transaction order, but that order need not respect real time. **Strict serializability** combines serializability with real-time precedence. Snapshot isolation provides a consistent snapshot and write-conflict checks but can permit write skew; read committed permits still more histories.
 
-### Use Cases
+Atomic visibility is another obligation: a reader should not see half of a multi-key commit when the API promises an atomic transaction. Two individually linearizable keys do not provide that automatically. Conversely, a serializable database can expose a stale but serializable snapshot unless it also promises real-time recency. See [ACID Transactions](./01-acid-transactions.md) and [Distributed Transactions](../02-distributed-databases/07-distributed-transactions.md#isolation-fails-despite-atomic-commit) for transaction mechanisms and anomalies.
 
-- Total order broadcast
-- Multi-threaded programming model
-- Replicated state machines
+## Composition, scope, and mixed modes
 
----
+Always attach the model to a scope. “Linearizable database” may mean point operations per key while range indexes, follower reads, and transactions have different contracts. A batch API may read keys at different frontiers. A cache can turn a linearizable source into an eventual endpoint. An external side effect is outside the database history unless it participates through fencing or idempotent workflow state.
 
-## Causal Consistency
+Mixing modes creates a new contract rather than preserving the strongest component. A quorum write followed by an eventual follower read may violate read-your-writes. A causal write routed through a consumer that discards its dependency token becomes an ordinary asynchronous write. A strong primary-key lookup and stale secondary index can still produce false negatives. Each path—including retries, background jobs, and failover routing—must propagate the required frontier.
 
-### Definition
+Linearizability composes across objects, but multi-object **operations** still need their own sequential specification. Sequential consistency, session guarantees, and causal consistency need shared program/dependency context to compose. When teams independently assign scopes, document where contexts join and where the guarantee ends.
 
-Operations that are causally related appear in the same order to all nodes. Concurrent (unrelated) operations may appear in different orders.
+## Mechanisms and their real costs
 
-### Causality Defined
+| Contract | Essential mechanism/state | Foreground consequence | Failure behavior |
+|---|---|---|---|
+| Linearizable register | Fenced authority or ordered quorum tags; durable commit frontier; authoritative read path | Writes coordinate; reads prove authority or query/write back | Side without authority waits or rejects |
+| Sequential order | One ordering domain/log and preserved client program order | Operations enter total order; response need not reflect external real time | Failover must preserve log order |
+| Causal | Dependency context plus causal delivery/visibility gate | Metadata travels; a missing predecessor can delay visibility | Independent partitions may progress on concurrent work |
+| Session guarantees | Client token/frontier and wait, route, or fallback policy | Roaming read may wait or move to a fresher replica | Token loss weakens the session unless rejected |
+| Bounded staleness | Measured authority and replica frontiers | Serve locally within bound; otherwise wait/route/fail | Bound is observable and may become unavailable |
+| Eventual convergence | Durable asynchronous log, idempotent delivery, deterministic merge/repair | Local acceptance can avoid remote coordination | Divergence is allowed until delivery assumptions recover |
 
-Operation A causally precedes B if:
-1. Same process: A happens before B in program order
-2. Reads-from: A is a write, B is a read that returns A's value
-3. Transitivity: A precedes C, C precedes B → A precedes B
+Stronger history does not have one universal latency multiplier. Placement, durability, batching, read leases, contention, and requested operation matter. Model components explicitly: for a quorum write, completion follows the required acknowledgement order statistic; for a causal read, cost may be zero when dependencies are local or an unbounded wait while one predecessor is missing.
 
-```
-Causal chain:
-  User 1: write("Hello")          [message 1]
-          ↓ reads
-  User 2: write("Reply to Hello") [message 2]
+**Illustrative calculation, not a product claim.** A replica applies 150 log positions/s while its source commits 200/s for 20 seconds. Its deficit grows by `(200 - 150) * 20 = 1,000` positions. If apply capacity later rises to 300/s while commits remain 200/s, catch-up needs at least `1,000 / (300 - 200) = 10` seconds. A session requiring the latest source position cannot receive a read-your-writes result there before catch-up unless the request routes elsewhere. Queueing, batches, and retries make real tails worse.
 
-All nodes must see message 1 before message 2
-```
+**Illustrative metadata bound.** A dense causal vector with one unsigned 64-bit counter for each of `A` actors needs at least `8A` bytes before actor IDs and framing. At 1,000 actors that lower bound is about 8,000 bytes per context, motivating dotted, hierarchical, partition-scoped, or server-held contexts. The calculation is a representation example, not a claim that causal consistency always has that overhead.
 
-### Concurrent Operations
+## Make the contract observable
 
-```
-User A: write("Post A")
-User B: write("Post B")   ← concurrent, no causal relation
+An API should return enough evidence for the chosen model: commit/request ID, authority epoch, logical position or version, session/dependency token, and for stale reads an `as_of` frontier or timestamp. The request can carry a minimum frontier and a policy such as `wait`, `route`, or `fail`; it should not rely on sleeping an assumed replication delay.
 
-Node 1 might show: Post A, Post B
-Node 2 might show: Post B, Post A
-Both are valid under causal consistency
-```
+Document downgrade behavior. If a strong read cannot prove authority, does it return unavailable, fall back only when the caller explicitly accepts staleness, or serve a separate cached representation? Do timeouts mean unknown commit? How long are tokens valid, and across which tenants, regions, restores, and schema versions? These are part of consistency just as much as the replication algorithm.
 
-### Implementation: Vector Clocks
+Authorization can itself require consistency. Credential revocation, ownership transfer, quota reservation, and policy changes may need a current/fenced read, while public content can tolerate a stale cache. Bind tokens to principal and tenant, prevent clients from forging progress, and avoid leaking internal topology in externally visible versions. A consistency downgrade must never imply an authorization downgrade.
 
-```
-Vector clock: [A:3, B:2, C:1]
+Observe required versus served frontier, replica apply position and age, wait/route/fallback counts, session-token size and rejection, authority term and lease evidence, stale-read age distribution, causal dependency queue, incomplete-operation outcomes, conflict backlog, and contract mode by endpoint and tenant. Measure semantic outcomes rather than calling every successful HTTP response “consistent.”
 
-Each node maintains clock for every node
-On local event: increment own counter
-On send: attach vector clock
-On receive: merge (max each component), then increment own
-```
+## Specialized failure traces
 
-**Comparing vector clocks:**
-```
-V1 = [2, 3, 1]
-V2 = [2, 2, 2]
+### Acknowledgement precedes the durable linearization point
 
-V1 < V2?  No (3 > 2)
-V2 < V1?  No (2 > 1)
-Concurrent? Yes (neither dominates)
-```
+A leader returns success before the entry is committed on the required quorum, then fails. A new leader without the entry serves the old value. The completed write has no legal place before the later read. Acknowledgement must follow the protocol’s durable commit point, not local receipt.
 
-### Causal+ Consistency
+### Paused leaseholder serves after its lease
 
-Causal consistency plus convergence: concurrent writes resolve to same value everywhere.
+A process pauses while holding a read lease. The cluster advances the epoch and commits a new value. The old process resumes using cached time and serves the prior value as linearizable. Lease safety needs a valid clock/expiry model and fencing; otherwise use a read barrier against current consensus state.
 
-Resolution strategies:
-- Last-writer-wins (LWW)
-- Multi-value (return all concurrent values)
-- Application-specific merge
+### Sequential consistency surprises a real-time observer
 
----
+Client A’s write returns, and only afterward client B reads the old value. A legal sequential order can place B’s read before A’s write because their program orders do not conflict. If the product says “completed changes are immediately visible,” it needs linearizability, not sequential consistency.
 
-## Session Guarantees
+### Reply appears before its causal parent
 
-Weaker consistency models that are often "good enough."
+A user reads post `p` and writes reply `r` with dependency `{p}`. A remote indexer publishes `r` before receiving `p`, so readers see a reply to nothing. The pipeline discarded or ignored the causal context; wall-clock sorting afterward cannot repair the visibility violation.
 
-### Read Your Writes
+### Roaming session loses read-your-writes
 
-After writing, you see your own writes.
+A write in region A returns position 91. The client reconnects to B but does not present its token; B is at 87 and returns the previous profile. Sticky routing happened to supply the guarantee until failover. Persist and enforce the session frontier or make the weaker cross-device contract explicit.
 
-```
-✓ Correct:
-  write(x, 1)
-  read(x) → 1
+### Per-key linearizability exposes an impossible snapshot
 
-✗ Violation:
-  write(x, 1)
-  read(x) → old_value  (stale replica)
-```
+A transfer changes `debit` and `credit` under separate linearizable key operations. A reader sees new debit and old credit. Each key history is legal; the multi-key observation is not atomic. Use a transaction/snapshot contract rather than assuming object composition creates transaction isolation.
 
-**Implementation:**
-- Sticky sessions (always same node)
-- Include write timestamp, wait if replica behind
-- Read from leader after writing
+### Replicas receive the same updates but disagree forever
 
-### Monotonic Reads
+Two eventual replicas apply concurrent values through a resolver that depends on local iteration order. Delivery completes, yet final states differ. Eventual delivery is not convergence; use a deterministic total choice or merge satisfying the required algebra.
 
-Once you've seen a value, you never see older values.
+## Verification and evolution
 
-```
-✓ Correct:
-  read(x) → 5
-  read(x) → 5 or higher
+Capture client-side invocation and response events, values, stable operation IDs, requested model, tokens, and unknown outcomes. Do not reconstruct real-time order solely from unsynchronized server timestamps. Inject process crashes, pauses, asymmetric partitions, reordered and duplicate delivery, clock faults, disk faults, lease expiry, replica migration, and mixed software/configuration versions.
 
-✗ Violation:
-  read(x) → 5
-  read(x) → 3  (went backwards)
-```
+Use a checker matched to the claim:
 
-**Implementation:**
-- Track high-water mark per client
-- Sticky sessions
-- Version vectors
+- linearizability: search for a legal real-time-respecting history, partitioned by object only when the API is truly local;
+- sequential consistency: preserve program order but deliberately omit cross-client real-time edges;
+- causal: generate explicit reads-from dependencies and ensure descendants never appear without predecessors;
+- session: roam clients among replicas and assert each of the four token/frontier properties independently;
+- bounded staleness: compare the served frontier with the authoritative frontier under the declared metric;
+- convergence: deliver the same operation set in duplicated and permuted orders and compare state;
+- transactions: infer dependency cycles and isolation anomalies with an isolation checker such as Elle.
 
-### Monotonic Writes
+Check safety and liveness separately. A finite test finding no violation is evidence, not proof; a concise counterexample is decisive. Preserve the exact binary, configuration, topology, and checker model with every history so a claimed guarantee is reproducible.
 
-Writes by a process are seen in order by all nodes.
+Changing consistency is an API migration. Introduce new tokens and response metadata before requiring them; dual-run old and new read paths; compare histories; then gate writes or reads at a versioned activation frontier. Rollback must not route a token-requiring client to a server that silently ignores the token. Never change a mode name in place while retaining its old clients.
 
-```
-✓ Correct:
-  write(x, 1)
-  write(x, 2)
-  All nodes eventually have: 1 → 2
+## Decision framework
 
-✗ Violation:
-  Node A sees: 2, then 1 (wrong order)
-```
+Choose from the invariant outward:
 
-### Writes Follow Reads
+| Need | Candidate minimum contract | Question that can force something stronger |
+|---|---|---|
+| Lock, leader record, unique reservation, revocation | Linearizable conditional object | Does the invariant span several objects or an external side effect? |
+| Multi-key transaction with real-time commit order | Strict serializability plus atomic durability | Are stale snapshots or weaker isolation actually allowed? |
+| Conversation, dependency graph, collaborative workflow | Causal visibility plus explicit convergence | Must all concurrent actions have one immediate winner? |
+| User roaming among replicas | Required session guarantees | Is the token durable across devices and failover? |
+| Follower read with freshness SLO | Consistent prefix plus version/time bound | What happens when the bound cannot be met? |
+| Cache, derived view, offline mergeable state | Eventual delivery plus deterministic convergence | Are false negatives, stale positives, deletes, and conflicts acceptable? |
 
-If you read a value and then write, your write is ordered after the read.
+Do not pay for a stronger model by reflex, and do not weaken one based on generic latency folklore. State the smallest history that keeps the product invariant true, expose its evidence and failure outcome, then test that exact contract across every serving path.
 
-```
-Process reads x = 5, then writes y = 10
+## Primary references
 
-All nodes see: write(x, 5) happens before write(y, 10)
-```
-
----
-
-## Eventual Consistency
-
-### Definition
-
-If no new updates are made, eventually all replicas converge to the same value.
-
-```mermaid
-sequenceDiagram
-    participant A as Node A
-    participant B as Node B
-    participant C as Node C
-
-    Note over A: write(x, 1)
-    A->>A: x = 1
-    A-->>B: propagate
-    B->>B: x = 1
-    A-->>C: propagate
-    C->>C: x = 1
-    Note over A,C: Eventual convergence — all nodes now have x = 1
-```
-
-### What Eventual Consistency Does NOT Guarantee
-
-- How long "eventually" takes
-- What value you'll read before convergence
-- Which write "wins" if concurrent
-
-### Conflict Resolution
-
-When concurrent writes exist:
-
-**Last-Writer-Wins (LWW):**
-```
-write(x, 1) at t=10
-write(x, 2) at t=15
-Result: x = 2 (higher timestamp wins)
-
-Problem: Clock skew can discard writes
-```
-
-**Multi-Value (Siblings):**
-```
-write(x, 1) at Node A
-write(x, 2) at Node B (concurrent)
-Result: x = {1, 2} (application must resolve)
-```
-
-**CRDTs (Conflict-free Replicated Data Types):**
-```
-G-Counter: only increment, merge = max per node
-LWW-Register: last-writer-wins with logical clock
-OR-Set: add wins over concurrent remove
-```
-
----
-
-## Tunable Consistency
-
-Many systems allow per-operation consistency choice.
-
-### Quorum Parameters
-
-```
-N = total replicas
-W = write quorum (replicas that must ack write)
-R = read quorum (replicas to read from)
-```
-
-**Guarantees:**
-```
-W + R > N  → Strong consistency (overlap guarantees seeing latest)
-W + R ≤ N  → Eventual consistency (might miss latest)
-```
-
-**Common configurations:**
-
-| Config | W | R | Consistency | Use Case |
-|--------|---|---|-------------|----------|
-| Strong | N | 1 | Strong | Writes slow, reads fast |
-| Strong | ⌈N/2⌉+1 | ⌈N/2⌉+1 | Strong | Balanced |
-| Eventual | 1 | 1 | Eventual | Maximum performance |
-| Write-heavy | 1 | N | Eventual+ | Tolerate write loss |
-
-### Example: Cassandra
-
-```cql
--- Strong consistency
-SELECT * FROM users WHERE id = 123 
-USING CONSISTENCY QUORUM;
-
--- Eventual consistency (faster)
-SELECT * FROM users WHERE id = 123 
-USING CONSISTENCY ONE;
-```
-
----
-
-## Consistency in Practice
-
-### Choosing a Model
-
-| Requirement | Minimum Model |
-|-------------|---------------|
-| Distributed lock | Linearizable |
-| Counter with exact count | Linearizable |
-| User sees own posts | Read-your-writes |
-| Chat message ordering | Causal |
-| Social feed | Eventual |
-| Shopping cart | Eventual + CRDT |
-| Configuration | Linearizable |
-
-### Mixing Consistency Levels
-
-Most applications use multiple levels:
-
-```
-User profile updates: Eventual (staleness OK)
-Password changes: Read-your-writes (must see new password)
-Account balance: Linearizable (must be accurate)
-```
-
-### Testing Consistency
-
-**Jepsen** - Black-box consistency testing:
-1. Perform operations against cluster
-2. Record history of operations
-3. Check if history matches consistency model
-
-**Linearizability checker:**
-```
-History:
-  [invoke write(1)]
-  [invoke read]
-  [ok write(1)]
-  [ok read → 0]  ← Violation! Read should see 1
-
-Check: Is there a linearization? No.
-```
-
----
-
-## Implementation Cost Analysis
-
-Understanding the concrete cost of each consistency model prevents over- or under-engineering.
-
-### Coordination Rounds Per Operation
-
-| Model | Coordination | Detail |
-|-------|-------------|--------|
-| Linearizable | 1 RTT to leader + majority ack | Write: client→leader→majority→ack. Read: leader lease or read-index RPC. |
-| Sequential | 0 extra beyond total-order broadcast | Total order already established; no per-read coordination once log is applied. |
-| Causal | Vector clock piggybacked on messages | No extra round trips — metadata travels with application messages. |
-| Eventual | 0 | Fire-and-forget async replication. No coordination on the write path. |
-
-### Latency Impact
-
-Linearizable operations pay the price of cross-replica coordination on every request:
-
-```
-Latency breakdown (single-region, 3-AZ deployment):
-  Linearizable write:  local disk (~1ms) + cross-AZ RTT (~5-15ms) + majority ack
-  Linearizable read:   lease-based ~0ms extra, or read-index +1 RTT (~5-15ms)
-  Causal write:        local disk (~1ms) + vector clock merge (<0.1ms)
-  Eventual write:      local disk (~1ms)
-
-Cross-region (US-East → EU-West, ~80ms RTT):
-  Linearizable write:  +80-160ms (consensus across regions)
-  Causal write:        +0ms (async replication, metadata only)
-  Eventual write:      +0ms
-```
-
-### Bandwidth Overhead
-
-| Model | Per-message overhead | Notes |
-|-------|---------------------|-------|
-| Linearizable | Consensus metadata (~50-100 bytes) | Raft log entry headers, term, index |
-| Sequential | Log sequence number (~8 bytes) | Total order broadcast sequence |
-| Causal | Vector clock (8 bytes × N nodes) | Grows with cluster size; use interval tree clocks for >50 nodes |
-| Eventual | Version/timestamp (~8-16 bytes) | LWW timestamp or version vector |
-
-**Key trade-off**: linearizable consistency in a 3-AZ deployment adds 5-15ms p50 latency per write. For a service doing 10k writes/sec, that means ~100k additional network round trips per second — a measurable infrastructure cost. Causal consistency gives strong-enough ordering for most user-facing features at near-zero overhead.
-
----
-
-## Real System Consistency Guarantees
-
-Knowing what a system actually provides — not what marketing claims — prevents production surprises. These are the per-operation guarantees as of late 2025.
-
-| System | Version | Default Consistency | Strongest Available | Mechanism | Cost of Strongest |
-|--------|---------|--------------------|--------------------|-----------|-------------------|
-| Google Spanner | 2024+ | Linearizable (external consistency) | Linearizable | TrueTime + 2PC across Paxos groups | Always-on; ~7ms commit wait for clock uncertainty |
-| CockroachDB | v23.2+ | Serializable | Serializable (strict serializable with AS OF SYSTEM TIME) | Raft per-range, HLC timestamps | Default; follower reads trade staleness for latency |
-| DynamoDB | 2024 | Eventual | Strongly consistent reads | Leader-based reads from storage nodes | 2× RCU cost, higher latency, single-region only |
-| Cassandra | 4.x / 5.0 | Tunable (ONE default) | Linearizable (SERIAL) | Paxos (LWT) for SERIAL; quorum overlap for QUORUM | SERIAL: 4× latency vs ONE; QUORUM: 2× vs ONE |
-| MongoDB | 7.x+ | Causal (in causal sessions) | Linearizable | Majority read concern + majority write concern; linearizable reads via no-op Raft write | Linearizable reads add 1 Raft RTT per read |
-| PostgreSQL | 16+ | Linearizable (single node, trivially) | Serializable (SSI) | Predicate locking on single node; async replicas are eventual | SSI adds ~5-10% overhead; streaming replicas lag by ms-seconds |
-| etcd | v3.5+ | Linearizable | Linearizable | Raft consensus, leader-based reads | Default; serializable reads bypass leader (stale OK) |
-| Redis (Cluster) | 7.x | Eventual (async replication) | Eventual (no strong option) | Async primary→replica | No strong consistency; WAIT command reduces but doesn't eliminate window |
-| TiDB | v7.x+ | Snapshot isolation | Snapshot isolation (not serializable) | Percolator-style 2PC + Raft | Write-write conflicts detected; but no read-write anomaly protection |
-
-**Common gotcha**: DynamoDB strongly consistent reads only work within a single region. Global Tables use eventual consistency across regions — there is no cross-region strong read option.
-
-**PostgreSQL note**: Single-node PostgreSQL is trivially linearizable because there is only one copy. The moment you add streaming replicas, reads against those replicas are eventual (lag depends on `max_standby_streaming_delay` and load).
-
----
-
-## CRDT Reference
-
-CRDTs (Conflict-free Replicated Data Types) provide mathematically guaranteed convergence without coordination. Each type defines a merge function that is commutative, associative, and idempotent — meaning replicas can exchange state in any order and still converge.
-
-### G-Counter (Grow-only Counter)
-
-Each node maintains its own counter. The global count is the sum. Merge takes the max per node.
-
-```
-State:  { node_id → count }
-
-increment(node_id):
-    state[node_id] += 1
-
-value():
-    return sum(state.values())
-
-merge(local, remote):
-    for each node_id in union(local.keys(), remote.keys()):
-        result[node_id] = max(local.get(node_id, 0),
-                              remote.get(node_id, 0))
-    return result
-
-Example:
-  Node A: {A:3, B:0} → value = 3
-  Node B: {A:1, B:2} → value = 3
-  merge:  {A:3, B:2} → value = 5
-```
-
-### PN-Counter (Positive-Negative Counter)
-
-Two G-Counters: one for increments (`P`), one for decrements (`N`). Value = `P.value() - N.value()`.
-
-```
-State:  { P: G-Counter, N: G-Counter }
-
-increment(node_id):  P.increment(node_id)
-decrement(node_id):  N.increment(node_id)
-value():             P.value() - N.value()
-
-merge(local, remote):
-    result.P = G-Counter.merge(local.P, remote.P)
-    result.N = G-Counter.merge(local.N, remote.N)
-    return result
-```
-
-### OR-Set (Observed-Remove Set)
-
-Add wins over concurrent remove. Each add operation is tagged with a unique identifier. Remove only removes tags the remover has observed.
-
-```
-State:  { element → set_of_unique_tags }
-
-add(element):
-    tag = generate_unique_tag()  // e.g., (node_id, lamport_ts)
-    state[element].add(tag)
-
-remove(element):
-    state[element] = {}  // remove only locally observed tags
-
-lookup(element):
-    return len(state[element]) > 0
-
-merge(local, remote):
-    for each element:
-        result[element] = union(local[element], remote[element])
-                          - (local_removed ∩ remote_removed)
-    // In practice: keep all tags from both sides,
-    // only discard tags that BOTH sides have removed
-    return result
-```
-
-**Why unique tags matter**: without them, a concurrent add and remove on the same element creates ambiguity. Tags let the merge function distinguish "this add happened after the remove" from "this add was already removed."
-
-### LWW-Register (Last-Writer-Wins Register)
-
-Simplest convergent register. Each write carries a timestamp; highest timestamp wins.
-
-```
-State:  { value, timestamp }
-
-write(new_value, ts):
-    if ts > state.timestamp:
-        state = { value: new_value, timestamp: ts }
-
-read():
-    return state.value
-
-merge(local, remote):
-    if remote.timestamp > local.timestamp:
-        return remote
-    return local
-    // On tie: break by node_id or discard (implementation-specific)
-```
-
-**Warning**: LWW silently drops concurrent writes. This is acceptable for "last status update" use cases but dangerous for anything requiring all writes to be preserved (use OR-Set or a sequence CRDT instead).
-
----
-
-## Consistency Verification (Jepsen)
-
-[Jepsen](https://jepsen.io) is the industry-standard framework for black-box consistency testing of distributed systems. It injects faults (network partitions, clock skew, process crashes, disk corruption) while running concurrent workloads, then checks whether the recorded history of operations violates the system's claimed consistency model.
-
-### Notable Violations Found
-
-| System | Version | Claimed Guarantee | Actual Violation Found | Year |
-|--------|---------|-------------------|----------------------|------|
-| MongoDB | 2.6 | Linearizable (w:majority, r:majority) | Stale reads under network partitions; writes acknowledged by majority but not visible to majority reads | 2015 |
-| Cassandra | 2.0.x | QUORUM reads = strong consistency | Stale reads after node restart; commitlog replay ordering issues | 2013 |
-| etcd | 3.1 | Linearizable reads | Stale reads during leader transfer; new leader served reads before applying pending log entries | 2020 |
-| Redis Sentinel | 3.x–5.x | CP (claimed by users) | Split-brain data loss; async replication means acknowledged writes lost on failover | 2013–2020 |
-| TiDB | 2.1 | Snapshot isolation | Lost updates under high contention; timestamp oracle gaps caused visibility anomalies | 2019 |
-| RabbitMQ | 3.x | Queue mirroring = no message loss | Messages lost during network partitions with `ha-mode: all`; confirmed publishes not replicated | 2014 |
-
-### How Jepsen Catches These
-
-```
-1. Start cluster (Docker/LXC containers)
-2. Run concurrent client operations (reads, writes, CAS)
-3. Inject faults:
-   - iptables partitions between specific node pairs
-   - SIGSTOP/SIGKILL random nodes
-   - Clock skew via ntpd manipulation
-4. Record full operation history:
-   [invoke :write 1] [ok :write 1] [invoke :read] [ok :read nil] ← violation?
-5. Feed history to model checker:
-   - Linearizability: Knossos or Elle checker
-   - Serializability: Elle (Adya-style dependency graph analysis)
-   - Causal: verify partial-order constraints
-6. Output: either "valid" or counterexample with specific operations
-```
-
-### Hermitage: Single-Node Isolation Testing
-
-For single-node databases, the [Hermitage](https://github.com/ept/hermitage) test suite verifies transaction isolation levels against the SQL standard. It tests for specific anomalies:
-
-| Anomaly | Read Uncommitted | Read Committed | Repeatable Read | Serializable |
-|---------|-----------------|----------------|-----------------|--------------|
-| Dirty write | Prevented | Prevented | Prevented | Prevented |
-| Dirty read | Possible | Prevented | Prevented | Prevented |
-| Non-repeatable read | Possible | Possible | Prevented | Prevented |
-| Phantom read | Possible | Possible | Possible* | Prevented |
-| Write skew | Possible | Possible | Possible* | Prevented |
-
-*Many databases (MySQL/InnoDB, PostgreSQL) prevent phantoms at Repeatable Read via MVCC/gap locks, exceeding the SQL standard minimum.
-
-**Practical advice**: run Jepsen against your deployment configuration, not defaults. Many violations only surface under specific replication settings, failure modes, or version combinations. A system that passes Jepsen at `W=ALL, R=ALL` may fail at `W=QUORUM, R=QUORUM`.
-
----
-
-## Key Takeaways
-
-1. **Stronger isn't always better** - Pay for what you need
-2. **Linearizability is expensive** - Requires coordination, hurts availability
-3. **Causal consistency is often sufficient** - Preserves intuitive ordering
-4. **Eventual consistency requires conflict handling** - CRDTs or application logic
-5. **Session guarantees help** - Read-your-writes often enough for good UX
-6. **Tune per-operation** - Different data has different requirements
-7. **Test your assumptions** - Use tools like Jepsen to verify
+- Herlihy, M. P., and Wing, J. M. [Linearizability: A Correctness Condition for Concurrent Objects](https://doi.org/10.1145/78969.78972). ACM TOPLAS, 1990.
+- Lamport, L. [How to Make a Multiprocessor Computer That Correctly Executes Multiprocess Programs](https://doi.org/10.1109/TC.1979.1675439). IEEE Transactions on Computers, 1979.
+- Ahamad, M., Neiger, G., Burns, J. E., Kohli, P., and Hutto, P. W. [Causal Memory: Definitions, Implementation, and Programming](https://doi.org/10.1007/BF01784241). Distributed Computing, 1995.
+- Terry, D. B., et al. [Session Guarantees for Weakly Consistent Replicated Data](https://doi.org/10.1109/PDIS.1994.331722). PDIS, 1994.
+- Attiya, H., Bar-Noy, A., and Dolev, D. [Sharing Memory Robustly in Message-Passing Systems](https://doi.org/10.1145/200836.200869). Journal of the ACM, 1995.
+- Adya, A., Liskov, B., and O’Neil, P. [Generalized Isolation Level Definitions](https://doi.org/10.1109/ICDE.2000.839388). ICDE, 2000.
+- Horn, A., and Kroening, D. [Faster Linearizability Checking via P-Compositionality](https://doi.org/10.1007/978-3-319-19195-9_4). FORTE, 2015.
+- Kingsbury, K., and Alvaro, P. [Elle: Inferring Isolation Anomalies from Experimental Observations](https://www.vldb.org/pvldb/vol14/p268-alvaro.pdf). PVLDB, 2020.

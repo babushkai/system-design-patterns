@@ -1,640 +1,131 @@
-# MapReduce: Simplified Data Processing on Large Clusters
-
-## Paper Overview
-
-**Authors:** Jeffrey Dean, Sanjay Ghemawat (Google)  
-**Published:** OSDI 2004  
-**Citation:** One of the most cited papers in computer science
-
-## TL;DR
-
-MapReduce is a programming model for processing large datasets in parallel across a distributed cluster. Users define **map** functions that process key-value pairs to generate intermediate pairs, and **reduce** functions that merge intermediate values with the same key. The runtime handles parallelization, fault tolerance, and data distribution automatically. This abstraction enabled Google to run thousands of different computations on commodity hardware while hiding the complexity of distributed systems.
-
----
-
-## Problem Statement
-
-Before MapReduce, Google engineers had to write custom distributed systems for each computation:
-- Crawling the web
-- Building the search index
-- Analyzing logs
-- Computing PageRank
-
-Each system needed to handle:
-- Parallelization across hundreds of machines
-- Data distribution and load balancing
-- Fault tolerance for machine failures
-- Network optimization
-
-This was complex, error-prone, and duplicated effort.
-
----
-
-## Core Abstraction
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                    MapReduce Programming Model                           │
-│                                                                          │
-│   map(key1, value1) → list(key2, value2)                                │
-│   reduce(key2, list(value2)) → list(value2)                             │
-│                                                                          │
-│   ┌──────────────────────────────────────────────────────────────────┐  │
-│   │                        Example: Word Count                        │  │
-│   │                                                                   │  │
-│   │   Input: "hello world hello"                                     │  │
-│   │                                                                   │  │
-│   │   map("doc1", "hello world hello"):                              │  │
-│   │       emit("hello", 1)                                           │  │
-│   │       emit("world", 1)                                           │  │
-│   │       emit("hello", 1)                                           │  │
-│   │                                                                   │  │
-│   │   reduce("hello", [1, 1]):                                       │  │
-│   │       emit("hello", 2)                                           │  │
-│   │                                                                   │  │
-│   │   reduce("world", [1]):                                          │  │
-│   │       emit("world", 1)                                           │  │
-│   └──────────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## Execution Flow
-
-```mermaid
-graph TD
-    subgraph Input["Input Files (GFS)"]
-        S0[Split 0] & S1[Split 1] & S2[Split 2] & S3[Split 3] & S4[Split 4]
-    end
-
-    subgraph Map["Map Phase"]
-        M0[Map 0<br/>Worker] & M1[Map 1<br/>Worker] & M2[Map 2<br/>Worker] & M3[Map 3<br/>Worker] & M4[Map 4<br/>Worker]
-        D0[("Local Disk<br/>(R parts)")] & D1[("Local Disk<br/>(R parts)")] & D2[("Local Disk<br/>(R parts)")] & D3[("Local Disk<br/>(R parts)")] & D4[("Local Disk<br/>(R parts)")]
-    end
-
-    subgraph Reduce["Reduce Phase"]
-        R0[Reduce 0<br/>Worker] & R1[Reduce 1<br/>Worker] & R2[Reduce 2<br/>Worker]
-        O0[("Output 0<br/>GFS")] & O1[("Output 1<br/>GFS")] & O2[("Output 2<br/>GFS")]
-    end
-
-    S0 --> M0
-    S1 --> M1
-    S2 --> M2
-    S3 --> M3
-    S4 --> M4
-
-    M0 --> D0
-    M1 --> D1
-    M2 --> D2
-    M3 --> D3
-    M4 --> D4
-
-    D0 -->|Shuffle<br/>partition by key hash| R0
-    D1 -->|Shuffle| R0
-    D2 -->|Shuffle| R1
-    D3 -->|Shuffle| R1
-    D4 -->|Shuffle| R2
-
-    R0 --> O0
-    R1 --> O1
-    R2 --> O2
-```
-
-### Execution Steps
-
-1. **Split input**: Divide input into M splits (typically 16-64 MB each)
-2. **Fork processes**: Master assigns map/reduce tasks to workers
-3. **Map phase**: Workers read splits, apply map function, buffer output in memory
-4. **Partition**: Buffered output partitioned into R regions by hash(key) mod R
-5. **Write locally**: Partitioned data written to local disk
-6. **Shuffle**: Reduce workers fetch their partition from all map workers
-7. **Sort**: Reduce workers sort by key (external sort if needed)
-8. **Reduce phase**: Iterate over sorted data, apply reduce function
-9. **Output**: Write reduce output to GFS
-
----
-
-## Implementation Details
-
-### Master Data Structures
-
-```python
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set
-from enum import Enum
-import time
-
-class TaskState(Enum):
-    IDLE = "idle"
-    IN_PROGRESS = "in_progress"
-    COMPLETED = "completed"
-
-class TaskType(Enum):
-    MAP = "map"
-    REDUCE = "reduce"
-
-@dataclass
-class MapTask:
-    task_id: int
-    input_split: str  # GFS file path
-    state: TaskState = TaskState.IDLE
-    worker_id: Optional[str] = None
-    start_time: Optional[float] = None
-    output_locations: List[str] = field(default_factory=list)  # R locations
-
-@dataclass
-class ReduceTask:
-    task_id: int
-    partition: int  # Partition number (0 to R-1)
-    state: TaskState = TaskState.IDLE
-    worker_id: Optional[str] = None
-    start_time: Optional[float] = None
-    input_locations: List[str] = field(default_factory=list)  # From all mappers
-
-
-class MapReduceMaster:
-    """
-    Master coordinates the entire MapReduce job.
-    Tracks task states, handles failures, and manages workers.
-    """
-    
-    def __init__(self, input_files: List[str], num_reducers: int):
-        self.num_mappers = len(input_files)
-        self.num_reducers = num_reducers
-        
-        # Initialize map tasks
-        self.map_tasks: Dict[int, MapTask] = {
-            i: MapTask(task_id=i, input_split=f)
-            for i, f in enumerate(input_files)
-        }
-        
-        # Initialize reduce tasks
-        self.reduce_tasks: Dict[int, ReduceTask] = {
-            i: ReduceTask(task_id=i, partition=i)
-            for i in range(num_reducers)
-        }
-        
-        # Worker tracking
-        self.workers: Dict[str, float] = {}  # worker_id -> last_heartbeat
-        self.worker_timeout = 10.0  # seconds
-    
-    def get_task(self, worker_id: str) -> Optional[Dict]:
-        """Assign a task to a worker"""
-        self.workers[worker_id] = time.time()
-        
-        # Prefer map tasks first (reduce can't start until maps complete)
-        for task_id, task in self.map_tasks.items():
-            if task.state == TaskState.IDLE:
-                task.state = TaskState.IN_PROGRESS
-                task.worker_id = worker_id
-                task.start_time = time.time()
-                
-                return {
-                    "type": TaskType.MAP,
-                    "task_id": task_id,
-                    "input_split": task.input_split,
-                    "num_reducers": self.num_reducers
-                }
-        
-        # All maps done? Assign reduce tasks
-        if self._all_maps_complete():
-            for task_id, task in self.reduce_tasks.items():
-                if task.state == TaskState.IDLE:
-                    task.state = TaskState.IN_PROGRESS
-                    task.worker_id = worker_id
-                    task.start_time = time.time()
-                    
-                    # Collect input locations from all mappers
-                    input_locations = []
-                    for map_task in self.map_tasks.values():
-                        input_locations.append(
-                            map_task.output_locations[task_id]
-                        )
-                    
-                    return {
-                        "type": TaskType.REDUCE,
-                        "task_id": task_id,
-                        "partition": task.partition,
-                        "input_locations": input_locations
-                    }
-        
-        return None  # No tasks available
-    
-    def task_completed(
-        self, 
-        worker_id: str, 
-        task_type: TaskType,
-        task_id: int,
-        output_locations: List[str]
-    ):
-        """Handle task completion notification"""
-        if task_type == TaskType.MAP:
-            task = self.map_tasks[task_id]
-            if task.worker_id == worker_id:
-                task.state = TaskState.COMPLETED
-                task.output_locations = output_locations
-        else:
-            task = self.reduce_tasks[task_id]
-            if task.worker_id == worker_id:
-                task.state = TaskState.COMPLETED
-    
-    def check_timeouts(self):
-        """Re-assign tasks from failed workers"""
-        now = time.time()
-        
-        # Check for worker timeouts
-        failed_workers = set()
-        for worker_id, last_heartbeat in self.workers.items():
-            if now - last_heartbeat > self.worker_timeout:
-                failed_workers.add(worker_id)
-        
-        # Re-assign map tasks
-        for task in self.map_tasks.values():
-            if task.state == TaskState.IN_PROGRESS:
-                if task.worker_id in failed_workers:
-                    task.state = TaskState.IDLE
-                    task.worker_id = None
-        
-        # Re-assign reduce tasks
-        for task in self.reduce_tasks.values():
-            if task.state == TaskState.IN_PROGRESS:
-                if task.worker_id in failed_workers:
-                    task.state = TaskState.IDLE
-                    task.worker_id = None
-        
-        # Also re-run completed map tasks if worker failed
-        # (reduce workers may not have fetched data yet)
-        for task in self.map_tasks.values():
-            if task.state == TaskState.COMPLETED:
-                if task.worker_id in failed_workers:
-                    task.state = TaskState.IDLE
-                    task.worker_id = None
-    
-    def _all_maps_complete(self) -> bool:
-        return all(t.state == TaskState.COMPLETED for t in self.map_tasks.values())
-    
-    def is_done(self) -> bool:
-        return all(t.state == TaskState.COMPLETED for t in self.reduce_tasks.values())
-```
-
-### Worker Implementation
-
-```python
-class MapReduceWorker:
-    """
-    Worker executes map and reduce tasks.
-    """
-    
-    def __init__(self, worker_id: str, master_address: str):
-        self.worker_id = worker_id
-        self.master = master_address
-        self.map_fn = None
-        self.reduce_fn = None
-    
-    def run(self):
-        """Main worker loop"""
-        while True:
-            # Request task from master
-            task = self.request_task()
-            
-            if task is None:
-                # No tasks available, sleep and retry
-                time.sleep(1)
-                continue
-            
-            if task["type"] == TaskType.MAP:
-                self.execute_map(task)
-            else:
-                self.execute_reduce(task)
-    
-    def execute_map(self, task: Dict):
-        """Execute a map task"""
-        task_id = task["task_id"]
-        input_file = task["input_split"]
-        num_reducers = task["num_reducers"]
-        
-        # Read input
-        content = self.read_gfs(input_file)
-        
-        # Apply map function
-        intermediate = []
-        for key, value in self.parse_input(content):
-            for output_key, output_value in self.map_fn(key, value):
-                intermediate.append((output_key, output_value))
-        
-        # Partition by reduce task
-        partitions = [[] for _ in range(num_reducers)]
-        for key, value in intermediate:
-            partition = hash(key) % num_reducers
-            partitions[partition].append((key, value))
-        
-        # Write partitions to local disk
-        output_locations = []
-        for partition_id, partition_data in enumerate(partitions):
-            location = f"/tmp/mr-{task_id}-{partition_id}"
-            self.write_local(location, partition_data)
-            output_locations.append(f"{self.worker_id}:{location}")
-        
-        # Notify master
-        self.notify_complete(TaskType.MAP, task_id, output_locations)
-    
-    def execute_reduce(self, task: Dict):
-        """Execute a reduce task"""
-        task_id = task["task_id"]
-        input_locations = task["input_locations"]
-        
-        # Fetch all intermediate data for this partition
-        intermediate = []
-        for location in input_locations:
-            worker, path = location.split(":")
-            data = self.fetch_from_worker(worker, path)
-            intermediate.extend(data)
-        
-        # Sort by key
-        intermediate.sort(key=lambda x: x[0])
-        
-        # Group by key and apply reduce
-        output = []
-        i = 0
-        while i < len(intermediate):
-            key = intermediate[i][0]
-            values = []
-            
-            # Collect all values for this key
-            while i < len(intermediate) and intermediate[i][0] == key:
-                values.append(intermediate[i][1])
-                i += 1
-            
-            # Apply reduce function
-            for output_value in self.reduce_fn(key, values):
-                output.append((key, output_value))
-        
-        # Write output to GFS
-        output_file = f"/output/part-{task_id:05d}"
-        self.write_gfs(output_file, output)
-        
-        # Notify master
-        self.notify_complete(TaskType.REDUCE, task_id, [output_file])
-```
-
----
-
-## Fault Tolerance
-
-### Worker Failure
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                    Handling Worker Failures                              │
-│                                                                          │
-│   Map Worker Fails:                                                     │
-│   ┌──────────────────────────────────────────────────────────────────┐  │
-│   │   1. Master detects via missing heartbeats                       │  │
-│   │   2. All map tasks on that worker reset to IDLE                  │  │
-│   │   3. Tasks re-assigned to other workers                          │  │
-│   │   4. Reduce workers notified of new intermediate locations       │  │
-│   │                                                                   │  │
-│   │   Note: Completed map tasks ALSO re-executed because output      │  │
-│   │         is on local disk (inaccessible if worker dead)           │  │
-│   └──────────────────────────────────────────────────────────────────┘  │
-│                                                                          │
-│   Reduce Worker Fails:                                                  │
-│   ┌──────────────────────────────────────────────────────────────────┐  │
-│   │   1. Master detects via missing heartbeats                       │  │
-│   │   2. Only IN_PROGRESS reduce tasks reset to IDLE                │  │
-│   │   3. Tasks re-assigned to other workers                          │  │
-│   │                                                                   │  │
-│   │   Note: Completed reduce tasks NOT re-executed because output   │  │
-│   │         is on GFS (globally accessible)                          │  │
-│   └──────────────────────────────────────────────────────────────────┘  │
-│                                                                          │
-│   Master Failure:                                                       │
-│   ┌──────────────────────────────────────────────────────────────────┐  │
-│   │   Original paper: Abort job, user restarts                       │  │
-│   │   Later systems: Checkpointing, standby master                   │  │
-│   └──────────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-### Deterministic Execution
-
-For fault tolerance to work correctly:
-- Map and Reduce functions must be **deterministic**
-- Same input → same output, always
-- Re-execution produces identical results
-- Non-deterministic functions can cause inconsistencies
-
----
-
-## Optimizations
-
-### Locality Optimization
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                    Data Locality Optimization                            │
-│                                                                          │
-│   GFS stores data in 64MB chunks, replicated 3x                         │
-│                                                                          │
-│   ┌────────────────────────────────────────────────────────────────┐    │
-│   │   GFS Chunk Locations for Input Split                          │    │
-│   │                                                                 │    │
-│   │   Split "input-0": replicas on [Machine A, Machine B, Machine C]│    │
-│   │                                                                 │    │
-│   │   Master scheduling priority:                                   │    │
-│   │   1. Schedule map task on machine with replica (local read)    │    │
-│   │   2. Schedule on machine on same rack (rack-local)             │    │
-│   │   3. Schedule anywhere (remote read)                            │    │
-│   │                                                                 │    │
-│   │   Result: Most reads are local, minimizing network bandwidth   │    │
-│   └────────────────────────────────────────────────────────────────┘    │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-### Combiner Function
-
-```python
-# Without combiner: Each mapper emits ("the", 1) thousands of times
-# Lots of network traffic during shuffle
-
-def word_count_map(key, value):
-    for word in value.split():
-        emit(word, 1)
-
-def word_count_reduce(key, values):
-    emit(key, sum(values))
-
-# With combiner: Partial aggregation on mapper before shuffle
-def word_count_combiner(key, values):
-    # Same as reduce, runs locally on mapper
-    emit(key, sum(values))
-
-# Mapper output: ("the", 4523) instead of thousands of ("the", 1)
-# Much less data transferred during shuffle
-```
-
-### Backup Tasks
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                    Handling Stragglers                                   │
-│                                                                          │
-│   Problem: One slow machine can delay entire job                        │
-│   - Bad disk                                                            │
-│   - Competing workloads                                                 │
-│   - CPU throttling                                                      │
-│                                                                          │
-│   Solution: Backup tasks                                                │
-│   ┌──────────────────────────────────────────────────────────────────┐  │
-│   │   When job is almost complete (e.g., 90% of tasks done):         │  │
-│   │   1. Identify still-running tasks                                │  │
-│   │   2. Schedule backup executions on other machines                │  │
-│   │   3. First to complete wins, other killed                        │  │
-│   │                                                                   │  │
-│   │   Cost: Few percent more resources                               │  │
-│   │   Benefit: Significantly reduced tail latency                    │  │
-│   └──────────────────────────────────────────────────────────────────┘  │
-│                                                                          │
-│   Example from paper:                                                   │
-│   - Sort 1TB without backup tasks: 1283 seconds                        │
-│   - Sort 1TB with backup tasks: 891 seconds (44% faster)               │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## Example Applications
-
-### Distributed Grep
-
-```python
-def grep_map(key, value):
-    # key: filename, value: file contents
-    for line in value.split('\n'):
-        if re.search(pattern, line):
-            emit(line, "1")
-
-def grep_reduce(key, values):
-    emit(key, None)  # Just output matching lines
-```
-
-### URL Access Count
-
-```python
-def url_map(key, value):
-    # key: log line number, value: log entry
-    parsed = parse_log_entry(value)
-    emit(parsed.url, 1)
-
-def url_reduce(key, values):
-    emit(key, sum(values))
-```
-
-### Inverted Index
-
-```python
-def index_map(key, value):
-    # key: document ID, value: document content
-    for word in value.split():
-        emit(word, key)
-
-def index_reduce(key, values):
-    # key: word, values: list of document IDs
-    emit(key, sorted(set(values)))
-```
-
-### PageRank Iteration
-
-```python
-def pagerank_map(key, value):
-    # key: page URL, value: (current_rank, outlinks)
-    current_rank, outlinks = value
-    
-    # Distribute rank to outlinks
-    contribution = current_rank / len(outlinks)
-    for outlink in outlinks:
-        emit(outlink, contribution)
-    
-    # Emit graph structure
-    emit(key, outlinks)
-
-def pagerank_reduce(key, values):
-    # Separate contributions from graph structure
-    outlinks = None
-    total_contribution = 0
-    
-    for value in values:
-        if isinstance(value, list):
-            outlinks = value
-        else:
-            total_contribution += value
-    
-    # PageRank formula
-    new_rank = 0.15 + 0.85 * total_contribution
-    emit(key, (new_rank, outlinks))
-```
-
----
-
-## Performance Results (from paper)
-
-### Grep
-
-- 10^10 100-byte records (1 TB)
-- Pattern occurs in 92,337 records
-- M = 15,000 map tasks, R = 1 reduce task
-- 1,764 machines
-- **Time: 150 seconds** (including ~60s startup overhead)
-- Peak: 30 GB/s aggregate read rate
-
-### Sort
-
-- 10^10 100-byte records (1 TB)
-- M = 15,000 map tasks, R = 4,000 reduce tasks
-- 1,764 machines
-- **Time: 891 seconds** (with backup tasks)
-- Three phases visible: map (~200s), shuffle (~600s), reduce (~100s)
-
----
-
-## Limitations
-
-1. **Only batch processing** - Not suitable for real-time or interactive queries
-2. **Disk-based shuffle** - Expensive I/O between phases
-3. **Limited to map + reduce** - Complex algorithms need multiple jobs
-4. **No iteration support** - Each iteration = full job restart
-5. **High latency** - Startup overhead, materialization between phases
-
----
-
-## Legacy and Influence
-
-### Direct Descendants
-- **Hadoop MapReduce** - Open source implementation
-- **Apache Spark** - In-memory, DAG-based (addressed many limitations)
-- **Apache Flink** - Stream processing with batch
-
-### Broader Impact
-- Popularized functional programming patterns in data processing
-- Demonstrated viability of commodity hardware for big data
-- Inspired cloud computing models (EMR, Dataproc)
-- Influenced SQL-on-Hadoop systems (Hive, Pig)
-
----
-
-## Key Takeaways
-
-1. **Simple abstraction, powerful results** - Two functions (map, reduce) express surprisingly many computations.
-
-2. **Automatic parallelization** - Users write sequential code; framework handles distribution.
-
-3. **Fault tolerance through re-execution** - Deterministic functions + lineage tracking = no lost work.
-
-4. **Data locality matters** - Schedule computation near data to minimize network I/O.
-
-5. **Backup tasks for stragglers** - Small resource cost for large latency improvement.
-
-6. **Commodity hardware works** - Expect failures, design for them, scale out not up.
-
-7. **Intermediate data on local disk** - Reduces network traffic, enables recovery without re-running entire pipeline.
+# MapReduce (OSDI 2004): Evidence-First Paper Analysis
+
+MapReduce is best read as a paper about **where to place the distributed-systems boundary**. The programmer supplies two data transformations; the runtime owns task placement, shuffle, retry, straggler mitigation, and output publication. Its lasting contribution is not the word-count example. It is the contract that makes a large class of batch computations safely replayable.
+
+## Publication identity and scope
+
+- **Paper:** *MapReduce: Simplified Data Processing on Large Clusters*
+- **Authors:** Jeffrey Dean and Sanjay Ghemawat, Google
+- **Venue and version:** 6th USENIX Symposium on Operating Systems Design and Implementation (OSDI), 2004, pages 137–150
+- **System described:** Google's C++ MapReduce implementation running over the Google File System (GFS) on early-2000s commodity clusters
+
+Every number below belongs to that implementation and the paper's test cluster. It is not a benchmark for Hadoop, Spark, a cloud data warehouse, or a current Google service. The paper also describes a **bounded batch** computation. Event time, unbounded streams, iterative in-memory execution, SQL optimization, and exactly-once interaction with arbitrary external systems are outside its design.
+
+For the general design space, first read [Batch Processing](../13-data-pipelines/01-batch-processing.md). This chapter concentrates on what the 2004 paper actually establishes.
+
+## Workload and problem boundary
+
+Google repeatedly needed to transform very large collections: construct inverted indexes, aggregate URL access counts, reverse link graphs, sort records, and run graph computations. The per-record logic was usually simple; the hard, repeated work was distributing it across unreliable machines.
+
+The paper narrows that problem deliberately:
+
+1. Input is a finite collection of key/value records stored in a distributed file system.
+2. A `Map` function emits zero or more intermediate key/value pairs.
+3. The runtime groups all intermediate values for a key.
+4. A `Reduce` function consumes one key and its grouped values, then emits output records.
+
+This form gives the runtime a useful independence property: different map invocations can run in any order, and different reduce partitions can run independently after their inputs are available. It does **not** mean every algorithm naturally fits one MapReduce. Multi-stage jobs are possible, but their orchestration and repeated materialization remain visible costs.
+
+## State model and correctness contract
+
+The important state is spread across three durability classes.
+
+| State | Location in the paper | Consequence of loss |
+|---|---|---|
+| Input and final reduce output | GFS | Replicated by the underlying file system |
+| Intermediate map output | Worker-local disk | The completed map task must run again if that worker disappears |
+| Scheduling metadata | One master process | Reconstructed from task state while the master lives; a master failure aborts the computation in the implementation described |
+
+Section 3.3 gives the semantic boundary. For deterministic `Map` and `Reduce`, atomic commit of each task's output makes a successful distributed execution equivalent to a non-faulting sequential execution. A map worker writes one temporary file per reduce partition; the master accepts the location from one successful attempt. A reduce attempt writes a temporary output and atomically renames it to its final file. Competing attempts may execute, but only a committed result becomes visible.
+
+With nondeterministic user functions, the guarantee is weaker. Each reduce partition may reflect one completed execution of each map task, but different reduce partitions can observe intermediate data from different successful attempts. That is a precise warning against treating retry as magic exactly-once execution.
+
+The paper's contract also stops at managed files. A mapper that charges a card, mutates a remote database, or sends an email can repeat that side effect after a retry. Such work needs an idempotency protocol; see [Idempotency](../01-foundations/08-idempotency.md).
+
+## Execution protocol
+
+Section 3 and Figure 1 describe six steps.
+
+1. The library splits input into `M` pieces and starts one master plus worker processes.
+2. The master assigns idle workers map or reduce tasks.
+3. A mapper reads its split, invokes user code, buffers intermediate records, partitions them into `R` regions, and periodically writes those regions to local disk.
+4. The master forwards map-output locations to reducers.
+5. A reducer fetches its partition from every mapper, externally sorts the records so equal keys are adjacent, and invokes the user's reducer once per key.
+6. Successful reducers publish `R` final output files. The caller receives their names, not one implicitly concatenated file.
+
+Two implementation choices carry much of the system's performance.
+
+### Data locality
+
+GFS knows which machines hold each input block. The scheduler tries to run a map on a machine containing the corresponding replica, or at least in the same network switch. This converts many network reads into local-disk reads. Section 3.4 is therefore not a minor optimization: it is why the sort experiment's input rate can exceed its network shuffle and replicated-output rates.
+
+### Task granularity
+
+The paper normally chooses `M` and `R` much larger than the worker count. Fine-grained tasks improve load balancing, speed recovery by redistributing only unfinished work, and expose enough alternatives for locality. The master pays `O(M + R)` scheduling state plus `O(MR)` map-to-reduce location metadata, so granularity is not free. The paper reports input splits typically 16–64 MB for that environment; this is an implementation observation, not a universal modern threshold.
+
+### Partition, ordering, and combiners
+
+The default partitioner hashes the intermediate key, ensuring all values for a key reach one reducer. Applications can supply a different function—for example, range partitioning for ordered output—but then skew and partition-boundary quality become application concerns. Within a reduce partition, the runtime sorts by key; a custom grouping comparator can expose secondary-order patterns.
+
+A combiner performs local partial aggregation before shuffle. It is valid only when that partial operation preserves the reducer's meaning. The paper's word-count sum works; an arbitrary reducer is not automatically a legal combiner.
+
+## Failure and recovery reasoning
+
+The master pings workers. When a worker stops responding:
+
+- in-progress map and reduce tasks become idle and are rescheduled;
+- completed map tasks are also rescheduled because their output lived on the failed worker's disk;
+- completed reduce tasks remain complete because final output is in GFS.
+
+Reducers already reading from a failed mapper are told about the replacement location. This is lineage-based recovery: regenerate cheap derived state from durable input rather than synchronously replicating every intermediate byte.
+
+The published implementation does **not** replicate the master. Section 3.3 says periodic checkpoints would make recovery possible, but because there is one master, the implementation aborts and lets the client retry the entire job when it fails. That limitation matters when comparing MapReduce with later durable workflow engines.
+
+Section 3.6 addresses slow rather than dead workers. Near completion, the master launches backup copies of remaining tasks; the first successful attempt wins. The paper notes that a faulty machine can make a task deterministically fail, so the system also records failures and can skip a bad input record when the user enables that escape hatch. Skipping is an availability policy that changes the result, not a correctness-preserving retry.
+
+## Quantitative evidence, with methodology
+
+The evaluation in Section 5 used a cluster of roughly 1,800 machines. Each had two 2 GHz Intel Xeon processors, 4 GB of memory, two 160 GB IDE disks, and gigabit Ethernet. The measured network bisection bandwidth was approximately 100–200 Gbit/s. Programs ran on a weekend afternoon when CPUs, disks, and network were mostly idle. Those details are part of every result.
+
+- **Grep (Figure 2):** the job scanned `10^10` records of 100 bytes—about 1 TB—split into 15,000 pieces, looking for a three-character pattern found in 92,337 records. With 1,764 workers, scan rate peaked above 30 GB/s. Maps finished around 80 seconds; end-to-end time was about 150 seconds, including roughly one minute of startup and GFS metadata overhead.
+- **Sort (Figure 3a):** the job sorted the same record count and size, with 15,000 map tasks and 4,000 reduce tasks. Input peaked near 13 GB/s, shuffle finished around 600 seconds, and two-way-replicated output finished around 850 seconds. Including startup, elapsed time was 891 seconds. Because the output was replicated twice, the system wrote about 2 TB for a 1 TB logical result.
+- **Backup-task ablation (Figure 3b):** disabling backup tasks stretched sort from 891 to 1,283 seconds—a 44% increase. Five straggling reducers accounted for the long tail. This isolates the mechanism's effect in that run; it does not predict a fixed 44% improvement elsewhere.
+- **Failure injection (Figure 3c):** the authors killed 200 of 1,746 worker processes several minutes into sort. The cluster scheduler restarted them, lost local map output was recomputed, and the job completed in 933 seconds—42 seconds slower than the normal run.
+
+The evaluation demonstrates feasibility, failure recovery, and the value of locality and speculative execution. It does not compare cost, energy, multi-tenant interference, small-job latency, or alternative batch engines under matched durability semantics.
+
+## Assumptions and limits
+
+- The abstraction favors associative grouping over arbitrary communication. Iterative algorithms repeatedly materialize and reread state.
+- A single hot key is owned by one reduce partition unless the application changes the keying strategy.
+- The runtime assumes input and final output use a reliable distributed file system; MapReduce itself is not the durable storage layer.
+- Deterministic functions make retry semantics clean. External side effects, nondeterminism, or order-sensitive reductions weaken that model.
+- The master is a scalability and availability boundary in the published implementation.
+- Batch completion, not low per-record latency, is the objective.
+
+These are design choices, not historical defects. They make a narrow, common workload unusually operable.
+
+## What later systems retained and changed
+
+Google's 2010 FlumeJava paper retained data-parallel operators but replaced hand-wired chains of MapReduce jobs with immutable parallel collections, deferred execution, and whole-pipeline optimization. The 2015 Dataflow model retained partitioned data-parallel execution while adding explicit event-time windows, triggers, and correctness/latency/cost choices for unbounded data. Neither result means MapReduce secretly had those semantics; they identify the next boundaries the original model did not cover.
+
+Modern engines also often retain intermediates in memory, build DAGs rather than a fixed map/shuffle/reduce shape, and use distributed schedulers with replicated control state. The durable lesson remains: define a replayable unit, make publication atomic, keep enough lineage to reconstruct lost derived state, and design straggler handling as part of the completion protocol.
+
+## Design review questions
+
+Use the paper as a reasoning framework, not a product prescription:
+
+1. Which inputs are durable, and which intermediate states can be regenerated?
+2. Is a task deterministic under retry? If not, what exact weaker result is acceptable?
+3. What operation atomically publishes an attempt, and how are losing attempts cleaned up?
+4. Does partitioning preserve correctness while avoiding hot reducers?
+5. Is locality worth scheduler delay in the actual network/storage topology?
+6. How is slow progress distinguished from failure, and what is the resource cost of duplicate attempts?
+7. Does the workload require bounded batch semantics, or event-time and continuously updated state?
+
+## Primary sources
+
+- [Dean and Ghemawat, *MapReduce: Simplified Data Processing on Large Clusters* (OSDI 2004), official Google Research PDF](https://storage.googleapis.com/gweb-research2023-media/pubtools/4449.pdf)
+- [Google Research publication record for MapReduce](https://research.google/pubs/mapreduce-simplified-data-processing-on-large-clusters/)
+- [Chambers et al., *FlumeJava: Easy, Efficient Data-Parallel Pipelines* (PLDI 2010)](https://research.google/pubs/flumejava-easy-efficient-data-parallel-pipelines/)
+- [Akidau et al., *The Dataflow Model* (VLDB 2015)](https://research.google/pubs/the-dataflow-model-a-practical-approach-to-balancing-correctness-latency-and-cost-in-massive-scale-unbounded-out-of-order-data-processing/)

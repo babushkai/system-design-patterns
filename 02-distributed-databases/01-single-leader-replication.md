@@ -2,740 +2,421 @@
 
 ## TL;DR
 
-Single-leader (master-slave) replication routes all writes through one node (the leader) and replicates to followers. It provides simple consistency guarantees and is the most common replication model. Trade-offs: leader is a bottleneck and single point of failure; failover is complex. Use synchronous replication for durability, asynchronous for performance.
+Single-leader replication makes one node the serialization point for writes and turns its commit history into an ordered replication stream. The easy diagram—primary sends a log to replicas—omits the real protocol: which log position is durable before acknowledgment, how a follower proves it has the same history, which read positions are safe, how a new leader receives a higher epoch, and how the old leader is fenced. Asynchronous acknowledgment minimizes write latency but admits an RPO window. Synchronous acknowledgment protects only the stage actually acknowledged: received, flushed, or applied are different guarantees. Replica reads need a session or commit-position fence if freshness matters. Safe failover is not “pick the most responsive replica”; it is a state transition that preserves the committed prefix, issues a new term/timeline, prevents stale writers, resolves ambiguous client outcomes, and repairs followers without reintroducing divergent history.
 
 ---
 
-## How It Works
+## Scope: One Write Authority and Its Replicated Log
 
-### Basic Architecture
+This chapter owns a topology in which one node accepts writes for a replicated dataset at a time.
 
-```mermaid
-graph TD
-    Writes:::invisible -->|Writes| Leader["Leader<br/>(Primary)"]
-    Leader --> F1[("Follower 1")]
-    Leader --> F2[("Follower 2")]
-    Leader --> F3[("Follower 3")]
-    F1 --> Reads:::invisible
-    F2 --> Reads
-    F3 --> Reads
+- [Multi-Leader Replication](02-multi-leader-replication.md) owns concurrent write authorities and cross-leader conflicts.
+- [Leaderless Replication](03-leaderless-replication.md) owns quorum reads/writes without a distinguished writer.
+- [Consensus Algorithms](08-consensus-algorithms.md) owns replicated state-machine agreement and majority safety proofs.
+- [Leader Election](09-leader-election.md) owns the general mechanism for choosing and fencing an epoch owner.
+- [Write-Ahead Logging](../03-storage-engines/04-write-ahead-logging.md) owns local crash recovery and log-record mechanics.
 
-    classDef invisible fill:none,stroke:none
-```
-
-### Write Path
-
-```
-1. Client sends write to leader
-2. Leader writes to local storage
-3. Leader sends replication log to followers
-4. Followers apply changes
-5. (Optional) Leader waits for acknowledgment
-6. Leader responds to client
-```
-
-### Replication Log
-
-The leader maintains a log of all changes:
-
-```
-Log entry:
-  - Log Sequence Number (LSN): 12345
-  - Operation: INSERT
-  - Table: users
-  - Data: {id: 1, name: "Alice"}
-  - Timestamp: 2024-01-15T10:30:00Z
-
-Followers:
-  1. Fetch entries after their last known LSN
-  2. Apply entries in order
-  3. Update their LSN position
-```
+A database can implement primary/standby replication without making every transaction a consensus operation. It may use an external consensus service only for membership/failover, or rely on operator fencing. Therefore “there is a leader” does not imply “the data is consensus-replicated.” Document the actual promotion authority and acknowledgment contract.
 
 ---
 
-## Synchronous vs Asynchronous Replication
+## The Contract in Four Coordinates
 
-### Synchronous Replication
+Every write progresses through distinguishable stages:
 
-Leader waits for follower acknowledgment before confirming write.
-
-```mermaid
-sequenceDiagram
-    participant Client
-    participant Leader
-    participant Follower
-
-    Client->>Leader: write(x)
-    Leader->>Follower: replicate
-    Follower-->>Leader: ack
-    Leader-->>Client: ok
+```text
+client command
+    |
+    v
+primary append -> primary durable -> replica received -> replica durable -> replica applied
+       LSN 841        LSN 841          LSN 841          LSN 841          LSN 839
 ```
 
-**Guarantees:**
-- Data exists on at least 2 nodes before ack
-- Follower is always up-to-date
+Use the engine's native coordinate—LSN, binlog file/offset, GTID set, term/index, or timeline/position—but retain the distinction:
 
-**Trade-offs:**
-- Write latency includes replication time
-- Follower failure blocks writes
-- Usually only 1 sync follower (semi-sync)
+1. **generated:** the primary assigned the next ordered position;
+2. **durable locally:** the primary's crash recovery can reproduce it;
+3. **received remotely:** bytes reached a follower process or kernel;
+4. **durable remotely:** a follower persisted the required log prefix;
+5. **applied:** follower query state reflects the entry.
 
-### Asynchronous Replication
+An SLA such as “synchronous replication means no data loss” is incomplete until it states *which followers, which stage, and what failure set*. Waiting for one remote process to receive bytes is not the same as waiting for a fault-independent replica to flush them. Waiting for flush protects failover durability but does not make a follower read see the write; that requires apply.
 
-Leader confirms immediately, replicates in background.
-
-```mermaid
-sequenceDiagram
-    participant Client
-    participant Leader
-    participant Follower
-
-    Client->>Leader: write(x)
-    Leader-->>Client: ok
-    Leader->>Follower: replicate
-    Follower-->>Leader: ack
-```
-
-**Trade-offs:**
-- Fast writes (no waiting)
-- Data loss possible if leader fails
-- Followers may lag behind
-
-### Semi-Synchronous
-
-One follower is synchronous, others asynchronous.
-
-```mermaid
-graph LR
-    Leader --> |sync| F1["Follower 1<br/>(must ack)"]
-    Leader -.-> |async| F2["Follower 2<br/>(background)"]
-    Leader -.-> |async| F3["Follower 3<br/>(background)"]
-```
-
-**Used by:** MySQL semi-sync, PostgreSQL sync_commit
+The topology also needs an **epoch** (term/timeline/generation). A log position alone is ambiguous after failover because two histories might both contain position 900. The safe coordinate is conceptually `(epoch, position)` plus history ancestry.
 
 ---
 
-## Replication Lag
+## Data Plane: From Transaction to Applied State
 
-### What Is Lag?
+### Primary write path
 
-Time or operations between leader state and follower state.
+A typical physical-log path is:
 
-```
-Timeline:
-  Leader:   [op1][op2][op3][op4][op5]
-  Follower: [op1][op2][op3]
-                        │
-                  3 ops behind (lag)
-```
+1. execute under local concurrency control;
+2. append change records and a commit record to the primary log;
+3. make the local log durable according to policy;
+4. stream records to configured followers;
+5. wait for the configured remote acknowledgment set, if any;
+6. return the commit result to the client.
 
-### Measuring Lag
+The key prefix invariant is:
 
-```sql
--- PostgreSQL
-SELECT 
-  client_addr,
-  pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn) as lag_bytes,
-  replay_lag
-FROM pg_stat_replication;
+> If the system acknowledges a transaction under durability policy D, every future writable epoch must contain that transaction or the system has violated D.
 
--- MySQL
-SHOW SLAVE STATUS\G
--- Look at: Seconds_Behind_Master
-```
+That invariant couples the request path to candidate selection during failover. A controller cannot promise remote-durable acknowledgment and later promote a replica that lacks the acknowledged prefix.
 
-### Causes of Lag
+### Replication stream
 
-| Cause | Impact | Mitigation |
-|-------|--------|------------|
-| Network latency | Delay in log delivery | Faster network |
-| Follower CPU | Slow apply | Better hardware |
-| Large transactions | Big log entries | Smaller batches |
-| Long-running queries | Apply blocked | Query timeouts |
-| Follower disk I/O | Write bottleneck | Faster storage |
+Physical replication copies storage-engine log records or page changes. It preserves engine internals and is efficient for exact standbys, but often couples versions, page formats, and full-cluster topology.
 
-### Consistency Problems from Lag
+Logical replication copies row/statement/domain changes. It supports selective replication, transformations, and some online upgrades, but needs stable identities, deterministic semantics, schema compatibility, and explicit handling for sequences, large objects, and DDL.
 
-**Read-your-writes violation:**
-```
-Client writes to leader
-Client reads from lagged follower
-  → Doesn't see own write
+Statement replication is safe only when evaluation is deterministic and all implicit context is reproduced: time, randomness, collation, triggers, user-defined functions, auto-generated identifiers, and row-selection order. Row or logical-change replication trades larger records for less replay ambiguity.
+
+### Follower receive, flush, and apply
+
+Followers usually separate network receive from storage flush and replay. That pipeline lets a follower receive quickly while a single-threaded apply stage falls behind. Monitor all coordinates:
+
+```text
+primary generated:       2/AF00
+follower received:       2/AF00  -> transport current
+follower flushed:        2/AE80  -> small durability gap
+follower applied:        2/A100  -> query-visible lag is large
 ```
 
-**Monotonic reads violation:**
-```
-Client reads from follower A (up-to-date)
-Client reads from follower B (lagged)
-  → Time appears to go backward
-```
-
-**Solutions:**
-- Read from leader for your own data
-- Sticky sessions (same follower)
-- Include version/timestamp, wait if behind
+One scalar “replication lag” hides which subsystem is failing. Time-based lag is also ambiguous during idle periods and clock skew; byte/position lag plus apply rate is usually more actionable.
 
 ---
 
-## Handling Node Failures
+## Acknowledgment Policies and Failure Semantics
 
-### Follower Failure
+### Asynchronous
 
-Follower crashes and restarts.
+The primary returns after local durability and does not wait for a remote replica. Normal-case latency stays local. If the primary and its local durable media become unavailable before a follower persists the suffix, acknowledged transactions can be lost on promotion.
 
-```
-Recovery:
-1. Check last applied LSN in local storage
-2. Request log entries from leader starting at LSN
-3. Apply entries sequentially
-4. Resume normal replication
-```
+For log generation rate $g$ bytes/s and replication delay $d$ seconds, the unreplicated data exposure is roughly:
 
-### Leader Failure (Failover)
+$$
+B_{exposed} \approx g d
+$$
 
-Leader crashes; need to promote a follower.
+The business RPO is not bytes; it is acknowledged commands in that interval. Track both position lag and logical command count/value where possible.
 
-```
-Steps:
-1. Detect leader failure (timeout)
-2. Choose new leader (most up-to-date follower)
-3. Reconfigure followers to replicate from new leader
-4. Redirect clients to new leader
-5. (If old leader recovers) Demote to follower
-```
+### One synchronous follower
 
-### Failover Challenges
+The primary waits for one eligible follower. This can survive primary loss if the failover controller is constrained to promote a node containing that durable acknowledgment. It may stop writes when no eligible synchronous follower exists—or silently/explicitly fall back to asynchronous mode, reintroducing an RPO window. That downgrade must be a visible state transition with an owner, alert, and recovery condition.
 
-**Detecting failure:**
-```
-Is leader dead or just slow?
+### Quorum or named synchronous sets
 
-Too aggressive: false positive, unnecessary failover
-Too conservative: extended downtime
+Policies may wait for any $k$ of $n$ followers or selected failure domains. Placement matters more than count: two replicas on one power/network boundary do not protect against that boundary. Candidate eligibility must reflect the same policy after failure.
 
-Typical: 10-30 second timeout
-```
+Synchronous commit latency is approximately the relevant acknowledgment order statistic, not the mean follower RTT. For “any 2 of 3,” it tracks the second-fastest eligible acknowledgment plus primary work. Tail latency changes when a slow/failing replica changes which order statistic controls the request.
 
-**Choosing new leader:**
-```
-Options:
-1. Most up-to-date follower (least data loss)
-2. Pre-designated standby
-3. Consensus among followers (Raft-style)
-```
+### Receive, flush, or apply acknowledgment
 
-**Lost writes:**
-```
-Leader had commits not yet replicated:
-  - Lost when new leader takes over
-  - May cause conflicts if old leader recovers
-  
-Prevention:
-  - Sync replication (at least 1 copy)
-  - Don't ack until replicated
-```
+| Remote stage | Protects against | Does not guarantee |
+|---|---|---|
+| Receive/write | transient primary loss if follower process survives as assumed | follower host/power loss; readable freshness |
+| Durable flush | primary plus independent follower process/host loss within placement assumptions | query visibility on follower |
+| Apply | durable copy and read visibility through that position | application side effects outside database |
 
-**Split brain:**
-```
-Old leader comes back, doesn't know it's demoted:
-  Two nodes accept writes!
-  
-Prevention:
-  - Fencing tokens
-  - STONITH (kill old leader)
-  - Epoch numbers
-```
+Name the stage in client-visible durability classes. A critical ledger and an ephemeral session update can use different classes if the API makes the trade explicit.
 
 ---
 
-## Read Scaling
+## Replica Reads Need a Position Contract
 
-### Reading from Followers
+Adding followers increases read capacity only for reads allowed to observe their state. Four common contracts are:
 
-Distribute read load across followers.
+### Eventual reads
 
-```mermaid
-graph TD
-    LB["Load Balancer"] --> Leader["Leader<br/>(writes)"]
-    LB --> F1[("Follower<br/>(reads)")]
-    LB --> F2[("Follower<br/>(reads)")]
-    LB --> F3[("Follower<br/>(reads)")]
-    LB --> F4[("Follower<br/>(reads)")]
+Route to any healthy replica and accept arbitrary current lag within the operational policy. Suitable for feeds, search-like browsing, or caches where stale results are product-acceptable.
+
+### Read-your-writes
+
+Return the commit coordinate with a successful write. Before serving the next read, a replica must prove `applied_position >= required_position`; otherwise wait within a budget, route to the primary/current replica, or return a retryable freshness error.
+
+```text
+POST /profile -> 200, commit_token=(epoch 12, LSN 90AF)
+GET  /profile with token
+router selects replica whose applied coordinate covers (12, 90AF)
 ```
 
-### Read Scaling Math
+The epoch prevents comparing unrelated post-failover histories as plain integers.
 
-```
-Before scaling:
-  Leader: 10,000 reads/sec, 1,000 writes/sec
-  Bottleneck: Leader saturated
+### Monotonic reads
 
-After adding 4 followers:
-  Leader: 1,000 writes/sec (writes only)
-  Followers: 2,500 reads/sec each
-  Total reads: 10,000 reads/sec
-  
-Reads scale linearly with followers
-Writes still limited to single leader
-```
+Track the greatest coordinate a session has observed. Never send it to a replica behind that coordinate. This prevents a user from seeing data appear and then disappear when load balancing changes replicas.
 
-### Geo-Distribution
+### Bounded-staleness reads
 
-Place followers in different regions.
+Serve a replica only if its applied position/time is within a documented bound. A time bound requires trustworthy commit/apply timestamps; byte lag alone cannot prove seconds of staleness under bursty writes. Define what happens when no follower meets the bound.
 
-```mermaid
-graph TD
-    Leader["US-East (Leader)"] -.-> F1[("US-West<br/>Follower")]
-    Leader -.-> F2[("Europe<br/>Follower")]
-    Leader -.-> F3[("Asia<br/>Follower")]
-    Leader -.-> F4[("US-East<br/>Follower")]
-```
-
-Users read from closest follower. Writes go to leader (higher latency for distant users).
+Replica reads can also conflict with replay. Long queries may require old row versions that apply wants to remove or may block DDL replay. Engines choose among canceling the read, delaying apply, retaining more versions on the primary, or routing the query elsewhere. Read scaling therefore creates retention and recovery coupling, not free replicas.
 
 ---
 
-## Statement-Based vs Row-Based Replication
+## Control Plane: A Safe Failover State Machine
 
-### Statement-Based
+Failure detection is suspicion, not proof. A safe failover needs ordered control-plane steps:
 
-Replicate the SQL statement.
-
-```
-Leader executes: INSERT INTO users VALUES (1, 'Alice')
-Sends to followers: "INSERT INTO users VALUES (1, 'Alice')"
-Followers execute same statement
-```
-
-**Problems:**
-- Non-deterministic functions: `NOW()`, `RAND()`, `UUID()`
-- Triggers, stored procedures may behave differently
-- Order-dependent statements
-
-### Row-Based (Logical)
-
-Replicate the actual row changes.
-
-```
-Leader executes: INSERT INTO users VALUES (1, 'Alice')
-Sends to followers: {table: users, type: INSERT, row: {id:1, name:'Alice'}}
-Followers apply row change
+```text
+1. suspect primary and stop assigning new client traffic
+2. acquire a new promotion epoch from the authoritative coordinator
+3. fence the old epoch at routers and, where possible, storage/network/power
+4. identify candidates whose history contains the required committed prefix
+5. choose the most advanced eligible history, not merely the lowest-latency host
+6. promote it and create a new timeline/term
+7. publish routing + epoch atomically enough that stale routes are rejected
+8. reattach or rebuild followers against the chosen history
+9. resolve in-flight client commands with durable command identifiers
 ```
 
-**Advantages:**
-- Deterministic
-- Works with any statement
-- Enables CDC (Change Data Capture)
+The ordering between fencing and promotion is the safety boundary. If the old primary can still write while the new primary accepts writes, a network partition becomes split brain.
 
-**Trade-off:**
-- Larger log for bulk updates
-- Less human-readable
+### Candidate selection
 
-### Mixed Mode
+A candidate must satisfy:
 
-Use statement-based when safe, row-based otherwise.
+- it has the acknowledged durability prefix required by policy;
+- its log/history is internally valid and recoverable;
+- it belongs to an eligible failure domain/version/configuration;
+- it can obtain the new epoch and reject old-epoch traffic;
+- its apply/recovery time meets the failover objective.
 
-```
-Simple INSERT → Statement-based (compact)
-Statement with NOW() → Row-based (deterministic)
-```
+“Most advanced” is insufficient if a node has uncommitted or divergent local entries. The engine needs a history relation—timeline ancestry, GTID executed set, or term/index rules—to distinguish a valid extension from a fork.
+
+### Planned switchover
+
+A switchover can eliminate ambiguity:
+
+1. drain or briefly quiesce writes;
+2. record the final required coordinate;
+3. wait for target flush/apply to reach it;
+4. revoke/fence the old primary;
+5. promote target with a new epoch;
+6. move routing and verify session tokens;
+7. demote the old node only after it proves it follows the new history.
+
+Use this path for maintenance and topology changes. It exercises most failover machinery without a data-loss race.
 
 ---
 
-## Implementation Examples
+## Split Brain, Divergence, and Rejoin
 
-### PostgreSQL Streaming Replication
+### Why timeout election is unsafe by itself
 
-```sql
--- Primary postgresql.conf
-wal_level = replica
-max_wal_senders = 10
-synchronous_commit = on  -- or 'remote_apply'
-synchronous_standby_names = 'follower1'
+During a partition, the primary cannot distinguish “I lost the network” from “all replicas failed.” A replica cannot distinguish “primary failed” from “primary is isolated from me.” If both use timeouts to declare authority, both may write.
 
--- Replica recovery.conf (or standby.signal in PG12+)
-primary_conninfo = 'host=primary port=5432 user=replicator'
-recovery_target_timeline = 'latest'
+Use a majority-backed coordinator, storage-level reservation, cloud/virtual-machine fence, network fence, or manual procedure that establishes one promotion epoch. Clients and downstream systems include or validate that epoch where practical. A process-local role flag is not fencing.
+
+### Divergent suffixes
+
+After two writable histories exist:
+
+```text
+common prefix:  A B C
+old primary:    A B C D E
+new primary:    A B C F G
 ```
 
-### MySQL Replication
+These are not ordinary replication lag. The suffixes encode potentially conflicting committed effects. Automatically rewinding `D E` is data loss; replaying them after `F G` may violate constraints or repeat effects. Freeze the losing history, preserve forensic copies, identify client-visible commits by command ID, and perform domain reconciliation. The prevention mechanism—fencing—is far cheaper than recovery.
 
-```sql
--- Leader
-server-id = 1
-log_bin = mysql-bin
-binlog_format = ROW
+### Rejoining an old primary
 
--- Follower
-server-id = 2
-relay_log = relay-bin
-read_only = ON
-
-CHANGE MASTER TO
-  MASTER_HOST = 'leader',
-  MASTER_USER = 'replicator',
-  MASTER_AUTO_POSITION = 1;
-START SLAVE;
-```
+Never simply restart it as a follower. It must prove the new history is a descendant of its safe prefix or be rewound/reseeded from a trusted base backup plus log. The rejoin protocol verifies cluster identity, new epoch, checksum/history, and configuration before the node becomes read-eligible.
 
 ---
 
-## Monitoring
+## Log Retention, Slots, and Rebuild Economics
 
-### Key Metrics
+A disconnected follower needs every log segment after its last durable coordinate. With retained log capacity $B$ bytes and generation rate $g$ bytes/s, the catch-up window is approximately:
 
-| Metric | What It Shows | Alert Threshold |
-|--------|---------------|-----------------|
-| Replication lag | Follower behind leader | > 30 seconds |
-| Log position diff | Bytes behind | > 100 MB |
-| Follower state | Connected/disconnected | Not streaming |
-| Apply rate | Log entries/second | Dropping |
-| Disk usage | Log accumulation | > 80% |
+$$
+T_{retention} = \frac{B}{g}
+$$
 
-### Health Checks
+Size for peak sustained generation plus incident duration, not daily average. Schema changes, index builds, bulk loads, and vacuum/compaction can change log rate abruptly.
 
-```python
-def check_replication_health():
-  leader_lsn = query_leader("SELECT pg_current_wal_lsn()")
-  
-  for follower in followers:
-    follower_lsn = query_follower("SELECT pg_last_wal_replay_lsn()")
-    lag = leader_lsn - follower_lsn
-    
-    if lag > threshold:
-      alert(f"Follower {follower} lagging: {lag} bytes")
-    
-    if not follower.is_streaming:
-      alert(f"Follower {follower} not connected")
-```
+Retention mechanisms create opposing failure modes:
+
+- **no reservation:** the primary recycles required log and the follower needs a full rebuild;
+- **unbounded reservation/slot:** an abandoned follower pins log until the primary disk fills.
+
+Put byte and age limits, ownership, and alerts on every retention reservation. Archive logs to independent durable storage when the recovery design requires catch-up beyond local retention.
+
+Follower catch-up dynamics depend on production rate $\lambda$ and follower apply capacity $\mu$ (in a common unit such as log bytes/s). Backlog shrinks only when $\mu > \lambda$:
+
+$$
+T_{catchup} \approx \frac{B_{lag}}{\mu-\lambda}
+$$
+
+If apply capacity merely equals incoming rate, the follower remains perpetually behind. A rebuild also competes for primary/network/storage resources; throttle it against live SLOs while preserving an RTO estimate.
 
 ---
 
-## When to Use Single-Leader
+## Topology and Capacity
 
-### Good Fit
+### Primary fanout
 
-- Most reads, few writes (read-heavy workloads)
-- Strong consistency requirements
-- Simple operational model preferred
-- Geographic read distribution
-- Traditional OLTP applications
+Directly streaming to $n$ followers multiplies primary network connections, encryption work, and log reads. Cascading followers reduce primary fanout and inter-region bandwidth, but downstream lag includes every upstream queue and cascading promotion rules become more complex.
 
-### Poor Fit
+For generated log rate $g$, direct egress is roughly $n g$ before protocol/compression overhead. A cascade can reduce cross-region copies but increases recovery dependencies. Place enough direct/fault-independent followers to meet promotion policy; use cascades for read/backup consumers that need not be immediate candidates.
 
-- Write-heavy workloads (leader bottleneck)
-- Multi-region writes (latency to leader)
-- Zero-downtime requirements (failover window)
-- Conflicting writes from multiple locations
+### Write ceiling
 
----
+All writes pass through one primary's concurrency control, log append, storage flush, and network acknowledgment path. More read replicas do not increase that write ceiling. Partition the data into independent single-leader groups when one authority is insufficient; [Database Sharding](../06-scaling/03-database-sharding.md) owns routing and movement between those groups.
 
-## PostgreSQL Streaming Replication Internals
+### Read ceiling
 
-### WAL Sender and Receiver
-
-The primary spawns one **WAL sender** process per connected replica. Each WAL sender reads from the Write-Ahead Log and streams records over PostgreSQL's replication protocol (a libpq connection in `replication` mode). On the replica side, a **WAL receiver** process accepts the stream, writes records to the replica's local WAL files, and then hands them to the startup process for replay against the data files.
-
-```mermaid
-graph LR
-    subgraph Primary
-        WS["WAL Sender<br/>(per replica)"]
-        WAL[("WAL<br/>Segments")]
-        WAL -->|reads| WS
-    end
-    subgraph Replica
-        WR["WAL Receiver"]
-        LocalWAL[("Local WAL<br/>+ Startup Replay")]
-        WR -->|writes to| LocalWAL
-    end
-    WS -->|replication protocol<br/>(streaming walsender)| WR
-```
-
-This is a push-based model: the primary pushes WAL as it's generated. The replica does not poll. If the replica falls behind, the WAL sender catches up from the retained WAL segments.
-
-### Physical vs Logical Replication Slots
-
-**Physical replication slots** deliver a byte-for-byte copy of WAL. The replica applies it identically, producing an exact binary clone of the primary. This is the standard mechanism for hot standby replicas.
-
-**Logical replication slots** decode WAL into logical change events (INSERT, UPDATE, DELETE) using an output plugin (e.g., `pgoutput`). This enables:
-- Selective table replication (not all-or-nothing)
-- Independent schema evolution on subscriber and publisher
-- Cross-version replication (e.g., PG 14 → PG 16 for upgrades)
-- Feeding CDC pipelines (Debezium, etc.)
-
-Physical slots are simpler and lower-overhead. Logical slots are more flexible but carry higher CPU cost due to decoding.
-
-### Monitoring Replication Slots
-
-```sql
-SELECT slot_name, slot_type, active,
-       restart_lsn, confirmed_flush_lsn,
-       pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn) AS retained_bytes
-FROM pg_replication_slots;
-```
-
-Key fields:
-- `active`: whether a consumer is connected. Inactive slots are the danger zone.
-- `restart_lsn`: oldest WAL position the slot forces the primary to retain.
-- `confirmed_flush_lsn`: (logical slots) position the consumer has confirmed processing.
-- `retained_bytes`: how much WAL is being held. If this grows unbounded, you have a problem.
-
-### Slot Bloat Failure Mode
-
-If a consumer disconnects (replica down, Debezium crashed, network partition), the slot **prevents WAL recycling**. The primary accumulates WAL segments indefinitely until the disk fills, at which point the primary itself crashes — taking down writes for all clients.
-
-Monitor with:
-```sql
-SELECT slot_name,
-       pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)) AS retained_wal
-FROM pg_replication_slots
-WHERE NOT active;
-```
-
-Alert when `retained_wal` exceeds a threshold (e.g., 10 GB). Remediation: drop the orphaned slot with `pg_drop_replication_slot('slot_name')` and re-provision the consumer.
-
-### `wal_keep_size` vs Replication Slots
-
-- `wal_keep_size` (formerly `wal_keep_segments`): a **hint** — keeps at least this much WAL, but if the follower is further behind, it will fail to catch up and need a full base backup.
-- Replication slots: a **guarantee** — WAL is never recycled past the slot's `restart_lsn`, so the follower can always catch up. But this guarantee can fill your disk.
-
-Best practice: use replication slots for reliability, but pair them with monitoring and automated slot cleanup for inactive consumers.
+Follower capacity is limited by apply work plus queries. Analytical reads compete with replay for CPU, cache, I/O, and version retention. Model a replica as two workloads, reserve apply headroom, and remove it from freshness-sensitive routing before lag runs away.
 
 ---
 
-## Failover Automation
+## Backups and Point-in-Time Recovery Are Separate Copies
 
-### Patroni
+Replication rapidly copies operator mistakes, corrupt writes, and malicious deletes. It is availability, not a historical backup.
 
-**Patroni** is the de facto standard for PostgreSQL HA. Its architecture:
+A recoverable design needs:
 
-```mermaid
-graph TD
-    N1["PG Node 1<br/>(primary)<br/>+ Patroni"] --> DCS[("DCS<br/>(etcd / Consul / ZK)")]
-    N2["PG Node 2<br/>(replica)<br/>+ Patroni"] --> DCS
-    N3["PG Node 3<br/>(replica)<br/>+ Patroni"] --> DCS
-```
+- a consistent base snapshot with known start/end coordinate;
+- an ordered, durable log archive from that coordinate onward;
+- integrity checks and encryption/key-recovery procedures;
+- a restore process that can stop before a bad transaction;
+- periodic restore tests measuring actual RPO/RTO.
 
-Each Patroni agent holds a **leader lock** in the DCS with a TTL (typically 30s). The primary must renew the lock before expiry or lose leadership.
-
-### Planned Switchover vs Unplanned Failover
-
-**`patronictl switchover`** (planned):
-1. Operator selects target replica
-2. Patroni checkpoints the primary and waits for the target to catch up
-3. Demotes old primary (shuts down PG or makes it read-only)
-4. Promotes target replica
-5. Other replicas reconfigure to follow new primary
-6. Near-zero data loss, typically < 5s total
-
-**`patronictl failover`** / automatic failover (unplanned):
-1. Primary fails to renew DCS leader lock (detection time = TTL)
-2. Patroni agents on replicas race to acquire the lock
-3. Winner is the replica with least replication lag
-4. Winner promotes itself, other replicas follow
-5. Typical total time: 10–30s (detection + promotion + routing)
-
-### Alternative Tools
-
-| Tool | Database | DCS Required | Fencing |
-|------|----------|-------------|---------|
-| Patroni | PostgreSQL | Yes (etcd/Consul/ZK) | Watchdog + DCS lease |
-| repmgr | PostgreSQL | No | SSH-based (less reliable) |
-| Orchestrator | MySQL | No (uses own raft or DB backend) | Hooks-based |
-| ProxySQL | MySQL | No | Routing layer only (no fencing) |
-| Group Replication | MySQL | No (built-in Paxos) | Consensus-based |
-
-**repmgr** is simpler to set up but lacks DCS integration. It relies on SSH to fence the old primary, which fails if the network is partitioned — exactly when you need fencing most.
-
-### Key Metric
-
-```
-failover_time = detection_time + promotion_time + routing_update_time
-```
-
-With Patroni: typically 10–30s. The detection phase (DCS lease expiry) dominates. Promotion itself is fast (< 5s). Routing update depends on your proxy layer (HAProxy, PgBouncer, DNS TTL).
+After failover, archive continuity must identify the new timeline/epoch. A point-in-time restore cannot blindly concatenate divergent logs.
 
 ---
 
-## Split-Brain Prevention Deep Dive
+## Security and Tenant Boundaries
 
-### Why Timeout-Based Detection Fails
+Replication links carry the full change stream and often bypass ordinary query authorization. Use mutually authenticated channels, least-privilege replication identities, key rotation, network policy, and audited configuration changes. Treat base backups, archived logs, and temporary rebuild copies as production data with the same encryption and deletion controls.
 
-A timeout fires when the primary stops responding. But "not responding" ≠ "dead":
-- JVM/CLR GC pause (stop-the-world for 10+ seconds)
-- Disk I/O stall (RAID rebuild, SAN hiccup)
-- Network partition (primary is fine, just unreachable)
-- CPU saturation (primary is alive but slow)
+A shared follower can expose all tenants even when an application query layer normally filters them. Row-level security behavior on replicas, privileged analytics access, logical publication filters, and backup restore access need separate review. Redact or tokenize sensitive logical-change payloads only if doing so preserves recovery and downstream contracts.
 
-In all cases, the primary is still running and may still accept writes. If a replica promotes itself, you have **two primaries** — split brain.
-
-### Fencing Tokens
-
-A lock service (ZooKeeper, etcd) issues a **monotonically increasing token** with each lock acquisition. Every write to the storage layer must include the token. The storage rejects any write with a token lower than the highest it has seen.
-
-```
-Lock service issues token 33 → Old primary writes with token 33
-Old primary loses lock
-Lock service issues token 34 → New primary writes with token 34
-Old primary tries to write with token 33 → REJECTED (33 < 34)
-```
-
-This requires the storage layer to participate in the protocol. Not all systems support it, but it is the theoretically sound solution (see Martin Kleppmann's critique of Redlock).
-
-### STONITH (Shoot The Other Node In The Head)
-
-Physical fencing: send an IPMI/BMC command to **power off** the old primary's hardware. If the node is off, it cannot accept writes. Brutal but effective.
-
-Used in: Pacemaker/Corosync clusters, enterprise HA setups with BMC access. Not available in cloud environments (use cloud-native fencing instead — e.g., AWS `stop-instances` API).
-
-### Patroni's Watchdog
-
-Patroni can register a Linux **kernel watchdog** (`/dev/watchdog`). Patroni periodically pings the watchdog. If Patroni crashes or hangs (and thus cannot renew the DCS lock), the watchdog **reboots the entire node** within seconds. This prevents the zombie-primary scenario where the PG process is still running but Patroni is not managing it.
-
-Configuration: set `watchdog.mode: required` in Patroni config. The watchdog timeout must be shorter than the DCS TTL.
-
-### PostgreSQL Timeline Mechanism
-
-After failover, the new primary starts a **new timeline** (timeline ID increments). Replicas must be configured with `recovery_target_timeline = 'latest'` to follow the promoted primary. If a replica is stuck on the old timeline, it will diverge and require a pg_rewind or fresh base backup.
+Promotion authority is a high-impact privilege. Separate it from routine database credentials, require an auditable epoch-grant path, and rehearse recovery when the coordinator or fencing mechanism is unavailable.
 
 ---
 
-## Replication Lag Decoded
+## Failure Modes
 
-### PostgreSQL `pg_stat_replication` Lag Fields
+### Commit acknowledged, response lost
 
-```sql
-SELECT client_addr, application_name,
-       write_lag, flush_lag, replay_lag
-FROM pg_stat_replication;
-```
+The primary commits, then the connection drops. The client cannot infer failure. Retrying with a new business identity duplicates the action. Persist a stable command ID and result in the same transaction; after reconnect/failover, resolve that ID before retrying. See [Idempotency](../01-foundations/08-idempotency.md).
 
-These three fields represent **time intervals**, not byte offsets:
+### Synchronous mode silently degrades
 
-| Field | Measures | Meaning |
-|-------|----------|---------|
-| `write_lag` | Primary sent WAL → replica OS acknowledged write to disk buffer | Network + kernel buffer delay |
-| `flush_lag` | Primary sent WAL → replica fsynced WAL to disk | Network + disk durability delay |
-| `replay_lag` | Primary sent WAL → replica applied WAL to data files | Full end-to-end delay including apply |
+The only synchronous follower disconnects. The primary continues asynchronously by policy, but monitoring still reports the cluster “healthy.” A later primary loss violates the assumed zero-RPO service. Expose the active durability mode on every response/metric where necessary and page on downgrade duration.
 
-### Which to Alert On
+### Receiver current, applier stalled
 
-- **`replay_lag`** for query consistency: if you're reading from the replica, this is how stale your reads are.
-- **`flush_lag`** for durability: if the primary dies right now, WAL up to `flush_lag` ago is safely on the replica's disk. Anything between `flush_lag` and `write_lag` is in the replica's OS buffer and could be lost if the replica also crashes.
+Network lag is zero while a blocking query or incompatible schema change stops replay. Freshness routing sends reads to stale state because it watches receive coordinates. Gate on applied coordinate for read semantics and diagnose receive/flush/apply separately.
 
-### Recommended Thresholds
+### Replication slot fills primary disk
 
-| Threshold | Action | Rationale |
-|-----------|--------|-----------|
-| `replay_lag` > 100ms | WARN | Read queries may return stale data |
-| `replay_lag` > 1s | PAGE | Failover to this replica would lose 1s of data |
-| `replay_lag` > 10s | CRITICAL | Replica is falling behind; investigate apply bottleneck |
-| `flush_lag` > 5s | PAGE | Durability guarantee degraded |
+A decommissioned consumer retains logs indefinitely. Free space falls until writes stop. Every slot/reservation needs a named owner, maximum retained bytes/age, and an explicit choice between dropping the consumer and protecting the primary.
 
-### MySQL Comparison
+### Failover chooses a low-lag but invalid branch
 
-MySQL's `Seconds_Behind_Master` is a single coarser metric. It measures the difference between the timestamp embedded in the relay log event and the current time when the SQL thread applies it. Limitations:
-- Granularity is 1 second (PostgreSQL's fields are sub-millisecond)
-- Does not distinguish write/flush/replay phases
-- Can report 0 while the I/O thread is disconnected (misleading)
-- Affected by clock skew between primary and replica
+A controller compares only numeric offsets and promotes a node from a different timeline. Acknowledged history disappears. Candidate selection must validate history ancestry and durability policy, not scalar position alone.
+
+### Old primary accepts background writes
+
+Client routing moved, but a scheduled job connects directly to the old primary and writes after promotion. Routing changes are not fencing. Enforce the epoch at all ingress paths and disable/revoke the old writer at the resource or infrastructure boundary.
 
 ---
 
-## Cascading Replication
+## Observability and Incident Evidence
 
-### Topology
+Monitor by topology role and epoch:
 
-```mermaid
-graph TD
-    Primary["Primary<br/>(US-East)"] -.-> EU[("Regional Replica<br/>(EU-West)")]
-    Primary -.-> AP[("Regional Replica<br/>(AP-Southeast)")]
+- primary generated/durable coordinate and transaction commit rate;
+- each follower receive, flush, and apply coordinate plus byte/time backlog;
+- apply throughput, estimated catch-up time, replay conflicts, and paused state;
+- active acknowledgment policy, eligible synchronous set, and downgrade time;
+- commit latency split into local flush and remote acknowledgment;
+- retained log bytes/age by slot or consumer and archive continuity;
+- current writable epoch/timeline, promotion events, fence acknowledgments, and route propagation;
+- replica-read waits/fallbacks for session tokens and bounded-staleness violations;
+- ambiguous commands resolved after reconnect/failover.
 
-    EU -.-> EU1[("Local Replica<br/>(EU-West AZ1)")]
-    EU -.-> EU2[("Local Replica<br/>(EU-West AZ2)")]
-
-    AP -.-> AP1[("Local Replica<br/>(AP-SE AZ1)")]
-    AP -.-> AP2[("Local Replica<br/>(AP-SE AZ2)")]
-```
-
-### Use Case
-
-Cross-region replication without overloading the primary's WAL sender. Instead of 6 direct connections to the primary, you have 2 regional connections. The regional replicas fan out locally.
-
-### Configuration
-
-In PostgreSQL, set `primary_conninfo` on cascade replicas to point to the regional replica, not the primary:
-
-```ini
-# Local replica in EU-West AZ1
-primary_conninfo = 'host=eu-west-regional port=5432 user=replicator'
-```
-
-The regional replica must have `wal_level = replica` and `max_wal_senders` configured, just like a primary.
-
-### Trade-offs
-
-- **Lag accumulates**: primary → regional = 50ms, regional → local = 50ms → total = ~100ms
-- **Single point of failure**: if the regional replica fails, all downstream replicas lose replication
-- **Mitigation**: each downstream replica should be **reconfigurable** to connect directly to the primary. Patroni handles this automatically. Without Patroni, you need an operator runbook or automation.
+Preserve promotion decisions, candidate coordinates/history, coordinator epoch, fence results, and client-routing versions. Without that evidence, a split-brain review becomes guesswork after the losing nodes are rebuilt.
 
 ---
 
-## Semi-Synchronous Silent Downgrade
+## Migration and Verification
 
-### The Problem
+### Introducing a follower
 
-MySQL's semi-synchronous replication has a parameter `rpl_semi_sync_master_timeout` (default: **10 seconds**). If no replica acknowledges within this timeout, MySQL **silently falls back to asynchronous replication**. It logs a warning but continues accepting writes.
+1. take a verified base snapshot at a recorded coordinate;
+2. restore it with encryption and cluster identity intact;
+3. stream/archive every subsequent log record;
+4. wait until receive, flush, and apply reach the target;
+5. validate checksums or logical samples and schema/version compatibility;
+6. add read traffic gradually; do not make it a promotion candidate until it passes failover criteria.
 
-This means:
-1. You configured semi-sync expecting durability
-2. A replica went down or became slow
-3. After 10 seconds, MySQL switched to async **without any client error**
-4. Data loss window is now open — writes are only on the primary
-5. If the primary crashes, those writes are gone
+### Changing durability policy
 
-### Detection
+Canary synchronous acknowledgment by workload class. Measure commit tail latency, eligible-set churn, downgrade behavior, and candidate guarantees. A rollback to asynchronous mode changes RPO; surface it as a semantic release, not a tuning toggle.
 
-Monitor the MySQL status variable:
-```sql
-SHOW STATUS LIKE 'Rpl_semi_sync_master_status';
--- ON = semi-sync active
--- OFF = silently fell back to async
-```
+### Essential fault tests
 
-Alert immediately when this flips to OFF. Also monitor `Rpl_semi_sync_master_no_tx` (count of commits that fell back to async).
+- kill the primary before local flush, after local flush, after remote receive, after remote flush, and after commit-before-response;
+- partition primary from replicas while clients can still reach both sides;
+- pause receive and apply independently;
+- exhaust log retention and verify bounded behavior;
+- promote, then restart the old primary with direct clients/background jobs;
+- lose the promotion coordinator or fencing provider;
+- run long follower reads during replay/DDL;
+- restore a base backup plus archived logs across a timeline change.
 
-### Mitigation Options
+Assert both state invariants and acknowledged-command outcomes. A fast failover that loses a confirmed payment is not a successful test.
 
-| Strategy | Behavior | Risk |
-|----------|----------|------|
-| Set timeout to very high (e.g., `3600000` ms) | Writes block until replica comes back | Extended write downtime if replica fails |
-| Accept the downgrade | Semi-sync is "best effort" | Silent data loss window |
-| Use Group Replication (MySQL) | True consensus (Paxos-based) | Higher write latency, more operational complexity |
-| Add more sync replicas | Timeout less likely to fire | More infrastructure cost |
+---
 
-### PostgreSQL Comparison
+## Decision Framework
 
-PostgreSQL handles this **more safely by default**. With `synchronous_commit = on` and `synchronous_standby_names` configured:
-- If all named synchronous replicas are down, **writes block** — they do not silently fall back to async
-- The primary waits indefinitely for a sync replica to come back
-- This prevents silent data loss but can cause write availability issues
+Choose single-leader replication when:
 
-You can configure `synchronous_standby_names = 'ANY 1 (replica1, replica2, replica3)'` so that a write succeeds as long as any one of three replicas acknowledges. This balances durability with availability.
+- one ordered write authority per shard fits throughput and locality;
+- simple local transaction semantics matter more than multi-region write availability;
+- clients can route writes to the current authority;
+- RPO/latency can be expressed with an explicit acknowledgment policy; and
+- the organization can operate fencing, promotion, backup, and rejoin protocols.
 
-To opt into MySQL-like behavior (accept async fallback), set `synchronous_commit = local` — but this is an explicit choice, not a silent downgrade.
+Reconsider when all regions must accept writes during inter-region partitions, one primary is the sustained write bottleneck, or client locality dominates consistency simplicity. Multi-leader and leaderless designs move rather than remove complexity: conflicts, quorum semantics, repair, and application merge become the new core.
+
+For each deployment, write down:
+
+1. the acknowledged durable stage and failure domains;
+2. eligible promotion candidates and authority for the next epoch;
+3. the old-primary fencing mechanism;
+4. replica-read freshness contract and fallback;
+5. maximum log-retention/catch-up window;
+6. ambiguous-commit resolution key;
+7. tested RPO and RTO from restore, not aspiration.
 
 ---
 
 ## Key Takeaways
 
-1. **All writes through leader** - Simple consistency, single point of failure
-2. **Sync replication for safety** - At cost of latency and availability
-3. **Async for performance** - Accept potential data loss
-4. **Replication lag is inevitable** - Design reads to handle it
-5. **Failover is complex** - Split-brain, data loss, client redirect
-6. **Scale reads with followers** - Writes don't scale
-7. **Row-based replication is safer** - Deterministic, enables CDC
-8. **Monitor lag continuously** - Early warning of problems
+1. Single-leader replication is an ordered-history and epoch protocol, not just log copying.
+2. Receive, durable flush, and apply acknowledgments protect different outcomes.
+3. The acknowledgment policy constrains which follower may safely become leader.
+4. Replica reads require commit/session coordinates when freshness matters.
+5. Failover must fence the old epoch before exposing the new one and must validate history ancestry.
+6. Retention slots trade follower rebuild risk for primary disk risk; both need bounds.
+7. Replication provides availability, while base backups plus archived logs provide historical recovery.
+
+---
+
+## References
+
+- PostgreSQL, [High Availability, Load Balancing, and Replication](https://www.postgresql.org/docs/current/high-availability.html), current documentation.
+- PostgreSQL, [Log-Shipping Standby Servers](https://www.postgresql.org/docs/current/warm-standby.html), current documentation.
+- MySQL, [Replication](https://dev.mysql.com/doc/refman/8.4/en/replication.html), 8.4 Reference Manual.
+- MySQL, [Replication with Global Transaction Identifiers](https://dev.mysql.com/doc/refman/8.4/en/replication-gtids.html), 8.4 Reference Manual.
+- Diego Ongaro and John Ousterhout, [*In Search of an Understandable Consensus Algorithm*](https://raft.github.io/raft.pdf), USENIX ATC, 2014.
+- Barbara Liskov and James Cowling, [*Viewstamped Replication Revisited*](https://pmg.csail.mit.edu/papers/vr-revisited.pdf), 2012.
+- M. R. Eltabakh et al., [*Zephyr: Live Migration in Shared Nothing Databases for Elastic Cloud Platforms*](https://www.cs.purdue.edu/homes/csjgwang/pubs/SIGMOD2011_Zephyr.pdf), SIGMOD, 2011.

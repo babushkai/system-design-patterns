@@ -1,708 +1,167 @@
 # Multi-Leader Replication
 
-## TL;DR
+Multi-leader replication lets more than one site commit writes without first obtaining permission from a single remote leader. That can keep a disconnected client productive and remove an inter-region round trip from the foreground path. It also creates independent histories that must later be combined. The design is therefore not “single-leader replication, twice”: its core product contract is what a local acknowledgement means while other writers are unreachable.
 
-Multi-leader (master-master) replication allows writes at multiple nodes, each replicating to others. It enables low-latency writes from any location and tolerates datacenter failures. The price: write conflicts are possible and must be resolved. Use when you need multi-region writes or high write availability; avoid when strong consistency is required.
+This chapter owns replication streams between writable sites: durable capture, topology, ordering, deduplication, causal sessions, bootstrap, rejoin, and regional operations. [Conflict Resolution](./04-conflict-resolution.md) owns merge algebra and CRDT mechanics. [Partitioning Strategies](./05-partitioning-strategies.md) owns key placement, while [Consensus Algorithms](./08-consensus-algorithms.md) covers systems that choose one ordered history instead of reconciling several.
 
----
+## Workload and consistency contract
 
-## How It Works
+Start with operations, not a topology diagram. For each command class, specify:
 
-### Architecture
+- where it may be accepted and which local durability boundary precedes success;
+- whether a client needs read-your-writes, monotonic reads, causal visibility, or merely eventual convergence after communication resumes;
+- whether concurrent updates commute, can be presented as siblings, or must be serialized;
+- whether invariants span one key, several keys, tenants, or external systems;
+- the maximum tolerable replication lag, conflict age, and recovery point after losing a site.
 
-```mermaid
-graph TD
-    subgraph Cluster
-        LA["Leader A<br/>(US)"] <-->|replication| LB["Leader B<br/>(Europe)"]
-        LB <-->|replication| LC["Leader C<br/>(Asia)"]
-        LA <-->|replication| LC
-        LA --> FA["Followers"]
-        LB --> FB["Followers"]
-        LC --> FC["Followers"]
-    end
+A typical active-active contract says that a write acknowledged in region A survives an A process restart, is usable immediately in A, and will eventually be delivered at least once to every healthy destination. It does **not** say that a simultaneous read in B sees the write, that wall-clock timestamps identify the real last writer, or that two locally valid transactions preserve a global invariant.
+
+The distinction matters for money and scarce resources. If A and B can each decrement the last inventory unit, no deterministic merge can make both promises true. Route that item to one authority, allocate regional escrow quotas, or coordinate the reservation. Multi-leader replication is appropriate only for the remaining state whose concurrent outcomes have an explicit meaning.
+
+## Durable state and invariants
+
+Each committed mutation needs an immutable replication identity. A useful envelope contains:
+
+```text
+event_id              globally unique retry identity
+origin_id, origin_epoch, origin_sequence
+transaction_id, transaction_position
+key and operation or after-image
+causal_context        dependencies observed by the writer, when required
+commit_time           diagnostic or tie-break input, not proof of causality
+schema_version and resolver_version
+tenant_id and data-classification metadata
 ```
 
-Clients write to nearest leader.
+Every destination durably tracks received events, applied events, per-origin contiguous sequence frontiers, gaps, and quarantined failures. The source tracks each destination’s acknowledged receive frontier so that it knows what log can be reclaimed. Tombstones and conflict metadata are data with their own retention rules, not temporary implementation details.
 
-### Write Flow
+The following invariants make recovery reason-able:
 
-```
-1. Client in Europe writes to Leader B
-2. Leader B accepts write, responds to client
-3. Leader B asynchronously replicates to A and C
-4. Leaders A and C apply the change
+1. An origin acknowledges only after the local mutation and its replication record share an atomic durable boundary.
+2. A receiver acknowledges delivery only after the event is durable at that receiver.
+3. Re-delivery has one logical effect. Deduplication covers both database changes and emitted side effects.
+4. Events from an origin are applied in sequence, or an operation is explicitly proven safe under reordering. Transaction fragments become visible atomically when the contract promises that boundary.
+5. Replicas that have received the same event set and use the same resolution version converge.
+6. A progress frontier never advances across an unrecorded gap or a quarantined event.
+7. Reclaimed history is older than every bootstrap, repair, and offline-replica requirement that can still legally return.
 
-Write succeeds without waiting for cross-datacenter round-trip
-```
+An `event_id` alone is not enough. If the deduplication marker commits and the data mutation does not, the event is lost; if the data commits and the marker does not, replay repeats it. They must be atomic, or the target operation must itself be conditional on a stored version.
 
-### Replication Topologies
-
-**Circular:**
-```mermaid
-graph LR
-    A --> B --> C --> D --> A
-```
-
-Each node replicates to next; failures break the ring.
-
-**Star (Hub and Spoke):**
-```mermaid
-graph TD
-    A --> B
-    A --> C
-    A --> D
-```
-
-Central hub coordinates; hub failure is critical.
-
-**All-to-All:**
-```mermaid
-graph TD
-    A <--> B
-    A <--> C
-    A <--> D
-    B <--> C
-    B <--> D
-    C <--> D
-```
-
-Most resilient; conflicts more complex.
-
----
-
-## Use Cases
-
-### Multi-Datacenter Operation
-
-```
-US Datacenter:
-  - Users write locally
-  - <10ms write latency
-  - Survives Europe/Asia outage
-
-Europe Datacenter:
-  - Users write locally
-  - <10ms write latency
-  - Survives US/Asia outage
-
-Cross-DC replication: 100-200ms (async)
-```
-
-### Collaborative Editing
-
-```
-User A (laptop): types "Hello"
-User B (phone): types "World" (same document, same position)
-
-Both succeed locally
-Conflict resolution determines final state
-```
-
-### Offline Clients
-
-```
-Mobile app (disconnected):
-  Write changes locally (local leader)
-  Queue for sync
-  
-When connected:
-  Sync with server
-  Resolve conflicts
-  
-Each device is essentially a leader
-```
-
----
-
-## Conflict Handling
-
-### When Conflicts Occur
+## Architecture: data plane and control plane
 
 ```mermaid
-sequenceDiagram
-    participant A as Leader A
-    participant B as Leader B
-    Note over A: write(x, 1)
-    Note over B: write(x, 2)
-    A-->>B: replicate x=1
-    B-->>A: replicate x=2
-    Note over A,B: Both succeed locally<br/>Replication reveals conflict
+flowchart LR
+    C[Client] --> DB[(Regional writer)]
+    DB --> LOG[(Commit log / outbox)]
+    LOG --> SHIP[Per-destination shipper]
+    SHIP --> IN[(Durable inbox)]
+    IN --> APPLY[Ordered idempotent applier]
+    APPLY --> RDB[(Remote regional writer)]
+    APPLY --> CQ[Conflict / quarantine state]
+    CTRL[Control plane] -. topology, epochs, schemas,<br/>routing and retention .-> SHIP
+    CTRL -. activation barriers .-> APPLY
 ```
 
-### Types of Conflicts
+The data plane commits, ships, receives, and applies mutations. The control plane owns the region set, origin epochs, replication routes, resolver and schema versions, tenant placement policy, and bootstrap or drain state. Separating them prevents a transient configuration view from rewriting history.
 
-**Write-Write:**
-Same field updated differently.
-```
-Leader A: user.email = "a@example.com"
-Leader B: user.email = "b@example.com"
-```
-
-**Delete-Update:**
-One deletes, one updates.
-```
-Leader A: DELETE user WHERE id=1
-Leader B: UPDATE user SET name='Bob' WHERE id=1
-```
-
-**Uniqueness violation:**
-Both create records with same unique value.
-```
-Leader A: INSERT (id=auto, email='x@y.com')
-Leader B: INSERT (id=auto, email='x@y.com')
-```
-
-### Conflict Avoidance
-
-Prevent conflicts by routing related writes to same leader.
-
-```
-Strategy: All writes for a user go to their "home" datacenter
-
-User 123 → always Leader A
-User 456 → always Leader B
-
-Conflicts impossible for per-user data
-Cross-user operations may still conflict
-```
-
----
-
-## Conflict Resolution Strategies
-
-### Last-Writer-Wins (LWW)
-
-Highest timestamp wins; discard other writes.
-
-```
-Write at A: {value: 1, timestamp: 100}
-Write at B: {value: 2, timestamp: 105}
-
-Resolution: value = 2 (higher timestamp)
-
-Problem: Write at A is silently lost
-Problem: Clock skew can choose "wrong" winner
-```
-
-### Merge Values
-
-Combine conflicting values.
-
-```
-Shopping cart at A: [item1, item2]
-Shopping cart at B: [item1, item3]
-
-Merge: [item1, item2, item3]
-```
-
-### Custom Resolution
-
-Application-specific logic.
-
-```
-// For document editing
-func resolve_conflict(version_a, version_b):
-  merged = three_way_merge(base, version_a, version_b)
-  if has_semantic_conflict(merged):
-    return create_conflict_marker(version_a, version_b)
-  return merged
-```
-
-### Application-Level Resolution
-
-Store all versions; let user decide.
-
-```
-Read returns: {
-  versions: [
-    {value: "Alice", timestamp: 100, origin: "A"},
-    {value: "Bob", timestamp: 105, origin: "B"}
-  ],
-  conflict: true
-}
-
-UI: "Multiple versions found. Which is correct?"
-```
-
-### CRDTs
-
-Conflict-free Replicated Data Types - mathematically guaranteed to converge.
-
-```
-G-Counter (grow-only counter):
-  Node A: {A: 5, B: 3}
-  Node B: {A: 4, B: 7}
-  
-  Merge: {A: max(5,4), B: max(3,7)} = {A: 5, B: 7}
-  Total: 12
-  
-  Always converges, never conflicts
-```
-
----
-
-## Handling Causality
-
-### The Problem
-
-Without tracking causality, operations may be applied in wrong order.
-
-```
-User 1 at Leader A:
-  1. INSERT message(id=1, text="Hello")
-  2. INSERT message(id=2, text="World", reply_to=1)
-
-Replication to Leader B might arrive:
-  Message 2 arrives before Message 1
-  reply_to=1 references non-existent message
-```
-
-### Version Vectors
-
-Track causality across leaders.
-
-```
-Version vector: {A: 3, B: 5, C: 2}
-
-Meaning: 
-  - Seen 3 operations from A
-  - Seen 5 operations from B
-  - Seen 2 operations from C
-
-Comparing:
-  {A:3, B:5} vs {A:4, B:4}
-  Neither dominates → concurrent, potential conflict
-```
-
-### Detecting Causality
-
-```
-Write at A: attached vector {A:10, B:5, C:7}
-Write at B: attached vector {A:10, B:6, C:7}
-
-A's write precedes B's? 
-  Check if A's vector ≤ B's vector
-  {A:10, B:5, C:7} ≤ {A:10, B:6, C:7}? 
-  Yes: A ≤ B in all components
-
-Apply A's write before B's
-```
-
----
-
-## Replication Lag and Ordering
-
-### Causality Anomalies
-
-```
-Leader A: User posts message (seq 1)
-Leader B: User edits profile (seq 1)
-
-Without ordering:
-  Follower might see edit before message
-  Or message before edit
-  
-With logical clocks:
-  Total order preserved across leaders
-```
-
-### Conflict-Free Operations
-
-Some operations don't conflict even if concurrent:
-
-```
-Concurrent but safe:
-  Leader A: UPDATE users SET last_login = now() WHERE id = 1
-  Leader B: UPDATE users SET email_count = email_count + 1 WHERE id = 1
-
-Different columns → merge both changes
-```
-
----
-
-## Implementation Considerations
-
-### Primary Key Generation
-
-Avoid conflicts on auto-increment IDs.
-
-```
-Strategy 1: Range allocation
-  Leader A: IDs 1-1000000
-  Leader B: IDs 1000001-2000000
-  
-Strategy 2: Composite keys
-  ID = (leader_id, sequence_number)
-  
-Strategy 3: UUIDs
-  Globally unique, no coordination needed
-```
-
-### Uniqueness Constraints
-
-How to enforce unique email across leaders?
-
-```
-Option 1: Check before write (racy)
-  Check locally → might conflict with other leader
-
-Option 2: Conflict detection
-  Accept write, detect duplicate on sync
-  Application handles de-duplication
-
-Option 3: Deterministic routing
-  All writes for email domain → specific leader
-```
-
-### Foreign Key Constraints
+In a small full mesh, every origin sends directly to every other region. Delivery paths are short, but directed streams and credentials grow as `M(M-1)` for `M` regions. A hub or log fan-out reduces connections, yet the hub becomes a lag and availability dependency. Multi-hop topologies require immutable origin identity: a B-origin event forwarded by C must still be recognized as B’s event when it reaches A, or replication loops amplify it forever.
 
-Cross-leader FK enforcement is hard.
+## Commit, ship, and apply protocol
 
-```
-Leader A: INSERT order (user_id = 123)
-Leader B: DELETE user WHERE id = 123 (concurrent)
-
-Results:
-  Order references non-existent user
-  
-Solutions:
-  - Soft deletes
-  - Application-level referential integrity
-  - Accept inconsistency, repair later
-```
-
----
-
-## Real-World Systems
-
-### CouchDB
-
-```
-// Writes go to any node
-PUT /db/doc123
-{
-  "_id": "doc123",
-  "_rev": "1-abc123",
-  "name": "Alice"
-}
-
-// Conflict detection on sync
-GET /db/doc123?conflicts=true
-{
-  "_id": "doc123",
-  "_rev": "2-def456",
-  "_conflicts": ["2-xyz789"],
-  "name": "Alice Smith"
-}
-
-// Application resolves by deleting losing revisions
-```
-
-### MySQL Group Replication
-
-```sql
--- Enable multi-primary mode
-SET GLOBAL group_replication_single_primary_mode = OFF;
-
--- All members accept writes
--- Certification-based conflict detection
--- Conflicting transactions rolled back on one node
-```
-
-### Galera Cluster
-
-```
-wsrep_provider = /usr/lib/galera/libgalera_smm.so
-wsrep_cluster_address = gcomm://node1,node2,node3
-
--- Synchronous replication with certification
--- Conflicts detected before commit
--- "Optimistic locking" - most transactions succeed
-```
-
----
-
-## Monitoring Multi-Leader
-
-### Key Metrics
-
-| Metric | Description | Alert Threshold |
-|--------|-------------|-----------------|
-| Replication lag | Time behind other leaders | > 1 minute |
-| Conflict rate | Conflicts per second | Increasing trend |
-| Conflict resolution time | Time to resolve | > 1 second avg |
-| Cross-DC latency | Replication RTT | > 500ms |
-| Queue depth | Pending replication ops | Growing |
-
-### Health Checks
-
-```python
-def check_multi_leader_health():
-  for leader in leaders:
-    for other in leaders:
-      if leader == other:
-        continue
-      
-      # Check replication is flowing
-      lag = get_replication_lag(leader, other)
-      if lag > threshold:
-        alert(f"{leader} → {other} lag: {lag}")
-      
-      # Check connectivity
-      if not can_connect(leader, other):
-        alert(f"{leader} cannot reach {other}")
-```
-
----
-
-## When to Use Multi-Leader
-
-### Good Fit
-
-- Multi-datacenter deployment with local writes
-- Offline-first applications
-- Collaborative editing
-- High write availability requirements
-- Tolerance for eventual consistency
-
-### Poor Fit
-
-- Strong consistency requirements
-- Complex transactions across datacenters
-- Low conflict tolerance
-- Simple single-region deployments
-- Applications unable to handle conflict resolution
-
----
-
-## Conflict Detection Timing
-
-The moment you choose to detect conflicts determines the fundamental character of your multi-leader system. There are two approaches, and the choice is not really a choice at all.
-
-### Synchronous Detection
-
-Detect conflicts at write time by coordinating with other leaders before acknowledging the write.
-
-```
-Client → Leader A: write(x, 1)
-Leader A → Leader B: "I'm about to write x, any conflicts?"
-Leader B → Leader A: "No conflict" (or "Conflict — reject")
-Leader A → Client: "Write accepted"
-
-Round-trip cost: cross-datacenter latency added to every write
-```
-
-This approach requires the same cross-leader communication that single-leader replication uses. If Leader B is unreachable, Leader A must either block (losing availability) or proceed without checking (losing the guarantee). You have re-invented single-leader replication with extra steps.
-
-### Asynchronous Detection
-
-Accept the write immediately, detect conflicts when replication delivers the write to other leaders.
-
-```
-Client → Leader A: write(x, 1)       ← returns immediately
-Leader A → Leader B: replicate(x, 1) ← happens later
-Leader B: detects conflict with local write(x, 2)
-Leader B: applies resolution strategy
-```
-
-This is the standard approach. The write is fast because it only touches the local leader. Conflicts surface later — seconds or minutes later in cross-region setups — and are resolved after the fact.
-
-### The Fundamental Tradeoff
-
-```
-Synchronous:  Strong consistency + high write latency + reduced availability
-Asynchronous: Eventual consistency + low write latency  + high availability
-```
+For a local transaction, the writer changes application state and appends one or more ordered replication records in the same database transaction or WAL boundary. It then acknowledges locally. A shipper reads from a durable cursor, batches records without crossing unsupported transaction boundaries, and sends them with the destination’s topology epoch.
 
-Most multi-leader systems choose async detection because latency is the reason you chose multi-leader in the first place. If you could tolerate cross-datacenter round-trips on every write, you would use single-leader replication and avoid the entire conflict problem. Choosing synchronous conflict detection in a multi-leader setup is a contradiction — you pay the complexity cost of multi-leader without getting the latency benefit.
+The receiver writes the batch to an inbox before acknowledging it. An applier then:
 
-The exception: systems like Galera Cluster use "virtually synchronous" certification-based replication where the conflict check happens at commit time with minimal coordination. This works within a single region but breaks down at cross-region latencies.
+1. verifies tenant, schema, origin epoch, and sequence;
+2. rejects duplicates and holds later records behind sequence gaps;
+3. evaluates causal predecessors if the data type requires them;
+4. applies the mutation and deduplication marker atomically;
+5. records any semantic conflict without skipping the frontier silently;
+6. advances the contiguous applied frontier and emits only idempotent downstream work.
 
----
+Transport is normally at-least-once. Exactly-once *effect* comes from stable identity and atomic conditional application, not from a message broker label. A poison event must move into visible quarantine while its origin frontier remains blocked or explicitly records a policy decision; merely incrementing the cursor creates permanent divergence.
 
-## Real System Implementations
+### Causal sessions without global serialization
 
-Understanding how production systems implement multi-leader replication reveals the gap between theory and practice. Most systems make significant compromises.
+A client response can carry a session token such as `{A: 914, B: 207}`. On a later request, a region either waits until its applied frontiers dominate that token, forwards to a region that does, or returns a defined “causal state unavailable” response. This supplies read-your-writes and monotonic reads across region changes without imposing one total order on unrelated writes.
 
-### CockroachDB
+Hybrid logical clocks can provide stable ordering inputs and bound clock anomalies, but they do not prove that two events are causally related. Version vectors or explicit dependency tokens do. If vector size grows with thousands of devices, scope causal metadata to a document, use dotted versions, or accept a weaker session contract.
 
-CockroachDB is **not true multi-leader**. It uses Raft consensus per range (a subset of keys), with a single leaseholder per range that accepts writes. From a client perspective it may look multi-leader — any node can accept a write request — but the node proxies that write to the leaseholder for the relevant range. This is single-leader-per-partition, not multi-leader.
+Merge policy belongs in [Conflict Resolution](./04-conflict-resolution.md). The replication layer’s responsibility is to retain enough context for that policy and to apply one version of it deterministically. Changing a resolver while old events are in flight requires versioned semantics or an offline convergence rewrite.
 
-```
-Client → Node 3 → (proxy) → Node 1 (leaseholder for range) → Raft consensus → commit
-```
-
-This distinction matters: CockroachDB provides serializable isolation precisely because it avoids multi-leader conflicts.
-
-### MySQL Group Replication (Multi-Primary Mode)
-
-True multi-leader. All members accept writes. Conflict detection uses **certification-based replication**: each transaction carries a write set (the set of rows it modified). At commit time, the group communication layer checks whether any concurrent transaction modified overlapping rows. If so, the later transaction is rolled back.
-
-```
-Transaction T1 on Node A: write set = {row 5, row 12}
-Transaction T2 on Node B: write set = {row 12, row 30}
-Overlap on row 12 → T2 is rolled back, client must retry
-```
-
-This is synchronous conflict detection, which limits MySQL Group Replication to low-latency network environments (same region).
-
-### PostgreSQL BDR (Bi-Directional Replication)
-
-Asynchronous multi-leader replication with column-level conflict detection. If two leaders update different columns of the same row, BDR merges them without flagging a conflict. Supports CRDT-based data types for automatic resolution. See `01-foundations/04-consistency-models.md` for CRDT details.
-
-```
-Leader A: UPDATE user SET name='Alice' WHERE id=1
-Leader B: UPDATE user SET email='a@new.com' WHERE id=1
-
-Column-level detection → no conflict → merge both changes
-Row-level detection → conflict → requires resolution
-```
-
-### Google Docs (Operational Transformation)
-
-Technically multi-leader: every open client is a leader that accepts local edits immediately. Conflict resolution uses Operational Transformation (OT), which transforms concurrent operations so they can be applied in any order and converge to the same document state.
-
-```
-User A inserts "X" at position 5
-User B inserts "Y" at position 3 (concurrent)
-
-OT transforms A's operation: insert "X" at position 6 (shifted by B's insert)
-Both converge to same document
-```
-
-OT works for character-level operations but does not generalize to arbitrary database writes.
-
-### DynamoDB Global Tables
-
-Multi-region multi-leader using last-writer-wins resolution. Each item carries a version attribute and a timestamp. Concurrent writes to the same item in different regions result in the higher-timestamp write winning. DynamoDB does not expose conflicts to the application — the losing write is silently discarded.
+## Topology and schema evolution
 
-```
-Region us-east-1: PutItem(pk="user#1", name="Alice", ts=100)
-Region eu-west-1: PutItem(pk="user#1", name="Bob",   ts=102)
-
-Resolution: name="Bob" (ts 102 > 100)
-Alice's write is lost — no notification, no record
-```
-
-This is acceptable for session data, caches, and last-login timestamps. It is not acceptable for financial records, inventory counts, or anything where silent data loss causes business impact.
-
----
-
-## Multi-Leader Anti-Patterns
-
-These are recurring mistakes that cause production incidents in multi-leader deployments. Each looks harmless in a single-leader setup but becomes dangerous when multiple leaders accept concurrent writes.
-
-### Auto-Increment Primary Keys
-
-```
-Leader A: INSERT user → id = 101
-Leader B: INSERT user → id = 101
-
-Replication: two different users with id = 101
-Foreign keys, application caches, API responses — all corrupted
-```
-
-**Fix:** Use UUIDs, Snowflake IDs (Twitter-style time-sortable distributed IDs), or pre-allocated ID ranges per leader. UUIDs are simplest but use 128 bits and fragment B-tree indexes. Snowflake IDs give sortability without coordination.
+Adding a writable region is a state machine, not a load-balancer edit:
 
-### Foreign Key Constraints Across Leaders
-
-```
-Leader A: DELETE FROM users WHERE id = 123
-Leader B: INSERT INTO orders (user_id) VALUES (123)  ← concurrent
-
-After replication:
-  Leader A has an order referencing a deleted user
-  Leader B has a deleted user with no dangling orders (order was inserted before delete arrived)
-  State diverges between leaders
+```text
+ABSENT -> SNAPSHOTTING(L) -> CATCHING_UP(>L) -> VALIDATING
+       -> READ_ONLY -> WRITE_ENABLED
 ```
 
-**Fix:** Use soft deletes (`deleted_at` timestamp) so the row always exists for FK purposes. Or drop FK constraints entirely and enforce referential integrity at the application level with async repair jobs.
+Take a consistent snapshot at source frontier `L`, restore it, then apply every event after `L`. Validate row or range digests and wait for a declared lag bound before serving reads. Enable writes only after every existing site understands the new origin epoch and has a return path for its events. Removing a region reverses the process: stop new routing, drain accepted writes to all required destinations, preserve its origin identity through the rejoin window, then retire credentials and history.
 
-### Unique Constraints
+Schema changes use expand–migrate–contract. Readers and appliers first learn both encodings; producers then emit the new representation; old events and offline sites are drained or translated; only then may the old field disappear. Replication records keep an immutable schema identifier. The general compatibility rules live in [Data Encoding](../03-storage-engines/07-data-encoding.md), and large data backfills should follow the log-boundary discipline in [Change Data Capture](../13-data-pipelines/04-change-data-capture.md).
 
-```
-Leader A: INSERT INTO users (email) VALUES ('alice@example.com')  ← succeeds locally
-Leader B: INSERT INTO users (email) VALUES ('alice@example.com')  ← succeeds locally
-
-After replication: two rows with same email on both leaders
-Unique index is violated — most databases reject the replicated row
-  leaving the two leaders permanently diverged
-```
+## Specialized failure traces
 
-**Fix:** Route all writes for unique-constrained entities to a single designated leader (effectively falling back to single-leader for those tables). Alternatively, use deterministic conflict resolution (e.g., keep the row with the lower UUID).
+### Acknowledgement outruns durable capture
 
-### Triggers and Stored Procedures
+Region A updates a row, replies success, and intends to enqueue replication afterward. The process loses power between those actions. A recovers the row from its database, but no other region can ever learn the mutation. If A is then lost permanently, an acknowledged write disappears. A transactional outbox or shared WAL boundary closes this gap.
 
-Triggers that fire on write may produce different side effects on each leader depending on local state at execution time. A trigger that sends a notification email will send it twice — once on each leader when replication applies the write.
+### A loop repeats an external side effect
 
-**Fix:** Design triggers to be idempotent and deterministic. Better yet, move side-effect logic out of the database and into application-level event handlers that deduplicate.
+A’s event reaches B, B republishes it as a new B event, and C forwards both versions back to A. Database LWW may hide the duplicates, while a trigger sends three emails. Preserve origin identity, deduplicate before apply, and derive side-effect idempotency keys from the original event, not the receiving site.
 
-### Schema Changes (DDL)
+### Local uniqueness creates two winners
 
-```
-Leader A: ALTER TABLE users ADD COLUMN phone VARCHAR(20)
-Leader B: ALTER TABLE users ADD COLUMN phone INTEGER
-
-Both succeed locally. Replication of data rows now fails
-because column types don't match.
-```
+A and B both accept `username = "river"` for different user IDs. Each local unique index is valid. When streams cross, neither row can be inserted without violating the constraint, and choosing a row does not retract the already-issued account promise. Globally scarce names need one routing authority or a reservation protocol; “repair later” is a business compensation, not database consistency.
 
-**Fix:** Coordinate DDL changes through a single control plane. Apply schema migrations to all leaders in a defined order. Tools like `pt-online-schema-change` or `gh-ost` help but must be orchestrated across leaders.
+### A returning site resurrects deleted data
 
----
+B was offline longer than tombstone retention. A deletion replicated among the remaining sites and its marker was reclaimed. B returns with the old live value, which now looks like a new missing record and spreads. Rejoin through a fresh snapshot after the allowed offline horizon; never let a stale replica self-declare current.
 
-## Monitoring Multi-Leader Health
+### Mixed schemas block a frontier
 
-Standard database monitoring is necessary but not sufficient for multi-leader. You must monitor the replication relationships themselves — and monitor them in both directions.
+A deploys a required new field and emits version 9. B’s applier understands only version 8, quarantines event 501, but incorrectly advances through event 502. B now advertises progress while permanently missing state. Schema gates must precede producer rollout, and sequence frontiers must expose—not skip—the blocked record.
 
-### Replication Lag Per Direction
+## Capacity and cost model
 
-In single-leader, lag is unidirectional: leader → follower. In multi-leader, every pair of leaders has bidirectional replication, and lag may differ by direction.
+Let global accepted mutation rate be `W` events/s, mean encoded event size `B`, writable regions `M`, retained-log time `T`, and mean apply CPU `c_apply` seconds/event. In a direct fan-out design:
 
+```text
+cross-region egress rate       ~= W * B * (M - 1)
+replication-log bytes retained ~= W * B * T
+balanced ingress per region    ~= W * B * (M - 1) / M
+apply cores per region         >= W * (M - 1) / M * c_apply / target_utilization
 ```
-A → B lag: 200ms  (normal — cross-Atlantic)
-B → A lag: 45s    (problem — B's outbound replication is stalled)
-
-Monitor each direction independently. Alert thresholds should
-account for expected cross-region latency.
-```
 
-### Conflict Rate Tracking
+Compression and batching reduce wire overhead but increase batch-loss retry size and head-of-line delay. Size for peak accepted rate plus replay, not just steady state. If incoming apply demand is `λ` and capacity is `μ`, a partition lasting `D` seconds creates roughly `λD` queued events; after healing, catch-up time is at least `λD / (μ-λ)`. When `μ <= λ`, the region never catches up.
 
-Track conflicts per second, broken down by table and conflict type. A sudden spike in conflict rate usually indicates an application bug (e.g., a new code path that stopped routing writes to the correct leader) rather than an infrastructure problem.
+Conflict exposure grows with both hot-key rate and visibility delay. For a key receiving writes as a Poisson process at rate `λ_k`, the chance another write arrives during replication window `Δ` is approximately `1 - e^(-λ_kΔ)`. This is an illustrative workload model, not a correctness bound; measure the actual per-key distribution because a few hot keys dominate.
 
-```
-Baseline: 2 conflicts/sec (acceptable for this workload)
-Alert:    50 conflicts/sec sustained for 5 minutes
-Action:   check recent deployments, examine conflict details
-```
+Cost includes duplicated regional storage, egress, conflict retention, repair scans, and operator time. A design that saves 80 ms of write latency but doubles every byte across four destinations should make that exchange explicit.
 
-### Divergence Detection
+## Security, isolation, and observability
 
-Even with conflict resolution, leaders can silently diverge due to bugs in replication or resolution logic. Run periodic full-table checksums to verify that leaders hold identical data.
+Replication identities are privileged database writers. Use mutually authenticated, encrypted channels; short-lived credentials per direction; destination-side allow-lists for origins, tenants, schemas, and operations; and immutable audit records for topology or resolver changes. An applier must re-establish tenant and row-security context rather than bypass authorization because traffic is “internal.” Encrypt sensitive conflict payloads and bound who may inspect them.
 
-```
-MySQL:   pt-table-checksum — computes per-chunk CRC32 across replicas
-Postgres: pg_comparator — detects row-level differences between instances
+Tenant placement and deletion policy travel with the event. A residency-restricted tenant must not enter a disallowed regional log, retry queue, backup, or quarantine store. Per-tenant rate and backlog quotas prevent one migration or hot tenant from consuming every apply worker; dedicated lanes are warranted when noisy-neighbor risk exceeds the efficiency of a shared stream.
 
-Schedule: nightly for large tables, hourly for critical small tables
-```
+The primary dashboard is a matrix of `origin -> destination`, showing durable-receive and applied frontiers, oldest unapplied age, bytes queued, gaps, retries, quarantine count, and event throughput. Add conflict counts by entity and resolver version, dedup hits, schema rejects, clock-offset diagnostics, and periodic key-range digests. End-to-end canary mutations reveal a stream that is connected but not applying.
 
-### Queue Depth and Split-Brain Indicators
+Test histories, not just APIs: crash at every local-commit/outbox/inbox/apply boundary; duplicate, drop, delay, and reorder batches; partition one direction only; roll clocks; reuse a restored origin counter; hold a site offline past retention; mix schema and resolver versions; and inject a hot tenant. Property tests should assert convergence after delivering the same event set, replay idempotence, monotonic frontiers, and preservation of each declared business invariant.
 
-Monitor pending replication events per leader. A growing queue means replication is falling behind consumption — eventually the queue fills and replication stalls or drops events.
+## Decision framework
 
-Split-brain detection: if both leaders are accepting writes for the same key space but replication between them has been down for longer than your alert threshold, you are accumulating conflicts that will be painful to resolve. Alert on `replication_link_down AND write_rate > 0` for both leaders simultaneously.
+Use multi-leader replication when local or offline write acceptance is a product requirement, cross-site latency is material, and every concurrently writable command has a defensible reconciliation or ownership rule. Prefer [single-leader replication](./01-single-leader-replication.md) when writes can tolerate one authority and operational simplicity matters. Prefer consensus per partition when a single current value or cross-writer invariant must be decided synchronously. Prefer asynchronous replicas or CDC-fed views when only read locality is needed.
 
----
+The decisive review question is: **what user-visible promise can two isolated sites both make, and how is that promise still true when their histories meet?** If the answer is “the timestamp winner,” the design is unfinished.
 
-## Key Takeaways
+## Primary references
 
-1. **Writes anywhere** - Low latency, but conflicts possible
-2. **Conflicts are inevitable** - Must have resolution strategy
-3. **LWW is simple but lossy** - Consider merge or CRDTs
-4. **Topology matters** - All-to-all most resilient
-5. **Causality tracking is complex** - Version vectors help
-6. **Avoid conflicts when possible** - Route related writes together
-7. **Unique constraints are hard** - Application-level handling often needed
-8. **Great for multi-region** - Primary use case is geo-distribution
+- Terry, D. B., et al. [Managing Update Conflicts in Bayou, a Weakly Connected Replicated Storage System](https://doi.org/10.1145/224056.224070). SOSP, 1995.
+- Petersen, K., et al. [Flexible Update Propagation for Weakly Consistent Replication](https://doi.org/10.1145/268998.266711). SOSP, 1997.
+- Saito, Y., and Shapiro, M. [Optimistic Replication](https://doi.org/10.1145/1057977.1057980). ACM Computing Surveys, 2005.
+- Apache CouchDB. [Replication Protocol](https://docs.couchdb.org/en/stable/replication/protocol.html).
+- MySQL. [Group Replication](https://dev.mysql.com/doc/refman/8.4/en/group-replication.html).
+- Amazon DynamoDB. [Global tables: multi-active, multi-Region replication](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/GlobalTables.html).

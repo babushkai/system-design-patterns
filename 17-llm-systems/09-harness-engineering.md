@@ -153,6 +153,10 @@ Execution then occurs in an isolation domain with explicit mounts, egress, resou
 
 The model should never receive a credential whose authority exceeds the current action. The gateway authenticates the human or service principal; the policy layer maps the requested effect to a capability; the sandbox broker mints a short-lived token scoped to resource, verb, tenant, and expiry. Tool output contains a receipt, not the secret used to obtain it. Approval binds to an action digest and base resource revision, so changing the recipient, command, or patch invalidates the approval.
 
+A remote tool protocol authenticates a transport; it does not make every advertised tool trustworthy or authorize a domain effect. Register a remote server by canonical origin, operator/trust domain, protocol and schema revision, permitted capability classes, and data-handling policy. Pin the registry snapshot used by a run, diff schema/description changes like code, and require the handler to derive the principal and tenant from verified identity rather than model-supplied arguments.
+
+For HTTP MCP servers, follow the protocol's current authorization profile: bind the token to the intended resource/audience, validate it at the resource server, and never pass an upstream token through to another server. The client or credential broker stores each server's token outside model-visible context and attenuates access to the action when possible. Session IDs correlate protocol state; they are not authentication. A newly discovered server, changed tool description, or successful OAuth flow remains untrusted until local policy admits its exact capability.
+
 Policy checks run again at commit. A plan approved ten minutes ago may now target a changed branch, expired URL, revoked user, or different production environment. “The model already asked” is not an authorization cache.
 
 ---
@@ -241,6 +245,7 @@ Build the smallest runtime that makes the desired guarantee enforceable. Add com
 - [Code Execution with MCP](https://www.anthropic.com/engineering/code-execution-with-mcp) — scripts over chained tool calls
 - [Claude Code Best Practices](https://www.anthropic.com/engineering/claude-code-best-practices) — a production harness, documented
 - [Model Context Protocol](https://modelcontextprotocol.io/) — tool/context integration standard
+- [MCP Authorization specification (2025-06-18)](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization) and [MCP Security Best Practices](https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices) — audience binding, token handling, session and confused-deputy defenses
 - [The Lethal Trifecta for AI Agents](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/) — Simon Willison
 - [Context Rot](https://research.trychroma.com/context-rot) — Chroma research on long-context degradation
 - [SWE-bench Verified](https://www.swebench.com/), [Terminal-Bench](https://www.tbench.ai/), [τ-bench](https://arxiv.org/abs/2406.12045), [OSWorld](https://os-world.github.io/) — harness-sensitive benchmarks

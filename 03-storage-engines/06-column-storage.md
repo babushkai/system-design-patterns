@@ -1,657 +1,243 @@
 # Column-Oriented Storage
 
-## TL;DR
+Column-oriented storage makes one physical bet: analytical queries usually touch many rows but only a subset of their attributes. Storing values from the same column together reduces projected I/O, exposes homogeneous data to encoding, and lets execution operate on vectors rather than repeatedly interpreting row objects.
 
-Column-oriented storage stores data by column rather than by row. This enables excellent compression and allows reading only needed columns. Ideal for analytics workloads (OLAP) that scan many rows but few columns. Row stores excel at transactional workloads (OLTP) that access entire rows. Most data warehouses use columnar storage.
+This chapter owns the **analytical physical layout and scan path**: row groups, column chunks and pages, encodings, metadata pruning, late materialization, vectorized execution, update overlays, and scan capacity. [Data Encoding](./07-data-encoding.md) owns general serialization rules. [SSTables and Compaction](./03-sstables-compaction.md) owns immutable sorted-run lifecycle, and [Lakehouse Table Formats](../13-data-pipelines/05-lakehouse-table-formats.md) owns multi-file table snapshots and metadata protocols.
 
----
+## Workload and correctness contract
 
-## Row vs Column Storage
+Columnar layout is strongest when:
 
-### Row-Oriented (Traditional)
+- scans touch a small fraction of a wide schema;
+- predicates and aggregations evaluate over many rows;
+- inserts arrive in batches or can be buffered;
+- updates/deletes can use deltas or background rewrite;
+- physical clustering lets metadata exclude substantial data;
+- CPU-efficient decode and vector execution matter as much as storage size.
 
-```
-Table: Users
-  id | name    | age | city
-  ---+---------+-----+---------
-  1  | Alice   | 30  | NYC
-  2  | Bob     | 25  | LA
-  3  | Charlie | 35  | Chicago
-
-On disk:
-  [1, Alice, 30, NYC][2, Bob, 25, LA][3, Charlie, 35, Chicago]
-  
-  Entire row stored contiguously
-```
-
-### Column-Oriented
-
-```
-Same table, stored by column:
-
-id:    [1, 2, 3]
-name:  [Alice, Bob, Charlie]
-age:   [30, 25, 35]
-city:  [NYC, LA, Chicago]
-
-Each column stored separately
-```
-
----
-
-## Why Columns?
-
-### Query Pattern Difference
-
-```
-OLTP (Transactional):
-  SELECT * FROM users WHERE id = 123
-  → Need all columns for one row
-  → Row storage efficient
-  
-OLAP (Analytical):
-  SELECT AVG(age) FROM users WHERE city = 'NYC'
-  → Need 2 columns, millions of rows
-  → Reading all columns is wasteful
-```
-
-### Column Storage Advantages
-
-```
-Query: SELECT AVG(age) FROM users WHERE city = 'NYC'
-
-Row storage reads:
-  [1, Alice, 30, NYC][2, Bob, 25, LA][3, Charlie, 35, Chicago]...
-  Read everything, use only 2 columns
-  
-Column storage reads:
-  age:  [30, 25, 35, ...]
-  city: [NYC, LA, Chicago, ...]
-  Skip id, name columns entirely
-  
-I/O reduction: 2/4 = 50% in this example
-Real tables with 100+ columns: 95%+ reduction
-```
-
----
-
-## Compression Benefits
-
-### Same-Type Data Compresses Better
+It is weaker for single-row fetches that need most columns, high-rate in-place updates, and latency dominated by one random lookup. Hybrid systems commonly keep a row-oriented write path or primary store and create columnar segments for scans.
 
-```
-Row storage:
-  [1, Alice, 30, NYC][2, Bob, 25, LA]...
-  Mixed types (int, string, int, string)
-  Poor compression
-
-Column storage:
-  age: [30, 25, 35, 40, 28, 30, 35, 30, ...]
-  Same type, similar values
-  Excellent compression
-```
-
-### Run-Length Encoding (RLE)
-
-```
-city column (sorted):
-  [Chicago, Chicago, Chicago, LA, LA, NYC, NYC, NYC, NYC, NYC]
-  
-RLE compressed:
-  [(Chicago, 3), (LA, 2), (NYC, 5)]
-  
-10 values → 3 pairs
-```
-
-### Dictionary Encoding
-
-```
-status column:
-  [pending, active, active, pending, active, completed, ...]
-  
-Dictionary:
-  0 = pending
-  1 = active
-  2 = completed
-  
-Encoded: [0, 1, 1, 0, 1, 2, ...]
-  String → 2 bits
-  Massive space savings for low-cardinality columns
-```
-
-### Bit-Packing
+The file contract must preserve more than values:
 
-```
-age column (0-100 range):
-  Standard int: 32 bits per value
-  Bit-packed: 7 bits per value (2^7 = 128)
-  
-4.5x space reduction
-```
+- one logical row position aligns across every projected column;
+- null and nested structure are reconstructable;
+- schema evolution does not reinterpret old fields;
+- statistics and filters never exclude a row that could match;
+- updates/deletes are applied at the correct snapshot;
+- corrupt pages are detected rather than silently decoded.
 
-### Compression Comparison
+Fast wrong pruning is worse than a slow scan. Metadata participates in query correctness.
 
-| Encoding | Best For | Ratio |
-|----------|----------|-------|
-| RLE | Sorted, repetitive | 10-100x |
-| Dictionary | Low cardinality | 10-50x |
-| Bit-packing | Small integers | 2-8x |
-| Delta | Timestamps, sequences | 5-20x |
-| LZ4/Zstd | General purpose | 2-5x |
+## Physical state: row groups, chunks, and pages
 
----
+A columnar file is horizontally divided into **row groups**. Within one row group, each field has a **column chunk** containing pages. This creates two locality dimensions:
 
-## Column Store Architecture
+- row groups bound parallelism, pruning, and rewrite units;
+- column chunks let projection read only required attributes.
 
-### Physical Layout
-
-```
-Table: sales
-Columns: date, product_id, quantity, price, region
-
-Files on disk:
-  sales_date.col      (dates only)
-  sales_product_id.col
-  sales_quantity.col
-  sales_price.col
-  sales_region.col
-
-Each file:
-  - Sorted by some key (often date)
-  - Divided into row groups
-  - Each group independently compressed
-```
+Pages provide independently encoded/compressed units and may carry checksums, value counts, null counts, encoding metadata, and page-level statistics. A file footer records schema, row-group locations, column-chunk offsets/sizes, codec information, and optional statistics/index locations.
 
-### Row Groups
+The values at logical position `i` across chunks belong to the same row. Columns can use different page boundaries; readers align by logical value/row counts, not by assuming page 7 of every column begins at the same byte or row.
 
-```
-┌─────────────────────────────────────────────────────┐
-│                    Row Group 1                      │
-│  date:[...] product_id:[...] quantity:[...] ...     │
-├─────────────────────────────────────────────────────┤
-│                    Row Group 2                      │
-│  date:[...] product_id:[...] quantity:[...] ...     │
-├─────────────────────────────────────────────────────┤
-│                    Row Group 3                      │
-│  date:[...] product_id:[...] quantity:[...] ...     │
-└─────────────────────────────────────────────────────┘
-
-Row group size: Typically 100K - 1M rows
-Enables:
-  - Parallel processing
-  - Predicate pushdown (skip row groups)
-  - Memory efficiency
-```
+### Null and nested data
 
-### Reconstructing Rows
+Flat fixed-width arrays often use a validity bitmap: one bit says whether each position is present. Nested records and repeated fields need more structure. Dremel's encoding represents repetition and definition levels so a reader can distinguish an absent optional field, an empty list, and values in repeated nested records without materializing the full tree first. Parquet inherits this model.
 
-```
-Need to join columns back together:
-  Position 0: date[0], product_id[0], quantity[0], ...
-  Position 1: date[1], product_id[1], quantity[1], ...
-  
-Same position across columns = same row
-Called "late materialization"
-```
+Schema fields need stable identity and repetition/nullability semantics. Matching only by ordinal is dangerous when columns are inserted or reordered; matching only by name is dangerous when names are reused. A migration plan should define field IDs, aliases, defaults, type promotions, and whether old readers may encounter new required fields.
 
----
+## Encoding is chosen per data distribution
 
-## Query Execution
+Column locality creates opportunities, but no encoding wins for every page.
 
-### Traditional (Early Materialization)
+- **Dictionary encoding:** store distinct values once and encode rows as integer codes. Effective for repeated values; high cardinality can make the dictionary larger than direct encoding.
+- **Run-length encoding:** store `(value, run_length)` for repeated adjacent values. Physical sort order often creates long runs.
+- **Bit packing:** use only the bits needed for a bounded integer/code range.
+- **Delta and frame-of-reference:** store differences from a prior value or page base for timestamps and locally clustered numbers.
+- **Boolean/validity bitmaps:** compact flags and support word/SIMD operations.
+- **General compression:** compress encoded page bytes with codecs such as LZ4, Snappy, or Zstandard.
 
-```
-Query: SELECT product_id, quantity 
-       FROM sales 
-       WHERE region = 'US' AND quantity > 100
-
-1. Scan region column, find matching row IDs
-2. For each matching row:
-   - Fetch product_id, quantity, region
-   - Build full row
-   - Apply predicates
-   - Return results
-
-Reconstructs rows early, even if filtered out later
-```
+Writers may sample a page and fall back when a dictionary overflows or an encoding expands data. The choice trades compressed bytes, encoder CPU, decoder CPU, random access, and predicate execution. A heavier codec can reduce object-store/network time and still make the query faster; on cached data it may make CPU the bottleneck.
 
-### Columnar (Late Materialization)
+Dictionary codes are normally local to a page or chunk. Code 7 in one row group need not equal code 7 in another. Join, grouping, or comparison across dictionaries must compare values, unify dictionaries, or carry dictionary identity.
 
-```
-Same query:
-
-1. Scan region column → bitmap of US rows
-2. Scan quantity column → bitmap of quantity > 100
-3. AND bitmaps → final row IDs
-4. Only for matching rows:
-   - Fetch product_id, quantity
-   - Return results
-
-Only reconstruct needed rows at the end
-Significant speedup for selective queries
-```
+## The analytical scan protocol
 
-### Vectorized Execution
+A well-designed scan discards work in stages:
 
-```
-Process columns in batches (vectors):
-
-Instead of:
-  for row in rows:
-    result = row.quantity * row.price
-    
-Do:
-  quantities = load_vector(1024 values)
-  prices = load_vector(1024 values)
-  results = quantities * prices  # SIMD operation
-
-Benefits:
-  - CPU cache efficiency
-  - SIMD parallelism
-  - Reduced interpretation overhead
-```
+1. **Table/partition pruning:** use the table snapshot and partition metadata to choose files.
+2. **Footer discovery:** fetch file metadata and identify required column chunks.
+3. **Row-group pruning:** evaluate conservative min/max, null count, Bloom filters, and dictionaries.
+4. **Page pruning:** use page indexes/statistics where present.
+5. **Predicate decode:** decode filter columns into vectors and build a selection bitmap/vector.
+6. **Late materialization:** decode projected columns only for surviving rows when the format/reader supports efficient selective access.
+7. **Vector execution:** pass batches through filters, joins, aggregates, and projections.
+8. **Final materialization:** construct output rows only at the API boundary that requires them.
 
----
+Projection pushdown saves bytes only when the reader does not fetch unneeded chunks. Predicate pushdown saves work only when metadata or encoded execution can reject pages/rows before full decode.
 
-## Parquet Format
+### Statistics must be conservative
 
-### File Structure
+For predicate `price > 100`, a row group with exact maximum 90 is safely skipped. A group with `[min=20, max=500]` must be scanned even if only one row may match.
 
-```
-┌─────────────────────────────────────────────┐
-│ Magic Number: PAR1                          │
-├─────────────────────────────────────────────┤
-│ Row Group 1                                 │
-│   Column Chunk 1: [Pages...] + Column Meta  │
-│   Column Chunk 2: [Pages...] + Column Meta  │
-│   ...                                       │
-├─────────────────────────────────────────────┤
-│ Row Group 2                                 │
-│   ...                                       │
-├─────────────────────────────────────────────┤
-│ Footer                                      │
-│   File Metadata                             │
-│   Row Group Metadata                        │
-│   Column Metadata                           │
-│   Schema                                    │
-├─────────────────────────────────────────────┤
-│ Footer Length (4 bytes)                     │
-├─────────────────────────────────────────────┤
-│ Magic Number: PAR1                          │
-└─────────────────────────────────────────────┘
-```
+Statistics implementations must define nulls, NaNs, signed zero, decimal scale, timestamp timezone, collation, and string truncation. A truncated upper string bound that is smaller than an omitted real value can create a false exclusion. When bounds are incomplete or untrusted, the reader must scan. Bloom filters may return false positives but must not return false negatives for the encoded values and normalization rules.
 
-### Page Types
+Physical clustering determines pruning power. If data is ordered by `(tenant_id, event_time)`, tenant-time queries may touch few row groups, while a global time query can overlap many tenants. No one sort order serves every predicate. Multi-dimensional clustering, duplicated projections, or secondary data structures exchange storage/rewrite cost for broader pruning.
 
-```
-Data Page:
-  - Actual column values
-  - Definition levels (for nulls)
-  - Repetition levels (for nested data)
-  
-Dictionary Page:
-  - Dictionary for dictionary encoding
-  - Stored once per column chunk
-  
-Data Page V2:
-  - Improved encoding
-  - Header contains statistics
-```
+## Vectorized execution
 
-### Metadata for Query Planning
+A row-at-a-time interpreter repeatedly resolves field offsets, branches on types/nulls, dispatches an operator, and produces one result. A vectorized engine processes a batch of values with one typed operator:
 
+```text
+input vectors -> predicate -> selection vector -> aggregate/join -> output vectors
 ```
-Footer contains per-column stats:
-  - Min/max values
-  - Null count
-  - Distinct count (optional)
-
-Query: WHERE date >= '2024-01-01'
-  Check row group metadata
-  Skip row groups where max_date < '2024-01-01'
-```
 
----
+This improves instruction-cache locality, amortizes dispatch, enables branch-light loops and SIMD, and keeps compact arrays in CPU caches. Operators can pass a selection vector or bitmap rather than copying every surviving row. Predicates may execute on dictionary codes after evaluating the dictionary once; aggregates may consume encoded runs without expanding every value.
 
-## ORC Format
+Batch size is a cache and latency decision. Larger batches amortize calls but consume more working memory and delay the first result; smaller batches increase dispatch overhead. Choose from measured operator and cache behavior rather than a universal row count.
 
-### Structure
-
-```
-Similar to Parquet, used heavily in Hive/Hadoop:
-
-┌─────────────────────────────────────────────┐
-│ Stripe 1                                    │
-│   Index Data (min/max, positions)           │
-│   Row Data (column streams)                 │
-│   Stripe Footer                             │
-├─────────────────────────────────────────────┤
-│ Stripe 2                                    │
-│   ...                                       │
-├─────────────────────────────────────────────┤
-│ File Footer                                 │
-│   Type information                          │
-│   Stripe information                        │
-│   Column statistics                         │
-├─────────────────────────────────────────────┤
-│ Postscript                                  │
-│   Compression type, version                 │
-└─────────────────────────────────────────────┘
-```
+Apache Arrow standardizes an in-memory columnar representation with contiguous buffers, validity bitmaps, offsets for variable-length values, and nested-array layouts. Parquet and ORC optimize persisted size and skipping; Arrow optimizes interoperable in-memory access. A reader often decodes a storage page into Arrow-like vectors, but engines may use their own vector format or execute directly on encoded pages. “Parquet becomes Arrow” is a common architecture, not a correctness requirement.
 
-### ORC vs Parquet
+### Early versus late materialization
 
-| Aspect | Parquet | ORC |
-|--------|---------|-----|
-| Origin | Twitter/Cloudera | Facebook/Hortonworks |
-| Ecosystem | Spark, general | Hive, Presto |
-| Nested data | Better | Good |
-| ACID updates | No | Yes (with Hive) |
-| Predicate pushdown | Good | Better indexes |
+Early materialization reconstructs rows near the scan and lets conventional row operators consume them. It can be efficient when most rows and columns survive. Late materialization carries positions/selections deeper and fetches attributes only when needed; it excels for selective predicates and wide schemas but introduces position mapping and potentially scattered gathers.
 
----
+The correct boundary depends on selectivity, projected widths, join shape, and whether the storage format supports efficient page/position access. Optimizers should cost both rather than treating late materialization as always faster.
 
-## Indexing in Column Stores
+## Inserts, updates, and deletes
 
-### Zone Maps (Min/Max Index)
+Appending one row into separate durable streams for hundreds of columns is inefficient and difficult to publish atomically. Column stores buffer rows, sort/cluster a batch, transpose it into columns, encode pages, and publish a complete segment. The buffer and spill path is therefore part of ingestion capacity.
 
-```
-For each row group or page:
-  Store min and max value
-
-Query: WHERE price > 1000
-
-Row Group 1: min=50, max=500   → skip
-Row Group 2: min=200, max=1500 → scan
-Row Group 3: min=800, max=2000 → scan
-Row Group 4: min=5000, max=8000 → scan (all match)
-```
+Updates typically use one of three contracts:
 
-### Bitmap Indexes
+- **copy-on-write:** rewrite the affected row group/file and atomically replace it in the table snapshot;
+- **merge-on-read:** write new row versions or equality/position deletes separately and merge them during scans;
+- **delta store:** keep recent mutable rows in a row/delta structure and periodically convert them into columnar segments.
 
-```
-For low-cardinality columns:
-
-region = 'US':   [1, 0, 1, 1, 0, 1, ...]
-region = 'EU':   [0, 1, 0, 0, 1, 0, ...]
-region = 'APAC': [0, 0, 0, 0, 0, 0, ...]
-
-Query: WHERE region IN ('US', 'EU')
-  Bitmap OR: [1, 1, 1, 1, 1, 1, ...]
-  Very fast set operations
-```
+A position delete must bind to the exact immutable data-file identity and row position. Applying it to a rewritten file with shifted positions deletes the wrong row. Equality deletes require matching schema, type, and normalization semantics. Readers choose data and delete files from one table snapshot so a concurrent rewrite cannot mix generations.
 
-### Bloom Filters on Columns
+Merge-on-read reduces write amplification and increases scan merge work. Copy-on-write makes reads simpler and turns small updates into large rewrites. Background maintenance eventually folds deltas/deletes into new files; its transactional multi-file publication belongs in [Lakehouse Table Formats](../13-data-pipelines/05-lakehouse-table-formats.md), while immutable run replacement inside an LSM belongs in [SSTables and Compaction](./03-sstables-compaction.md).
 
-```
-Store Bloom filter per column chunk
+## Concrete failure and correctness traces
 
-Query: WHERE product_id = 'ABC123'
+### Positional schema evolution swaps fields
 
-Check Bloom filter:
-  Definitely not in chunk → skip
-  Maybe in chunk → scan
+1. Old files store fields `[id, country, amount]` by ordinal.
+2. A new schema inserts `currency` before `amount`.
+3. An old reader or ordinal-only reader interprets currency bytes as amount.
 
-Useful for high-cardinality equality predicates
-```
+Stable field identity and compatible readers must precede writer cutover. A renamed/reordered display schema must not rewrite physical meaning implicitly.
 
----
+### Unsafe min/max causes false pruning
 
-## Writes in Column Stores
+1. A writer truncates long string maximum `mango…` to `mang` without marking it as a lower/incomplete bound.
+2. A reader evaluates `value = 'mango'` and concludes the row group maximum is below the predicate.
+3. It skips a group that actually contains the value.
 
-### The Challenge
+Statistics serialization and comparison need cross-version conformance tests. Unknown or truncated bounds must remain conservative.
 
-```
-INSERT single row:
-  Row store: Append to one file
-  Column store: Append to N files (one per column)
-  
-Much more I/O for writes
-```
+### Dictionary identity is lost
 
-### Batch Writes
+1. Row group A maps code 3 to `US`; row group B maps code 3 to `DE`.
+2. A grouping operator concatenates code vectors and groups by integer code alone.
+3. Different countries merge into one group.
 
-```
-Buffer writes in memory (row format)
-Periodically flush as column chunks
-
-Write pattern:
-  1. Write to in-memory buffer
-  2. When buffer full (e.g., 10K rows):
-     - Convert to columnar
-     - Compress
-     - Write to disk
-
-Batching amortizes conversion overhead
-```
+Keep dictionary identity, unify dictionaries, or decode before cross-chunk comparison.
 
-### Delta Stores
+### Delete vector follows the wrong rewrite
 
-```
-MemStore (row format) + Column files (column format)
+1. Delete file D references row position 9 in data file F.
+2. Compaction rewrites F into G with a different row order.
+3. A bad snapshot publishes G but retains D as if it referenced G.
+4. The reader deletes an unrelated row or fails to delete the intended one.
 
-Reads: Merge MemStore + Column files
-Writes: Go to MemStore only
+File content identity and snapshot-level replacement must couple data and position deletes.
 
-Periodically compact MemStore into column files
-Similar to LSM tree approach
-```
+### Partial object publication
 
-### Updates and Deletes
+1. A writer uploads several columnar files and fails halfway.
+2. A reader discovers files by listing a directory/prefix.
+3. It observes only part of a logical batch and double-reads files left by a retry.
 
-```
-Option 1: Delete bitmap
-  Mark rows as deleted
-  Compact to remove later
-  
-Option 2: Merge-on-read
-  Store updates separately
-  Merge during query
-  
-Option 3: Copy-on-write
-  Rewrite affected row groups
-  Expensive but simple
-```
+Immutable objects need a transactional manifest/snapshot as table authority. Object listing is not an atomic commit protocol.
 
----
+### Small-file metadata dominates
 
-## Systems Using Columnar Storage
+1. A streaming writer emits thousands of tiny files per minute.
+2. A query performs object listings, opens, footer range reads, decompressor setup, and task scheduling for each.
+3. It spends more time in metadata and fixed per-file work than scanning values.
 
-### Analytical Databases
+Batching and compaction must be sized as part of the ingest/query cost model.
 
-```
-ClickHouse:
-  - Native columnar
-  - MergeTree engine
-  - Very fast for time-series
-
-Snowflake:
-  - Columnar on cloud storage
-  - Automatic clustering
-  - Micro-partitions
-
-BigQuery:
-  - Capacitor columnar format
-  - Dremel-style query engine
-  - Serverless
-
-Redshift:
-  - Columnar PostgreSQL variant
-  - Zone maps
-  - Compression encoding per column
-```
+## Capacity and cost model
 
-### Hybrid Stores
+For a scan, estimate bytes by the actual chunks that survive pruning:
 
+```text
+scan_bytes
+  ~= footer_and_index_bytes
+   + sum(compressed selected-column chunks in surviving row groups)
+   + delete/delta metadata
 ```
-DuckDB:
-  - Embedded columnar database
-  - Vectorized execution
-  - Great for local analytics
-
-CockroachDB:
-  - Row store primary
-  - Columnar for analytics (experimental)
-  
-PostgreSQL:
-  - Row store with columnar extensions
-  - cstore_fdw, Citus columnar
-```
-
----
 
-## When to Use Columnar
+If `R` rows survive file/row-group pruning, projected uncompressed width is `W_p`, compressed bytes are `B_c`, storage bandwidth is `S`, decode throughput is `D`, and operator throughput is `E`, a lower-bound pipeline time is governed by the slowest resource:
 
-### Good Fit
-
+```text
+time >= max(B_c / S,
+            decoded_bytes / D,
+            R / E,
+            network_result_time)
 ```
-✓ Analytics/OLAP workloads
-✓ Aggregations over many rows
-✓ Queries use few columns
-✓ Data is append-mostly
-✓ Compression important
-✓ Wide tables (100+ columns)
-```
-
-### Poor Fit
 
-```
-✗ Transactional/OLTP workloads
-✗ Point lookups by primary key
-✗ Frequent updates/deletes
-✗ Queries need all columns
-✗ Real-time requirements
-✗ Narrow tables (few columns)
-```
+Parallelism can overlap stages until storage requests, memory bandwidth, CPU, or network saturates. Compression ratio alone does not predict latency.
 
-### Comparison
+Vector working memory is approximately batch rows times the widths of decoded columns, plus variable-length buffers, validity, selection, hash tables, join build state, and operator outputs. Multiple pipeline stages and concurrent tasks multiply it. Enforce per-query/task memory limits with spill; an underestimated variable-length column can otherwise turn projection into an out-of-memory failure.
 
-| Aspect | Row Store | Column Store |
-|--------|-----------|--------------|
-| Point lookup | Fast | Slow |
-| Full scan | Slow | Fast |
-| Aggregation | Slow | Fast |
-| Insert single row | Fast | Slow |
-| Bulk load | Medium | Fast |
-| Compression | 2-3x | 10-100x |
-| OLTP | Excellent | Poor |
-| OLAP | Poor | Excellent |
+Row-group size trades:
 
----
+- larger groups: better sequential I/O, bigger encoding samples, fewer footers/tasks;
+- smaller groups: finer pruning, more parallel units, cheaper copy-on-write;
+- too large: one weak min/max range forces a large scan and update rewrite;
+- too small: metadata, seeks/range requests, codec setup, and scheduling dominate.
 
-## Arrow and Parquet: In Memory vs At Rest
+Choose with the storage request latency, target concurrency, sort distribution, update size, and expected predicate selectivity. There is no universal row count or byte target.
 
-The columnar world standardized on *two* formats because the optimization targets differ:
+For object storage, fixed cost matters:
 
+```text
+metadata_time ~= file_count * (open/range-request/footer/scheduling cost)
 ```
-Parquet (at rest): optimize for SIZE and skippability.
-  Heavy encodings (dictionary, RLE, bit-packing) + block compression.
-  Values are NOT randomly accessible — you decode a page to read it.
-
-Arrow (in memory): optimize for COMPUTE.
-  Fixed-width arrays, validity bitmaps, contiguous buffers — a value
-  is at base + i × width, SIMD-scannable directly, no decode step.
-  The same buffer layout in every language (C++, Rust, Java, Python
-  via zero-copy FFI) — "serialization" between processes sharing
-  Arrow is memcpy or shared memory, not encode/decode.
-
-The pipeline every modern engine runs:
-  Parquet page → decode once → Arrow batch → all further operators
-  (filter, join, aggregate) work on Arrow vectors.
-  Arrow Flight / ADBC move Arrow batches over the network, replacing
-  row-at-a-time protocols (JDBC/ODBC) that spend more CPU converting
-  than transferring.
-```
-
-The practical consequence: "which format?" is not a choice — Parquet *and* Arrow, with the boundary at the scan. What is a choice: pushing work below that boundary (predicate/projection pushdown into the Parquet reader) so fewer pages ever get decoded.
-
-### Vectorized execution, concretely
 
-```
-SELECT SUM(amount) WHERE region_code = 7    (1M rows)
-
-Row engine:  1M × (interpret row layout → extract field → branch → add)
-             ~5-20 ns per row of interpretation overhead
-
-Vectorized engine on Arrow batches (~1K-4K values per batch):
-  region_code: compare 32 codes per AVX-512 instruction → bitmask
-  amount:      masked SIMD add, 16 int32s per instruction
-  ≈ 1M rows / 16 per instr ≈ 62K instructions + branch-free selection
-  → 10-100× less CPU per row; memory bandwidth becomes the limit
-
-Two details that make it work:
-  - dictionary-encoded columns can evaluate predicates on the CODES
-    (compare against the dictionary once, then scan small integers)
-  - selection vectors/bitmaps defer materialization — operators pass
-    "which rows survive" instead of copying survivors
-```
+Even when requests run concurrently, service limits and coordinator CPU cap useful fan-out. Track files and row groups scanned, bytes read before/after pruning, bytes decoded, rows selected, and CPU per stage.
 
----
+Clustering maintenance is a write cost. If ingest arrives out of order, row-group min/max ranges widen and pruning decays. Re-sorting rewrites data and needs temporary space. Model it as a recurring background workload with an SLO, not a one-time `ORDER BY` choice.
 
-## Sort Order Is the Real Index
+## Production operation and migration
 
-In a column store, physical sort order does the job B-tree indexes do in OLTP — it decides both compression ratio and how much data scans can skip:
+Observe pruning by layer (file, row group, page), projected versus fetched columns, compressed bytes read, decoded bytes, rows before/after filters, codec CPU, vector batch occupancy, materialization/gather cost, spill, footer/cache hit rate, files per query, delete/delta density, and clustering quality. A query can read few bytes yet be CPU-bound on pathological decoding or nested reconstruction.
 
-```
-Same 1B-row events table, two layouts:
-
-Sorted by (event_time):
-  event_time: delta encoding → ~1-2 bits/value
-  zone maps on event_time: a 1-day query scans ~1/365 of row groups
-  but: WHERE user_id = X must scan EVERY row group (user_id is
-  scattered — its per-group min/max spans the whole domain)
-
-Sorted by (user_id, event_time):
-  user_id: RLE → almost free; queries by user prune to a few groups
-  event_time: still locally sorted within a user → decent deltas
-  but: pure time-range queries now scan everything
-
-The sort key is a QUERY WORKLOAD decision, revisited as workloads
-change. Multi-dimensional compromise: Z-order / Hilbert curves
-interleave dimensions so BOTH user_id and event_time predicates
-prune reasonably (Delta OPTIMIZE ZORDER BY, Iceberg sort orders,
-ClickHouse ORDER BY tuple).
-```
+Use representative workload replay before changing sort order, row-group size, codec, dictionary policy, or page indexes. Compare not only compression but p50/p99 scan time, ingest CPU, rewrite cost, memory, and affected query classes. Backfill into new files and atomically switch table metadata; keep old readers compatible until rollback expires.
 
-And because ingestion rarely arrives in sort order, clustering *decays*: streamed data lands in arrival order, zone maps widen, scans slow. Engines re-sort in the background (Snowflake auto-clustering, Delta/Iceberg compaction with sort) — the columnar analog of LSM compaction, paid in the same currency (background I/O and compute).
+Schema migration should maintain stable field IDs, explicitly allow type promotions, and test old/new writer-reader combinations. Validate statistics against a full scan and fuzz nulls, NaNs, extreme decimals, Unicode/collation, nested empty versus null collections, dictionary fallback, page boundaries, and corrupted checksums. Differential tests should compare vectorized/encoded execution with a simple row interpreter for randomly generated predicates.
 
----
+Fault tests should interrupt multipart upload, footer write, snapshot publication, delete-file replacement, and compaction. A reader must see either the old complete snapshot or the new complete snapshot—never a directory-shaped mixture.
 
-## Updates Without Rewrites: Deletion Vectors
+## Decision framework
 
-Classic columnar updates meant copy-on-write: rewrite the whole row group (possibly a 128 MB file) to change one row. Modern table formats added a merge-on-read middle path:
+1. What percentage of rows and columns does each dominant query actually touch after pruning?
+2. Which physical sort/clustering order serves those predicates, and which workloads does it harm?
+3. What row-group/page size balances pruning, request overhead, parallelism, and rewrite cost?
+4. Which encodings reduce end-to-end time after decoder CPU and cache behavior?
+5. Where does materialization occur, and what selectivity makes that boundary worthwhile?
+6. How are updates/deletes associated with the correct file generation and snapshot?
+7. Can ingestion, clustering, delete folding, and small-file compaction keep up with steady state plus bursts?
+8. Are schema IDs, statistics, and vectorized results cross-version and differentially tested?
 
-```
-Deletion vector: a compressed bitmap (often roaring) per data file
-marking rows as dead. DELETE/UPDATE writes:
-  - a tiny deletion-vector file (positions of deleted rows)
-  - (for UPDATE) the new row versions into a new file
-The 128 MB data file is untouched.
-
-Read path: scan file ⊕ apply its deletion vector — a masked scan,
-nearly free in a vectorized engine (it's just another bitmap AND).
-
-The LSM parallel is exact: deletion vectors are tombstones, readers
-pay a small merge cost, and background compaction eventually rewrites
-files to fold deletes in. Same debt dynamics too — millions of
-accumulated deletes without compaction degrade scans, so table
-maintenance (OPTIMIZE / rewrite_data_files) is an operational duty,
-not an optimization.
-
-(Iceberg v2 position/equality deletes, Delta deletion vectors,
-DuckDB and Photon read them natively — see
-[Lakehouse Table Formats](../13-data-pipelines/05-lakehouse-table-formats.md).)
-```
+## Primary references
 
----
-
-## Key Takeaways
-
-1. **Column storage reads only needed columns** - Huge I/O savings
-2. **Same-type data compresses well** - 10-100x compression
-3. **Late materialization improves performance** - Delay row reconstruction
-4. **Vectorized execution uses SIMD** - CPU-efficient processing
-5. **Row groups enable predicate pushdown** - Skip irrelevant data
-6. **Parquet/ORC are standard formats** - Wide ecosystem support
-7. **Writes are expensive** - Batch and buffer
-8. **Use for analytics, not transactions** - Right tool for the job
+- [Stonebraker et al., *C-Store: A Column-oriented DBMS* (VLDB 2005)](https://www.vldb.org/conf/2005/papers/p553-stonebraker.pdf)
+- [Boncz, Zukowski, and Nes, *MonetDB/X100: Hyper-Pipelining Query Execution* (CIDR 2005)](https://www.cidrdb.org/cidr2005/papers/P19.pdf)
+- [Abadi, Myers, DeWitt, and Madden, *Materialization Strategies in a Column-Oriented DBMS* (ICDE 2007), author-hosted PDF](https://www.cs.umd.edu/~abadi/papers/abadiicde2007.pdf)
+- [Melnik et al., *Dremel: Interactive Analysis of Web-Scale Datasets* (VLDB 2010)](https://storage.googleapis.com/gweb-research2023-media/pubtools/3293.pdf)
+- [Google, *Capacitor: Columnar Storage for the Cloud* (VLDB 2016)](https://research.google/pubs/capacitor-columnar-storage-for-the-cloud/)
+- [Apache Parquet, official file-format specification](https://parquet.apache.org/docs/file-format/)
+- [Apache Arrow, official columnar-format specification](https://arrow.apache.org/docs/format/Columnar.html)

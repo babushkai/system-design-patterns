@@ -1,954 +1,371 @@
-# Rate Limiting
+# Rate Limiting: Admission Policy and Distributed Budgets
 
 ## TL;DR
 
-Rate limiting controls the number of requests a client can make within a time window, protecting services from abuse, ensuring fair usage, and preventing resource exhaustion. Common algorithms include token bucket, leaky bucket, fixed window, and sliding window. Implementation can be done at the API gateway, application layer, or using distributed stores like Redis.
+Rate limiting decides whether new work may enter a protected scope. A complete design names the **subject**, **resource**, **cost unit**, **sustained rate**, **burst allowance**, **decision scope**, and **failure behavior**. “100 requests per second” is incomplete if one request costs a thousand times another, ten gateway replicas each enforce their own 100, or an unavailable counter silently changes the policy.
+
+Token buckets are the common admission primitive because they express both rate and burst. The distributed challenge is accounting: a linearizable global decision is accurate but adds a dependency to every request; local decisions are available and fast but overshoot unless they spend bounded leases allocated by a global authority. Put cheap local protection in front of shared policy, expose honest retry guidance, and treat policy rollout and counter recovery as production migrations.
+
+This chapter owns admission and quota accounting. [Circuit Breakers](./06-circuit-breakers.md) own dependency health and in-flight concurrency, [Backpressure](./07-backpressure.md) owns bounded queues and producer signaling, and [Retries, Timeouts, and Hedging](./10-retries-timeouts-hedging.md) owns later attempts.
 
 ---
 
-## Why Rate Limiting?
+## 1. Admission Contract
 
-Without rate limiting:
+Define the decision before choosing an algorithm:
 
-```mermaid
-graph TD
-    A[Legitimate Users] --> C[API Server<br/>CPU: 100%<br/>Memory: 95%<br/>Connections: EXHAUSTED<br/>Status: OVERWHELMED]
-    B[Abusive Client<br/>10000 req/s] --> C
-    C --> D[All users experience failures]
-```
+| Field | Required answer |
+|---|---|
+| **Subject** | User, tenant, credential, IP prefix, device, workload, or a hierarchy of them. |
+| **Resource** | Route, operation, model, bytes, database partition, global service, or daily entitlement. |
+| **Cost unit** | Request, byte, row, CPU estimate, token, recipient, or another stable weighted unit. |
+| **Policy** | Sustained rate, burst, quota period, priority, and whether unused entitlement carries forward. |
+| **Scope** | Process, host, zone, region, or global; exact or bounded-error enforcement. |
+| **Decision** | Reject, degrade, redirect, or shape. Queueing belongs to backpressure, not an implicit limiter buffer. |
+| **Response** | Machine-readable reason, policy identity, retry guidance, and remaining budget if safe to expose. |
+| **Failure behavior** | Fail open, fail closed, spend a cached lease, or enter a restricted emergency policy. |
+| **Change semantics** | When a new policy becomes effective and how already leased capacity is handled. |
 
-With rate limiting:
+### Invariants
 
-```mermaid
-graph TD
-    A[Legitimate Users] --> RL[Rate Limiter]
-    B[Abusive Client<br/>10000 req/s] --> RL
-    RL -->|Allowed<br/>100 req/s each| C[API Server]
-    RL -->|Rejected<br/>429 Too Many Requests| D[Blocked<br/>exceeds 100 req/s limit]
-```
+1. Every admitted unit is charged to all mandatory policy dimensions exactly once at the declared accounting boundary.
+2. Distributed overshoot is bounded and derived from lease or replica configuration.
+3. A client cannot select another gateway, identity form, or region to multiply entitlement.
+4. Clock rollback cannot mint credit or extend a quota window.
+5. Policy and counter state are versioned so a stale data plane cannot enforce an incompatible rule indefinitely.
+6. Cardinality and stored state remain bounded under attacker-controlled identifiers.
+7. A rejection is cheaper than the work it protects.
+
+Rate limits are policy, not capacity discovery. Derive them from downstream safe goodput, fairness, commercial entitlement, and recovery headroom; do not use a limiter to guess where saturation begins.
 
 ---
 
-## Rate Limiting Algorithms
-
-### 1. Token Bucket
-
-```
-Token Bucket Visualization:
-
-    ┌─────────────────────────────────────┐
-    │              BUCKET                  │
-    │  ┌─────────────────────────────────┐│
-    │  │ 🪙 🪙 🪙 🪙 🪙 🪙 🪙 🪙          ││  Capacity: 10 tokens
-    │  │       (8 tokens)                ││
-    │  └─────────────────────────────────┘│
-    │                 ▲                    │
-    │                 │                    │
-    │    Refill: 2 tokens/second          │
-    └─────────────────────────────────────┘
-              │
-              ▼
-    ┌─────────────────────────────────────┐
-    │           REQUEST                    │
-    │   Takes 1 token (if available)      │
-    │   Rejected if no tokens             │
-    └─────────────────────────────────────┘
-```
-
-```go
-package main
-
-import (
-	"sync"
-	"time"
-)
-
-type TokenBucket struct {
-	capacity   float64
-	refillRate float64 // tokens per second
-	tokens     float64
-	lastRefill time.Time
-	mu         sync.Mutex
-}
-
-func NewTokenBucket(capacity int, refillRate float64) *TokenBucket {
-	return &TokenBucket{
-		capacity:   float64(capacity),
-		refillRate: refillRate,
-		tokens:     float64(capacity),
-		lastRefill: time.Now(),
-	}
-}
-
-func (tb *TokenBucket) refill() {
-	now := time.Now()
-	elapsed := now.Sub(tb.lastRefill).Seconds()
-	tb.tokens += elapsed * tb.refillRate
-	if tb.tokens > tb.capacity {
-		tb.tokens = tb.capacity
-	}
-	tb.lastRefill = now
-}
-
-func (tb *TokenBucket) Allow(tokens int) bool {
-	tb.mu.Lock()
-	defer tb.mu.Unlock()
-
-	tb.refill()
-	need := float64(tokens)
-	if tb.tokens >= need {
-		tb.tokens -= need
-		return true
-	}
-	return false
-}
-
-func (tb *TokenBucket) WaitTime(tokens int) time.Duration {
-	tb.mu.Lock()
-	defer tb.mu.Unlock()
-
-	tb.refill()
-	need := float64(tokens)
-	if tb.tokens >= need {
-		return 0
-	}
-	deficit := need - tb.tokens
-	return time.Duration(deficit / tb.refillRate * float64(time.Second))
-}
-
-// Usage
-func main() {
-	limiter := NewTokenBucket(
-		100,  // Burst up to 100 requests
-		10,   // 10 requests per second sustained
-	)
-
-	if limiter.Allow(1) {
-		processRequest()
-	} else {
-		retryAfter := limiter.WaitTime(1)
-		rateLimitExceeded(retryAfter)
-	}
-}
-```
-
-### 2. Leaky Bucket
-
-```
-Leaky Bucket Visualization:
-
-         Incoming Requests
-              │ │ │
-              ▼ ▼ ▼
-    ┌─────────────────────────────────────┐
-    │              BUCKET                  │
-    │  ┌─────────────────────────────────┐│
-    │  │ ● ● ● ● ●                       ││  Queue: 5 requests
-    │  │ ● ● ● ●                         ││  Capacity: 10
-    │  └─────────────────────────────────┘│
-    └────────────────┬────────────────────┘
-                     │
-                     ▼ Constant leak rate
-              (process 2 req/sec)
-                     │
-                     ▼
-              ┌──────────┐
-              │ Process  │
-              └──────────┘
-
-Overflow → Request rejected (queue full)
-```
-
-```go
-package main
-
-import (
-	"sync"
-	"time"
-)
-
-type LeakyBucket struct {
-	capacity int
-	leakRate float64 // requests per second
-	queue    []time.Time
-	lastLeak time.Time
-	mu       sync.Mutex
-}
-
-func NewLeakyBucket(capacity int, leakRate float64) *LeakyBucket {
-	return &LeakyBucket{
-		capacity: capacity,
-		leakRate: leakRate,
-		lastLeak: time.Now(),
-	}
-}
-
-func (lb *LeakyBucket) leak() {
-	now := time.Now()
-	elapsed := now.Sub(lb.lastLeak).Seconds()
-	leaked := int(elapsed * lb.leakRate)
-
-	if leaked > len(lb.queue) {
-		leaked = len(lb.queue)
-	}
-	lb.queue = lb.queue[leaked:]
-	lb.lastLeak = now
-}
-
-func (lb *LeakyBucket) Allow() bool {
-	lb.mu.Lock()
-	defer lb.mu.Unlock()
-
-	lb.leak()
-	if len(lb.queue) < lb.capacity {
-		lb.queue = append(lb.queue, time.Now())
-		return true
-	}
-	return false
-}
-
-func (lb *LeakyBucket) QueuePosition() int {
-	lb.mu.Lock()
-	defer lb.mu.Unlock()
-
-	lb.leak()
-	return len(lb.queue)
-}
-
-// Leaky bucket smooths out traffic
-// Even if 100 requests arrive at once,
-// they're processed at constant rate (e.g., 10/sec)
-```
-
-### 3. Fixed Window
-
-```
-Fixed Window Visualization:
-
-Window 1 (12:00:00 - 12:01:00)    Window 2 (12:01:00 - 12:02:00)
-┌─────────────────────────────┐  ┌─────────────────────────────┐
-│  ████████████████░░░░░░░░░░ │  │  ████░░░░░░░░░░░░░░░░░░░░░░ │
-│  80 requests (limit: 100)   │  │  20 requests                │
-└─────────────────────────────┘  └─────────────────────────────┘
-
-Problem: Boundary burst
-       12:00:30              12:01:30
-          │                     │
-Window 1: │█████████████████████│
-          │   80 requests       │ 
-                                │
-Window 2:                       │█████████████████████
-                                │   80 requests
-
-Within 1 minute (12:00:30 - 12:01:30): 160 requests! (exceeds 100 limit)
-```
-
-```go
-package main
-
-import (
-	"sync"
-	"time"
-)
-
-type FixedWindowLimiter struct {
-	limit         int
-	windowSeconds int64
-	counters      map[string]int
-	windows       map[string]int64
-	mu            sync.Mutex
-}
-
-func NewFixedWindowLimiter(limit int, windowSeconds int64) *FixedWindowLimiter {
-	return &FixedWindowLimiter{
-		limit:         limit,
-		windowSeconds: windowSeconds,
-		counters:      make(map[string]int),
-		windows:       make(map[string]int64),
-	}
-}
-
-func (fw *FixedWindowLimiter) getWindow() int64 {
-	return time.Now().Unix() / fw.windowSeconds
-}
-
-func (fw *FixedWindowLimiter) Allow(key string) bool {
-	fw.mu.Lock()
-	defer fw.mu.Unlock()
-
-	window := fw.getWindow()
-
-	// Reset counter if new window
-	if fw.windows[key] != window {
-		fw.counters[key] = 0
-		fw.windows[key] = window
-	}
-
-	if fw.counters[key] < fw.limit {
-		fw.counters[key]++
-		return true
-	}
-	return false
-}
-
-func (fw *FixedWindowLimiter) Remaining(key string) int {
-	fw.mu.Lock()
-	defer fw.mu.Unlock()
-
-	window := fw.getWindow()
-	if fw.windows[key] != window {
-		return fw.limit
-	}
-	rem := fw.limit - fw.counters[key]
-	if rem < 0 {
-		return 0
-	}
-	return rem
-}
-
-func (fw *FixedWindowLimiter) ResetTime() int64 {
-	return fw.windowSeconds - (time.Now().Unix() % fw.windowSeconds)
-}
-
-// Simple but has burst issue at window boundaries
-// limiter := NewFixedWindowLimiter(100, 60)
-```
-
-### 4. Sliding Window Log
-
-```
-Sliding Window Log:
-
-Current Time: 12:01:30
-Window: Last 60 seconds (12:00:30 - 12:01:30)
-
-Request Log:
-┌──────────────────────────────────────────────────────────────┐
-│  12:00:25  ✗ (outside window)                                │
-│  12:00:35  ✓ (inside window)  ────┐                          │
-│  12:00:45  ✓ (inside window)      │                          │
-│  12:01:00  ✓ (inside window)      │  Count these            │
-│  12:01:15  ✓ (inside window)      │                          │
-│  12:01:28  ✓ (inside window)  ────┘                          │
-└──────────────────────────────────────────────────────────────┘
-                                     
-Count in window: 5
-Limit: 100
-→ Allow request
-```
-
-```go
-package main
-
-import (
-	"sort"
-	"sync"
-	"time"
-)
-
-type SlidingWindowLogLimiter struct {
-	limit         int
-	windowSeconds float64
-	logs          map[string][]float64 // key -> sorted timestamps
-	mu            sync.Mutex
-}
-
-func NewSlidingWindowLogLimiter(limit int, windowSeconds int) *SlidingWindowLogLimiter {
-	return &SlidingWindowLogLimiter{
-		limit:         limit,
-		windowSeconds: float64(windowSeconds),
-		logs:          make(map[string][]float64),
-	}
-}
-
-func (sw *SlidingWindowLogLimiter) cleanup(key string, now float64) {
-	cutoff := now - sw.windowSeconds
-	logs := sw.logs[key]
-
-	// Find first timestamp in window (binary search)
-	idx := sort.SearchFloat64s(logs, cutoff)
-	sw.logs[key] = logs[idx:]
-}
-
-func (sw *SlidingWindowLogLimiter) Allow(key string) bool {
-	sw.mu.Lock()
-	defer sw.mu.Unlock()
-
-	now := float64(time.Now().UnixNano()) / 1e9
-	sw.cleanup(key, now)
-
-	if len(sw.logs[key]) < sw.limit {
-		// Insert in sorted order
-		logs := sw.logs[key]
-		idx := sort.SearchFloat64s(logs, now)
-		logs = append(logs, 0)
-		copy(logs[idx+1:], logs[idx:])
-		logs[idx] = now
-		sw.logs[key] = logs
-		return true
-	}
-	return false
-}
-
-func (sw *SlidingWindowLogLimiter) GetCount(key string) int {
-	sw.mu.Lock()
-	defer sw.mu.Unlock()
-
-	now := float64(time.Now().UnixNano()) / 1e9
-	sw.cleanup(key, now)
-	return len(sw.logs[key])
-}
-
-// Accurate but memory-intensive (stores every timestamp)
-// O(n) space where n = requests in window
-```
-
-### 5. Sliding Window Counter
-
-```
-Sliding Window Counter:
-
-Current Time: 12:01:30 (30 seconds into window 2)
-
-Window 1 (12:00:00 - 12:01:00): 70 requests
-Window 2 (12:01:00 - 12:02:00): 20 requests (so far)
-
-Weighted count = 
-    (Window 1 count × overlap %) + Window 2 count
-    = 70 × 50% + 20
-    = 35 + 20
-    = 55 requests
-
-┌─────────────────────────────────────────────────────────────┐
-│                                                             │
-│  Window 1        │         Window 2                         │
-│  ████████████████│█████████░░░░░░░░░░░░░░░░░░░░░           │
-│        70        │   20                                     │
-│           │◄────────────────────────────────►│              │
-│           │     Sliding Window (60 sec)      │              │
-│           │                                  │              │
-│           12:00:30                    12:01:30              │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-```
-
-```go
-package main
-
-import (
-	"math"
-	"sync"
-	"time"
-)
-
-type windowData struct {
-	count     int
-	startTime float64
-}
-
-type SlidingWindowCounterLimiter struct {
-	limit         int
-	windowSeconds float64
-	windows       map[string]*[2]windowData // [0]=current, [1]=previous
-	mu            sync.Mutex
-}
-
-func NewSlidingWindowCounterLimiter(limit int, windowSeconds int) *SlidingWindowCounterLimiter {
-	return &SlidingWindowCounterLimiter{
-		limit:         limit,
-		windowSeconds: float64(windowSeconds),
-		windows:       make(map[string]*[2]windowData),
-	}
-}
-
-func (sw *SlidingWindowCounterLimiter) getWindowStart(now float64) float64 {
-	return math.Floor(now/sw.windowSeconds) * sw.windowSeconds
-}
-
-func (sw *SlidingWindowCounterLimiter) Allow(key string) bool {
-	sw.mu.Lock()
-	defer sw.mu.Unlock()
-
-	now := float64(time.Now().UnixNano()) / 1e9
-	windowStart := sw.getWindowStart(now)
-
-	data, exists := sw.windows[key]
-	if !exists {
-		data = &[2]windowData{
-			{count: 0, startTime: windowStart},
-			{count: 0, startTime: windowStart - sw.windowSeconds},
-		}
-		sw.windows[key] = data
-	}
-
-	// Slide windows if needed
-	if data[0].startTime < windowStart {
-		data[1] = data[0]
-		data[0] = windowData{count: 0, startTime: windowStart}
-	}
-
-	// Calculate weighted count
-	elapsedRatio := (now - windowStart) / sw.windowSeconds
-	previousWeight := 1.0 - elapsedRatio
-	weightedCount := float64(data[1].count)*previousWeight + float64(data[0].count)
-
-	if weightedCount < float64(sw.limit) {
-		data[0].count++
-		return true
-	}
-	return false
-}
-
-// Best of both worlds: accurate + memory efficient
-// O(1) space per key
-```
+## 2. Data Plane and Control Plane
+
+~~~mermaid
+flowchart LR
+    subgraph DP["Data plane"]
+        R["Request + authenticated subject"]
+        L["Local guard<br/>cached policy + lease"]
+        G["Global decision<br/>only when required"]
+        S["Protected service"]
+        X["Reject / degrade<br/>reason + retry guidance"]
+        R --> L
+        L -->|local credit| S
+        L -->|refresh or exact check| G
+        G -->|allow| S
+        L -->|deny| X
+        G -->|deny| X
+    end
+
+    subgraph CP["Control plane"]
+        P[("Versioned policies")]
+        A["Allocator<br/>issues bounded leases"]
+        M["Audit, usage, billing,<br/>rollout and revocation"]
+        P --> A
+        P --> M
+    end
+
+    A -.leases.-> L
+    L -.usage reports.-> A
+    P -.policy snapshots.-> L
+    G -.durable decisions.-> M
+~~~
+
+The data plane must continue with a deliberate degraded policy when the control plane is impaired. If every request synchronously fetches policy, a policy-store incident becomes a full application outage. If cached policy never expires or carries no version, revocation and emergency reduction may not take effect.
 
 ---
 
-## Distributed Rate Limiting with Redis
+## 3. Rate, Burst, Quota, and Concurrency Are Different
 
-```python
-import redis
-import time
-from typing import Tuple
+- **Rate** bounds admitted work per unit time.
+- **Burst** permits temporary accumulation of unused rate credit.
+- **Quota** bounds total entitlement over a longer business interval.
+- **Concurrency** bounds simultaneous in-flight work and adapts to service time; it belongs to the circuit-breaker chapter.
+- **Backpressure** slows producers or bounds queued work; it belongs to the next chapter.
 
-class RedisRateLimiter:
-    def __init__(self, redis_client: redis.Redis):
-        self.redis = redis_client
-    
-    def token_bucket(self, key: str, capacity: int, 
-                     refill_rate: float, tokens: int = 1) -> Tuple[bool, dict]:
-        """
-        Distributed token bucket using Redis
-        """
-        now = time.time()
-        bucket_key = f"ratelimit:bucket:{key}"
-        
-        # Lua script for atomic operation
-        lua_script = """
-        local bucket_key = KEYS[1]
-        local capacity = tonumber(ARGV[1])
-        local refill_rate = tonumber(ARGV[2])
-        local tokens_requested = tonumber(ARGV[3])
-        local now = tonumber(ARGV[4])
-        
-        -- Get current state
-        local bucket = redis.call('HMGET', bucket_key, 'tokens', 'last_refill')
-        local current_tokens = tonumber(bucket[1]) or capacity
-        local last_refill = tonumber(bucket[2]) or now
-        
-        -- Calculate tokens to add
-        local elapsed = now - last_refill
-        local new_tokens = math.min(capacity, current_tokens + (elapsed * refill_rate))
-        
-        -- Check if we can consume tokens
-        if new_tokens >= tokens_requested then
-            new_tokens = new_tokens - tokens_requested
-            redis.call('HMSET', bucket_key, 'tokens', new_tokens, 'last_refill', now)
-            redis.call('EXPIRE', bucket_key, math.ceil(capacity / refill_rate) * 2)
-            return {1, new_tokens, capacity}
-        else
-            redis.call('HMSET', bucket_key, 'tokens', new_tokens, 'last_refill', now)
-            return {0, new_tokens, capacity}
-        end
-        """
-        
-        result = self.redis.eval(
-            lua_script, 1, bucket_key,
-            capacity, refill_rate, tokens, now
-        )
-        
-        allowed, remaining, limit = result
-        return bool(allowed), {
-            'remaining': remaining,
-            'limit': limit,
-            'reset_after': (tokens - remaining) / refill_rate if not allowed else 0
-        }
-    
-    def sliding_window(self, key: str, limit: int, 
-                       window_seconds: int) -> Tuple[bool, dict]:
-        """
-        Distributed sliding window counter using Redis
-        """
-        now = time.time()
-        window_start = int(now // window_seconds) * window_seconds
-        current_key = f"ratelimit:window:{key}:{window_start}"
-        previous_key = f"ratelimit:window:{key}:{window_start - window_seconds}"
-        
-        pipe = self.redis.pipeline()
-        pipe.get(current_key)
-        pipe.get(previous_key)
-        results = pipe.execute()
-        
-        current_count = int(results[0] or 0)
-        previous_count = int(results[1] or 0)
-        
-        # Calculate weighted count
-        elapsed_ratio = (now - window_start) / window_seconds
-        previous_weight = 1 - elapsed_ratio
-        weighted_count = previous_count * previous_weight + current_count
-        
-        if weighted_count < limit:
-            # Increment and set expiry
-            pipe = self.redis.pipeline()
-            pipe.incr(current_key)
-            pipe.expire(current_key, window_seconds * 2)
-            pipe.execute()
-            
-            return True, {
-                'remaining': int(limit - weighted_count - 1),
-                'limit': limit,
-                'reset': window_start + window_seconds
-            }
-        
-        return False, {
-            'remaining': 0,
-            'limit': limit,
-            'reset': window_start + window_seconds
-        }
-```
+A service may need all four. A rate limiter alone can overload a slow dependency: under Little’s Law, admitted concurrency is approximately arrival rate × service time. If service time grows tenfold while rate stays fixed, in-flight work grows tenfold. Pair an entitlement limiter with a concurrency guard at the dependency boundary.
+
+### Multi-dimensional policy
+
+A request may consume:
+
+- one global service budget;
+- one tenant budget;
+- one route budget;
+- a weighted compute budget;
+- a security/abuse budget.
+
+Define whether all dimensions must succeed atomically. Sequentially consuming global credit and then discovering the tenant is empty leaks global credit unless the first reservation can be rolled back safely. Options are:
+
+- one atomic script/transaction for co-located counters;
+- reserve all dimensions under one decision ID and commit/expire them;
+- order checks from cheapest/coarsest to most specific and accept documented conservative under-utilization;
+- use independent hierarchical leases whose parent already bounds their sum.
+
+Do not reveal another tenant’s remaining capacity through response headers or timing.
 
 ---
 
-## Rate Limit Response Headers
+## 4. Canonical Algorithms
 
-```nginx
-# nginx rate limiting with limit_req
+### Token bucket
 
-http {
-    # Define rate limit zones
-    # $binary_remote_addr uses client IP; zone=api stores state; rate=100r/m
-    limit_req_zone $binary_remote_addr zone=api:10m rate=100r/m;
+Let:
 
-    # Optional: rate limit by API key header
-    map $http_x_api_key $limit_key {
-        default         $binary_remote_addr;
-        "~.+"           $http_x_api_key;
-    }
-    limit_req_zone $limit_key zone=api_by_key:10m rate=100r/m;
+- <code>r</code> be credit added per second;
+- <code>B</code> be maximum stored credit;
+- <code>x</code> be the request’s weighted cost;
+- <code>t_last</code> and <code>b_last</code> be the prior update.
 
-    server {
-        listen 80;
+At monotonic time <code>t</code>:
 
-        location /api/resource {
-            # Allow small bursts (up to 10 excess), delay after 5
-            limit_req zone=api_by_key burst=10 delay=5;
+> b_now = min(B, b_last + r × max(0, t − t_last))
 
-            # Custom 429 error response
-            limit_req_status 429;
-            error_page 429 = @rate_limited;
+Admit if <code>b_now ≥ x</code>, then store <code>b_now − x</code>. The state update and decision must be atomic.
 
-            proxy_pass http://upstream_backend;
+The bucket permits at most <code>B + rT</code> units over any interval of length <code>T</code>, subject to initialization policy. A full bucket’s burst duration at rate <code>r</code> is <code>B/r</code>; choose <code>B</code> from downstream queue/concurrency headroom, not convenience.
 
-            # Forward rate limit headers from upstream
-            add_header X-RateLimit-Limit    100;
-            add_header X-RateLimit-Reset    $upstream_http_x_ratelimit_reset;
-        }
+Use weighted tokens when work varies, but validate estimates against actual resource consumption. If clients declare their own cost, the server must constrain or recompute it.
 
-        location @rate_limited {
-            default_type application/json;
-            return 429 '{"error":"Rate limit exceeded","retry_after":45}';
-        }
-    }
-}
-```
+### Leaky-bucket shaping and GCRA
 
-```
-HTTP Response Headers:
+A shaper schedules admitted units at a controlled departure rate rather than rejecting them immediately. This is appropriate only when a bounded delay still meets the caller deadline. Its queued bytes and wait time are backpressure state and must be capped.
 
-HTTP/1.1 200 OK
-X-RateLimit-Limit: 100
-X-RateLimit-Remaining: 42
-X-RateLimit-Reset: 1609459200
+The Generic Cell Rate Algorithm represents a conforming schedule with a theoretical arrival time. Each unit advances that time by an emission interval; burst tolerance allows arrivals a bounded distance before it. It stores compact state and avoids a log of timestamps, but weighted work and distributed updates still require atomic accounting.
 
-HTTP/1.1 429 Too Many Requests
-X-RateLimit-Limit: 100
-X-RateLimit-Remaining: 0
-X-RateLimit-Reset: 1609459200
-Retry-After: 45
+### Fixed and sliding windows
 
-{
-  "error": "Rate limit exceeded",
-  "retry_after": 45
-}
-```
+A fixed-window counter is simple but permits a boundary burst: nearly a full allowance just before reset and another just after. A rolling log is exact for recorded events but costs memory and deletion work proportional to activity. A sliding-window counter interpolates adjacent buckets, reducing boundary error without storing every arrival.
+
+Use window counters for contractual calendar quotas, reporting, or when their error is explicitly acceptable. Do not present one algorithm as universally “best”; state the maximum burst and approximation error the product accepts.
+
+### Avoid client-clock authority
+
+Use a monotonic server clock for replenishment. For distributed durable state, server-side store time or logical expiries are safer than a caller timestamp. Civil-time quota boundaries require explicit timezone and repeated/missing-hour behavior; a daily entitlement is not the same mechanism as a per-second traffic shaper.
 
 ---
 
-## Multi-Tier Rate Limiting
+## 5. Distributed Accounting
 
-```mermaid
-graph TD
-    G[Global Tier<br/>100,000 req/s total<br/>protects entire system] --> API[Per-API Tier<br/>/api/search: 10,000 req/s<br/>/api/write: 1,000 req/s]
-    API --> U[Per-User Tier<br/>Free: 100 req/min<br/>Pro: 1000 req/min<br/>Enterprise: 10000 req/min]
-```
+### Linearizable central decision
 
-```go
-package main
+Every request atomically updates one authoritative counter. This gives the clearest global bound and easy revocation, but adds network latency, store throughput, and a new availability dependency. Hot tenants create hot keys even if the counter store is horizontally scalable.
 
-import "fmt"
+Use it when the entitlement is financially or operationally strict and the decision rate fits the authority. Partition by policy key while preserving atomicity across mandatory dimensions.
 
-type Tier int
+### Independent local buckets
 
-const (
-	TierFree Tier = iota
-	TierPro
-	TierEnterprise
-)
+Each of <code>N</code> replicas enforces a local rate <code>r_local</code>. If every replica uses the full global rate, total admission can reach <code>N × r_global</code>, and autoscaling silently raises the limit. Dividing by an expected replica count fails during rollout, skew, and partial outage.
 
-type RateLimitRule struct {
-	Name          string
-	KeyTemplate   string // e.g., "user:{user_id}" or "global"
-	Limit         int
-	WindowSeconds int
-}
+Independent buckets are appropriate for **per-instance self-protection**, not an exact tenant-global entitlement.
 
-type EndpointLimit struct {
-	Limit  int
-	Window int
-}
+### Leased credit
 
-type TierLimits struct {
-	PerMinute int
-	PerHour   int
-	PerDay    int
-}
+A global allocator grants each enforcement point a bounded amount of spend:
 
-type CheckResult struct {
-	Allowed       bool
-	Reason        string
-	LimitsChecked int
-}
+1. Data plane requests a lease containing policy version, subject/resource, credit, epoch, and expiry.
+2. Allocator atomically subtracts that credit from the parent budget.
+3. Data plane admits locally until credit or lease time is exhausted.
+4. It reports usage and requests more before depletion.
+5. Expired or revoked leases cannot be reused; unused credit is reclaimed only by a protocol that prevents double spend.
 
-type TieredRateLimiter struct {
-	limiter        *RedisRateLimiter // assumes RedisRateLimiter from earlier section
-	tierLimits     map[Tier]TierLimits
-	endpointLimits map[string]EndpointLimit
-}
+If at most <code>q_i</code> unreported credit exists at enforcer <code>i</code>, crash/failover overshoot or stranded-credit error is bounded by:
 
-func NewTieredRateLimiter(limiter *RedisRateLimiter) *TieredRateLimiter {
-	return &TieredRateLimiter{
-		limiter: limiter,
-		tierLimits: map[Tier]TierLimits{
-			TierFree:       {PerMinute: 60, PerHour: 1000, PerDay: 10000},
-			TierPro:        {PerMinute: 600, PerHour: 10000, PerDay: 100000},
-			TierEnterprise: {PerMinute: 6000, PerHour: 100000, PerDay: 1000000},
-		},
-		endpointLimits: map[string]EndpointLimit{
-			"/api/search": {Limit: 10, Window: 1},  // 10/sec
-			"/api/export": {Limit: 5, Window: 60},   // 5/min
-			"/api/batch":  {Limit: 1, Window: 10},   // 1/10sec
-		},
-	}
-}
+> distributed error bound ≤ sum of outstanding lease credit + in-flight decision race
 
-func (t *TieredRateLimiter) Check(userID string, tier Tier, endpoint string) CheckResult {
-	checked := 0
+Smaller leases improve accuracy and revocation speed but increase allocator QPS and sensitivity to latency. Larger leases improve availability and locality but reserve more unused capacity and enlarge the error bound.
 
-	// 1. Global rate limit
-	if allowed, _ := t.limiter.SlidingWindow("global", 100000, 1); !allowed {
-		return CheckResult{Allowed: false, Reason: "global_limit"}
-	}
-	checked++
+### Regional hierarchy
 
-	// 2. Endpoint-specific limit
-	if ep, ok := t.endpointLimits[endpoint]; ok {
-		key := fmt.Sprintf("endpoint:%s:%s", endpoint, userID)
-		if allowed, _ := t.limiter.SlidingWindow(key, ep.Limit, ep.Window); !allowed {
-			return CheckResult{Allowed: false, Reason: fmt.Sprintf("endpoint_limit:%s", endpoint)}
-		}
-		checked++
-	}
+For global traffic, allocate global → region → cell/process. Enforce cheap local safety before spending regional/global entitlement. Rebalance using measured demand, but keep emergency reserve rather than allocating the entire parent budget.
 
-	// 3. User tier limits (check multiple windows)
-	limits := t.tierLimits[tier]
-	windows := []struct {
-		name    string
-		limit   int
-		seconds int
-	}{
-		{"per_minute", limits.PerMinute, 60},
-		{"per_hour", limits.PerHour, 3600},
-		{"per_day", limits.PerDay, 86400},
-	}
+During a partition choose explicitly:
 
-	for _, w := range windows {
-		key := fmt.Sprintf("user:%s:%s", userID, w.name)
-		if allowed, _ := t.limiter.SlidingWindow(key, w.limit, w.seconds); !allowed {
-			return CheckResult{Allowed: false, Reason: fmt.Sprintf("user_limit:%s", w.name)}
-		}
-		checked++
-	}
+- **fail closed:** preserve strict quota, sacrifice availability;
+- **cached lease:** preserve bounded service until credit expires;
+- **fail open:** preserve availability with unbounded entitlement risk;
+- **restricted policy:** allow critical operations, deny optional or expensive work.
 
-	// All limits passed
-	return CheckResult{Allowed: true, LimitsChecked: checked}
-}
-```
+This is a product and security choice, not an implementation default.
 
 ---
 
-## Rate Limiting Strategies
+## 6. Fairness, Identity, and Abuse
 
-### By IP Address
+Rate-limit keys must follow authenticated identity. IP-only limits combine many users behind NAT, allow address rotation, and can let an attacker exhaust a victim’s shared prefix. Use IP/network reputation as one abuse signal, not the commercial tenant identity.
 
-```go
-package main
+Hierarchical fairness prevents one subject from taking every resource:
 
-import (
-	"net"
-	"net/http"
-	"strings"
-)
+- reserve a minimum or weighted share per class;
+- permit borrowing from unused shared capacity;
+- revoke borrowed credit when owners become active;
+- cap expensive routes with weighted cost;
+- isolate administrative and recovery traffic from public traffic.
 
-func GetClientIP(r *http.Request) string {
-	// Check forwarded headers
-	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
-		// First IP is the original client
-		if ip := strings.TrimSpace(strings.Split(forwarded, ",")[0]); ip != "" {
-			return ip
-		}
-	}
+High-cardinality keys are a denial-of-service vector against the limiter itself. Validate key length, canonicalize identity, bound inactive-state retention, aggregate unauthenticated traffic, and cap dynamic policy descriptors.
 
-	if realIP := r.Header.Get("X-Real-IP"); realIP != "" {
-		return realIP
-	}
-
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
-}
-
-// Problem: Shared IPs (NAT, proxies)
-// Solution: Combine with other identifiers
-```
-
-### By API Key
-
-```go
-package main
-
-import (
-	"fmt"
-	"net/http"
-)
-
-func RateLimitByAPIKey(r *http.Request) (bool, string) {
-	apiKey := r.Header.Get("X-API-Key")
-
-	if apiKey == "" {
-		// Anonymous requests get stricter limits
-		return RateLimitByIP(r)
-	}
-
-	// Get tier from API key
-	keyInfo := GetAPIKeyInfo(apiKey)
-
-	return CheckRateLimit(
-		fmt.Sprintf("api_key:%s", apiKey),
-		keyInfo.Tier,
-	)
-}
-```
-
-### By User with Quotas
-
-```go
-package main
-
-import "time"
-
-type UserQuota struct {
-	RequestsRemaining int
-	RequestsTotal     int
-	ResetAt           time.Time
-	OverageAllowed    bool
-	OverageRate       float64 // cost per request over quota
-}
-
-type QuotaResult struct {
-	Allowed     bool
-	Remaining   int
-	Total       int
-	ResetAt     time.Time
-	Overage     bool
-	OverageRate float64
-}
-
-type QuotaRateLimiter struct {
-	// storage fields omitted for brevity
-}
-
-func (q *QuotaRateLimiter) CheckQuota(userID string) QuotaResult {
-	quota := q.getUserQuota(userID)
-
-	if quota.RequestsRemaining > 0 {
-		q.decrementQuota(userID)
-		return QuotaResult{
-			Allowed:   true,
-			Remaining: quota.RequestsRemaining - 1,
-			Total:     quota.RequestsTotal,
-			ResetAt:   quota.ResetAt,
-		}
-	}
-
-	if quota.OverageAllowed {
-		// Allow but charge overage
-		q.recordOverage(userID)
-		return QuotaResult{
-			Allowed:     true,
-			Remaining:   0,
-			Overage:     true,
-			OverageRate: quota.OverageRate,
-		}
-	}
-
-	return QuotaResult{
-		Allowed:   false,
-		Remaining: 0,
-		ResetAt:   quota.ResetAt,
-	}
-}
-```
+Quota enforcement is not authorization. A valid token balance never grants access to the underlying resource.
 
 ---
 
-## Algorithm Comparison
+## 7. Response and Client Contract
 
-| Algorithm | Pros | Cons | Best For |
-|-----------|------|------|----------|
-| Token Bucket | Allows bursts, smooth average rate | Slightly complex state | APIs with burst traffic |
-| Leaky Bucket | Smooth output rate, prevents bursts | Requests may wait | Backend protection |
-| Fixed Window | Simple, low memory | Boundary burst problem | Simple use cases |
-| Sliding Log | Accurate | High memory usage | When accuracy critical |
-| Sliding Window | Accurate, low memory | Slightly complex | Production rate limiting |
+For HTTP, 429 means the client exceeded a rate policy. A temporarily overloaded service may instead use a service-unavailable response according to its API contract. Include:
 
----
+- a stable reason/policy code;
+- whether retry is permitted;
+- <code>Retry-After</code> when the server can provide meaningful guidance;
+- standardized RateLimit fields where deployed and safe;
+- correlation and decision IDs for support.
 
-## Rate Limiting at Different Layers
+Remaining-credit values are observations, not reservations. Concurrent requests can spend them before the next call.
 
-```mermaid
-graph TD
-    CDN[CDN/Edge<br/>IP-based DDoS protection<br/>Geographic rate limiting<br/>Bot detection] --> GW[API Gateway<br/>API key validation<br/>Tier-based limits<br/>Endpoint-specific limits<br/>Request counting]
-    GW --> APP[Application Layer<br/>Business logic limits<br/>User quotas<br/>Resource-specific limits]
-    APP --> DB[("Database<br/>Connection pooling<br/>Query rate limiting<br/>Read/write quotas")]
-```
+Clients must obey the attempt policy in [Retries, Timeouts, and Hedging](./10-retries-timeouts-hedging.md). A retry at exactly the reset instant can synchronize a herd; retry guidance should still be combined with client jitter and deadline checks.
 
 ---
 
-## Key Takeaways
+## 8. Concrete Failure Trace: Scaling Multiplies the Limit
 
-1. **Choose the right algorithm**: Token bucket for APIs (allows bursts), sliding window for accurate limits, leaky bucket for smoothing
+1. A gateway process has a local bucket allowing <code>R</code> requests/s for tenant T.
+2. The fleet runs four replicas, so T can reach roughly <code>4R</code> by spreading connections.
+3. A burst increases CPU and [Auto-Scaling](./08-auto-scaling.md) adds eight replicas.
+4. Aggregate entitlement becomes roughly <code>12R</code> exactly while the downstream is stressed.
+5. Requests slow; in-flight work rises; retries add more attempts.
+6. The downstream fails despite every gateway reporting that its limiter is healthy.
 
-2. **Use distributed storage**: Redis or similar for rate limiting across multiple application instances
+The bug is a mismatch between declared global scope and process-local state. Fix it with a global authority or bounded regional/process leases. Keep a separate local self-protection bucket so a global-accounting outage cannot flood one instance.
 
-3. **Implement multiple tiers**: Global → API → User limits provide defense in depth
+---
 
-4. **Return proper headers**: `X-RateLimit-*` headers help clients implement backoff strategies
+## 9. Capacity and Cost Model
 
-5. **Consider legitimate use cases**: Set limits that allow legitimate use while preventing abuse
+Let:
 
-6. **Monitor and adjust**: Track rate limit hits, false positives, and adjust limits based on real usage patterns
+- <code>lambda</code>: offered requests/s;
+- <code>r</code>: admitted weighted units/s;
+- <code>B</code>: burst units;
+- <code>S</code>: mean admitted service time;
+- <code>K</code>: active subject/resource counter cardinality;
+- <code>u</code>: atomic store operations per exact decision;
+- <code>q</code>: average lease size;
+- <code>N</code>: enforcement points.
 
-7. **Graceful degradation**: Consider allowing degraded service instead of hard blocking (e.g., slower responses, reduced features)
+Expected admitted concurrency is approximately <code>r × S</code> for stable traffic. A burst can add up to <code>B</code> near-simultaneous units, so downstream concurrency or queue headroom must absorb the chosen burst.
+
+An exact central limiter needs approximately <code>r × u</code> store operations/s plus rejected-decision traffic if denials also read/update state. With leases, allocator request rate is approximately:
+
+> allocator QPS ≈ admitted weighted units/s ÷ average lease size
+
+but hot-key skew, unused leases, refresh-before-empty, and failover increase it.
+
+State memory is roughly <code>K × bytes per counter</code> plus indexes, expiry structures, policy cache, and replicas. Estimate attacker-created inactive keys and cleanup cost, not only paying tenants.
+
+Cost includes decision latency, counter storage/replication, cross-region traffic, audit retention, unused reserved credit, rejected-request CPU/TLS, and engineering for reconciliation. If the limiter call costs more than the request it rejects, add an earlier local guard.
+
+---
+
+## 10. Operations and Migration
+
+### Safe policy rollout
+
+1. Publish a versioned policy with effective time and compatibility metadata.
+2. Evaluate in shadow mode and record would-allow/would-deny decisions.
+3. Compare impact by tenant, route, cost, and region.
+4. Enforce for a controlled cohort while retaining a kill switch.
+5. Reconcile leased credit across old/new versions.
+6. Expand only when rejection and downstream-goodput effects match the model.
+
+Changing a key, cost unit, or quota window is a state migration. Dual-account old and new keys before cutover; otherwise subjects can reset usage simply by crossing the version boundary.
+
+### Recovery
+
+- Counter-store loss: restore durable entitlement state, then reconcile audit/usage; do not invent remaining paid quota.
+- Allocator partition: use only valid cached leases and explicit emergency behavior.
+- Clock anomaly: clamp negative elapsed time and alert; never refill from rollback.
+- Policy-store outage: serve last verified snapshot until its safety expiry.
+- Hot subject: isolate shard/key and reduce lease size or move to a dedicated authority.
+
+---
+
+## 11. Security and Governance
+
+- Authenticate before charging a privileged identity; apply a cheap unauthenticated guard before expensive authentication.
+- Sign or mutually authenticate lease and policy distribution.
+- Prevent tenants from choosing policy descriptors or weighted cost.
+- Encrypt counter, lease, policy, and audit traffic; usage reveals customer behavior.
+- Separate policy authorship, emergency override, and audit permissions.
+- Audit policy changes, manual credit grants, fail-open activation, key rewrites, and counter resets.
+- Retain decision evidence according to billing, fraud, privacy, and dispute requirements.
+
+Never expose a global limiter service directly to untrusted callers.
+
+---
+
+## 12. Observability
+
+Measure:
+
+- offered, admitted, rejected, degraded, and shaped weighted units;
+- rejection by policy version, subject class, resource, region, and reason;
+- bucket/lease utilization and outstanding credit;
+- overshoot, stranded credit, reconciliation difference, and stale-policy age;
+- decision latency and error by local/global path;
+- counter-store QPS, hot keys, conflicts, expiry backlog, and cardinality;
+- downstream goodput, latency, concurrency, and saturation alongside admission.
+
+Avoid unbounded subject IDs in metrics labels. Put high-cardinality detail in sampled logs or an audit store.
+
+A rising rejection rate may mean policy is working. The alert condition is a contract violation: unexpected protected-traffic rejection, error bound exceeded, stale policy, allocator exhaustion, or downstream saturation despite admission.
+
+---
+
+## 13. Verification
+
+- prove the token-bucket interval bound with deterministic and randomized arrival sequences;
+- race concurrent spends on the same key;
+- test monotonic-clock rollback and civil-time quota transitions;
+- distribute one subject across every replica and region;
+- add/remove replicas during a burst and verify entitlement is unchanged;
+- partition enforcers from the allocator and measure the declared error bound;
+- crash an enforcer with unused and just-spent lease credit;
+- roll policy/key/cost versions while traffic continues;
+- generate attacker-controlled unique identities and verify bounded limiter state;
+- overload the counter store and exercise fail-open/closed/restricted behavior;
+- compare audit usage with authoritative billing/resource totals;
+- verify rejected work is materially cheaper than admitted work.
+
+Test the full composition with retry budgets and downstream concurrency limits. A mathematically correct bucket can still participate in an overload loop if clients ignore rejection guidance.
+
+---
+
+## 14. Decision Framework
+
+| Requirement | Preferred mechanism |
+|---|---|
+| Per-process self-protection | Local token bucket |
+| Strict global commercial quota | Linearizable authoritative counter |
+| High-rate global entitlement with bounded error | Hierarchical leased credit |
+| Smooth egress into a batchable dependency | Bounded shaper plus backpressure |
+| Calendar usage entitlement | Versioned window/quota ledger |
+| Variable request cost | Weighted units validated by server |
+| Limit must follow changing service latency | Concurrency control, not a fixed rate |
+| Control plane may be unavailable | Cached policy and bounded leases with declared emergency behavior |
+
+Select the weakest coordination that still satisfies the entitlement and error contract. Add an exact global decision only where its precision is worth the latency and availability dependency.
+
+---
+
+## Primary References
+
+- IETF, [RFC 1363: A Proposed Flow Specification](https://www.rfc-editor.org/rfc/rfc1363.html), for the token-bucket interval bound.
+- IETF, [RFC 2697: A Single Rate Three Color Marker](https://www.rfc-editor.org/rfc/rfc2697.html).
+- IETF, [RFC 6585: Additional HTTP Status Codes](https://www.rfc-editor.org/rfc/rfc6585.html), including 429.
+- IETF, [RFC 9333: RateLimit Fields for HTTP](https://www.rfc-editor.org/rfc/rfc9333.html).
+- Envoy, [Local Rate Limiting](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/other_features/local_rate_limiting).
+- Google SRE, [Handling Overload](https://sre.google/sre-book/handling-overload/).
+- Google SRE, [Addressing Cascading Failures](https://sre.google/sre-book/addressing-cascading-failures/).
+
+---
+
+**Next:** [Circuit Breakers](./06-circuit-breakers.md) protect a dependency using rolling health state and bounded concurrency after admission.

@@ -28,6 +28,8 @@ unit_cost = total_resource_cost / successful_in_policy_outcomes
 
 The numbers do not need to be exact at first. They need to be explicit. A wrong estimate with visible assumptions can be corrected. An architecture with no estimate discovers its costs in production.
 
+All dollar rates in the worked examples below are **illustrative planning inputs, not vendor quotes**. Replace them with a dated rate card or contract that records provider, region, accelerator/instance shape, purchase model, currency, tax/transfer treatment, and effective date. The examples demonstrate dimensional analysis; copying `$4/hour` into a budget would discard the variables that determine a real price.
+
 ---
 
 ## Capacity Is a Feasible Region, Not One Number

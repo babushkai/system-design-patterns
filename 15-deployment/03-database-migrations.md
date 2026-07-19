@@ -1,141 +1,384 @@
 # Database Schema Migrations
 
-## TL;DR
+A database schema migration changes the contract shared by stored data, application binaries, database engines, replicas, change streams, and offline consumers. The production risk is not merely whether the DDL statement succeeds. It is whether old and new readers/writers remain compatible during rolling deployment, whether metadata locks and rewrite work stay inside the serving envelope, whether historical rows converge without stale overwrite, and whether rollback still has a lossless representation.
 
-Schema changes are deployments — the riskiest kind, because they're stateful, often lock-taking, and rarely reversible. Two rules generate every safe migration: **(1)** never couple a schema change and a code change in one step — every schema version must work with both the previous and next code version (N−1 compatibility), because deploys are rolling and rollbacks happen; **(2)** decompose every breaking change into **expand → migrate → contract**: add the new shape alongside the old, dual-write and backfill, switch reads, then remove the old shape only after verification. Use online-DDL mechanics (`CREATE INDEX CONCURRENTLY`, `NOT VALID` constraints, gh-ost) on large tables, run backfills as throttled idempotent batch jobs, lint migrations in CI, and plan to **roll forward** — down-migrations that drop data are a fiction.
+This chapter owns **schema compatibility, engine DDL/lock mechanics, constraints and indexes, in-database representation changes, backfills, and contract cleanup**. [Service and Platform Migration](./06-migration-strategies.md) owns authority transfer between systems, strangler seams, cross-system shadowing, and general migration ledgers. [Change Data Capture](../13-data-pipelines/04-change-data-capture.md) owns log extraction and downstream delivery semantics.
 
----
+## Primary Evidence and Scope
 
-## Why Naive Migrations Cause Outages
-
-`ALTER TABLE` looks innocent in development (1,000 rows) and takes a lock in production (1,000,000,000 rows). Two distinct failure classes:
-
-**Locking.** DDL generally needs (briefly or for the duration) an exclusive lock. Even "instant" DDL in Postgres must *acquire* the `ACCESS EXCLUSIVE` lock — and if it queues behind one long-running query, every subsequent query queues behind *it*: a one-millisecond change causes a multi-minute outage. Always run DDL with `lock_timeout` (e.g., 2s) and retry, so a contended lock attempt fails fast instead of stalling the world.
-
-**Version skew.** Deploys are rolling: for minutes (or, with canaries, hours) old code and new code run simultaneously against one schema — and a rollback can extend that to days. Rename a column in one step and the old pods crash instantly:
-
-```mermaid
-graph TD
-    subgraph SKEW["During any rolling deploy"]
-        OLD["Pods v1<br/>read/write: full_name"] --> DB[("schema")]
-        NEW["Pods v2<br/>read/write: display_name"] --> DB
-    end
-    DB -.->|"rename in one step →<br/>one version always broken"| X["✗"]
-    style X fill:#fdd,stroke:#c33
-```
-
-Hence the contract: **schema change N must be compatible with code versions N−1 and N.** Which immediately forbids, as single steps: renaming columns/tables, changing column types, adding `NOT NULL` to existing columns, dropping anything still referenced. All of those become multi-step dances.
-
-### Operation safety reference
-
-| Operation | Postgres | MySQL (8.0/InnoDB) |
+| Primary evidence | What it establishes | Boundary |
 |---|---|---|
-| Add nullable column (no default rewrite) | ✅ instant | ✅ instant |
-| Add column + volatile default | ✅ (11+: no rewrite) | ⚠️ often rewrite |
-| Create index | ⚠️ use `CONCURRENTLY` | ✅ inplace (still I/O-heavy) |
-| Add FK / CHECK constraint | ⚠️ use `NOT VALID` + `VALIDATE` | ⚠️ full scan |
-| Add `NOT NULL` | ⚠️ via `CHECK NOT VALID` route | ⚠️ inplace, locks under load |
-| Change column type / PK type | ❌ expand-contract | ❌ expand-contract or gh-ost |
-| Rename column/table | ❌ expand-contract (metadata-fast but breaks N−1 code) | same |
-| Drop column | ⚠️ only as the contract step | same |
+| PostgreSQL 18 documentation | `ALTER TABLE` lock levels vary; unspecified forms default to `ACCESS EXCLUSIVE`; concurrent index builds and deferred constraint validation have distinct phases and failure artifacts | PostgreSQL 18 behavior; verify the deployed major/minor version |
+| MySQL 8.4 documentation | `INSTANT`, `INPLACE`, and `COPY` differ; online DDL may still need exclusive metadata locks and can cause I/O, replication, and rollback cost | MySQL 8.4/InnoDB behavior, operation-specific |
+| GitHub Engineering, gh-ost (August 2016) | A ghost-table migration can copy rows and tail row-based binlog changes, with pause/throttle, test, audit, and controlled cutover | Historical GitHub design and current open-source tool constraints |
+| Fowler and Sadalage, evolutionary database design | Application and database changes can be decomposed into backward-compatible evolutionary steps | A method, not an engine guarantee |
 
-(Tools like `strong_migrations` and `squawk` encode exactly this table as CI lint rules — adopt one rather than relying on memory.)
+Do not copy an operation-safety table across engines or versions. Ask the actual engine for its plan/algorithm where possible, pin the version, inspect locks and space, and rehearse on production-shaped data.
 
----
+## Migration contract
 
-## Expand → Migrate → Contract
+Before writing DDL, record:
 
-The universal recipe, shown for the canonical hard case — renaming `full_name` to `display_name` on a hot table:
+| Field | Required answer |
+|---|---|
+| **Object** | Database, schema, table, partition, column, index, constraint, view, sequence, trigger, or policy? |
+| **Current/target contract** | Which values, nullability, uniqueness, references, types, and query access paths change? |
+| **Compatibility set** | Which old/new binaries, jobs, CDC consumers, replicas, and tools coexist with each schema phase? |
+| **Engine mechanics** | Required lock, scan/rewrite, algorithm, temporary space, log volume, replication effect, and cancellation behavior? |
+| **Data transform** | Mapping, ordering/version token, invalid-source policy, and semantic validation? |
+| **Serving budget** | Lock-wait, latency, I/O, replica-lag, log-growth, and failure-headroom budget? |
+| **Rollback boundary** | Until which phase can routing/code rollback without losing new writes or values? |
+| **Contract evidence** | How is absence of old readers/writers/consumers proven before removal? |
+| **Ownership** | Who approves, executes, throttles, aborts, validates, and performs irreversible cleanup? |
 
-```mermaid
-graph LR
-    E["EXPAND<br/>add display_name<br/>(nullable)"] --> DW["code: dual-write<br/>both columns,<br/>read old"]
-    DW --> BF["BACKFILL<br/>copy old→new in<br/>throttled batches"]
-    BF --> SR["code: read new<br/>(verify first!)<br/>still dual-write"]
-    SR --> SW["code: write<br/>new only"]
-    SW --> C["CONTRACT<br/>drop full_name<br/>(days later)"]
+“Zero downtime” is not a mechanism. State maximum acquisition pause, allowed latency/lag impact, cutover behavior, and recovery after cancellation or process death.
+
+## State, authority, and invariants
+
+The schema history table is not enough for a multi-phase change. Keep a durable record:
+
+```text
+migration identity and immutable definition digest
+database/cluster and object identity
+source and target schema versions
+phase and phase revision
+binary/consumer compatibility matrix revision
+DDL plan/algorithm and lock expectations
+backfill snapshot/range checkpoints and transform version
+validation counts, checksums, and exceptions
+read/write switch state
+rollback deadline and cleanup prerequisites
+actor, approvals, timestamps, and engine job identity
 ```
 
-1. **Expand (schema):** `ALTER TABLE users ADD COLUMN display_name text;` — additive, instant, invisible to v1 code.
-2. **Dual-write (code deploy):** writes populate both columns; reads still use the old one. Crucially, this step is fully rollback-safe.
-3. **Backfill (data job):** copy historical rows — see below. New writes are already correct via dual-write, so the backfill only chases history.
-4. **Verify:** count mismatches (`WHERE full_name IS DISTINCT FROM display_name`), checksum samples, and ideally **shadow-read** — read both, compare, log diffs, serve the old value. Zero diffs for a representative window is the gate.
-5. **Switch reads (code deploy):** read the new column; keep dual-writing so rollback to step 4 remains trivial.
-6. **Write new only (code deploy):** stop touching the old column.
-7. **Contract (schema):** drop the old column — *days later*, after you're certain no rollback will need it, and after checking nothing else reads it (views, reports, [CDC consumers](../13-data-pipelines/04-change-data-capture.md) — the dropped column disappears from the change stream too).
+**Reference-design invariants:**
 
-Every step is individually deployable, individually reversible (until contract), and N−1 compatible. The same skeleton handles type changes (including the infamous `int → bigint` primary-key migration: new column, dual-write, backfill, swap with a brief rename transaction), table splits, and moving data between databases — only the dual-write/dual-read plumbing varies. Feature flags pair naturally with the read-switch step ([Feature Flags](./02-feature-flags.md)): flip reads gradually, compare error rates, revert instantly.
+1. Every active binary and consumer understands the currently exposed schema.
+2. One representation is authoritative for reads and writes at each phase, even when two representations are maintained.
+3. A historical backfill cannot overwrite a value from a newer application write.
+4. A migration retry is idempotent or resumes from durable engine/workflow state.
+5. DDL lock acquisition and maintenance work are bounded; timing out does not leave the application blocked indefinitely.
+6. Validation covers values, nulls, tombstones, constraints, indexes, and dependent objects—not only row count.
+7. Contract/removal begins only after old readers, writers, replicas, CDC consumers, reports, and rollback needs are absent.
+8. Schema version never regresses on one database during ordinary rollback; recovery uses a new forward phase.
+9. Migration and serving traffic share explicit I/O, log, connection, and storage budgets.
+10. Irreversible cleanup records evidence and preserves backup/audit obligations.
 
-### Backfills at scale
+## Control path and database data path
 
-A backfill is a batch job with a database in the blast radius. Requirements:
+~~~mermaid
+flowchart LR
+    P[Migration definition and policy] --> C[Migration controller]
+    C --> DDL[Engine DDL job]
+    C --> BF[Backfill workers]
+    C --> V[Semantic validator]
+    C --> H[(Migration history and evidence)]
+    APP[Old and new application cohorts] --> DB[(Primary database)]
+    DDL --> DB
+    BF --> DB
+    DB --> REP[Replicas / CDC / backups]
+    DB --> V
+    T[Locks, latency, I/O, lag, log, space] --> C
+    DB --> T
+    REP --> T
+~~~
 
-```python
-def backfill(batch_size=2000, max_replica_lag_s=5):
-    last_id = checkpoint.load()                      # resumable
-    while True:
-        rows = db.execute("""
-            UPDATE users SET display_name = full_name
-            WHERE id > %s AND id <= %s AND display_name IS NULL
-            RETURNING max(id)""", last_id, last_id + batch_size)
-        if rows.empty: break
-        last_id = rows.max_id
-        checkpoint.save(last_id)                     # idempotent restarts
-        while replica_lag() > max_replica_lag_s:     # throttle on real signals
-            time.sleep(1)
+The migration **control path** sequences phases, checks compatibility, admits maintenance work, and decides pause/abort/advance. The database **data path** continues serving transactions. The controller should disappear without leaving an ambiguous phase: engine job identity, cursor, transform version, and evidence are durable.
+
+## Compatibility is a matrix, not “N−1” alone
+
+During a rolling release, several actors coexist:
+
+| Actor | Examples of dependency on schema |
+|---|---|
+| Old application writer | Writes only old column/type or omits newly required value |
+| New application writer | May populate old and new representation |
+| Old reader | Selects old names/shape, possibly `SELECT *` |
+| New reader | Expects transformed values/index/constraint semantics |
+| Replica | Replays DDL/DML under its engine/version and available disk |
+| CDC consumer | Decodes column order/type and tombstones from the log |
+| Offline/reporting job | Uses stale SQL, snapshots, extracts, views, or ORM metadata |
+| Restore tooling | Recreates schema and replays history in order |
+
+For every phase, test every supported actor. “The new binary works” does not prove rollback safety or downstream compatibility.
+
+Prefer additive changes first: new nullable column/table/index/constraint state that old code ignores. Avoid `SELECT *`, positional decoding, and implicit type conversions because additive schema can still change result shape or wire encoding for brittle clients.
+
+## Expand, migrate, switch, contract
+
+The canonical state machine is:
+
+~~~mermaid
+stateDiagram-v2
+    [*] --> Planned
+    Planned --> Expanded: additive schema installed
+    Expanded --> Mirroring: new writes maintain target representation
+    Mirroring --> Backfilling: historical rows transform
+    Backfilling --> Validating: coverage complete
+    Validating --> TargetRead: semantic gate passes
+    TargetRead --> TargetWrite: rollback path evaluated
+    TargetWrite --> ContractReady: old dependency evidence zero
+    ContractReady --> Contracted: old representation removed
+    Planned --> Aborted
+    Expanded --> Aborted
+    Mirroring --> Aborted
+    Backfilling --> Aborted
+    Validating --> Backfilling: repair exceptions
+    TargetRead --> Mirroring: read rollback
+~~~
+
+### Expand
+
+Create the target representation without breaking existing actors. Examples:
+
+- add a nullable column before requiring values;
+- add a new table keyed by stable identity before moving reads;
+- build a new index before changing query plans intentionally;
+- add a constraint without validating historical data where the engine supports that separation;
+- add new enum/value protocol support to readers before writers emit it.
+
+An additive statement can still block or rewrite. Engine/version/table layout decides mechanics, not whether the SQL looks additive.
+
+### Maintain new writes
+
+When old and new fields live in one database transaction, update both atomically and define one as authoritative. Database triggers can centralize coverage but add hidden write cost, recursion/order concerns, and deployment coupling. Application dual-write is explicit but every writer—including admin tools and jobs—must participate.
+
+For cross-system writes, prefer one authoritative commit plus outbox/CDC and use the general [migration protocol](./06-migration-strategies.md). This chapter stays within schema evolution of one logical database contract.
+
+### Backfill historical rows
+
+A production backfill is a durable, throttled [job system](../18-workflow-job-systems/02-background-jobs-worker-pools.md), not DDL glue. Partition by stable keyset or immutable snapshot ranges; persist progress; keep transactions short; make updates conditional and idempotent.
+
+For a target derived from source value plus source version:
+
+```text
+backfill(row, source_version):
+    update target representation only when
+      target is absent OR target_source_version < source_version
 ```
 
-- **Batch by primary-key range** (not OFFSET), keep transactions short, commit per batch.
-- **Throttle on observed health** — replica lag, p99 latency — not a fixed sleep. The job should be the first thing to slow down, not your users. ([Backpressure](../06-scaling/07-backpressure.md))
-- **Idempotent + checkpointed:** the `IS NULL` guard makes re-runs safe; the checkpoint makes restarts cheap. Long backfills *will* be interrupted.
-- For billion-row tables, run the backfill as a proper [batch pipeline](../13-data-pipelines/01-batch-processing.md) and budget days, not minutes. Boring is the goal.
+If current application writes do not expose an ordering token, an `IS NULL` guard can protect values only when “once populated, never recompute” matches semantics. Otherwise a slow scan can overwrite a newer mutation.
 
----
+Avoid `OFFSET` pagination on a changing table. Use primary-key/keyset ranges, a consistent snapshot, or engine export manifests. Decide how inserts behind the cursor, deletes, nulls, invalid encodings, and changed rows are captured.
 
-## Online DDL Mechanics
+### Validate and switch reads
 
-When the operation itself rewrites a big table, use the non-blocking machinery:
+Validation gates include:
 
-**Postgres.**
-- `CREATE INDEX CONCURRENTLY` — builds without blocking writes (slower; can't run in a transaction; on failure leaves an `INVALID` index to drop and retry).
-- Constraints in two phases: `ALTER TABLE ... ADD CONSTRAINT ... NOT VALID` (instant — enforces for new writes only), then `VALIDATE CONSTRAINT` (full scan with only a light lock). The supported route to `NOT NULL` on a big table goes through a `NOT VALID` check constraint.
-- Wrap all DDL in `SET lock_timeout = '2s'` + retry loops.
+- total and per-range coverage, including deleted/invalid/quarantined rows;
+- exact or canonicalized value comparison;
+- aggregate invariants and domain constraints;
+- index usability and query plans under production parameters;
+- shadow reads comparing old and new while serving old;
+- replica/CDC decoding and lag;
+- authorization, row-security, masking, retention, and encryption behavior.
 
-**MySQL.**
-- InnoDB online DDL (`ALGORITHM=INPLACE/INSTANT`) covers many cases, but still object-level and I/O-bound on huge tables.
-- **gh-ost** (GitHub) does the general case externally: create a ghost table with the new schema, copy rows in batches, apply ongoing changes by **tailing the binlog** (no triggers — unlike `pt-online-schema-change`, which uses triggers and adds write overhead), then atomically swap names. Pausable, throttleable on replica lag, and rehearsable.
+Switch reads by a sticky cohort or feature flag where semantics permit. Keep the old representation current until the rollback window closes.
 
-The managed-platform versions of this (PlanetScale deploy requests, et al.) are the same ghost-table mechanics productized — with the addition of *revertible* schema changes, which is the direction of travel.
+### Switch writes and contract
 
----
+Stopping writes to the old representation is the point at which rollback may require reverse transformation. If the mapping is lossy—larger type to smaller, split data to one field, new enum to old—the prior binary may no longer represent new values.
 
-## Migrations in the Delivery Pipeline
+Contract/removal is a separately reviewed deployment. First prove no old query, prepared statement, view, ORM, report, replica, CDC schema, restore script, or rollback artifact refers to the object. Rename-to-tombstone or revoke access can expose hidden dependencies before destructive drop, but even metadata renames can break actors and require locks.
 
-- **Migrations are code:** versioned files (Flyway/Alembic/golang-migrate/Rails), applied by automation with an advisory lock so two deploys can't race ([CI/CD & GitOps](./04-cicd-gitops.md)), recorded in a schema-history table. No human runs DDL in prod by hand.
-- **Order of operations:** expand-phase migrations apply *before* the code that uses them rolls out; contract-phase migrations apply *after* the code that stops using the old shape is fully rolled out **and you've decided you won't roll back past it**. Automate the first; gate the second on a human.
-- **Lint in CI:** reject unsafe operations (the table above) mechanically — `squawk`, `strong_migrations`, or custom rules. Add a CI check that every migration runs against a realistic-size dataset clone or at minimum `EXPLAIN`s its locks.
-- **Plan to roll forward.** Auto-generated down-migrations either lose data (`DROP COLUMN` undone how?) or lie. Treat "down" as: ship a new forward migration that restores compatibility. The expand/contract discipline is what makes this safe — at every point, the *previous* code version still works, which is the only rollback that matters.
-- **Don't mix DML and DDL** in one migration file: schema steps are fast and lock-sensitive; data steps are slow and throttle-sensitive. Different tools, different supervision.
+## Engine mechanics: plan the actual operation
 
----
+### Metadata locks and blocker chains
 
-## Checklist
+DDL often needs a strong metadata/catalog lock briefly even when data work is online. A dangerous chain is:
 
-- [ ] Every migration is N−1 compatible (old code runs against new schema)
-- [ ] Breaking changes decomposed into expand → migrate → contract, each step separately deployed
-- [ ] `lock_timeout` + retry on all DDL; `CONCURRENTLY` / `NOT VALID` / gh-ost for big tables
-- [ ] Backfills: PK-range batched, idempotent, checkpointed, throttled on replica lag
-- [ ] Verification gate (counts/checksums/shadow reads) before read-switch; flags for gradual cutover
-- [ ] Contract step delayed past the rollback horizon; downstream readers (views, CDC, reports) checked
-- [ ] CI lints migrations for unsafe operations; apply is automated and serialized
-- [ ] Rollback story = roll forward; tested on a clone, not believed on faith
+1. a long transaction holds a conflicting lock;
+2. DDL queues waiting for its strong lock;
+3. later ordinary queries queue behind the waiting DDL under lock fairness;
+4. the application exhausts pools while the DDL has changed no data.
 
----
+Set a short, evidence-based lock-acquisition deadline separately from the statement/runtime deadline. Monitor blockers before execution. A failed attempt should release its queue position and retry with jitter during an approved window; it must not sit ahead of production indefinitely.
 
-## References
+**Documented, PostgreSQL 18:** `ALTER TABLE` subforms take different locks, and `ACCESS EXCLUSIVE` is the default when not otherwise documented. Multiple subcommands take the strictest required lock. Inspect the exact deployed documentation and avoid combining a cheap subcommand with a rewrite/strong-lock subcommand.
 
-- [gh-ost](https://github.com/github/gh-ost) — GitHub's triggerless online schema change; the design doc is a masterclass
-- [pt-online-schema-change](https://docs.percona.com/percona-toolkit/pt-online-schema-change.html) — the trigger-based predecessor
-- [strong_migrations](https://github.com/ankane/strong_migrations) / [squawk](https://github.com/sbdchd/squawk) — unsafe-operation linters encoding the rules above
-- [PostgreSQL: lock levels of DDL](https://www.postgresql.org/docs/current/explicit-locking.html) and [Braintree: PostgreSQL migrations without downtime](https://medium.com/paypal-tech/postgresql-at-scale-database-schema-changes-without-downtime-20d3749ed680)
-- [Evolutionary Database Design](https://martinfowler.com/articles/evodb.html) — Fowler & Sadalage; expand/contract origins
+### Index construction
+
+**Documented, PostgreSQL:** `CREATE INDEX CONCURRENTLY` avoids blocking concurrent inserts/updates/deletes but performs additional work and has caveats: it cannot run inside a transaction block, takes longer/more work, and failure can leave an `INVALID` index requiring inspection and cleanup. Unique concurrent builds can begin enforcing uniqueness before the index is fully valid.
+
+Index build capacity includes table scans, sort/work memory, temporary files, WAL/redo, replicas, storage writes, and changed query-planner choices. Completion does not prove the new plan is better for all parameter distributions.
+
+### Constraint introduction
+
+Separate enforcement for new writes from historical validation when supported. **Documented, PostgreSQL 18:** a foreign-key, check, or not-null constraint created `NOT VALID` can later be validated by scanning, and `VALIDATE CONSTRAINT` takes `SHARE UPDATE EXCLUSIVE` rather than the default `ACCESS EXCLUSIVE` path described for many alterations.
+
+Validation can still saturate I/O and encounter bad history. Quarantine or repair exceptions before declaring the constraint's business invariant true.
+
+### Instant, in-place, and copy are operation-specific
+
+**Documented, MySQL 8.4/InnoDB:** online DDL exposes `INSTANT`, `INPLACE`, and `COPY` algorithms and `LOCK` options, but support depends on the operation. In-place work may still rebuild data, consume substantial resources, and require an exclusive metadata lock at final definition update. Long/inactive transactions can block completion; large online DDL can create replication lag and expensive rollback.
+
+Specify the strongest acceptable algorithm and concurrency contract so the statement fails rather than silently choosing a blocking copy. Rehearse on the exact engine version/table features; generated columns, foreign keys, partitioning, full-text indexes, and old table formats can change support.
+
+### Ghost-table migration
+
+For a rewrite not safely supported in place:
+
+1. create a target/ghost table with the new schema;
+2. copy a consistent progression of existing rows;
+3. capture concurrent mutations and apply them in order/idempotently;
+4. converge and validate source versus ghost;
+5. acquire the required metadata lock and atomically switch names/routing;
+6. retain the old table through a rollback/verification window.
+
+**Documented, GitHub 2016:** gh-ost tails the MySQL binary log rather than installing triggers, incrementally copies rows, supports pause/throttle and test-on-replica, and postpones cutover. Its constraints and prerequisites remain product-specific; use a released version and read its current limitations.
+
+## Capacity and duration model
+
+Every migration consumes at least:
+
+```text
+source reads + target writes + index amplification
++ transaction/change log + replica apply
++ validation reads + temporary/duplicate storage
++ foreground interference and rollback reserve
+```
+
+For $D$ bytes, source-read rate $R_s$, network rate $R_n$, target-write rate $R_t$, and migration duty cycle $q$:
+
+$$
+\begin{aligned}
+T_{\mathrm{base}} &\ge \frac{D}{\min(R_s, R_n, R_t)} \\
+T_{\mathrm{elapsed}} &\ge \frac{T_{\mathrm{base}}}{q}
+\end{aligned}
+$$
+
+**Illustrative assumptions:** a 3 TiB table; source/target path benchmarked at 240 MiB/s, but maintenance receives a 35% duty cycle to preserve serving SLO.
+
+$$
+\begin{aligned}
+T_{\mathrm{base}} &\ge \frac{3 \times 1{,}048{,}576\ \mathrm{MiB}}{240\ \mathrm{MiB/s}}
+= 13{,}107\ \mathrm{s} = 3.64\ \mathrm{h} \\
+T_{\mathrm{elapsed}} &\ge \frac{3.64\ \mathrm{h}}{0.35} = 10.4\ \mathrm{h}
+\end{aligned}
+$$
+
+Continuous changes, secondary indexes, validation, throttling, retries, and cutover extend it. If writes generate change log faster than the migration can apply it, catch-up never completes.
+
+Backfill row-rate planning uses remaining rows $N_{\mathrm{remaining}}$ and effective progress rate $r_{\mathrm{effective}}$:
+
+$$
+T_{\mathrm{completion}} \ge \frac{N_{\mathrm{remaining}}}{r_{\mathrm{effective}}}
+$$
+
+Effective rate is constrained by source IOPS, target write/redo, replicas, lock conflicts, and user latency—not the worker's configured batch size.
+
+Temporary space must survive original table + ghost/new index + logs/undo + sort/temp + backups/snapshots + free-space threshold. Disk-full during DDL can threaten the database, not merely the migration.
+
+## Specialized failure traces
+
+### “Instant” DDL queues the application
+
+1. A long-running transaction retains a conflicting metadata lock.
+2. DDL waits for an exclusive metadata/catalog lock.
+3. New application statements line up behind the waiting DDL.
+4. Pools saturate and timeouts/retries amplify load.
+
+Preflight blockers, bound lock acquisition, cancel cleanly, and verify the DDL session is gone. Metadata-fast does not mean lock-free.
+
+### Backfill overwrites a fresh write
+
+1. Worker reads old value `A` from a snapshot.
+2. Application writes new value `B` to both representations.
+3. Delayed worker unconditionally writes `A` into the new column.
+
+Use version-fenced/conditional updates or a transform whose guard proves the target was never populated. Shadow comparison should classify stale-overwrite direction, not just count mismatch.
+
+### Dual-write has an unknown outcome
+
+1. Old representation commits.
+2. Target update times out after possibly committing in another system.
+3. Caller retries, duplicates, or returns failure after an accepted source write.
+
+Within one database, write both in one transaction. Across systems, use an authoritative commit plus durable outbox/CDC and the general migration protocol.
+
+### Concurrent index build fails halfway
+
+The command exits but leaves an invalid artifact that consumes space and may enforce partial uniqueness behavior per engine phase. Automation sees a migration record and assumes completion. Reconcile engine catalog state with migration history; cleanup/retry is an explicit recovery state.
+
+### Contract runs while one consumer remains
+
+Application telemetry shows zero old-column reads, but a weekly finance export and a lagging CDC consumer still decode it. Drop breaks the export and poisons downstream replay. Dependency evidence must cover observation periods, schemas, prepared statements, and offline schedules—not only live application traces.
+
+### Cutover cannot acquire metadata lock
+
+Ghost copy and change apply are complete, but a long transaction prevents the atomic swap. Change backlog grows while operators repeatedly force cutover, affecting production. Keep source/ghost synchronized, bound each attempt, surface blockers, and allow postpone/abort without discarding hours of progress.
+
+### Rollback binary cannot represent new values
+
+New writers emit values outside the old type/enum domain. Rolling back code while retaining schema does not help; old code truncates, rejects, or misinterprets data. Gate new-value emission separately from new-code rollout and record the irreversible compatibility boundary.
+
+## Security, privacy, and governance
+
+Migration roles are unusually powerful. Grant only required DDL/DML/catalog privileges for named objects and time-bound them. Separate author, approver, and production executor where risk requires it. Sign or digest immutable migration definitions so a reused version cannot execute changed SQL.
+
+Backfill/validation paths must enforce tenant isolation, row-level security expectations, encryption/key domains, masking, retention, legal holds, and audit. Maintenance roles that bypass policies can accidentally copy or log cross-tenant data. Do not emit row values or secrets in mismatch logs.
+
+Temporary tables, snapshots, change logs, old columns, and backups extend the data lifecycle. Cleanup includes indexes, triggers, views, grants, keys, extracts, and ghost tables—not just the visible column.
+
+Protect migration APIs from arbitrary SQL, unbounded batch sizes, broad table targeting, and unauthorized contract/drop. Emergency cancellation and lock termination are audited production actions.
+
+## Operations, rollout, and rollback
+
+Run one phase per deployable change:
+
+1. **preflight:** exact engine version, plan/algorithm, locks, blockers, disk/log/replica capacity, backup/restore, compatibility matrix;
+2. **canary:** representative small table/partition/tenant or production clone, then one bounded production object;
+3. **expand:** apply additive state and verify every replica/consumer;
+4. **mirror/backfill:** throttle below user traffic and persist progress;
+5. **validate:** hold at zero unexplained divergence for the declared workload window;
+6. **switch:** canary reads, then writes, with explicit rollback gates;
+7. **contract:** separate approval after dependency evidence and rollback horizon;
+8. **reconcile:** engine catalog, migration ledger, replicas, CDC, backups, and cleanup.
+
+Rollback before target-only writes usually means switching reads back while mirroring continues. After target-only values exist, rollback may require reverse transformation and is another forward migration. Destructive down-migrations are not a recovery plan.
+
+Do not combine engine upgrade, schema rewrite, ORM change, and traffic migration in one release. Each changes compatibility and failure evidence.
+
+Runbooks cover blocked metadata lock, replication/CDC lag, disk/log growth, invalid index, failed constraint validation, stuck/ambiguous engine job, ghost divergence, cutover blocker, old consumer discovered after switch, and accidental contract.
+
+## Observability and verification
+
+Track:
+
+- phase/revision, owner, elapsed time, progress rate, ETA, and last checkpoint;
+- lock requested/granted/wait, blocker identity/age, and statements queued behind DDL;
+- database latency/errors/connections, CPU, IOPS/throughput, buffer/cache effects;
+- WAL/redo/undo/binlog growth, replica/CDC lag, and backup impact;
+- original/target/temp/index bytes and free-space reserve;
+- backfill rows scanned/changed/skipped/retried/quarantined by range;
+- value/checksum/constraint/index mismatches and shadow-read results;
+- active old/new reader/writer/consumer versions and dependency evidence;
+- cutover pause, retry/error impact, rollback readiness, and cleanup age.
+
+Verification includes engine-plan assertions, migration lint, exact-version integration tests, old/new binary-schema compatibility, realistic-data clones, concurrent writes during scan, duplicate/reordered work, process crash at every phase, blocker/lock timeout, disk pressure, replica lag, CDC schema evolution, restore/replay, invalid source values, cutover and rollback, and old-consumer discovery.
+
+Property-test transformations for nulls, boundaries, encodings, timezone/collation, overflow, and round-trip reversibility. A count match can hide every semantic error that matters.
+
+## Decision framework
+
+1. Which readers, writers, replicas, CDC consumers, and offline jobs share this schema contract?
+2. What exact lock, scan/rewrite, temporary-space, log, and cancellation mechanics apply on the deployed engine version?
+3. Can the change be additive first, and which phase introduces irreversible values?
+4. Which representation is authoritative at every phase, and how are new writes mirrored atomically?
+5. What ordering/guard prevents historical backfill from overwriting current data?
+6. Which semantic checks—not only counts—gate read and write switches?
+7. Can maintenance traffic coexist with peak, failure, compaction, backup, and replica recovery?
+8. What evidence proves every old dependency is gone before contract?
+9. Until when is rollback lossless, and what forward migration is required afterward?
+10. Has crash/timeout/retry recovery been tested for each engine and workflow state?
+
+## Primary references
+
+- [PostgreSQL 18, *ALTER TABLE*](https://www.postgresql.org/docs/current/sql-altertable.html)
+- [PostgreSQL 18, *Explicit Locking*](https://www.postgresql.org/docs/current/explicit-locking.html)
+- [PostgreSQL 18, *CREATE INDEX*](https://www.postgresql.org/docs/current/sql-createindex.html)
+- [MySQL 8.4, *InnoDB and Online DDL*](https://dev.mysql.com/doc/refman/8.4/en/innodb-online-ddl.html)
+- [MySQL 8.4, *Online DDL Limitations*](https://dev.mysql.com/doc/refman/8.4/en/innodb-online-ddl-limitations.html)
+- [GitHub Engineering, *gh-ost: GitHub's online migration tool for MySQL* (August 2016)](https://github.blog/news-insights/company-news/gh-ost-github-s-online-migration-tool-for-mysql/)
+- [GitHub, *gh-ost source and design documentation*](https://github.com/github/gh-ost)
+- [Fowler and Sadalage, *Evolutionary Database Design*](https://martinfowler.com/articles/evodb.html)

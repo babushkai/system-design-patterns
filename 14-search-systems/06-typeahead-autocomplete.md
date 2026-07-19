@@ -1,1222 +1,297 @@
 # Typeahead and Autocomplete
 
-## TL;DR
+Typeahead predicts useful completions while a person is still typing. It looks like a small search box feature, but its workload is unusually demanding: requests arrive on nearly every keystroke, prefixes are extremely skewed, useful rankings change quickly, and the output can amplify private, abusive, or manipulated queries. The safe architecture is usually a purpose-built suggestion service, not a full search query with a prefix operator.
 
-Typeahead (autocomplete) provides real-time query suggestions as users type, improving search experience and guiding users to better queries. Key challenges include sub-50ms latency requirements, handling millions of queries, personalization, and trending content. Common implementations use tries, prefix trees, or precomputed suggestion lists with tiered caching.
+This chapter owns suggestion generation, prefix data structures, popularity and freshness pipelines, abuse controls, low-latency serving, personalization boundaries, and client interaction. General lexical retrieval belongs to [Lexical Query Execution](02-full-text-search.md); model training and experiment methodology belong to [Ranking and Evaluation](04-ranking-algorithms.md).
 
----
+## Workload and product contract
 
-## The Problem
+A request is more than a prefix:
 
-### Why Typeahead Matters
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Value of Typeahead                            │
-│                                                                 │
-│   User Experience:                                              │
-│   • Faster query entry (fewer keystrokes)                       │
-│   • Spell correction ("pythn" → "python")                       │
-│   • Query discovery (see what others search)                    │
-│   • Reduced cognitive load                                      │
-│                                                                 │
-│   Business Value:                                               │
-│   • Higher engagement (users search more)                       │
-│   • Better conversions (guided to good queries)                 │
-│   • Reduced zero-result searches                                │
-│   • Opportunity for promotions/trending                         │
-│                                                                 │
-│   Typical Impact:                                               │
-│   • 10-25% increase in searches                                 │
-│   • 5-15% improvement in CTR                                    │
-│   • Significant reduction in query abandonment                  │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### Requirements
-
-```
-Functional Requirements:
-• Suggest completions as user types
-• Support prefix matching ("pyt" → "python")
-• Rank suggestions by relevance/popularity
-• Handle typos and corrections
-• Personalize based on user history
-
-Non-Functional Requirements:
-• Latency: < 50ms p99 (perceived as instant)
-• Scale: 100K+ QPS for large sites
-• Freshness: Trending queries within minutes
-• Availability: 99.99% (core user experience)
-```
-
----
-
-## System Architecture
-
-### High-Level Design
-
-```mermaid
-graph TD
-    User["User types: pyt"] --> Client["Client<br/>Debounce (100-200ms)<br/>Local cache<br/>Abort previous request"]
-    Client --> CDN["CDN / Edge Cache<br/>Popular prefixes cached<br/>< 10ms response"]
-    CDN --> SVC["Suggestion Service"]
-    SVC --> L1["L1 Cache (Hot)"]
-    SVC --> Trie["Trie Index"]
-    SVC --> Pers["Personalization"]
-    L1 --> Ranker["Ranker<br/>(blend + sort)"]
-    Trie --> Ranker
-    Pers --> Ranker
-    Ranker --> Results["python, python tutorial,<br/>python download, ..."]
-```
-
-### Data Flow
-
-```mermaid
-graph TD
-    QL["Query Logs"] --> AGG["Aggregation Pipeline<br/>1. Clean queries<br/>2. Filter spam/adult/low-quality<br/>3. Aggregate counts<br/>4. Apply time decay<br/>5. Build/update trie"]
-    AGG --> SS[("Suggestion Store")]
-    AGG --> TI["Trie Index"]
-    AGG --> TC["Trending Cache"]
-```
-
-```
-Update frequency:
-• Full rebuild: Daily
-• Incremental: Hourly
-• Trending: Every few minutes
-```
-
----
-
-## Data Structures
-
-### Trie (Prefix Tree)
-
-```python
-class TrieNode:
-    def __init__(self):
-        self.children = {}  # char → TrieNode
-        self.is_end = False
-        self.query = None  # Full query if is_end
-        self.count = 0  # Popularity count
-        self.top_suggestions = []  # Precomputed top K
-
-class Trie:
-    def __init__(self):
-        self.root = TrieNode()
-    
-    def insert(self, query, count=1):
-        """Insert a query with its popularity count"""
-        node = self.root
-        
-        for char in query.lower():
-            if char not in node.children:
-                node.children[char] = TrieNode()
-            node = node.children[char]
-        
-        node.is_end = True
-        node.query = query
-        node.count += count
-    
-    def search_prefix(self, prefix, limit=10):
-        """Find all queries with given prefix"""
-        node = self.root
-        
-        # Navigate to prefix node
-        for char in prefix.lower():
-            if char not in node.children:
-                return []
-            node = node.children[char]
-        
-        # If precomputed suggestions exist, return them
-        if node.top_suggestions:
-            return node.top_suggestions[:limit]
-        
-        # Otherwise, collect all completions
-        results = []
-        self._collect_suggestions(node, results)
-        
-        # Sort by count and return top K
-        results.sort(key=lambda x: -x[1])
-        return [q for q, _ in results[:limit]]
-    
-    def _collect_suggestions(self, node, results):
-        """DFS to collect all suggestions under node"""
-        if node.is_end:
-            results.append((node.query, node.count))
-        
-        for child in node.children.values():
-            self._collect_suggestions(child, results)
-    
-    def precompute_suggestions(self, k=10):
-        """Precompute top-K suggestions for each node"""
-        self._precompute_node(self.root, k)
-    
-    def _precompute_node(self, node, k):
-        """Bottom-up precomputation"""
-        # First, precompute children
-        for child in node.children.values():
-            self._precompute_node(child, k)
-        
-        # Collect suggestions from this subtree
-        all_suggestions = []
-        
-        if node.is_end:
-            all_suggestions.append((node.query, node.count))
-        
-        for child in node.children.values():
-            all_suggestions.extend(
-                (q, c) for q, c in zip(
-                    child.top_suggestions,
-                    [self._get_count(child, q) for q in child.top_suggestions]
-                )
-            )
-        
-        # Keep top K
-        all_suggestions.sort(key=lambda x: -x[1])
-        node.top_suggestions = [q for q, _ in all_suggestions[:k]]
-
-# Usage
-trie = Trie()
-trie.insert("python", 100000)
-trie.insert("python tutorial", 50000)
-trie.insert("python download", 30000)
-trie.insert("pytorch", 20000)
-
-trie.precompute_suggestions(k=10)
-
-print(trie.search_prefix("pyt"))
-# ["python", "python tutorial", "python download", "pytorch"]
-```
-
-### Compressed Trie (Radix Tree)
-
-```python
-class RadixNode:
-    """
-    Radix tree compresses chains of single-child nodes
-    
-    Trie:                    Radix Tree:
-        p                        python
-        │                        /    \
-        y                      (end)  (space)
-        │                              │
-        t                           tutorial
-        │                              │
-        h                            (end)
-        │
-        o
-        │
-        n
-       / \
-    (end) (space)
-             │
-             t
-             │
-             ...
-    
-    Benefits: Less memory, better cache locality
-    """
-    
-    def __init__(self):
-        self.children = {}  # prefix_string → RadixNode
-        self.is_end = False
-        self.query = None
-        self.count = 0
-
-class RadixTree:
-    def __init__(self):
-        self.root = RadixNode()
-    
-    def insert(self, query, count=1):
-        node = self.root
-        remaining = query.lower()
-        
-        while remaining:
-            # Find matching child
-            match_found = False
-            for prefix, child in node.children.items():
-                common_len = self._common_prefix_length(remaining, prefix)
-                
-                if common_len == 0:
-                    continue
-                
-                match_found = True
-                
-                if common_len == len(prefix):
-                    # Full match, continue down
-                    node = child
-                    remaining = remaining[common_len:]
-                else:
-                    # Partial match, need to split
-                    self._split_node(node, prefix, common_len)
-                    node = node.children[prefix[:common_len]]
-                    remaining = remaining[common_len:]
-                break
-            
-            if not match_found:
-                # No match, create new node
-                new_node = RadixNode()
-                new_node.is_end = True
-                new_node.query = query
-                new_node.count = count
-                node.children[remaining] = new_node
-                return
-        
-        # Reached end of query
-        node.is_end = True
-        node.query = query
-        node.count += count
-    
-    def _common_prefix_length(self, s1, s2):
-        length = 0
-        for c1, c2 in zip(s1, s2):
-            if c1 != c2:
-                break
-            length += 1
-        return length
-    
-    def _split_node(self, parent, prefix, split_pos):
-        """Split a node at given position"""
-        child = parent.children.pop(prefix)
-        
-        # Create intermediate node
-        new_node = RadixNode()
-        new_node.children[prefix[split_pos:]] = child
-        
-        parent.children[prefix[:split_pos]] = new_node
-```
-
-### Precomputed Suggestion Lists
-
-```python
-class PrecomputedSuggestions:
-    """
-    For very high QPS, precompute all suggestions
-    
-    Trade-off: More storage, faster lookups
-    """
-    
-    def __init__(self, max_prefix_length=10, suggestions_per_prefix=10):
-        self.max_prefix_length = max_prefix_length
-        self.k = suggestions_per_prefix
-        self.prefix_map = {}  # prefix → [(query, score), ...]
-    
-    def build(self, query_counts):
-        """
-        Build suggestion lists for all prefixes
-        
-        query_counts: dict of query → count
-        """
-        # Group queries by all their prefixes
-        prefix_queries = defaultdict(list)
-        
-        for query, count in query_counts.items():
-            query_lower = query.lower()
-            for i in range(1, min(len(query_lower) + 1, self.max_prefix_length + 1)):
-                prefix = query_lower[:i]
-                prefix_queries[prefix].append((query, count))
-        
-        # Sort and keep top K for each prefix
-        for prefix, queries in prefix_queries.items():
-            queries.sort(key=lambda x: -x[1])
-            self.prefix_map[prefix] = queries[:self.k]
-    
-    def get_suggestions(self, prefix):
-        """O(1) lookup"""
-        return self.prefix_map.get(prefix.lower(), [])
-    
-    def serialize(self, path):
-        """Serialize for distribution"""
-        with open(path, 'wb') as f:
-            pickle.dump(self.prefix_map, f)
-    
-    @classmethod
-    def load(cls, path):
-        instance = cls()
-        with open(path, 'rb') as f:
-            instance.prefix_map = pickle.load(f)
-        return instance
-
-# Storage estimation
-# 10M unique queries, avg 20 chars
-# Max prefix length 10
-# Each query appears in ~10 prefix lists
-# ~100M entries × (20 bytes query + 8 bytes score) = ~3GB
-```
-
----
-
-## Ranking Suggestions
-
-### Multi-Signal Ranking
-
-```python
-class SuggestionRanker:
-    """
-    Rank suggestions using multiple signals
-    """
-    
-    def __init__(self, weights=None):
-        self.weights = weights or {
-            'popularity': 0.4,
-            'freshness': 0.2,
-            'user_affinity': 0.2,
-            'exact_match': 0.1,
-            'length_penalty': 0.1
-        }
-    
-    def rank(self, prefix, candidates, user_context=None):
-        """
-        Rank candidates for given prefix
-        """
-        scored = []
-        
-        for query, base_count in candidates:
-            score = 0
-            
-            # Popularity (log scale to prevent domination)
-            score += self.weights['popularity'] * np.log1p(base_count)
-            
-            # Freshness (recent searches weighted higher)
-            freshness = self.get_freshness_score(query)
-            score += self.weights['freshness'] * freshness
-            
-            # User affinity (personalization)
-            if user_context:
-                affinity = self.get_user_affinity(query, user_context)
-                score += self.weights['user_affinity'] * affinity
-            
-            # Exact prefix match bonus
-            if query.lower().startswith(prefix.lower()):
-                score += self.weights['exact_match']
-            
-            # Length penalty (prefer shorter, more general queries)
-            length_penalty = 1.0 / (1 + len(query) * 0.05)
-            score += self.weights['length_penalty'] * length_penalty
-            
-            scored.append((query, score))
-        
-        # Sort by score descending
-        scored.sort(key=lambda x: -x[1])
-        return [q for q, s in scored]
-    
-    def get_freshness_score(self, query):
-        """Score based on recency of query popularity"""
-        # Example: exponential decay over 7 days
-        last_seen = self.query_recency.get(query, 7)  # days ago
-        return np.exp(-last_seen / 3)  # Half-life of 3 days
-    
-    def get_user_affinity(self, query, user_context):
-        """Personalized score based on user history"""
-        # Check if user searched this before
-        if query in user_context.recent_queries:
-            return 1.0
-        
-        # Check topic similarity
-        query_topics = self.get_query_topics(query)
-        user_topics = user_context.interest_topics
-        
-        overlap = len(query_topics & user_topics)
-        return overlap / (len(query_topics) + 1)
-```
-
-### Trending Boost
-
-```python
-class TrendingDetector:
-    """
-    Detect and boost trending queries
-    """
-    
-    def __init__(self, window_minutes=60, threshold_multiplier=3):
-        self.window = window_minutes
-        self.threshold = threshold_multiplier
-        self.query_history = defaultdict(list)  # query → [timestamps]
-    
-    def record_query(self, query, timestamp=None):
-        """Record a query occurrence"""
-        timestamp = timestamp or time.time()
-        self.query_history[query].append(timestamp)
-        
-        # Trim old data
-        cutoff = timestamp - self.window * 60
-        self.query_history[query] = [
-            t for t in self.query_history[query]
-            if t > cutoff
-        ]
-    
-    def get_trending_score(self, query):
-        """
-        Compare current rate to baseline
-        
-        trending_score > 1 means above baseline
-        """
-        current_count = len(self.query_history[query])
-        baseline_count = self.get_baseline(query)
-        
-        if baseline_count == 0:
-            return current_count  # New query
-        
-        return current_count / baseline_count
-    
-    def get_trending_queries(self, top_k=100):
-        """Get top trending queries"""
-        scores = []
-        
-        for query in self.query_history:
-            score = self.get_trending_score(query)
-            if score >= self.threshold:
-                scores.append((query, score))
-        
-        scores.sort(key=lambda x: -x[1])
-        return scores[:top_k]
-
-# Integration with ranker
-def boost_trending(candidates, trending_queries, boost_factor=2.0):
-    """Boost trending queries in results"""
-    trending_set = set(trending_queries)
-    
-    boosted = []
-    for query, score in candidates:
-        if query in trending_set:
-            score *= boost_factor
-        boosted.append((query, score))
-    
-    return boosted
-```
-
----
-
-## Handling Typos
-
-### Fuzzy Matching
-
-```python
-class FuzzyMatcher:
-    """
-    Handle typos in typeahead queries
-    """
-    
-    def __init__(self, vocabulary, max_edit_distance=2):
-        self.vocabulary = vocabulary
-        self.max_distance = max_edit_distance
-        self.bk_tree = self.build_bk_tree(vocabulary)
-    
-    def get_corrections(self, query, limit=5):
-        """
-        Find similar queries within edit distance
-        """
-        candidates = self.bk_tree.search(query, self.max_distance)
-        
-        # Sort by edit distance, then by popularity
-        candidates.sort(key=lambda x: (x[1], -self.vocabulary[x[0]]))
-        
-        return [c[0] for c in candidates[:limit]]
-    
-    def build_bk_tree(self, vocabulary):
-        """Build BK-tree for efficient fuzzy search"""
-        tree = BKTree(levenshtein_distance)
-        for word in vocabulary:
-            tree.add(word)
-        return tree
-
-def levenshtein_distance(s1, s2):
-    """Classic edit distance"""
-    if len(s1) < len(s2):
-        return levenshtein_distance(s2, s1)
-    
-    if len(s2) == 0:
-        return len(s1)
-    
-    prev_row = range(len(s2) + 1)
-    
-    for i, c1 in enumerate(s1):
-        curr_row = [i + 1]
-        for j, c2 in enumerate(s2):
-            insertions = prev_row[j + 1] + 1
-            deletions = curr_row[j] + 1
-            substitutions = prev_row[j] + (c1 != c2)
-            curr_row.append(min(insertions, deletions, substitutions))
-        prev_row = curr_row
-    
-    return prev_row[-1]
-
-class BKTree:
-    """BK-Tree for efficient fuzzy matching"""
-    
-    def __init__(self, distance_func):
-        self.distance = distance_func
-        self.root = None
-    
-    def add(self, word):
-        if self.root is None:
-            self.root = (word, {})
-            return
-        
-        node = self.root
-        while True:
-            d = self.distance(word, node[0])
-            if d in node[1]:
-                node = node[1][d]
-            else:
-                node[1][d] = (word, {})
-                break
-    
-    def search(self, word, max_distance):
-        """Find all words within max_distance"""
-        if self.root is None:
-            return []
-        
-        results = []
-        candidates = [self.root]
-        
-        while candidates:
-            node = candidates.pop()
-            d = self.distance(word, node[0])
-            
-            if d <= max_distance:
-                results.append((node[0], d))
-            
-            # Only explore children within range
-            for dist, child in node[1].items():
-                if abs(dist - d) <= max_distance:
-                    candidates.append(child)
-        
-        return results
-```
-
-### Phonetic Matching
-
-```python
-import jellyfish
-
-class PhoneticMatcher:
-    """
-    Match queries that sound similar
-    
-    "jon" should suggest "john"
-    "kathy" should suggest "cathy"
-    """
-    
-    def __init__(self, vocabulary):
-        self.vocabulary = vocabulary
-        self.soundex_index = self.build_soundex_index(vocabulary)
-        self.metaphone_index = self.build_metaphone_index(vocabulary)
-    
-    def build_soundex_index(self, vocabulary):
-        """Index by Soundex code"""
-        index = defaultdict(list)
-        for word in vocabulary:
-            code = jellyfish.soundex(word)
-            index[code].append(word)
-        return index
-    
-    def build_metaphone_index(self, vocabulary):
-        """Index by Double Metaphone"""
-        index = defaultdict(list)
-        for word in vocabulary:
-            primary, secondary = jellyfish.metaphone(word), None
-            index[primary].append(word)
-            if secondary:
-                index[secondary].append(word)
-        return index
-    
-    def get_phonetic_matches(self, query, method='metaphone'):
-        """Find phonetically similar queries"""
-        if method == 'soundex':
-            code = jellyfish.soundex(query)
-            return self.soundex_index.get(code, [])
-        else:
-            code = jellyfish.metaphone(query)
-            return self.metaphone_index.get(code, [])
-
-# Example
-vocabulary = {"john", "jon", "joan", "jane", "cathy", "kathy"}
-matcher = PhoneticMatcher(vocabulary)
-
-print(matcher.get_phonetic_matches("jon"))   # ["john", "jon", "joan"]
-print(matcher.get_phonetic_matches("kathy")) # ["cathy", "kathy"]
-```
-
----
-
-## Personalization
-
-### User-Based Suggestions
-
-```python
-class PersonalizedTypeahead:
-    """
-    Personalize suggestions based on user history
-    """
-    
-    def __init__(self, global_trie):
-        self.global_trie = global_trie
-        self.user_histories = {}  # user_id → recent queries
-    
-    def get_suggestions(self, prefix, user_id, limit=10):
-        """
-        Blend global and personal suggestions
-        """
-        # Get global suggestions
-        global_suggestions = self.global_trie.search_prefix(prefix, limit * 2)
-        
-        # Get personal suggestions
-        personal_suggestions = self.get_personal_suggestions(prefix, user_id)
-        
-        # Blend results
-        return self.blend_suggestions(
-            global_suggestions,
-            personal_suggestions,
-            limit
-        )
-    
-    def get_personal_suggestions(self, prefix, user_id):
-        """Get suggestions from user's history"""
-        if user_id not in self.user_histories:
-            return []
-        
-        history = self.user_histories[user_id]
-        prefix_lower = prefix.lower()
-        
-        matches = [
-            (query, timestamp)
-            for query, timestamp in history
-            if query.lower().startswith(prefix_lower)
-        ]
-        
-        # Sort by recency
-        matches.sort(key=lambda x: -x[1])
-        return [q for q, _ in matches]
-    
-    def blend_suggestions(self, global_list, personal_list, limit):
-        """
-        Interleave global and personal suggestions
-        
-        Strategy: Alternate, with personal getting priority
-        """
-        result = []
-        seen = set()
-        
-        g_idx, p_idx = 0, 0
-        
-        while len(result) < limit:
-            # Personal first (up to 30% of results)
-            if p_idx < len(personal_list) and len(result) < limit * 0.3:
-                query = personal_list[p_idx]
-                p_idx += 1
-                if query not in seen:
-                    result.append(query)
-                    seen.add(query)
-                continue
-            
-            # Then global
-            if g_idx < len(global_list):
-                query = global_list[g_idx]
-                g_idx += 1
-                if query not in seen:
-                    result.append(query)
-                    seen.add(query)
-            else:
-                break
-        
-        return result
-    
-    def record_query(self, user_id, query):
-        """Record user's query"""
-        if user_id not in self.user_histories:
-            self.user_histories[user_id] = []
-        
-        self.user_histories[user_id].append((query, time.time()))
-        
-        # Keep only recent history
-        self.user_histories[user_id] = self.user_histories[user_id][-100:]
-```
-
-### Context-Aware Suggestions
-
-```python
-class ContextAwareTypeahead:
-    """
-    Adjust suggestions based on context
-    """
-    
-    def __init__(self, suggestion_store):
-        self.store = suggestion_store
-        self.context_boosters = {}
-    
-    def get_suggestions(self, prefix, context):
-        """
-        Context includes:
-        - Time of day
-        - Day of week
-        - User location
-        - Device type
-        - Current page/section
-        """
-        base_suggestions = self.store.get_suggestions(prefix)
-        
-        # Apply context-based boosting
-        scored = []
-        for query, base_score in base_suggestions:
-            boost = self.calculate_context_boost(query, context)
-            scored.append((query, base_score * boost))
-        
-        scored.sort(key=lambda x: -x[1])
-        return [q for q, _ in scored]
-    
-    def calculate_context_boost(self, query, context):
-        """Calculate boost based on context signals"""
-        boost = 1.0
-        
-        # Time-based boost (e.g., "breakfast" in morning)
-        hour = context.get('hour', 12)
-        time_affinities = self.get_time_affinities(query)
-        if hour in time_affinities:
-            boost *= time_affinities[hour]
-        
-        # Location-based boost
-        location = context.get('location')
-        if location:
-            location_affinity = self.get_location_affinity(query, location)
-            boost *= location_affinity
-        
-        # Device-based boost (e.g., apps on mobile)
-        device = context.get('device', 'desktop')
-        if device == 'mobile' and self.is_mobile_friendly(query):
-            boost *= 1.2
-        
-        # Section-based boost
-        section = context.get('section')
-        if section and self.matches_section(query, section):
-            boost *= 1.5
-        
-        return boost
-
-# Example context
-context = {
-    'hour': 8,  # Morning
-    'day': 'monday',
-    'location': 'new_york',
-    'device': 'mobile',
-    'section': 'food'
+```text
+SuggestRequest {
+  raw_prefix
+  locale
+  surface
+  tenant
+  subject_context?       // only when policy permits personalization
+  result_limit
+  request_sequence
+  deadline
 }
 
-# "coffee near me" would get boosted in morning, mobile, food section
-```
-
----
-
-## Scaling
-
-### Caching Strategy
-
-```mermaid
-graph TD
-    L1["Layer 1: Client Cache<br/>localStorage / sessionStorage<br/>TTL: Session | ~100 entries<br/>Hit rate: 20-30%"]
-    L1 -->|miss| L2["Layer 2: CDN Edge Cache<br/>Popular prefixes cached<br/>TTL: 5-15 min | Geo-distributed<br/>Serves 60-80% of traffic | Hit rate: 50-70%"]
-    L2 -->|miss| L3["Layer 3: Application Cache<br/>Redis / Memcached<br/>TTL: 1 hour | 10-100GB<br/>Hit rate: 95%+"]
-    L3 -->|miss| L4[("Layer 4: Primary Store<br/>Trie / Database<br/>Source of truth<br/>Updated via batch pipeline<br/>< 5% of total traffic")]
-```
-
-### Sharding
-
-```python
-class ShardedTypeahead:
-    """
-    Shard suggestions by prefix for horizontal scaling
-    """
-    
-    def __init__(self, num_shards=16):
-        self.num_shards = num_shards
-        self.shards = [Trie() for _ in range(num_shards)]
-    
-    def get_shard(self, prefix):
-        """Determine shard from prefix"""
-        # Shard by first character
-        if not prefix:
-            return 0
-        
-        first_char = prefix[0].lower()
-        if first_char.isalpha():
-            return ord(first_char) - ord('a') % self.num_shards
-        elif first_char.isdigit():
-            return int(first_char) % self.num_shards
-        else:
-            return hash(first_char) % self.num_shards
-    
-    def get_suggestions(self, prefix):
-        """Route to appropriate shard"""
-        shard_id = self.get_shard(prefix)
-        return self.shards[shard_id].search_prefix(prefix)
-    
-    def insert(self, query, count):
-        """Insert into appropriate shard"""
-        if not query:
-            return
-        
-        shard_id = self.get_shard(query)
-        self.shards[shard_id].insert(query, count)
-
-# Distributed deployment
-class DistributedTypeahead:
-    """
-    Multi-node deployment with consistent hashing
-    """
-    
-    def __init__(self, nodes):
-        self.ring = ConsistentHashRing(nodes)
-    
-    async def get_suggestions(self, prefix):
-        """Route to node owning this prefix"""
-        node = self.ring.get_node(prefix)
-        return await node.get_suggestions(prefix)
-```
-
-### Batch Updates
-
-```python
-class TypeaheadUpdater:
-    """
-    Batch update pipeline for typeahead data
-    """
-    
-    def __init__(self, suggestion_store):
-        self.store = suggestion_store
-    
-    def run_daily_update(self, query_logs_path):
-        """
-        Full rebuild of suggestion data
-        """
-        # Step 1: Aggregate query counts
-        query_counts = self.aggregate_queries(query_logs_path)
-        
-        # Step 2: Filter low-quality queries
-        filtered = self.filter_queries(query_counts)
-        
-        # Step 3: Build new trie
-        new_trie = Trie()
-        for query, count in filtered.items():
-            new_trie.insert(query, count)
-        
-        # Step 4: Precompute suggestions
-        new_trie.precompute_suggestions(k=10)
-        
-        # Step 5: Atomic swap
-        self.store.swap_trie(new_trie)
-        
-        # Step 6: Warm caches
-        self.warm_caches()
-    
-    def aggregate_queries(self, logs_path):
-        """Aggregate query counts with time decay"""
-        counts = defaultdict(float)
-        
-        for log_file in glob.glob(f"{logs_path}/*.log"):
-            file_date = self.extract_date(log_file)
-            decay = self.calculate_decay(file_date)
-            
-            for query, count in self.parse_log(log_file):
-                counts[query] += count * decay
-        
-        return counts
-    
-    def calculate_decay(self, log_date):
-        """Exponential decay for older logs"""
-        days_ago = (datetime.now() - log_date).days
-        return math.exp(-days_ago / 30)  # 30-day half-life
-    
-    def filter_queries(self, query_counts):
-        """Remove low-quality queries"""
-        filtered = {}
-        
-        for query, count in query_counts.items():
-            # Minimum count threshold
-            if count < 10:
-                continue
-            
-            # Length constraints
-            if len(query) < 2 or len(query) > 100:
-                continue
-            
-            # Content filtering
-            if self.is_spam(query) or self.is_adult(query):
-                continue
-            
-            # Normalize
-            normalized = self.normalize_query(query)
-            
-            filtered[normalized] = max(filtered.get(normalized, 0), count)
-        
-        return filtered
-    
-    def warm_caches(self):
-        """Pre-populate caches with popular prefixes"""
-        popular_prefixes = self.get_popular_prefixes(top_k=10000)
-        
-        for prefix in popular_prefixes:
-            suggestions = self.store.get_suggestions(prefix)
-            self.cache.set(f"suggest:{prefix}", suggestions, ttl=3600)
-```
-
----
-
-## Client Implementation
-
-### Debouncing and Cancellation
-
-```javascript
-class TypeaheadClient {
-    constructor(endpoint, options = {}) {
-        this.endpoint = endpoint;
-        this.debounceMs = options.debounceMs || 150;
-        this.minChars = options.minChars || 2;
-        this.cache = new Map();
-        this.pendingRequest = null;
-        this.debounceTimer = null;
-    }
-    
-    async getSuggestions(prefix) {
-        // Clear any pending debounce
-        if (this.debounceTimer) {
-            clearTimeout(this.debounceTimer);
-        }
-        
-        // Minimum characters check
-        if (prefix.length < this.minChars) {
-            return [];
-        }
-        
-        // Check cache first
-        if (this.cache.has(prefix)) {
-            return this.cache.get(prefix);
-        }
-        
-        // Debounce the request
-        return new Promise((resolve, reject) => {
-            this.debounceTimer = setTimeout(async () => {
-                try {
-                    // Cancel any pending request
-                    if (this.pendingRequest) {
-                        this.pendingRequest.abort();
-                    }
-                    
-                    // Create new request with AbortController
-                    const controller = new AbortController();
-                    this.pendingRequest = controller;
-                    
-                    const response = await fetch(
-                        `${this.endpoint}?q=${encodeURIComponent(prefix)}`,
-                        { signal: controller.signal }
-                    );
-                    
-                    const suggestions = await response.json();
-                    
-                    // Cache the result
-                    this.cache.set(prefix, suggestions);
-                    
-                    // Also cache intermediate prefixes
-                    this.cacheIntermediatePrefixes(prefix, suggestions);
-                    
-                    resolve(suggestions);
-                } catch (error) {
-                    if (error.name === 'AbortError') {
-                        // Request was cancelled, not an error
-                        resolve([]);
-                    } else {
-                        reject(error);
-                    }
-                }
-            }, this.debounceMs);
-        });
-    }
-    
-    cacheIntermediatePrefixes(prefix, suggestions) {
-        // If we have suggestions for "python", we can infer suggestions
-        // for "pytho", "pyth", etc.
-        for (let i = this.minChars; i < prefix.length; i++) {
-            const shorter = prefix.substring(0, i);
-            if (!this.cache.has(shorter)) {
-                // Filter suggestions that match shorter prefix
-                const filtered = suggestions.filter(s => 
-                    s.toLowerCase().startsWith(shorter.toLowerCase())
-                );
-                this.cache.set(shorter, filtered);
-            }
-        }
-    }
+SuggestResponse {
+  suggestions[] { display_text, canonical_target?, action, provenance }
+  generation
+  policy_version
+  personalized
+  incomplete
 }
-
-// Usage
-const typeahead = new TypeaheadClient('/api/suggest', {
-    debounceMs: 150,
-    minChars: 2
-});
-
-searchInput.addEventListener('input', async (e) => {
-    const suggestions = await typeahead.getSuggestions(e.target.value);
-    renderSuggestions(suggestions);
-});
 ```
 
-### Accessibility
+Define what a suggestion represents. It may be a prior query, catalog entity, navigation target, command, or generated completion. Mixing these sources without typed actions creates ambiguity and security problems. A displayed string that navigates to an entity is not the same as a query that should be executed literally.
 
-```html
-<!-- Accessible typeahead markup -->
-<div class="typeahead-container">
-    <label for="search-input" class="sr-only">Search</label>
-    <input 
-        type="text"
-        id="search-input"
-        role="combobox"
-        aria-expanded="false"
-        aria-autocomplete="list"
-        aria-controls="suggestions-list"
-        aria-activedescendant=""
-        autocomplete="off"
-    />
-    
-    <ul 
-        id="suggestions-list"
-        role="listbox"
-        aria-label="Search suggestions"
-        hidden
-    >
-        <!-- Suggestions inserted dynamically -->
-        <li role="option" id="suggestion-0" aria-selected="false">
-            python tutorial
-        </li>
-        <li role="option" id="suggestion-1" aria-selected="false">
-            python download
-        </li>
-    </ul>
-</div>
+The contract should specify:
 
-<script>
-class AccessibleTypeahead {
-    constructor(input, listbox) {
-        this.input = input;
-        this.listbox = listbox;
-        this.selectedIndex = -1;
-        
-        this.setupKeyboardNavigation();
-    }
-    
-    setupKeyboardNavigation() {
-        this.input.addEventListener('keydown', (e) => {
-            const options = this.listbox.querySelectorAll('[role="option"]');
-            
-            switch(e.key) {
-                case 'ArrowDown':
-                    e.preventDefault();
-                    this.selectedIndex = Math.min(
-                        this.selectedIndex + 1, 
-                        options.length - 1
-                    );
-                    this.updateSelection(options);
-                    break;
-                    
-                case 'ArrowUp':
-                    e.preventDefault();
-                    this.selectedIndex = Math.max(this.selectedIndex - 1, -1);
-                    this.updateSelection(options);
-                    break;
-                    
-                case 'Enter':
-                    if (this.selectedIndex >= 0) {
-                        e.preventDefault();
-                        this.selectOption(options[this.selectedIndex]);
-                    }
-                    break;
-                    
-                case 'Escape':
-                    this.close();
-                    break;
-            }
-        });
-    }
-    
-    updateSelection(options) {
-        options.forEach((opt, i) => {
-            opt.setAttribute('aria-selected', i === this.selectedIndex);
-        });
-        
-        if (this.selectedIndex >= 0) {
-            this.input.setAttribute(
-                'aria-activedescendant', 
-                options[this.selectedIndex].id
-            );
-            options[this.selectedIndex].scrollIntoView({ block: 'nearest' });
-        } else {
-            this.input.removeAttribute('aria-activedescendant');
-        }
-    }
-    
-    showSuggestions(suggestions) {
-        this.listbox.innerHTML = suggestions.map((s, i) => `
-            <li role="option" id="suggestion-${i}" aria-selected="false">
-                ${this.highlightMatch(s, this.input.value)}
-            </li>
-        `).join('');
-        
-        this.listbox.hidden = false;
-        this.input.setAttribute('aria-expanded', 'true');
-        this.selectedIndex = -1;
-    }
-    
-    highlightMatch(suggestion, query) {
-        const regex = new RegExp(`(${escapeRegex(query)})`, 'gi');
-        return suggestion.replace(regex, '<mark>$1</mark>');
-    }
-}
-</script>
+- minimum prefix length and supported normalization by locale;
+- maximum results and deterministic tie-breaking;
+- freshness bound for trends, removals, and safety policy;
+- whether history or coarse context can personalize results;
+- response behavior when one source or policy service is unavailable;
+- accessibility and client cancellation behavior;
+- deletion semantics for source content and user history.
+
+The primary performance objective is usually end-to-end time from a stable keystroke to rendered suggestions, not server p50 alone. Client debounce, network scheduling, stale-response suppression, and rendering all contribute.
+
+## State and invariants
+
+Separate authoritative source state from derived serving state:
+
+| State | Examples | Owner |
+|---|---|---|
+| eligible candidates | catalog names, approved queries, navigation actions | product/source systems |
+| aggregate signals | frequency, unique users, recency, conversions | governed event pipeline |
+| safety decisions | deny lists, policy labels, manual removals | trust/safety control plane |
+| suggestion generation | prefix map/FST, weights, source versions | build pipeline |
+| online overlays | short-lived trends or inventory status | streaming projection |
+| subject history | recent eligible actions | isolated personalization store |
+| client state | latest request sequence and selected item | client application |
+
+Enforce these invariants:
+
+**Only eligible candidates become visible.** Frequency never overrides authorization, safety, legal removal, inventory, or tenant policy.
+
+**Aggregate publication satisfies privacy thresholds.** A unique or rare private query cannot become a global suggestion merely because it was observed once. Eligibility requires a defined aggregation window, distinct-subject threshold or privacy mechanism, and abuse screening.
+
+**Generation publication is atomic.** A response comes from a complete base generation plus compatible overlays, not half of a rebuilt prefix map.
+
+**Normalization is identical for build and lookup.** Unicode form, case folding, whitespace, punctuation, transliteration, and locale rules are versioned. Display text remains separate from the normalized lookup key.
+
+**A stale client response cannot replace a newer one.** The client renders only the response matching its latest request sequence and current normalized prefix.
+
+**Deletion dominates stale popularity.** Once a candidate is removed at source version `v`, delayed counts or replayed events below `v` cannot reintroduce it.
+
+## Data plane and control plane
+
+The **offline data plane** collects events, validates candidate eligibility, aggregates privacy-safe signals, joins canonical entity state, computes scores, builds compact prefix structures, verifies them, and publishes immutable generations.
+
+The **online data plane** normalizes requests, routes lookups, reads precomputed candidates, applies fresh eligibility overlays and limited contextual ranking, returns typed actions, and emits privacy-minimized telemetry. It should do bounded work independent of the total candidate corpus.
+
+The **control plane** owns normalization versions, source priorities, scoring policy, privacy and safety rules, generation manifests, shard maps, canary state, emergency removals, and rollback. Serving nodes consume signed or authenticated immutable snapshots. If the control plane is temporarily unavailable, they may serve a pinned generation only within its allowed policy age; safety-sensitive removals need a highly available fast overlay.
+
+An end-to-end flow is:
+
+```text
+eligible source records + governed interaction events
+        -> normalize and aggregate by time window
+        -> remove ineligible, rare, and manipulated candidates
+        -> score by locale/surface/source
+        -> materialize bounded top candidates per prefix
+        -> build and verify immutable generation
+        -> canary and atomically publish
+        -> serve with short-lived trend and removal overlays
 ```
 
----
+Every output candidate retains provenance: source type, canonical ID, source version, score-policy version, and safety decision. Raw user text is not automatically a candidate source.
 
-## Best Practices
+## Prefix structures
 
+### Trie and radix tree
+
+A trie follows one symbol per edge. Lookup is proportional to prefix length, but naïve nodes waste memory on pointers and maps. Path compression combines single-child chains into radix edges. Storing top suggestions at every node makes lookup fast but duplicates candidate references across prefixes and makes online updates expensive.
+
+Tries are useful for mutable overlays and small dictionaries. They are less attractive for a large mostly immutable base unless represented compactly.
+
+### Minimal finite-state structures
+
+A deterministic acyclic finite-state automaton/transducer shares equivalent suffix states among sorted keys and can attach outputs such as candidate-list offsets or weights. This often produces a compact memory-mappable representation with predictable traversal. The trade-off is build complexity and immutability: large changes are usually handled by constructing a new generation, not mutating nodes in place.
+
+Keep the transducer’s job narrow. It maps a normalized prefix to an offset in a candidate table or encoded weighted completions. Candidate metadata and display strings can live in separate immutable blocks. Separating structure from payload lets a serving node page only the needed records and validate block checksums.
+
+### Precomputed prefix lists
+
+Materializing top `M` candidates for each indexed prefix gives nearly constant serving work. It is effective when the corpus changes in batches and `M` is modest. Costs are build amplification and lost long-tail recall: a context-specific candidate not in the precomputed `M` cannot be recovered by reranking.
+
+Do not estimate storage as `queries * average_prefix_length * full_string_size` without measuring prefix sharing and encoding. Build a representative sample and record unique normalized prefixes, candidates per prefix, bytes per edge/state, bytes per candidate reference, display-payload bytes, and compression. The model differs radically for natural-language queries, SKUs, and multilingual entities.
+
+A hybrid design commonly uses an immutable compact base plus small mutable overlays for trends, emergency removals, and newly created entities. Lookup merges bounded lists with stable deduplication and policy filters. Overlay size must be capped; otherwise it becomes an unplanned second primary index.
+
+## Normalization and locale semantics
+
+Normalize lookup keys deterministically under a named version. A pipeline might apply validated UTF-8 decoding, Unicode normalization, locale-aware case handling, whitespace folding, and selected punctuation rules. Do not apply universal accent stripping or transliteration without product evidence: it can merge distinct words and names.
+
+Use Unicode code points or grapheme-aware client behavior consistently. Truncating UTF-8 by bytes can create invalid keys; slicing code points can still split a visible grapheme. The client may display the raw input while the service uses a normalized routing and lookup key.
+
+Locale is part of the key because token boundaries, case, script variants, and useful suggestions differ. A fallback chain such as `language-region -> language -> global` is explicit and provenance-preserving. Global fallback must still respect regional policy and catalog eligibility.
+
+Normalization migrations require dual generations. Build `n+1` from canonical source strings, shadow lookups using captured raw prefixes, compare coverage/collisions, then atomically route clients. Re-normalizing old normalized keys loses information and compounds prior mistakes.
+
+## Ranking suggestions
+
+A suggestion score can combine governed signals:
+
+- distinct-subject frequency in multiple windows;
+- recency or trend acceleration;
+- successful downstream action, corrected for exposure;
+- candidate/source quality and availability;
+- prefix match quality and edit cost;
+- locale and surface affinity;
+- bounded subject history or context when permitted;
+- abuse, safety, and concentration penalties.
+
+Raw counts create feedback loops: being suggested increases exposure, which increases count, which increases rank. Log whether an action originated from a suggestion, measure unique subjects rather than raw repeated events, cap contribution per subject/device, and keep an exploration or editorial path for new candidates. Trend scoring should compare a recent window with a longer baseline and minimum support; a ratio with a tiny denominator promotes noise.
+
+Precompute expensive global scoring offline. Online ranking should merge a small number of lists, check fresh eligibility, and apply cheap context. Keep a stable deterministic tie-break such as canonical candidate ID so pagination, caches, and experiments do not churn.
+
+The general experiment and learned-ranking lifecycle is covered in the ranking chapter. Typeahead-specific evaluation includes prefix coverage, accepted-suggestion rate, time to successful action, keystrokes saved, inappropriate suggestion rate, diversity, zero-suggestion rate, stale/removed exposure, and end-to-end latency. Acceptance alone can reward obvious but unhelpful completions, so include downstream success and reformulation.
+
+## Freshness and trending overlays
+
+Batch generations give compact serving and reproducibility; trend signals need shorter latency. Use an overlay keyed by normalized prefix and candidate ID, populated from a durable stream with event-time windows and versioned checkpoints. Its record includes score contribution, support, expiry, source version, and policy version.
+
+The serving merge applies the base list, compatible trend overlay, removal overlay, and optional subject history in a declared order. An overlay newer than the base can reference a candidate absent from base only if it carries enough canonical metadata and eligibility proof. Otherwise defer it until the next build.
+
+Late events update aggregate windows idempotently. Exactly-once transport is unnecessary if aggregation keys include event identity and the state store/checkpoint commit is atomic; blindly incrementing on replay inflates trends. Event time and processing time must be distinct so a backlog recovery does not make yesterday’s query appear suddenly popular.
+
+Emergency removal is a separate high-priority negative overlay with independent availability and audit. It should suppress a canonical candidate across base, trends, personalization, caches, and replicas within a tested bound. The next full generation incorporates the removal, after which the overlay can expire safely.
+
+## Typos and fuzzy completions
+
+Fuzzy lookup expands work rapidly, especially for short prefixes. One edit on a two-character prefix can touch much of the dictionary and produce surprising suggestions. Gate it by minimum grapheme length, locale, candidate support, and a strict visited-state/candidate budget.
+
+Options include traversing the term automaton jointly with a Levenshtein automaton, consulting a deletion/spelling index, or correcting only after an exact-prefix miss. Keyboard adjacency and phonetic rules are locale/input-method-specific features, not universally valid edit costs.
+
+Expose when a suggestion corrects rather than completes the prefix. The client should not silently replace user input. Exact matches generally retain a protected path so fuzzy popularity does not displace what the user actually typed.
+
+## Personalization boundary
+
+Personal suggestions can use a subject’s explicitly eligible recent queries, entities, or actions. Store them separately from the global aggregate index, under per-subject authorization, retention, and deletion. Merge a bounded personal list at request time; never let one person’s raw history enter global suggestions without aggregate privacy controls.
+
+Incognito, logged-out, child, enterprise, and regulated contexts may require different behavior or no personalization. The response declares whether personalization was applied. A feature-store failure falls back to global eligible suggestions, not to another user or an unscoped cache entry.
+
+Cache keys include tenant, normalized prefix, locale, surface, generation, and policy-relevant context. Personalized results are either not shared or keyed to a protected subject/cohort identity with appropriate isolation. Caching only by prefix is a common privacy leak.
+
+## Sharding, caching, and serving
+
+Prefixes are highly skewed: empty and one-character prefixes dominate traffic, while long prefixes have enormous key cardinality. Serve or reject empty prefixes deliberately. Cache hot short prefixes at the edge or process, but bound policy staleness and make removals override cache entries.
+
+For a sharded prefix map, build and lookup must use the same stable normalization and routing function. One safe specification is:
+
+```text
+route_key = NFC(casefold_under_locale(raw_prefix))
+shard = first_64_bits(SHA-256(
+    "typeahead-prefix-shard:v4" || 0x00 || UTF8(route_key)
+)) mod shard_count
 ```
-Data Quality:
-□ Filter spam, adult, and low-quality queries
-□ Normalize queries (lowercase, trim, dedupe)
-□ Apply time decay to favor recent queries
-□ Handle multi-language content appropriately
 
-Performance:
-□ Target < 50ms p99 latency
-□ Implement multi-layer caching
-□ Use precomputed suggestion lists for hot prefixes
-□ Debounce client requests (150-200ms)
+The domain separator prevents accidental coupling with other hashes; SHA-256 avoids process-randomized language hashes; explicit Unicode/UTF-8 rules keep platforms consistent. Modulo routing makes shard-count changes disruptive, so production manifests should map many fixed virtual buckets to physical shards. The hash selects a virtual bucket, and the generation pins the bucket map.
 
-User Experience:
-□ Start suggesting after 2-3 characters
-□ Show 5-10 suggestions max
-□ Highlight matching portion of suggestions
-□ Support keyboard navigation
-□ Handle typos gracefully
+An alternative is range partitioning by prefix, which supports local traversal but creates hot alphabet/script ranges. Replicate hot ranges or split them adaptively under a versioned map. Consistent hashing helps movement but does not solve a single hot key: cache and replicate those entries.
 
-Personalization:
-□ Blend user history with global suggestions
-□ Respect user privacy (anonymize, TTL)
-□ Don't over-personalize (maintain discovery)
-□ Allow users to clear history
+Serving nodes memory-map immutable generations, verify manifest and block checksums before readiness, warm the highest-traffic prefixes, and atomically swap the active generation. Keep the prior generation open for rollback and for in-flight requests. Never overwrite files under active readers.
 
-Monitoring:
-□ Track suggestion CTR by position
-□ Monitor zero-suggestion rate
-□ Alert on latency degradation
-□ A/B test ranking changes
-```
+## Client protocol
 
----
+Debounce reduces requests but adds visible latency. Choose it from measured typing intervals and network latency, and allow immediate requests after actions such as paste or navigation. Cancel obsolete requests when possible, but also attach a monotonically increasing `request_sequence`; networks and servers can deliver cancelled work late.
+
+The client renders a response only if its sequence and normalized prefix match current state. Keyboard navigation, selection, focus, and screen-reader announcements follow the appropriate combobox/listbox accessibility pattern. Suggestions must not steal focus or execute on mere highlight. Typed actions distinguish “submit query,” “navigate,” and “run command.”
+
+Client telemetry records impressions only for suggestions actually rendered, with position and generation. Do not log every raw prefix indiscriminately; prefixes can contain names, secrets, medical terms, or pasted credentials. Apply collection minimization at the client boundary.
+
+## Capacity and cost model
+
+Consider an illustrative product workload:
+
+- 40,000 peak active typing sessions;
+- measured 2.4 suggest requests/s per active session after debounce and cancellation;
+- 80% process/edge cache hit ratio on the observed prefix distribution;
+- cache misses route to one base shard and one overlay service;
+- measured uncached service CPU is 0.35 ms and response payload averages 1.2 KiB;
+- target service CPU utilization 45% for burst and generation-swap headroom.
+
+Ingress is `40,000 * 2.4 = 96,000` requests/s. A measured 80% cache hit ratio leaves 19,200 uncached requests/s, not including invalidations or cold starts. CPU demand is `19,200 * 0.00035 = 6.72` CPU-seconds/s; at 45% target utilization, this component needs about 15 logical cores before TLS, overlay fan-out, logging, and failure reserve.
+
+Response bandwidth at the edge is `96,000 * 1.2 KiB`, about 110 MiB/s before protocol overhead. Origin payload is lower with caching, but a policy-version bump can invalidate the hot set at once. Load-test a cold generation and stagger rollout. If clients fail to cancel or debounce because of a regression, ingress can multiply with typing rate; enforce server-side per-session/tenant budgets.
+
+For build capacity, measure input candidates, distinct normalized prefixes, emitted candidate references, sort/shuffle bytes, final generation bytes, and peak temporary disk. If 30 million candidates produce a measured 420 million prefix-candidate pairs at 24 encoded bytes before compaction, the intermediate is about 9.4 GiB. This is an illustrative arithmetic input, not a universal amplification factor; real strings, locales, and prefix caps determine it.
+
+## Concrete failure trace: query-log poisoning
+
+An attacker sends the same offensive phrase from thousands of automated requests. The daily pipeline counts raw events, builds a new generation, and the phrase becomes the first completion for a popular two-character prefix. Caches propagate it globally before manual detection.
+
+Containment publishes an emergency negative overlay and purges/bypasses affected cache entries. The generation is rolled back, but rollback alone is insufficient if the old generation also contains the phrase. Repair removes poisoned events from the governed aggregate, rebuilds from a known checkpoint, and records the affected policy/generation lineage.
+
+Prevention combines distinct-subject support, per-actor contribution caps, bot/fraud signals, candidate allow/deny policy, minimum support for trends, manual review for high-exposure prefixes, staged canary publication, and automated diffs of newly promoted suggestions. Telemetry alerts on abrupt score/share changes and on candidates entering high-traffic prefixes for the first time.
+
+## Security, privacy, and abuse resistance
+
+Autocomplete is an output publication system. Apply stronger review to suggestions than to ordinary search results because the product proactively displays them. Enforce tenant and region boundaries before all caches. Escape display text; typed navigation targets must be validated server-side and limited to approved schemes/routes.
+
+Protect build inputs and manifests with authenticated writers, provenance, checksums, and audited activation. A compromised popularity pipeline can control prominent text without changing application code. Limit candidate length, token count, Unicode control characters, and payload size to prevent rendering abuse and resource exhaustion.
+
+Query-event collection needs purpose limitation, access control, short retention where feasible, deletion workflows, and aggregation privacy. Redact or drop patterns likely to be credentials or sensitive identifiers before durable logging. Differential privacy may be appropriate for published aggregates, but it does not replace eligibility, minimum support, or abuse controls.
+
+## Operations and observability
+
+Track by locale, surface, tenant, prefix-length bucket, generation, and policy version:
+
+- end-to-end and server queue/service latency;
+- request rate, cancellation, stale-response discard, and client debounce behavior;
+- cache hit rate plus saved origin work and policy staleness;
+- empty response, result count, exact/fuzzy/fallback path, and overlay contribution;
+- generation age, load/verification failures, active-reader count, and rollback status;
+- source-to-suggestion lag and deletion/removal propagation time;
+- candidate support, new high-exposure candidates, concentration, and abuse removals;
+- accepted suggestions, successful downstream actions, reformulation, and keystrokes saved;
+- privacy threshold drops and raw-event access/audit anomalies.
+
+Never place raw prefixes or subject IDs in metric labels. Keep tightly sampled, access-controlled diagnostics with redaction and explicit retention.
+
+Runbooks cover offensive/unsafe suggestion, legal or privacy removal, corrupt generation, stale trend overlay, hot-prefix overload, bad normalization rollout, cross-tenant cache leak, and event-pipeline replay. Exercise emergency suppression end-to-end, including client and CDN caches.
+
+## Verification strategy
+
+- **Normalization golden tests** cover scripts, combining marks, locale-specific case, whitespace, emoji, malformed input, and client/server parity.
+- **Structure tests** compare trie/FST/precomputed lookups with a simple sorted-list oracle over generated candidate sets.
+- **Routing tests** verify domain-separated SHA-256 virtual-bucket assignment identically across languages and architectures.
+- **Generation tests** kill builders at file boundaries, corrupt blocks, and prove only complete manifests activate.
+- **Ranking tests** replay fixed aggregate windows and prove deterministic ties, support thresholds, and removal dominance.
+- **Privacy/security tests** attempt rare-query promotion, bot amplification, tenant cache crossover, unsafe display text, and history leakage.
+- **Client tests** reorder and delay responses, exercise keyboard/screen-reader behavior, and verify impressions only after rendering.
+- **Load tests** include hot one-character prefixes, cache flush, cold generation, overlay outage, and a client request-amplification bug.
+- **Migration tests** shadow raw prefixes across normalization/generation versions and reconcile canonical candidate coverage.
+
+The golden corpus should include adversarial and sensitive cases maintained by the appropriate reviewers, not only popular benign prefixes.
+
+## Decision framework
+
+Choose the simplest serving structure that satisfies the measured corpus and freshness needs:
+
+- use a database/index prefix query for a small, low-QPS, non-sensitive catalog where its worst-case work is bounded;
+- use a mutable trie/radix structure for small dynamic dictionaries;
+- use an immutable FST or precomputed prefix map for a large read-heavy base;
+- add a bounded streaming overlay only when trend/new-entity freshness creates measurable value;
+- add fuzzy matching or personalization only with explicit latency, privacy, safety, and evaluation contracts.
+
+Before launch, answer:
+
+1. Which sources are allowed to publish suggestions, and under what privacy threshold?
+2. What normalization and locale contract is shared by build, routing, lookup, and client?
+3. How are popularity feedback and manipulation controlled?
+4. What is the cold-cache/hot-prefix capacity plan?
+5. How quickly can any candidate be suppressed across generations and caches?
+6. Can a complete generation be reproduced, canaried, rolled back, and reconciled?
+7. Which end-to-end quality and safety evidence justifies each ranking change?
+
+Autocomplete quality is inseparable from publication governance. A fast prefix lookup that leaks or amplifies harmful text is a failed design.
 
 ## References
 
-- [How We Built Prefixy](https://engineering.linkedin.com/blog/2018/09/how-we-built-prefixy--a-scalable-prefix-index-for-real-time-sug)
-- [Autocomplete System Design](https://www.youtube.com/watch?v=us0qySiUsGU) - System Design Interview
-- [Trie Data Structure](https://en.wikipedia.org/wiki/Trie)
-- [Google Suggest: A Study of Query Completion](https://research.google/pubs/pub36497/)
-- [Fast and Space-Efficient Prefix Search](https://www.cs.cmu.edu/~dga/papers/fastprefix-sosp2017.pdf)
+- [Jan Daciuk et al.: Incremental Construction of Minimal Acyclic Finite-State Automata](https://aclanthology.org/J00-1002/)
+- [Apache Lucene: FST Package](https://lucene.apache.org/core/10_1_0/core/org/apache/lucene/util/fst/package-summary.html)
+- [Surajit Chaudhuri and Raghav Kaushik: Extending Autocompletion to Tolerate Errors](https://doi.org/10.1145/1376616.1376705)
+- [Holger Bast and Ingmar Weber: Type Less, Find More: Fast Autocompletion Search with a Succinct Index](https://doi.org/10.1145/1148170.1148248)
+- [NIST: Privacy Framework](https://www.nist.gov/privacy-framework)
+- [W3C: WAI-ARIA Authoring Practices, Combobox Pattern](https://www.w3.org/WAI/ARIA/apg/patterns/combobox/)
+- [Unicode Standard Annex #15: Unicode Normalization Forms](https://unicode.org/reports/tr15/)
+- [Unicode Standard Annex #29: Unicode Text Segmentation](https://unicode.org/reports/tr29/)

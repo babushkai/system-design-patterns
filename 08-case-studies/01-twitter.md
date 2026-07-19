@@ -1,800 +1,322 @@
-# Twitter System Design
+# Twitter/X Timelines: Evidence, Inference, and Reference Design
 
-## TL;DR
+Twitter is a useful system-design case because a small durable write can trigger graph expansion, indexing, ranking, notification, and analytics work. It is also easy to turn that lesson into folklore. This chapter keeps three kinds of statements separate:
 
-Twitter handles 500M+ tweets per day with a fan-out-on-write architecture for home timeline delivery. Key challenges include celebrity accounts with millions of followers (fan-out becomes expensive), real-time search indexing, and trend detection. The system uses a hybrid approach: fan-out for regular users, fan-out-on-read for celebrities.
+- **Documented** means a dated Twitter/X engineering source or paper states the behavior.
+- **Inference** means the conclusion follows from documented constraints, but the private implementation is not published.
+- **Reference design** means a defensible design for a Twitter-like service, not a claim about Twitter/X production.
 
----
+Product names and architectures change. “Current” below always means current in the cited source, not necessarily current today.
 
-## Core Requirements
+## Evidence Boundary
 
-### Functional Requirements
-- Post tweets (280 characters, media attachments)
-- Follow/unfollow users
-- Home timeline (tweets from followed users)
-- User timeline (user's own tweets)
-- Search tweets
-- Trending topics
-- Notifications (mentions, likes, retweets)
+| Evidence | What it establishes | What it does not establish |
+|---|---|---|
+| Twitter's April 2014 Manhattan post | An eventually consistent, multi-tenant key-value core with pluggable storage, cross-datacenter replication, repair, and optional strong-consistency services | The complete 2026 storage topology |
+| Twitter's 2017 infrastructure retrospective | A historical path from MySQL through Gizzard, FlockDB, Snowflake, and Manhattan; a Redis-derived timeline cache written by Timeline and Fanout services | A universal rule for every timeline surface |
+| The public 2023 Home Mixer repository | Candidate pipelines, feature hydration, scoring, filtering, mixing, fallback, and serving stages for the published Home Timeline code | Undisclosed models, feature values, fleet layout, or later private changes |
+| The 2012 Earlybird paper | A segment-oriented real-time search engine designed for rapidly arriving Tweets | The present search stack |
+| Twitter's October 2021 event-processing post | A dated snapshot of approximately 400 billion real-time events and petabyte-scale daily data, with real-time and batch processing in three datacenters | Tweet request rate or user count |
 
-### Non-Functional Requirements
-- High availability (99.99%)
-- Low latency timeline reads (< 200ms)
-- Handle 500M tweets/day writes
-- Support users with 50M+ followers
-- Real-time trend detection
+The scale figures in this chapter retain those source dates. They are historical observations, not sizing constants.
 
----
+## Workload and Requirements
 
-## High-Level Architecture
+The core workload is asymmetric:
 
-```mermaid
-graph TD
-    MC["Mobile Clients"] --> AG["API Gateway<br/>Rate Limiting · Auth · Routing"]
-    WC["Web Clients"] --> AG
-    AG --> TS["Tweet Service"]
-    AG --> TLS["Timeline Service"]
-    AG --> SS["Search Service"]
-    TS --> TDB[("Tweet DB<br/>(MySQL)")]
-    TS --> MS[("Media Service<br/>(S3)")]
-    TLS --> TC[("Timeline Cache<br/>(Redis)")]
-    SS --> SI[("Search Index<br/>(Lucene)")]
-    TS -.-> FO["Fan-out Service<br/>Distributes tweets to followers"]
-    FO -.-> TC
-```
+- A Tweet is written once, but may become a candidate for many readers.
+- Follow and safety relationships change less often than timelines are read, yet they affect every read.
+- Search needs low indexing delay, while ranking needs fresh behavioral features.
+- Media bytes dominate object size and egress; Tweet metadata dominates online lookup count.
+- A small number of authors can have far more followers than the median author.
 
----
+**Documented (2023):** the public Home Mixer source describes separate “For You,” reverse-chronological “Following,” and List pipelines. “For You” draws candidates from several sources, hydrates features, scores, filters, mixes non-Tweet content, and prepares client instructions. It also exposes a reverse-chronological conversation-service fallback.
 
-## Timeline Architecture
+**Reference design requirements:**
 
-### Fan-Out-on-Write (Push Model)
+| Capability | Correctness target | Degradation target |
+|---|---|---|
+| Create a Tweet | An acknowledged Tweet has one stable ID and durable canonical body | Delay secondary work rather than lose the Tweet |
+| Follow/unfollow | Authorization and graph state converge without exposing blocked content | A stale follow may affect ranking briefly, but a block must take the safety path |
+| Home timeline | No duplicates within a cursor traversal; visibility checked against current policy | Serve a smaller, older, or chronological feed |
+| User timeline | Monotonic pagination over an author's published Tweets | Read canonical author history if caches are cold |
+| Search | Results honor deletion and visibility policy | Admit indexing lag and show an incomplete result set |
+| Delete | Canonical state changes once; derived copies are eventually removed or suppressed | Tombstone at read time until physical cleanup completes |
 
-```mermaid
-graph TD
-    A["User A posts a tweet"] --> TS["Tweet Service"]
-    TS --> FO["Fan-out Service"]
-    FO -.-> F1[("Follower 1<br/>Timeline Cache")]
-    FO -.-> F2[("Follower 2<br/>Timeline Cache")]
-    FO -.-> F3[("Follower 3<br/>Timeline Cache")]
-```
+Latency goals belong to a product SLO, not to this case study. Establish separate SLOs for publish acknowledgement, home-feed freshness, search freshness, and read latency; a single “API latency” percentile hides the asynchronous path.
 
-Each follower's timeline cache gets the tweet ID appended.
+## State, Authority, and Invariants
 
-```java
-import com.twitter.finagle.Service;
-import redis.clients.jedis.JedisCluster;
-import redis.clients.jedis.Pipeline;
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+The main design decision is not the database brand. It is which representation is authoritative.
 
-public class FanOutService {
-    private final JedisCluster redis;
-    private final FollowerService followerService;
-    private final ExecutorService executor;
-    private static final int MAX_TIMELINE_SIZE = 800; // Keep last 800 tweets
+| State | Authority in the reference design | Consistency | Rebuildable? |
+|---|---|---|---|
+| Tweet body and lifecycle | Tweet store, keyed by Tweet ID | Read-after-write for the author; durable state transitions | No |
+| Follow, mute, and block edges | Relationship service | Strong per edge; safety edges take precedence | No |
+| Author timeline | Ordered index of Tweet IDs by author | Monotonic append plus tombstones | Yes, from canonical Tweets |
+| Home candidate inbox | Materialized Tweet-ID references by reader | Eventually consistent | Yes |
+| Search index | Token-to-Tweet postings plus policy metadata | Eventually consistent | Yes |
+| Ranking features | Stream/batch feature stores | Versioned and bounded-stale | Yes |
+| Media | Immutable object store addressed by an asset/version ID | Durable after publish commit | No; derivatives are rebuildable |
 
-    public FanOutService(JedisCluster redis, FollowerService followerService) {
-        this.redis = redis;
-        this.followerService = followerService;
-        this.executor = Executors.newFixedThreadPool(64);
-    }
+The invariants are explicit:
 
-    /**
-     * Distribute tweet to all followers' timelines.
-     */
-    public CompletableFuture<Void> fanOutTweet(Tweet tweet) {
-        long userId = tweet.getAuthorId();
+1. A Tweet ID identifies at most one canonical Tweet.
+2. Publishing never depends on completing follower fan-out.
+3. A derived copy cannot override canonical deletion, account suspension, block, or audience policy.
+4. Timeline cursors identify a stable ordering boundary, not an offset into a changing list.
+5. Retryable commands carry an idempotency identity; event consumers deduplicate by event identity and projection version.
+6. Search and timeline projections expose their freshness so operators can distinguish “fast but stale” from “slow.”
 
-        return followerService.getFollowerCount(userId).thenComposeAsync(followerCount -> {
-            // Check if user is a celebrity (high follower count)
-            if (followerCount > 10_000) {
-                // Don't fan out for celebrities - use fan-out-on-read
-                return markAsCelebrityTweet(tweet);
-            }
+**Documented (2010):** Twitter introduced Snowflake because database-local auto-increment IDs did not provide a suitable distributed identifier. The public announcement establishes the service and its purpose. It does not prove that the original bit allocation remains unchanged.
 
-            // Get all followers and fan out
-            return followerService.getFollowers(userId).thenAcceptAsync(followers -> {
-                Pipeline pipe = redis.pipelined();
+**Reference design:** use a time-sortable, globally unique 64- or 128-bit ID whose generator lease and clock behavior are observable. Time ordering is helpful for storage locality and cursors, but canonical `created_at` remains separate because clocks can move and IDs can be generated before commit.
 
-                for (Long followerId : followers) {
-                    String timelineKey = "timeline:" + followerId;
-
-                    // Add tweet ID to timeline (sorted set by timestamp)
-                    pipe.zadd(timelineKey, tweet.getCreatedAt().toEpochMilli(), String.valueOf(tweet.getId()));
-
-                    // Trim to max size
-                    pipe.zremrangeByRank(timelineKey, 0, -MAX_TIMELINE_SIZE - 1);
-                }
-
-                pipe.sync();
-            }, executor);
-        }, executor);
-    }
-
-    /** Store in celebrity tweets index for fan-out-on-read. */
-    private CompletableFuture<Void> markAsCelebrityTweet(Tweet tweet) {
-        return CompletableFuture.runAsync(() -> {
-            redis.zadd(
-                "celebrity_tweets:" + tweet.getAuthorId(),
-                tweet.getCreatedAt().toEpochMilli(),
-                String.valueOf(tweet.getId())
-            );
-        }, executor);
-    }
-}
-```
-
-### Fan-Out-on-Read for Celebrities
-
-```java
-import com.twitter.finagle.Service;
-import redis.clients.jedis.JedisCluster;
-import java.util.*;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.stream.Collectors;
-
-public class TimelineService extends Service<TimelineRequest, TimelineResponse> {
-    private final JedisCluster redis;
-    private final TweetService tweetService;
-    private final FollowService followService;
-    private final ExecutorService executor;
-
-    public TimelineService(JedisCluster redis, TweetService tweetService, FollowService followService) {
-        this.redis = redis;
-        this.tweetService = tweetService;
-        this.followService = followService;
-        this.executor = Executors.newFixedThreadPool(32);
-    }
-
-    /**
-     * Get home timeline with hybrid fan-out.
-     */
-    public CompletableFuture<List<Tweet>> getHomeTimeline(long userId, int count, Long maxId) {
-        String timelineKey = "timeline:" + userId;
-
-        // 1. Get pre-computed timeline (fan-out-on-write results)
-        CompletableFuture<Set<String>> cachedFuture = CompletableFuture.supplyAsync(() -> {
-            if (maxId != null) {
-                double maxScore = redis.zscore(timelineKey, String.valueOf(maxId));
-                return redis.zrevrangeByScore(timelineKey, maxScore, 0, 0, count);
-            }
-            return redis.zrevrange(timelineKey, 0, count - 1);
-        }, executor);
-
-        // 2. Get tweets from celebrities user follows
-        CompletableFuture<List<String>> celebFuture = followService
-            .getCelebrityFollowings(userId)
-            .thenApplyAsync(celebrityIds -> {
-                List<String> celebTweets = new ArrayList<>();
-                for (Long celebrityId : celebrityIds) {
-                    Set<String> tweets = redis.zrevrange("celebrity_tweets:" + celebrityId, 0, count - 1);
-                    celebTweets.addAll(tweets);
-                }
-                return celebTweets;
-            }, executor);
-
-        // 3. Merge and sort
-        return cachedFuture.thenCombineAsync(celebFuture, (cached, celeb) -> {
-            Set<String> allIds = new LinkedHashSet<>(cached);
-            allIds.addAll(celeb);
-            return allIds;
-        }, executor).thenComposeAsync(allIds -> {
-            return tweetService.getTweetsBatch(
-                allIds.stream().map(Long::parseLong).collect(Collectors.toList())
-            );
-        }, executor).thenApplyAsync(tweets -> {
-            tweets.sort(Comparator.comparing(Tweet::getCreatedAt).reversed());
-            return tweets.subList(0, Math.min(count, tweets.size()));
-        }, executor);
-    }
-}
-```
+## Data Plane and Control Plane
 
 ```mermaid
-graph LR
-    subgraph precomputed["Pre-computed Timeline<br/>(fan-out-on-write)"]
-        P["Tweet 5, 4, 2, 1"]
-    end
-    subgraph celebrity["Celebrity Tweets<br/>(fetched on-read)"]
-        C["Celeb A: 3<br/>Celeb B: 2<br/>Celeb C: 1"]
-    end
-    subgraph merged["Merged & Sorted<br/>Home Timeline"]
-        M["Tweet 7, 6, 5, 4 ..."]
-    end
-    precomputed -->|"merge + sort"| merged
-    celebrity -->|"merge + sort"| merged
+flowchart LR
+    C[Client] --> E[API edge]
+    E --> W[Tweet command service]
+    W --> T[(Canonical Tweet store)]
+    W --> O[(Transactional outbox)]
+    O --> B[Event log]
+    B --> A[Author indexer]
+    B --> F[Home projection workers]
+    B --> S[Search indexers]
+    B --> N[Notification pipeline]
+    H[Home read service] --> I[(Candidate inboxes)]
+    H --> R[Candidate and ranking pipeline]
+    R --> P[Policy filter]
+    P --> C
+    F --> I
+    A --> U[(Author timeline index)]
 ```
 
----
-
-## Tweet Storage
-
-### Database Schema
-
-```sql
--- Tweets table (sharded by tweet_id)
-CREATE TABLE tweets (
-    id BIGINT PRIMARY KEY,           -- Snowflake ID
-    author_id BIGINT NOT NULL,
-    content VARCHAR(280) NOT NULL,
-    reply_to_id BIGINT,              -- If this is a reply
-    retweet_of_id BIGINT,            -- If this is a retweet
-    quote_tweet_id BIGINT,           -- If this is a quote tweet
-    media_ids JSON,                  -- Array of media IDs
-    created_at TIMESTAMP NOT NULL,
-    
-    INDEX idx_author_created (author_id, created_at DESC),
-    INDEX idx_reply (reply_to_id),
-    INDEX idx_retweet (retweet_of_id)
-) ENGINE=InnoDB;
-
--- User timeline (denormalized for fast reads)
-CREATE TABLE user_timeline (
-    user_id BIGINT NOT NULL,
-    tweet_id BIGINT NOT NULL,
-    created_at TIMESTAMP NOT NULL,
-    
-    PRIMARY KEY (user_id, tweet_id),
-    INDEX idx_user_time (user_id, created_at DESC)
-) ENGINE=InnoDB;
-
--- Follows relationship
-CREATE TABLE follows (
-    follower_id BIGINT NOT NULL,
-    followee_id BIGINT NOT NULL,
-    created_at TIMESTAMP NOT NULL,
-    
-    PRIMARY KEY (follower_id, followee_id),
-    INDEX idx_followee (followee_id)
-) ENGINE=InnoDB;
-```
-
-### Tweet ID Generation (Snowflake)
-
-```java
-import java.util.concurrent.atomic.AtomicLong;
-
-/**
- * Twitter's Snowflake ID generator.
- * 64-bit IDs with embedded timestamp for ordering.
- *
- * Structure:
- * | 1 bit unused | 41 bits timestamp | 10 bits machine | 12 bits sequence |
- */
-public class SnowflakeGenerator {
-    private static final long TWITTER_EPOCH = 1288834974657L; // Nov 4, 2010
-    private static final int MACHINE_ID_BITS = 10;
-    private static final int SEQUENCE_BITS = 12;
-    private static final long MAX_SEQUENCE = (1L << SEQUENCE_BITS) - 1; // 4095
-
-    private final long machineId;
-    private final AtomicLong sequence = new AtomicLong(0);
-    private long lastTimestamp = -1L;
-
-    public SnowflakeGenerator(int machineId) {
-        this.machineId = machineId & 0x3FF; // 10 bits
-    }
-
-    private long currentMillis() {
-        return System.currentTimeMillis();
-    }
-
-    private long waitNextMillis(long lastTs) {
-        long ts = currentMillis();
-        while (ts <= lastTs) {
-            ts = currentMillis();
-        }
-        return ts;
-    }
-
-    public synchronized long nextId() {
-        long timestamp = currentMillis();
-
-        if (timestamp < lastTimestamp) {
-            throw new IllegalStateException(
-                "Clock moved backwards! Refusing to generate ID for "
-                + (lastTimestamp - timestamp) + " milliseconds"
-            );
-        }
-
-        if (timestamp == lastTimestamp) {
-            long seq = sequence.incrementAndGet() & MAX_SEQUENCE;
-            if (seq == 0) {
-                timestamp = waitNextMillis(lastTimestamp);
-            }
-        } else {
-            sequence.set(0);
-        }
-
-        lastTimestamp = timestamp;
-
-        // Compose ID with bit manipulation
-        return ((timestamp - TWITTER_EPOCH) << (MACHINE_ID_BITS + SEQUENCE_BITS))
-             | (machineId << SEQUENCE_BITS)
-             | sequence.get();
-    }
-
-    /** Extract creation timestamp from a Snowflake ID. */
-    public static long extractTimestamp(long snowflakeId) {
-        return (snowflakeId >> (MACHINE_ID_BITS + SEQUENCE_BITS)) + TWITTER_EPOCH;
-    }
-
-    // Usage
-    public static void main(String[] args) {
-        SnowflakeGenerator generator = new SnowflakeGenerator(1);
-        long tweetId = generator.nextId(); // e.g., 1234567890123456789
-        long createdAt = extractTimestamp(tweetId);
-    }
-}
-```
-
----
-
-## Search Architecture
-
-```mermaid
-graph LR
-    T["Tweet"] --> K["Kafka"]
-    K --> SI["Search Indexer"]
-    SI --> ES[("Elasticsearch Cluster")]
-    SI -.-> TP["Tokenizer<br/>Parser<br/>Filter"]
-    ES --> S1[("Shard 1")]
-    ES --> S2[("Shard 2")]
-```
-
-```java
-import com.twitter.finagle.Service;
-import org.elasticsearch.action.index.IndexRequest;
-import org.elasticsearch.action.search.SearchRequest;
-import org.elasticsearch.action.search.SearchResponse;
-import org.elasticsearch.client.RestHighLevelClient;
-import org.elasticsearch.index.query.BoolQueryBuilder;
-import org.elasticsearch.index.query.QueryBuilders;
-import org.elasticsearch.search.builder.SearchSourceBuilder;
-import org.elasticsearch.search.sort.SortOrder;
-
-import java.util.*;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-import java.util.stream.Collectors;
-
-public class TweetSearchService extends Service<SearchRequest, SearchResponse> {
-    private final RestHighLevelClient esClient;
-    private final ExecutorService executor;
-    private static final String INDEX_NAME = "tweets";
-    private static final Pattern HASHTAG_PATTERN = Pattern.compile("#(\\w+)");
-    private static final Pattern MENTION_PATTERN = Pattern.compile("@(\\w+)");
-
-    public TweetSearchService(RestHighLevelClient esClient) {
-        this.esClient = esClient;
-        this.executor = Executors.newFixedThreadPool(16);
-    }
-
-    /** Index tweet for search. */
-    public CompletableFuture<Void> indexTweet(Tweet tweet) {
-        return CompletableFuture.runAsync(() -> {
-            Map<String, Object> doc = new HashMap<>();
-            doc.put("id", tweet.getId());
-            doc.put("text", tweet.getContent());
-            doc.put("author_id", tweet.getAuthorId());
-            doc.put("author_username", tweet.getAuthor().getUsername());
-            doc.put("created_at", tweet.getCreatedAt().toString());
-            doc.put("hashtags", extractHashtags(tweet.getContent()));
-            doc.put("mentions", extractMentions(tweet.getContent()));
-            doc.put("engagement", Map.of(
-                "likes", tweet.getLikeCount(),
-                "retweets", tweet.getRetweetCount(),
-                "replies", tweet.getReplyCount()
-            ));
-
-            IndexRequest request = new IndexRequest(INDEX_NAME)
-                .id(String.valueOf(tweet.getId()))
-                .source(doc);
-            esClient.index(request);
-        }, executor);
-    }
-
-    /** Search tweets with relevance ranking. */
-    public CompletableFuture<List<Map<String, Object>>> search(
-            String query, Map<String, String> filters, int size) {
-        return CompletableFuture.supplyAsync(() -> {
-            BoolQueryBuilder boolQuery = QueryBuilders.boolQuery()
-                .must(QueryBuilders.multiMatchQuery(query, "text^2", "author_username")
-                    .type("best_fields"));
-
-            // Apply filters
-            if (filters != null) {
-                if (filters.containsKey("from_user")) {
-                    boolQuery.filter(QueryBuilders.termQuery("author_username", filters.get("from_user")));
-                }
-                if (filters.containsKey("since")) {
-                    boolQuery.filter(QueryBuilders.rangeQuery("created_at").gte(filters.get("since")));
-                }
-            }
-
-            SearchSourceBuilder source = new SearchSourceBuilder()
-                .query(boolQuery)
-                .sort("_score", SortOrder.DESC)
-                .sort("created_at", SortOrder.DESC)
-                .size(size);
-
-            SearchRequest searchRequest = new SearchRequest(INDEX_NAME).source(source);
-            SearchResponse response = esClient.search(searchRequest);
-
-            return Arrays.stream(response.getHits().getHits())
-                .map(hit -> hit.getSourceAsMap())
-                .collect(Collectors.toList());
-        }, executor);
-    }
-
-    private List<String> extractHashtags(String text) {
-        Matcher matcher = HASHTAG_PATTERN.matcher(text);
-        List<String> tags = new ArrayList<>();
-        while (matcher.find()) { tags.add(matcher.group(1)); }
-        return tags;
-    }
-
-    private List<String> extractMentions(String text) {
-        Matcher matcher = MENTION_PATTERN.matcher(text);
-        List<String> mentions = new ArrayList<>();
-        while (matcher.find()) { mentions.add(matcher.group(1)); }
-        return mentions;
-    }
-}
-```
-
----
-
-## Trending Topics
-
-```java
-import redis.clients.jedis.JedisCluster;
-import redis.clients.jedis.ScanParams;
-import redis.clients.jedis.ScanResult;
-
-import java.util.*;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.stream.Collectors;
-
-/**
- * Detect trending topics using sliding window and velocity.
- * Backed by Redis (Twemcache) with Storm for real-time stream processing.
- */
-public class TrendingService {
-    private final JedisCluster redis;
-    private final ExecutorService executor;
-    private static final int WINDOW_SIZE = 3600;  // 1 hour window
-    private static final int BUCKET_SIZE = 60;    // 1 minute buckets
-
-    public TrendingService(JedisCluster redis) {
-        this.redis = redis;
-        this.executor = Executors.newFixedThreadPool(16);
-    }
-
-    /** Record hashtag occurrence. */
-    public CompletableFuture<Void> recordHashtag(String hashtag, String location) {
-        return CompletableFuture.runAsync(() -> {
-            long now = System.currentTimeMillis() / 1000;
-            long bucket = now / BUCKET_SIZE;
-
-            String key = "trend:" + location + ":" + hashtag;
-            redis.hincrBy(key, String.valueOf(bucket), 1);
-            redis.expire(key, WINDOW_SIZE * 2);
-        }, executor);
-    }
-
-    /** Get trending topics with velocity score. */
-    public CompletableFuture<List<Map.Entry<String, Double>>> getTrending(String location, int count) {
-        return CompletableFuture.supplyAsync(() -> {
-            long now = System.currentTimeMillis() / 1000;
-            long currentBucket = now / BUCKET_SIZE;
-
-            String pattern = "trend:" + location + ":*";
-            Set<String> keys = scanKeys(pattern);
-            Map<String, Double> scores = new HashMap<>();
-
-            for (String key : keys) {
-                String hashtag = key.substring(key.lastIndexOf(':') + 1);
-                Map<String, String> buckets = redis.hgetAll(key);
-
-                long recentCount = 0;
-                long olderCount = 0;
-
-                for (Map.Entry<String, String> entry : buckets.entrySet()) {
-                    long bucket = Long.parseLong(entry.getKey());
-                    long cnt = Long.parseLong(entry.getValue());
-
-                    // Skip expired buckets
-                    if ((currentBucket - bucket) * BUCKET_SIZE > WINDOW_SIZE) continue;
-
-                    if (currentBucket - bucket <= 10) { // Last 10 minutes
-                        recentCount += cnt;
-                    } else {
-                        olderCount += cnt;
-                    }
-                }
-
-                long total = recentCount + olderCount;
-                if (total < 10) continue; // Minimum threshold
-
-                double velocity = (recentCount * 2.0 + olderCount) / (WINDOW_SIZE / 60.0);
-                scores.put(hashtag, velocity);
-            }
-
-            return scores.entrySet().stream()
-                .sorted(Map.Entry.<String, Double>comparingByValue().reversed())
-                .limit(count)
-                .collect(Collectors.toList());
-        }, executor);
-    }
-
-    /** Get trends personalized to user's interests. */
-    public CompletableFuture<List<Map.Entry<String, Double>>> getPersonalizedTrends(
-            long userId, String location) {
-        return CompletableFuture.supplyAsync(() -> getUserInterests(userId), executor)
-            .thenCombine(getTrending(location, 50), (interests, globalTrends) -> {
-                Map<String, Double> boosted = new LinkedHashMap<>();
-                for (Map.Entry<String, Double> entry : globalTrends) {
-                    double boost = interests.contains(entry.getKey().toLowerCase()) ? 1.5 : 1.0;
-                    boosted.put(entry.getKey(), entry.getValue() * boost);
-                }
-                return boosted.entrySet().stream()
-                    .sorted(Map.Entry.<String, Double>comparingByValue().reversed())
-                    .collect(Collectors.toList());
-            });
-    }
-
-    private Set<String> scanKeys(String pattern) {
-        Set<String> keys = new HashSet<>();
-        ScanParams params = new ScanParams().match(pattern).count(100);
-        String cursor = "0";
-        do {
-            ScanResult<String> result = redis.scan(cursor, params);
-            keys.addAll(result.getResult());
-            cursor = result.getCursor();
-        } while (!"0".equals(cursor));
-        return keys;
-    }
-
-    private Set<String> getUserInterests(long userId) {
-        return redis.smembers("user:interests:" + userId);
-    }
-}
-```
-
----
-
-## Notifications
-
-```java
-import redis.clients.jedis.JedisCluster;
-import java.util.*;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.stream.Collectors;
-
-public enum NotificationType {
-    LIKE("like"), RETWEET("retweet"), REPLY("reply"),
-    MENTION("mention"), FOLLOW("follow"), QUOTE("quote");
-
-    private final String value;
-    NotificationType(String value) { this.value = value; }
-    public String getValue() { return value; }
-}
-
-public class Notification {
-    private final long id;
-    private final long userId;
-    private final NotificationType type;
-    private final long actorId;
-    private final Long tweetId;       // nullable
-    private final double createdAt;
-
-    public Notification(long id, long userId, NotificationType type,
-                        long actorId, Long tweetId, double createdAt) {
-        this.id = id;
-        this.userId = userId;
-        this.type = type;
-        this.actorId = actorId;
-        this.tweetId = tweetId;
-        this.createdAt = createdAt;
-    }
-
-    // Getters omitted for brevity
-    public long getId() { return id; }
-    public long getUserId() { return userId; }
-    public NotificationType getType() { return type; }
-    public long getActorId() { return actorId; }
-    public Long getTweetId() { return tweetId; }
-    public double getCreatedAt() { return createdAt; }
-}
-
-public class NotificationService {
-    private final JedisCluster redis;
-    private final PushService pushService;
-    private final ExecutorService executor;
-    private static final int MAX_NOTIFICATIONS = 1000;
-
-    public NotificationService(JedisCluster redis, PushService pushService) {
-        this.redis = redis;
-        this.pushService = pushService;
-        this.executor = Executors.newFixedThreadPool(16);
-    }
-
-    /** Create and deliver notification. */
-    public CompletableFuture<Void> createNotification(long userId, Notification notification) {
-        return CompletableFuture.runAsync(() -> {
-            String key = "notifications:" + userId;
-
-            // Store in notification sorted set
-            redis.zadd(key, notification.getCreatedAt(), String.valueOf(notification.getId()));
-
-            // Trim old notifications
-            redis.zremrangeByRank(key, 0, -MAX_NOTIFICATIONS - 1);
-
-            // Increment unread count
-            redis.incr("notifications:unread:" + userId);
-
-            // Check notification preferences and send push
-            Map<String, String> prefs = getNotificationPrefs(userId, notification.getType());
-            if ("true".equals(prefs.get("push_enabled"))) {
-                pushService.send(
-                    userId,
-                    formatTitle(notification),
-                    formatBody(notification)
-                );
-            }
-        }, executor);
-    }
-
-    /** Get user's notifications. */
-    public CompletableFuture<List<Notification>> getNotifications(long userId, int count, Double cursor) {
-        return CompletableFuture.supplyAsync(() -> {
-            String key = "notifications:" + userId;
-            Set<String> ids;
-
-            if (cursor != null) {
-                ids = redis.zrevrangeByScore(key, cursor, 0, 0, count);
-            } else {
-                ids = redis.zrevrange(key, 0, count - 1);
-            }
-
-            List<Notification> notifications = fetchNotifications(ids);
-
-            // Mark as read
-            redis.set("notifications:unread:" + userId, "0");
-            return notifications;
-        }, executor);
-    }
-
-    /**
-     * Aggregate similar notifications.
-     * e.g., "User A and 5 others liked your tweet"
-     */
-    public CompletableFuture<Void> aggregateNotifications(
-            long userId, long tweetId, Notification notification) {
-        return CompletableFuture.runAsync(() -> {
-            String key = "notification:aggregate:" + tweetId + ":" + notification.getType().getValue();
-
-            redis.sadd(key, String.valueOf(notification.getActorId()));
-            redis.expire(key, 86400); // 24 hours
-
-            long aggregatedCount = redis.scard(key);
-
-            if (aggregatedCount == 1) {
-                createNotification(userId, notification).join();
-            } else {
-                updateAggregatedNotification(userId, tweetId, notification.getType(), aggregatedCount);
-            }
-        }, executor);
-    }
-
-    private Map<String, String> getNotificationPrefs(long userId, NotificationType type) {
-        return redis.hgetAll("notification:prefs:" + userId + ":" + type.getValue());
-    }
-
-    private String formatTitle(Notification n) { /* format based on type */ return ""; }
-    private String formatBody(Notification n) { /* format based on type */ return ""; }
-    private List<Notification> fetchNotifications(Set<String> ids) { return Collections.emptyList(); }
-    private void updateAggregatedNotification(long userId, long tweetId, NotificationType type, long count) {}
-}
-```
-
----
-
-## Key Metrics & Scale
-
-| Metric | Value |
-|--------|-------|
-| Daily Active Users | 200M+ |
-| Tweets per day | 500M+ |
-| Timeline reads/sec | 300K+ |
-| Search queries/sec | 50K+ |
-| Average latency (timeline) | < 100ms |
-| Fan-out time (non-celebrity) | < 5 seconds |
-
----
-
-## Production Insights
-
-### Celebrity Fan-Out and Thundering Herd
-
-When a celebrity with 50M+ followers posts a tweet, naive fan-out-on-write would mean
-writing to 50 million Redis sorted sets in a single burst. This creates a thundering herd
-that can saturate network links, blow through Twemcache memory limits, and spike GC pauses
-across the fan-out worker fleet. Twitter's mitigation is the hybrid model: accounts above
-a follower threshold are flagged as "celebrity" and their tweets are never fanned out.
-Instead, the Timeline Service merges celebrity tweets at read time. The threshold is
-dynamic — it can be lowered during high-traffic events (e.g., Super Bowl) to shed write
-load. An additional safeguard is rate-limiting the fan-out queue per author so that
-automated bot accounts cannot trigger a write storm even if they accumulate followers.
-
-### Manhattan KV Store Rationale
-
-Twitter replaced its earlier MySQL-backed timeline store with Manhattan, an in-house
-multi-tenant, eventually-consistent key-value store. The motivation was operational:
-MySQL sharding required manual shard splits, cross-shard queries for user migrations,
-and careful schema evolution. Manhattan provides automatic partition rebalancing,
-tunable consistency (per-key read-your-writes when needed, eventual otherwise), and
-native multi-datacenter replication via CRDT-like merge semantics. It stores timeline
-data, user metadata, and social graph adjacency lists. The storage engine uses LSM
-trees optimized for write-heavy workloads, and supports secondary indexes for reverse
-lookups (e.g., "who follows this user?"). The API exposes range scans, which map
-naturally to paginated timeline reads keyed by Snowflake IDs.
-
-### Finagle RPC Circuit Breaking
-
-Every inter-service call at Twitter goes through Finagle, a protocol-agnostic RPC
-framework built on Netty. Finagle provides built-in circuit breaking using a
-successive-failure policy: after N consecutive failures (or when the failure rate over
-a sliding window exceeds a threshold), the circuit opens and subsequent requests are
-failed fast for a configurable cool-down period. This prevents a single degraded
-downstream (e.g., a slow Elasticsearch shard) from consuming all threads in the caller's
-pool and cascading into a full outage. Finagle also supports request-level deadlines
-propagated via Thrift context — if a timeline read has already exceeded its 200ms budget
-by the time it reaches the tweet lookup service, the downstream call is abandoned early.
-Load balancing uses a "power of two choices" algorithm (p2c) with latency-aware scoring,
-routing requests away from slow hosts before the circuit even trips.
-
-### Clock Skew in Snowflake ID Generation
-
-Snowflake's correctness depends on a monotonically advancing clock. In production,
-NTP corrections and VM live-migrations can cause the system clock to jump backward.
-When `nextId()` detects `timestamp < lastTimestamp`, it throws rather than issuing a
-duplicate or out-of-order ID. Twitter's operational response is threefold:
-(1) Run NTP with `-x` flag to slew rather than step the clock, bounding corrections
-to 500ppm drift instead of abrupt jumps.
-(2) Monitor clock offset via a sidecar that compares the local clock to multiple NTP
-sources and alerts when skew exceeds 10ms.
-(3) Provision spare Snowflake workers with distinct machine IDs — when a worker refuses
-to issue IDs due to clock regression, traffic is shifted to a healthy worker while the
-affected host re-syncs. The 41-bit timestamp field gives roughly 69 years of headroom
-from the Twitter epoch (Nov 4, 2010), meaning ID space exhaustion is not a near-term
-concern, but the machine-ID assignment (10 bits = 1024 workers) requires coordination
-via ZooKeeper to prevent collisions across data centers.
-
----
-
-## Key Takeaways
-
-1. **Hybrid fan-out**: Fan-out-on-write for regular users (pre-compute timelines), fan-out-on-read for celebrities (merge at read time)
-
-2. **Snowflake IDs**: Time-ordered, distributed ID generation enables efficient range queries and implicit ordering
-
-3. **Redis for timelines**: Timeline cache in Redis for fast reads; MySQL for persistence
-
-4. **Real-time search**: Separate search index (Elasticsearch) with near-real-time ingestion via Kafka
-
-5. **Velocity-based trending**: Detect trends based on rate of change, not just absolute counts
-
-6. **Notification aggregation**: Group similar notifications ("A and 5 others liked...") to reduce noise
+The **data plane** accepts commands, stores canonical state, publishes events, builds projections, retrieves candidates, evaluates policy, and serves responses.
+
+The **control plane** owns shard placement, consumer assignments, quota policy, ranking/model versions, feature definitions, search schema, cache TTL policy, rollout state, and regional traffic steering. A control-plane outage must freeze a known-good configuration rather than erase data-plane routing.
+
+**Documented (2014):** Manhattan separated interfaces, storage services, engines, and a core responsible for routing, topology, replication, and conflict resolution. ZooKeeper held topology information but was not in the read/write critical path. That is evidence for a control/data-plane split, not a requirement to copy Manhattan.
+
+## Tweet Write Flow
+
+This flow is an **explicit reference design**:
+
+1. The edge authenticates the actor, applies request and account quotas, and attaches an idempotency key.
+2. The command service validates text, audience, reply/quote references, media readiness, and abuse-policy preconditions.
+3. The service allocates a Tweet ID and atomically stores the Tweet plus an outbox record. The acknowledgement boundary is this durable commit.
+4. A relay publishes `TweetPublished(tweet_id, author_id, audience_version, event_id)` to a partitioned event log.
+5. Independent consumers update the author index, home candidate projections, search, notifications, counters, and offline datasets.
+6. Each projection records its source offset and projection version. Retrying the same event is harmless.
+
+The transactional outbox avoids a fatal split between “Tweet committed but event missing” and “event emitted but Tweet rolled back.” See [Outbox Pattern](../05-messaging/07-outbox-pattern.md) and [Delivery Guarantees](../05-messaging/04-delivery-guarantees.md).
+
+Media upload should be a separate reservation flow. Upload immutable bytes, scan and transcode them, then publish a Tweet referencing a ready asset version. Otherwise a database commit can expose a Tweet whose media was never made durable.
+
+## Timeline Write and Read Paths
+
+### What is documented
+
+**Documented (2017):** Twitter described Haplo as a primary cache for Tweet timelines backed by a customized Redis `HybridList`, read by Timeline Service and written by Timeline Service and Fanout Service. This establishes materialized timeline caching in that historical architecture.
+
+**Documented (2023):** Home Mixer shows that serving is not “read one cached list.” The published pipeline retrieves heterogeneous candidates, hydrates features, scores, filters, mixes, decorates, and emits client instructions. Its “For You” path includes a reverse-chronological fallback.
+
+Those sources do not publish a complete rule for which authors are pushed to which readers. Treat claims such as “Twitter always fan-outs ordinary users and always pulls celebrities” as unsupported unless tied to a dated source.
+
+### Hybrid reference design
+
+Use two candidate paths:
+
+- **Materialize-on-write:** append a compact Tweet reference to bounded follower inboxes when predicted fan-out cost fits the publish-freshness budget.
+- **Merge-on-read:** retrieve recent author items for high-fan-out, rapidly posting, or otherwise expensive sources and merge them at read time.
+
+Do not choose a fixed follower-count threshold. Let the controller estimate:
+
+`fanout_cost = eligible_followers × reference_bytes × replication_factor`
+
+and
+
+`completion_time = eligible_followers / available_projection_writes_per_second`.
+
+Push only while the expected work fits both the per-author quota and the global freshness budget. The policy can change without changing canonical data.
+
+The home read path is then:
+
+1. Resolve a cursor containing an ordering boundary, ranking configuration, and snapshot epoch.
+2. Fetch materialized references plus merge-on-read candidates.
+3. Deduplicate by Tweet ID and hydrate canonical Tweet, author, conversation, and feature data in batches.
+4. Apply hard visibility filters before ranking output is returned. Apply safety rules again if cached policy state is older than its allowed staleness.
+5. Rank or reverse-sort, mix product modules, and return a signed opaque continuation cursor.
+6. Record candidate-source coverage and freshness, not just response latency.
+
+Inbox projections are bounded. Retaining every historical reference for every reader turns a cache into an unbounded database. Older pages can fall back to author/search indexes or a compact archival projection.
+
+## Search, Trends, and Recommendations
+
+**Documented (2012):** the Earlybird paper describes a real-time search engine using in-memory segments for incoming Tweets and optimized immutable segments. It was designed around the tension between rapid ingestion and efficient retrieval. The paper is historical evidence, not a current component inventory.
+
+**Reference design search path:**
+
+1. Consume the canonical Tweet lifecycle stream.
+2. Normalize text and entities under a versioned analyzer.
+3. Write an immutable posting segment and a mutable deletion/visibility overlay.
+4. Query multiple time/term partitions in parallel with a deadline.
+5. Retrieve candidates, enforce the requesting user's ACL and safety state, then rank.
+6. Compact segments and physically remove expired tombstones later.
+
+Deletion must reach a cheap query-time suppression path before slow index compaction. Otherwise a search cluster can faithfully serve content the canonical system already removed.
+
+**Documented (2023):** public Home Mixer code names candidate generation, feature hydration, scoring, ranking, filters, heuristics, and fallback stages. **Inference:** separating those stages permits independent deadlines, feature/model versioning, and graceful degradation. The source does not disclose every production feature or model.
+
+Trending topics are not a simple global counter. An **explicit reference design** maintains decayed count-min or exact heavy-hitter structures per locale and time bucket, compares observed volume with a learned or historical baseline, applies spam/coordinated-behavior controls, and merges only aggregates across regions. This keeps trend detection separate from durable Tweet storage.
+
+## Partitioning and Illustrative Capacity Model
+
+The following numbers are intentionally illustrative; they are not Twitter measurements.
+
+Assume a design target of:
+
+- 8,000 Tweet creates/s average and 32,000/s peak;
+- 1.2 KiB of canonical Tweet metadata after indexing overhead, excluding media;
+- 280 eligible followers per ordinary publish on average after excluding merge-on-read sources;
+- 24 bytes per materialized inbox reference before storage-engine overhead;
+- replication factor 3 for online state.
+
+Canonical Tweet growth is approximately:
+
+`8,000 × 86,400 × 1.2 KiB ≈ 791 GiB/day` before replication, or about `2.3 TiB/day` at three copies.
+
+Average inbox projection work is:
+
+`8,000 × 280 = 2.24 million reference writes/s`.
+
+Raw reference growth is approximately:
+
+`2.24 million × 24 B ≈ 51 MiB/s`, or `4.3 TiB/day` before replication and retention.
+
+The arithmetic exposes the design pressure: tiny canonical writes can create much larger derived-write volume. It does not justify a particular threshold. Measure the follower-degree distribution, active-reader fraction, inbox retention, write amplification, and hot-author bursts before selecting a policy.
+
+Partition separately by access pattern:
+
+| Dataset | Candidate key | Hotspot concern | Mitigation |
+|---|---|---|---|
+| Tweets | Hash of Tweet ID | Recent-time locality if IDs are range-partitioned | Hash or salted time ranges |
+| Author timeline | Author ID | A prolific author | Subpartition by time bucket |
+| Home inbox | Reader ID | Highly active readers and rebuilds | Bounded buckets plus generation |
+| Follow graph | Source or destination ID, depending query | High-degree accounts | Maintain query-specific projections |
+| Search | Term/time segment | Viral terms and fresh segment | Scatter limits, replicas, admission control |
+| Event log | Author or Tweet ID | A hot author pins one partition | More virtual partitions or keyed substreams while preserving required order |
+
+See [Partitioning Strategies](../02-distributed-databases/05-partitioning-strategies.md), [Database Sharding](../06-scaling/03-database-sharding.md), and [Capacity Planning](../01-foundations/10-capacity-planning.md) for the general mechanisms.
+
+## Concrete Failure Trace: Viral Publish Overloads Fan-Out
+
+This is a **reference-design failure trace**, not a report of a Twitter incident.
+
+1. An author with a very large active audience publishes during an external event.
+2. The projection planner underestimates eligible recipients and admits the job to materialize-on-write.
+3. One event becomes millions of reference writes. Inbox shards saturate and consumer lag grows.
+4. Timeline reads miss their freshness objective. Clients refresh, raising read QPS.
+5. Projection workers time out and retry without a shared retry budget, adding duplicate work.
+6. Search and notification consumers sharing the same event-log or storage quota fall behind.
+
+The system survives only if protection exists before the burst:
+
+- Reserve separate quotas for canonical writes and each derived projection.
+- Convert an admitted fan-out job to merge-on-read when its measured completion cost exceeds budget.
+- Deduplicate projection writes and use checkpointed resumable ranges.
+- Bound queues by bytes and age; shed low-value notification or precomputation work before canonical data.
+- Expose feed freshness and consumer lag to the response path so it can select chronological fallback.
+- Apply one retry owner and a global attempt budget; see [Backpressure](../06-scaling/07-backpressure.md) and [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md).
+
+## Multi-Region Design
+
+**Documented (2014):** Manhattan's core handled intra- and inter-datacenter replication and conflict resolution; its eventual model included reconciliation, read repair, and hinted handoff, while strong consistency was opt-in. **Documented (2021):** a Twitter event-processing pipeline ran real-time components and query services in three datacenters, with batch work in one and data replicated to two others. Neither source proves one global topology for all Twitter products.
+
+An **explicit reference design** assigns each account or Tweet partition a write authority epoch:
+
+- Route commands to the authority region or reject them when authority is uncertain.
+- Replicate canonical Tweet and graph logs asynchronously to serving regions.
+- Build disposable timeline/search projections regionally from those logs.
+- Fence a previous writer before promoting another region.
+- Preserve source offsets so a recovered region can prove its replay point.
+- Size failover headroom before declaring a region evacuable.
+
+Feeds may tolerate bounded staleness; blocks, account suspension, and deletion suppression require a faster global safety channel. Multi-region is therefore a per-data-class decision, not a single active-active checkbox. See [Multi-Region Architecture](../06-scaling/09-multi-region-architecture.md).
+
+## Operations, Security, and Observability
+
+Operational signals must follow the work graph:
+
+- Publish commit latency, failure rate, and idempotency replay rate.
+- Outbox age and event-log produce/consume offsets.
+- Fan-out jobs admitted, converted to pull, completed, retried, and abandoned.
+- Timeline candidate coverage, deduplication rate, source freshness, policy-filter count, and fallback rate.
+- Search ingest lag, tombstone lag, segment age, scatter width, and partial-result rate.
+- Storage hot keys, per-tenant quota consumption, reconciliation backlog, and replica divergence.
+- Ranking feature age, model/config version, timeout contribution, and result-quality guardrails.
+
+Trace a publish using `tweet_id`, `event_id`, projection generation, region, and source offset. Sampling only successful home reads will miss the expensive publish tail.
+
+Security boundaries are part of correctness:
+
+- Authenticate users and services independently; authorize every object access against audience and relationship state.
+- Treat blocks, mutes, legal holds, geo restrictions, and account status as versioned policy inputs.
+- Encrypt private content and credentials in transit and at rest; isolate encryption keys from content stores.
+- Rate-limit by actor, application, destination, and cost, not only by IP.
+- Prevent model and analytics pipelines from becoming an unreviewed copy of deleted or restricted data.
+- Audit privileged reads and policy changes with immutable event identities.
+
+Search and caches should store enough policy metadata to reject safely, but a cached “allow” must expire quickly or be invalidated. The authorization model is covered in [Authorization Patterns](../10-security/07-authorization-patterns.md).
+
+## Evolution and Migration
+
+**Documented historical evolution:** Twitter's 2017 retrospective describes an early MySQL deployment, Gizzard for distributed storage, FlockDB for graph storage, Snowflake for IDs, and later Manhattan adoption. The 2021 RocksDB post says Manhattan had become the default persistent real-time store for core nouns including Tweets, Users, and Direct Messages at that date.
+
+The reusable lesson is migration discipline, not the component names. A safe reference migration from one Tweet or timeline store to another is:
+
+1. Define the new authority and compatibility contract.
+2. Backfill immutable history with source checksums and source positions.
+3. Dual-write through an outbox, but keep one declared authority.
+4. Shadow-read and compare presence, version, order, and policy outcome.
+5. Cut over a small tenant or partition cohort behind a reversible routing flag.
+6. Hold the old projection until the rollback window and reconciliation prove the new path.
+7. Retire dual writes before adding new semantics; permanent dual authority creates ambiguity.
+
+For timeline algorithm changes, log candidate sets and ranking decisions under both versions, then run guarded online experiments. Do not infer correctness from engagement alone: include safety, diversity, latency, freshness, and resource-cost guardrails. See [Migration Strategies](../15-deployment/06-migration-strategies.md) and [Online Experiments](../16-ml-systems/08-online-experiments.md).
+
+## Verification
+
+A design review should require evidence for these properties:
+
+- Replaying any published event twice produces the same projection.
+- Killing a fan-out worker leaves resumable work rather than an acknowledged gap.
+- A deletion or block suppresses content even while timeline and search indexes are stale.
+- Cursor pagination does not duplicate or skip items when new Tweets arrive.
+- A hot author cannot consume canonical-write, search, or unrelated-tenant quotas.
+- A regional promotion is fenced and preserves the declared RPO.
+- A stale ranking feature or failed candidate source selects a known fallback.
+- A full projection can be rebuilt from canonical history within a measured recovery objective.
+
+Test these with skewed follower graphs and viral bursts, not uniform random traffic. Uniform load conceals the exact heavy-tail failure this architecture must absorb.
+
+## Design Lessons
+
+1. Separate canonical social state from disposable delivery and ranking projections.
+2. Model write amplification from the degree distribution, not the average follower count alone.
+3. Make fan-out policy adaptive and reversible; never put full fan-out on the publish acknowledgement path.
+4. Enforce safety and visibility after candidate retrieval, even when earlier projections attempted filtering.
+5. Treat feed freshness, search freshness, and publish durability as different SLOs.
+6. Keep control-plane failure from invalidating known-good data-plane routing.
+7. Cite dated public architecture as evidence and label the remainder as inference or reference design.
+
+## Primary Sources
+
+- Twitter Engineering, [“Announcing Snowflake”](https://blog.x.com/engineering/en_us/a/2010/announcing-snowflake.html), June 2010.
+- Busch et al., Twitter, [“Earlybird: Real-Time Search at Twitter”](https://cs.uwaterloo.ca/~jimmylin/publications/Busch_etal_ICDE2012.pdf), ICDE 2012.
+- Twitter Engineering, [“Manhattan, our real-time, multi-tenant distributed database for Twitter scale”](https://blog.x.com/engineering/en_us/a/2014/manhattan-our-real-time-multi-tenant-distributed-database-for-twitter-scale), April 2014.
+- Twitter Engineering, [“The Infrastructure Behind Twitter: Scale”](https://blog.x.com/engineering/en_us/topics/infrastructure/2017/the-infrastructure-behind-twitter-scale), January 2017.
+- Twitter Engineering, [“Processing billions of events in real time at Twitter”](https://blog.x.com/engineering/en_us/topics/infrastructure/2021/processing-billions-of-events-in-real-time-at-twitter-), October 2021.
+- Twitter Engineering, [“Adopting RocksDB within Manhattan”](https://blog.x.com/engineering/en_us/topics/infrastructure/2021/adopting-rocksdb-within-manhattan), April 2021.
+- Twitter, [Home Mixer README in the public recommendation repository](https://github.com/twitter/the-algorithm/blob/main/home-mixer/README.md), public repository released in 2023.

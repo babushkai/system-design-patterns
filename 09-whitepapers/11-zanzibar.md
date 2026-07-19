@@ -1,116 +1,259 @@
 # Zanzibar: Google's Consistent, Global Authorization System
 
-## Paper Overview
+## Publication Boundary
 
-- **Title**: Zanzibar: Google's Consistent, Global Authorization System
-- **Authors**: Ruoming Pang, Ramón Cáceres, Mike Burrows, et al. (Google)
-- **Published**: USENIX ATC 2019
-- **Context**: One authorization system for Calendar, Cloud, Drive, Maps, Photos, YouTube — trillions of ACLs, millions of QPS, with a correctness requirement no cache may violate
+- **Paper:** *Zanzibar: Google's Consistent, Global Authorization System*
+- **Venue and version:** USENIX Annual Technical Conference 2019, proceedings paper, pages 33–46
+- **Authors:** Ruoming Pang, Ramón Cáceres, Mike Burrows, Zhifeng Chen, Pratik Dave, Nathan Germer, Alexander Golynski, Kevin Graney, Nina Kang, Lea Kissner, Jeffrey L. Korn, Abhishek Parmar, Christopher D. Richards, and Mengzhi Wang
+- **Evaluated system:** Google's internal production deployment, with measurements primarily from December 2018 and longer availability observations where stated
 
-## TL;DR
+This chapter explains the system in that paper. Open-source relationship-based authorization systems and subsequent Google changes are **later evolution**, not evaluation evidence for Zanzibar as published.
 
-Zanzibar stores permissions as **relation tuples** (`object#relation@user`) in Spanner and answers "can user U do R on object O?" as a graph reachability problem, configured per-application by **userset rewrite rules** (owner ⊆ editor ⊆ viewer, parent-folder inheritance). Its deepest contribution is consistency: the **new-enemy problem** — stale ACL reads letting a just-revoked user see new content — is prevented with **zookies**, snapshot tokens that pin content versions to ACL versions, exploiting Spanner's TrueTime ordering. The serving architecture (aggressive caching + the **Leopard** index for deeply nested groups) delivers ~10ms p95 at millions of QPS and five-nines availability over three years. Every modern ReBAC system — SpiceDB, OpenFGA, Ory Keto — is an implementation of this paper.
+## Problem and Workload
 
----
+Google products needed one authorization substrate for sharing-shaped policies: direct users, groups nested in groups, folders containing resources, and roles implying other roles. Authorization is on a serving critical path, but stale permissions can disclose data.
 
-## The Problem
+The paper reported, at its measurement boundary:
 
-Every Google product needs the same primitive — *is this principal allowed to act on this resource?* — evaluated on **every request**, against permissions that users edit constantly, with sharing semantics that cross product boundaries (a Doc shared via Drive to a Group, embedded in Calendar). Building authorization per-product yields N inconsistent engines and zero interoperability. The requirements that make a unified service hard:
+- more than 1,500 authorization namespaces,
+- more than 2 trillion stored relation tuples occupying about 100 TB,
+- full replication across more than 30 locations,
+- more than 10 million total queries/s at peak,
+- more than 10,000 servers across several dozen clusters.
 
-1. **Correctness with ordering guarantees** — respect the causal order of permission changes (the crux; see below).
-2. **Flexibility** — Drive's folder inheritance, YouTube's public/unlisted/private, Cloud IAM's roles, all in one data model.
-3. **Low latency at high scale** — authorization sits on the critical path of *everything*; the paper reports >2 trillion tuples and ~10M peak QPS (checks dominated by *reads*: ~99% of traffic).
-4. **Availability** — if authz is down, everything is down: 99.999% observed over 3 years.
+For one seven-day sample in December 2018, daily peaks were approximately 4.2 million `Check` calls/s, 8.2 million `Read` calls/s, 760,000 `Expand` calls/s, and 25,000 `Write` calls/s. These are different API operations and must not be collapsed into “10 million authorization decisions/s.”
 
----
+## Contract and Invariants
 
-## Data Model: Tuples + Rewrites
+Zanzibar needs more than low-latency graph traversal. Its correctness contract includes:
 
-```
-⟨tuple⟩ ::= ⟨object⟩ '#' ⟨relation⟩ '@' ⟨user⟩
-object  ::= namespace ':' object_id
-user    ::= user_id | userset            (userset = object#relation — the nesting trick)
+1. **External consistency of ACL writes:** completed writes appear in an order compatible with real time.
+2. **Snapshot evaluation:** one authorization computation observes relation tuples at a coherent snapshot.
+3. **Causal freshness floor:** a content object can require its authorization check to use an ACL snapshot no older than a supplied token.
+4. **Namespace isolation:** each application's relation vocabulary and rewrite rules are configured explicitly.
+5. **Bounded recursion and work:** the service must stop pathological policy graphs from consuming unbounded resources.
 
-doc:readme#owner@user:10
-doc:readme#parent@folder:specs
-folder:specs#viewer@group:eng#member     ← "members of group:eng", not a single user
-```
+The paper does not claim instantaneous global revocation independent of client behavior. The content service must persist and later pass the appropriate consistency token. If it omits that protocol, Zanzibar cannot infer the causal boundary.
 
-Allowing a tuple's user field to be another **userset** is what makes groups-in-groups and folder trees natural — the ACL graph references itself. Per-namespace **userset rewrite rules** then define computed relations:
+## State Model: Relation Tuples
 
-```yaml
-relation: viewer
-rewrite:
-  union:
-    - this: {}                                  # direct viewer tuples
-    - computed_userset: {relation: editor}      # editors are viewers
-    - tuple_to_userset:                         # inherit from parent folder
-        tupleset: {relation: parent}
-        computed_userset: {relation: viewer}
+A relation tuple has the conceptual form:
+
+```text
+<object>#<relation>@<user-or-userset>
 ```
 
-A `Check(doc:readme#viewer@user:bob)` is a recursive evaluation of this expression tree — direct lookup ∪ editor-check ∪ (find parents → check their viewers) — i.e., pointer-chasing through a distributed graph. The API surface is small and has become the de facto ReBAC standard: **Check**, **Read/Write** (tuples, with optimistic concurrency per object), **Expand** (the full effective userset, for audit), **Watch** (a change stream for downstream indexes — [CDC](../13-data-pipelines/04-change-data-capture.md) for permissions).
+Examples:
 
----
+```text
+document:roadmap#owner@user:alice
+document:roadmap#parent@folder:planning
+folder:planning#viewer@group:eng#member
+```
 
-## The New-Enemy Problem and Zookies
+The final subject can be a concrete user or another userset such as `group:eng#member`. This indirection represents group membership and resource inheritance without materializing every effective user on every resource.
 
-The paper's sharpest idea. With replicated, cached ACLs, two stale-read interleavings break security:
+Each namespace declares relations and **userset rewrite rules**. A relation can be computed from:
+
+- `this`: tuples stored directly for the relation,
+- a computed userset: another relation on the same object,
+- a tuple-to-userset: follow a tupleset edge, then evaluate a relation on each target,
+- union, intersection, and exclusion of subexpressions.
+
+Conceptually, a viewer rule might be:
+
+$$
+Viewer(d)=DirectViewer(d) \cup Editor(d) \cup
+\bigcup_{p\in Parent(d)} Viewer(p)
+$$
+
+This is a restricted authorization algebra, not arbitrary application code. Restriction makes evaluation, dependency tracking, caching, and review tractable.
+
+## API Surface and Semantics
+
+| API | Purpose | Important semantic boundary |
+|---|---|---|
+| `Write` | Add/delete relation tuples, with preconditions | Commits through Spanner and returns a consistency token |
+| `Read` | Enumerate tuples matching a pattern | Snapshot may be selected using consistency options |
+| `Watch` | Stream tuple changes after a point | Supports downstream indexes and incremental consumers |
+| `Check` | Test whether one subject belongs to an object relation | Recursively evaluates rewrites at one snapshot |
+| `Expand` | Return a userset tree for a relation | A tree/expression, not necessarily a fully enumerated user list |
+
+`Check` can distribute subproblems. A tuple-to-userset rule may read parent tuples, then check the requested relation on each parent. Union may return as soon as one positive branch is sufficient; intersection and exclusion require evidence from multiple branches. Query planning therefore depends on operator semantics, fan-out, cached subresults, and deadlines.
+
+## The New-Enemy Problem
+
+Consider this real-time order:
+
+1. Alice removes Bob from a folder's viewers.
+2. Alice adds new secret content governed by that folder.
+3. Bob requests the new content.
+
+An authorization replica with an old ACL snapshot can still see Bob as a viewer. Ordinary eventual consistency can therefore disclose content that did not exist until after revocation.
 
 ```mermaid
 sequenceDiagram
-    participant A as Alice
-    participant Z as Zanzibar (stale replica)
+    participant A as Alice/content service
+    participant Z as Zanzibar
     participant B as Bob
 
-    Note over A: ① removes Bob from folder ACL
-    Note over A: ② adds new secret doc to folder
-    B->>Z: Check(doc#viewer@bob)
-    Z-->>B: ALLOW ✗ — evaluated against ACL *before* ①
-    Note over B: Bob (the "new enemy") sees content<br/>created after his removal
+    A->>Z: Remove Bob from viewers
+    Z-->>A: Commit + zookie z
+    A->>A: Store new content with z
+    B->>A: Read new content
+    A->>Z: Check(viewer, Bob, minimum z)
+    Z-->>A: Evaluate at snapshot >= z
+    A-->>B: Deny
 ```
 
-(The mirror case: save content, then *tighten* the ACL — the new ACL must govern the old content.) The fix is not "always read fresh" (that forfeits caching and the latency budget); it's **bounded, *content-aware* staleness**:
+Zanzibar returns an opaque consistency token called a **zookie**. The client stores the relevant token with content and supplies it to later authorization checks. The server then evaluates at a snapshot at least as new as that token.
 
-- Every ACL write commits at a TrueTime timestamp in Spanner ([Spanner](./04-spanner.md) provides external consistency — the causal order between Alice's two actions is preserved in timestamps).
-- When a client stores content, it asks Zanzibar for a **zookie** — an opaque token encoding the current snapshot — and persists it *with the content*.
-- Every `Check` for that content carries its zookie: *evaluate at a snapshot ≥ this timestamp*. Replicas may serve from cache **if** their snapshot is fresh enough; otherwise they read through.
+If ACL state has timestamp $t_a$ and the content carries minimum token $t_c$, the safety condition is:
 
-Result: caches and replicas everywhere, yet no check ever uses an ACL older than the content it protects. The generalizable lesson for any authz (or cache) design: **revocation-sensitive reads need a freshness floor, and the floor should travel with the data it protects** ([Authorization at Scale](../10-security/07-authorization-patterns.md), [Consistency Models](../01-foundations/04-consistency-models.md)).
+$$
+t_a \geq t_c
+$$
 
----
+The zookie does not contain the policy result and is not a capability. It constrains snapshot selection. Revocation correctness still depends on the content service sequencing its ACL/content operations and propagating the token.
 
-## Serving Architecture
+## Storage and Snapshot Selection
+
+Relation tuples and changelogs are stored in Spanner. Zanzibar uses Spanner's external consistency and globally meaningful timestamps rather than implementing a separate global ordering protocol. See [Spanner](./04-spanner.md).
+
+Freshness has a latency cost. A sufficiently old “safe” snapshot can usually be served locally because replication is known to have caught up. A “recent” snapshot may require a more distant read or waiting for replication. In the paper's deployment, Spanner heartbeat intervals informed a safe timestamp more than roughly 10 seconds old; recent requests inside that window could pay much larger tails.
+
+The crucial distinction is:
+
+- **Default/bounded staleness** can select a statistically optimized snapshot when no causal minimum is supplied.
+- **At-least-as-fresh** evaluation honors a zookie floor, even if that requires slower work.
+- **Fully fresh** is not implied by every check; the point is the minimum snapshot required by the caller's causal context.
+
+## Check Execution and Caching
 
 ```mermaid
-graph TD
-    CLIENT["Product servers"] -->|Check/Read/Expand| ACL["aclserver clusters<br/>(consistent-hashed, distributed eval)"]
-    ACL --> CACHE["Multi-level caches +<br/>request hedging, dedup<br/>(single-flight per key)"]
-    ACL --> SP[("Spanner:<br/>tuples per namespace +<br/>changelog")]
-    ACL -->|deep nesting| LEO["Leopard index:<br/>flattened group-membership<br/>sets (skip lists),<br/>updated from Watch stream"]
-    WL["Watchservers"] --> SP
-    WL --> LEO
+flowchart TB
+    C[Product service] --> A[ACL server]
+    A --> P[Rewrite evaluator]
+    P --> MC[(Local result and tuple caches)]
+    P -->|subchecks routed by key| R[Peer ACL servers]
+    P --> S[(Spanner tuples)]
+    P --> L[Leopard membership index]
+    W[Watch stream] --> L
 ```
 
-Details that carry to any read-heavy, correctness-critical service:
+The serving design exploits repeated subproblems. Requests are routed so the same object-relation subchecks tend to reach the same cache. Identical in-flight reads are coalesced, preventing a popular group from producing a thundering herd. Slow Spanner reads can be hedged; the paper says median Spanner reads were about 0.5 ms, p95 about 2 ms, and roughly 1% were hedged in the described setup.
 
-- **Distributed evaluation with cache-aware routing:** a Check fans out subproblems across aclservers consistent-hashed by (object, relation), so hot subproblems (e.g., "is U in group:eng?") hit the same server's cache; in-flight identical subchecks are deduplicated (single-flight). Hot-spot mitigation, [hedged reads](../06-scaling/10-retries-timeouts-hedging.md) against slow Spanner replicas, and lock tables against thundering herds do the rest.
-- **Leopard** handles the pathological case: deeply nested groups would mean unbounded recursive fan-out, so group-membership reachability is **precomputed** into flattened sets (transitive closure, maintained incrementally from the Watch stream within seconds) and intersected at query time — the same materialize-the-expensive-path move as a [reverse index for list-filtering](../10-security/07-authorization-patterns.md).
-- **Hot standby reads:** latency-critical checks issue a second request to another replica after a short delay — tail-latency engineering straight from [The Tail at Scale](../06-scaling/10-retries-timeouts-hedging.md).
-- Performance reported: ~10M QPS peak, p50 ~3ms / p95 ~10ms for checks, 99.999% availability — numbers achieved *with* the zookie consistency guarantee, which is the point.
+At peak, the paper reported about 22 million delegated RPCs/s and about 200 million in-memory lookups/s. Caching and request coalescing avoided an estimated 500,000 additional internal RPCs/s. These figures reveal internal amplification: one external `Check` can trigger many cached or delegated suboperations.
 
----
+Cache keys must include everything affecting meaning, including namespace configuration version and snapshot constraints. A cached allow from an older snapshot cannot satisfy a request carrying a newer zookie.
 
-## Influence on System Design
+## Leopard: Materializing Large Group Membership
 
-- **ReBAC became the default model for sharing-shaped permissions**, and the open-source ecosystem (SpiceDB, OpenFGA, Ory Keto, Permify) implements this paper's API almost verbatim — tuples, rewrites, zookie-equivalents (SpiceDB's ZedTokens), Watch streams.
-- **Authorization as infrastructure:** the paper legitimized pulling authz out of N applications into one consistent, observable service with a latency SLO — the [PDP/PEP architecture](../10-security/07-authorization-patterns.md) at planetary scale.
-- **Consistency tokens as a pattern:** "carry a snapshot token with the data it governs" generalizes beyond authz — read-your-writes session tokens, [CDC](../13-data-pipelines/04-change-data-capture.md) watermarks, and cache-freshness floors are the same shape.
-- Built **on** Spanner's TrueTime rather than re-deriving ordering — a reminder that externally consistent storage is a substrate other guarantees can be cheaply built upon ([Spanner](./04-spanner.md)).
+Recursive traversal is unsuitable for groups with massive or deeply nested membership. Zanzibar's Leopard subsystem materializes membership indexes offline and incrementally updates them from `Watch` changes.
 
-## References
+Leopard represents sets and uses structures such as skip lists so membership and set intersection avoid enumerating an entire transitive graph at request time. This is a deliberate consistency/latency trade: use an asynchronously maintained index, but integrate snapshot/version rules so results do not silently violate the caller's freshness floor.
 
-- [Zanzibar: Google's Consistent, Global Authorization System (USENIX ATC '19)](https://www.usenix.org/conference/atc19/presentation/pang)
-- [Spanner: Google's Globally-Distributed Database](./04-spanner.md) — the storage and TrueTime substrate
-- [SpiceDB](https://authzed.com/docs) / [OpenFGA](https://openfga.dev/docs) — open-source implementations, with annotated-paper commentary
-- [Authorization at Scale](../10-security/07-authorization-patterns.md) — the practitioner companion to this paper
+For a seven-day sample, the paper reported:
+
+- median 1.56 million and p99 2.22 million Leopard queries/s,
+- median latency below 150 microseconds and p99 below 1 ms,
+- median about 500 and p99 about 1,500 updates/s.
+
+Those numbers describe Leopard operations in the paper's production deployment, not end-to-end authorization latency.
+
+## Quantitative Evaluation
+
+### Server-side RPC latency
+
+The December 2018 table reports server-side latency, not Internet client latency:
+
+| Operation/mode | p50 | p95 | p99 |
+|---|---:|---:|---:|
+| `Check`, safe snapshot | 3.00 ms | 9.46 ms | 15.0 ms |
+| `Check`, recent snapshot | 2.86 ms | 60.0 ms | 76.3 ms |
+| `Write` | 127 ms | 233 ms | 401 ms |
+
+The much larger recent-check tail is the cost of a stronger freshness constraint in a globally distributed system. A separate daily-peak figure showed approximately 3 ms p50, 11 ms p95, 20 ms p99, and 93 ms p99.9 for `Check`; do not mix those values with the table above without stating the different aggregation.
+
+### Availability methodology
+
+The paper's availability was measured with sampled/replayed requests and probers—three in each cluster—over rolling 90-day windows. A qualified RPC counted successful if it completed within 5 seconds for safe requests or 15 seconds for recent requests. Under that definition, Zanzibar reported more than 99.999% availability for three years.
+
+This is a meaningful but specific metric. It includes generous deadline thresholds compared with ordinary check latency and reflects Google's internal client mix and deployment. It is not a theorem that a clone inherits five nines.
+
+## Failure Semantics
+
+| Failure | Expected behavior | Safety concern |
+|---|---|---|
+| Local ACL server loss | Route to another replica; rebuild caches | Latency and backend load spike |
+| Spanner replica behind zookie | Wait or read from a sufficiently fresh location | Never satisfy the floor with stale cache data |
+| One recursive branch times out | Respect operator semantics; return error/unknown when proof is incomplete | Fail-open can disclose data; blind fail-closed can cause outage |
+| Watch consumer lags | Leopard/index declares its applied watermark | Index result must meet requested snapshot |
+| Namespace config changes | Version caches and evaluators coherently | Old rewrite plus new tuples changes meaning |
+| Hot group or object | Route/cache/coalesce and bound fan-out | A single policy node can amplify globally |
+| Product omits zookie | Service can only honor requested/default consistency | Causal content/ACL ordering is lost outside Zanzibar |
+
+For authorization, timeout semantics are part of policy. A caller must distinguish `DENY`, `ALLOW`, and “could not establish result.” Collapsing infrastructure failure into allow is unsafe; collapsing everything into deny can make the authorization service a global outage multiplier.
+
+## Algorithmic Cost and Policy Design
+
+Let the rewrite evaluation visit $V$ unique usersets and follow $E$ relation edges after cache hits. A naive upper bound is $O(V+E)$ remote/logical work, but latency follows the critical dependency path while resource cost follows total fan-out. Intersection and exclusion can force evaluation of branches that union might short-circuit.
+
+Policy reviews should therefore budget:
+
+- maximum rewrite depth,
+- maximum parents or groups followed at one step,
+- repeated subproblem cacheability,
+- hot-key request rate,
+- index-lag tolerance,
+- the cost of negative checks, which may require proving absence.
+
+Denormalizing every effective permission makes reads cheap but writes explode with group churn. Traversing everything live makes writes cheap but tails unbounded. Zanzibar uses both: live tuple/rewrite evaluation for the general case and Leopard materialization for the pathological membership case.
+
+## Assumptions and Limits
+
+1. The published system depends on Spanner and TrueTime-like globally ordered snapshots; that dependency is central, not incidental.
+2. Google's centralized operational environment, private network, and full replication across many locations shape the evaluation.
+3. Namespace rewrites are intentionally restricted and do not express arbitrary contextual policy code.
+4. Clients must store and pass zookies correctly to obtain causal freshness.
+5. Full replication of roughly 100 TB was acceptable for this workload; it is not a default for arbitrary authorization datasets.
+6. The paper does not benchmark open-source systems, public-cloud multitenancy, or policy languages added later.
+7. `Expand` returns a structural userset representation; enumerating every member of enormous groups remains undesirable.
+
+## Design-Review Questions
+
+1. What exact interleaving creates a “new enemy” in this product, and where is its freshness token persisted?
+2. Does every content read carry the minimum authorization snapshot, including caches and asynchronous jobs?
+3. Are `DENY`, `ALLOW`, timeout, and incomplete evaluation distinct in the API?
+4. Which rewrite operators can short-circuit, and what is worst-case fan-out for negative checks?
+5. What watermark proves an asynchronously maintained membership index is fresh enough?
+6. Can a namespace change invalidate cached results atomically with tuple interpretation?
+7. What happens to backend QPS when a popular cache key expires or one cluster restarts?
+8. Does a stated latency percentile refer to safe, recent, or at-least-token consistency?
+9. Is the availability SLI deadline aligned with the product's actual authorization deadline?
+10. Which assumptions come from Spanner and cannot be copied by duplicating only the tuple API?
+
+## Later Evolution and Influence
+
+SpiceDB, OpenFGA, and other systems later adopted related tuple/rewrite APIs and consistency-token ideas. They have different policy languages, storage engines, consistency contracts, and deployment models. They should be studied as descendants, not described as implementations proven equivalent by the 2019 paper.
+
+The durable lessons are narrower and stronger:
+
+- authorization needs an explicit snapshot contract;
+- revocation-sensitive data should carry its minimum policy version;
+- restricted policy algebra enables distributed evaluation and caching;
+- materialize only the graph regions whose live traversal is pathological;
+- availability methodology must include consistency mode and deadline.
+
+## Primary Reference
+
+- [Zanzibar: Google's Consistent, Global Authorization System — USENIX ATC 2019 (paper PDF)](https://www.usenix.org/system/files/atc19-pang.pdf)
+
+## Related Chapters
+
+- [Spanner](./04-spanner.md)
+- [Authorization at Scale](../10-security/07-authorization-patterns.md)
+- [Consistency Models](../01-foundations/04-consistency-models.md)
+- [Conflict Resolution](../02-distributed-databases/04-conflict-resolution.md)
+- [Change Data Capture](../13-data-pipelines/04-change-data-capture.md)
+- [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md)

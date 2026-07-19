@@ -1,593 +1,492 @@
-# Alerting
+# Alert Evaluation and Notification
 
 ## TL;DR
 
-Good alerts are actionable, relevant, and timely. Alert on symptoms (user impact) not causes (high CPU). Use SLO-based alerting to balance reliability with development velocity. Every alert should either wake someone up or be deleted.
+Alerting is a stateful policy system that converts telemetry into human work. A rule evaluation is not a page: it produces alert instances; grouping combines related instances; inhibition suppresses symptoms under a known cause; silences are authorized time-bounded routing overrides; routing selects receivers and escalation; notification delivery has retries and deduplication.
+
+Correctness depends on evaluation time, data freshness, missing-data semantics, rule revision, stable alert identity, and high-availability coordination. Two evaluators can legitimately compute the same firing state, but receivers should not page twice. Conversely, aggressive deduplication or inhibition must not hide independent incidents.
+
+The paging threshold should represent required human urgency and user/business impact. SLO burn-rate math belongs to [SLOs and Error-Budget Control](./05-slos-error-budgets.md); metrics semantics belong to [Metrics Systems](./02-metrics-monitoring.md). This chapter owns alert state, grouping, inhibition, silence, routing, delivery, and human load.
 
 ---
 
-## The Problem with Bad Alerting
+## Alert Workload and Contract
 
-### Alert Fatigue
+An alert rule declares:
 
-```
-Monday 2:00 AM: "CPU > 80% on web-server-1"
-Monday 2:15 AM: "CPU > 80% on web-server-2"  
-Monday 2:30 AM: "Memory > 70% on db-server"
-Monday 3:00 AM: "Disk > 60% on log-server"
-...
+~~~text
+rule identity and immutable revision
+owner and service/tenant scope
+signal query and evaluation interval
+data window, freshness, and missing-data policy
+condition and pending/confirmation semantics
+alert identity labels
+grouping and inhibition metadata
+severity/urgency and required response
+routing policy and escalation
+runbook/dashboard/evidence links
+maintenance and expiry policy
+~~~
 
-On-call engineer: *mutes all alerts, goes back to sleep*
+An alert instance is a stateful object keyed by a bounded fingerprint, typically rule ID plus the labels that identify one actionable failure domain. Raw error text, pod ID, request path, trace ID, and customer ID usually do not belong in the fingerprint.
 
-Tuesday: Actual outage, nobody notices because alerts are noise
+### Invariants
 
-Result: 
-- Alert fatigue → ignored alerts
-- Burnout → high turnover
-- Incidents → missed real problems
-```
+1. The same rule revision, evaluation time, and input snapshot produce the same alert result.
+2. Missing/stale input never silently becomes a numeric zero.
+3. An alert fingerprint corresponds to one unit of human action.
+4. Pending, firing, resolved, silenced, and inhibited remain distinct states.
+5. Inhibition never alters the underlying alert’s evaluated state.
+6. Silences are authorized, scoped, expiring, attributable, and auditable.
+7. HA replicas may evaluate redundantly but notifications are deduplicated without losing all delivery.
+8. Routing and contact configuration activate atomically under a versioned control plane.
+9. Alert payloads expose only data permitted for the receiver.
+10. Every page has an owner, response expectation, and retirement criteria.
 
-### The Golden Rule
+## Evaluation State Machine
 
-> Every alert should be actionable. If you can't take action, don't alert.
+~~~mermaid
+stateDiagram-v2
+    [*] --> Inactive
+    Inactive --> Pending: condition true
+    Pending --> Inactive: condition false or policy-defined unknown
+    Pending --> Firing: confirmation condition satisfied
+    Firing --> Firing: condition remains true
+    Firing --> Resolved: condition false
+    Firing --> Firing: missing data under keep-firing policy
+    Resolved --> Inactive: resolution notification processed
+~~~
 
-```
-Questions for every alert:
-1. Does this require immediate human action?
-2. Is the action clear?
-3. Will this fire at 3 AM?
-4. Is the threshold meaningful?
+Silenced and inhibited are delivery annotations on Pending/Firing, not replacements for these states.
 
-If any answer is "no" → reconsider the alert
-```
+### Evaluation algorithm
 
----
+At evaluation time $t_e$:
 
-## Alert on Symptoms, Not Causes
+1. Pin the rule and routing policy revision.
+2. Query the declared interval ending at $t_e$ or at an explicit data watermark.
+3. Verify source coverage, freshness, and query completeness.
+4. Normalize absent, stale, NaN, reset, and partial-region states.
+5. Compute the condition under the rule’s typed semantics.
+6. Load prior instance state by fingerprint.
+7. Advance pending/firing/resolved state using elapsed evaluation time, not count of successful scheduler runs.
+8. Persist new state and evidence/watermark.
+9. Emit a state transition to notification processing.
+10. Record evaluation duration, query cost, and failures.
 
-### Symptoms vs. Causes
+If evaluations are missed, “three evaluations pending” is not the same as “condition persisted for three intervals.” Use timestamps and define how gaps affect continuity.
 
-```
-Causes (don't alert):              Symptoms (do alert):
-─────────────────────              ────────────────────
-High CPU usage        ────────►   Slow response times
-High memory usage     ────────►   Errors returned to users
-Full disk            ────────►   Failed transactions
-Network packet loss   ────────►   Timeouts
-Pod restart          ────────►   Service unavailability
+### Rule expression semantics
 
-Users don't care about CPU.
-Users care that the website is slow.
-```
+A rule query must define:
 
-### Example Transformation
+- population denominator and exclusions;
+- aggregation dimensions;
+- interval and alignment;
+- handling of counter resets and late data;
+- minimum traffic/sample sufficiency;
+- regional/tenant coverage;
+- comparison and hysteresis;
+- no-data behavior; and
+- whether the condition reflects symptom, risk, or cause.
 
-```yaml
-# BAD: Cause-based alert
-- alert: HighCPU
-  expr: cpu_usage > 80
-  labels:
-    severity: warning
-  annotations:
-    summary: "High CPU usage"
+Page primarily on user/business impact or an imminent hard limit with a known response. Cause signals such as CPU, queue, disk, or replica count are valuable diagnostic context and sometimes actionable predictors, but should not each page for the same incident.
 
-# Problem: CPU can be 90% and everything is fine
-# Problem: CPU can be 50% but app is broken
+## Missing and Stale Data
 
-# GOOD: Symptom-based alert  
-- alert: HighErrorRate
-  expr: |
-    sum(rate(http_requests_total{status=~"5.."}[5m])) 
-    / sum(rate(http_requests_total[5m])) > 0.01
-  for: 5m
-  labels:
-    severity: critical
-  annotations:
-    summary: "Error rate > 1%"
-    runbook: "https://wiki/runbooks/high-error-rate"
-```
+Missing data has several causes:
 
----
+- the service has zero legitimate traffic;
+- the instrument/resource no longer exists;
+- collection or remote write failed;
+- query timed out or returned partial regions;
+- rule expression removed all series;
+- producer schema changed;
+- deployment is not yet emitting; or
+- the monitoring system itself is down.
 
-## SLO-Based Alerting
+### Explicit policies
 
-### The Error Budget Model
+| Policy | Appropriate use | Risk |
+|---|---|---|
+| Treat as healthy | Optional population that truly has no work | Collection outage hides failure |
+| Treat as failing | Required heartbeat/freshness signal | Planned inactivity pages |
+| Keep previous state for bounded time | Short telemetry gaps | Stale firing/healthy state persists |
+| Mark unknown and route separately | Most ambiguous infrastructure | Needs an independent meta-alert path |
 
-```
-SLO: 99.9% availability per month
+For ratio rules, zero denominator is unknown unless the contract explicitly defines it. A missing numerator must not automatically become zero while the denominator remains.
 
-Error Budget = 100% - 99.9% = 0.1%
-In 30 days: 30 * 24 * 60 * 0.001 = 43.2 minutes of errors allowed
+### Dead-man signals
 
-Budget consumption:
-┌────────────────────────────────────────────────────────────────┐
-│                        30-day error budget                      │
-│                                                                 │
-│ Day 1-10: ███░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 10% used (4.3 min)   │
-│ Day 10-15: █████░░░░░░░░░░░░░░░░░░░░░░░░░ 15% used (2.2 min)   │
-│ Day 15-20: ████████░░░░░░░░░░░░░░░░░░░░░░ 25% used (4.3 min)   │
-│ Day 20-25: ████████████████░░░░░░░░░░░░░░ 50% used (10.8 min)  │
-│ Incident:  █████████████████████████████░░ 90% used (17.3 min) │
-│                                                                 │
-│ Remaining budget: 4.3 minutes for rest of month                │
-└────────────────────────────────────────────────────────────────┘
-```
+A continuously expected heartbeat evaluated by an independent path detects pipeline disappearance. It should traverse as much of the production alert path as possible, and an external receiver verifies its arrival. One internal rule cannot prove that its own notification transport works.
 
-### Burn Rate
+Track the data watermark and coverage alongside every alert. A “resolved” transition caused by lost telemetry should be labeled unknown, not celebrated as recovery.
 
-```
-Burn rate = rate of error budget consumption
+## Alert Identity and Grouping
 
-Burn rate 1.0 = Using budget exactly as planned
-Burn rate 2.0 = Using budget 2x too fast (budget gone in 15 days)
-Burn rate 36 = Using budget 36x too fast (budget gone in 20 hours)
+### Fingerprint
 
-Why burn rate matters:
-- Burn rate 1 at 3 AM → Not urgent, can wait until morning
-- Burn rate 10 at 3 AM → Wake someone up now
-```
+Choose labels that answer “would one responder action resolve all instances with this fingerprint?”
 
-### Multi-Window, Multi-Burn-Rate Alerts
+Common bounded identity:
 
-```yaml
-# Recommended by Google SRE
-# Different windows catch different problem types
+~~~text
+rule
+service or user journey
+environment
+region/cell when mitigation differs
+tenant tier only when response differs
+severity/urgency
+~~~
 
-# Window 1: Fast burn (5% budget in 1 hour)
-# Catches: Major incidents, total outages
-- alert: ErrorBudget_FastBurn
-  expr: |
-    (
-      # 1-hour error rate
-      sum(rate(http_requests_total{status=~"5.."}[1h]))
-      / sum(rate(http_requests_total[1h]))
-    ) > (14.4 * 0.001)  # 14.4x burn rate = 5% budget/hour
-  for: 2m
-  labels:
-    severity: critical
-    
-# Window 2: Slow burn (10% budget in 6 hours)  
-# Catches: Gradual degradation, partial failures
-- alert: ErrorBudget_SlowBurn
-  expr: |
-    (
-      # 6-hour error rate
-      sum(rate(http_requests_total{status=~"5.."}[6h]))
-      / sum(rate(http_requests_total[6h]))
-    ) > (6 * 0.001)  # 6x burn rate = 10% budget/6 hours
-  for: 15m
-  labels:
-    severity: warning
+Exclude volatile replica/pod labels from service-level pages; include them in evidence. For node-specific hardware action, node can be the actionable identity.
 
-# Short window confirms (prevents alert on brief spike that recovered)
-# Long window shows sustained issue (worth alerting on)
-```
+Changing identity labels during a rule rollout can create one resolved old alert and one firing new alert. Migrate with shadow evaluation and explicit notification suppression.
 
-### SLO Alert Design
+### Grouping
 
-```
-┌───────────────────────────────────────────────────────────────────┐
-│            SLO-Based Alert Matrix                                  │
-├──────────────┬──────────────┬──────────────┬─────────────────────┤
-│ Burn Rate    │ Time Window  │ Budget Consumed │ Severity         │
-├──────────────┼──────────────┼──────────────┼─────────────────────┤
-│ 14.4x        │ 1 hour       │ 2% / hour      │ Page immediately  │
-│ 6x           │ 6 hours      │ 5% / 6 hours   │ Page during hours │
-│ 3x           │ 1 day        │ 10% / day      │ Ticket            │
-│ 1x           │ 3 days       │ 10% / 3 days   │ Review            │
-└──────────────┴──────────────┴──────────────┴─────────────────────┘
+Grouping batches related firing instances into one notification:
 
-Detection time vs. budget consumed trade-off:
-- Fast detection = more sensitive = more false positives
-- Slow detection = less budget consumed before alert
-```
+- service + alert family;
+- region/cell;
+- incident correlation key; or
+- receiver/owner.
 
----
+The group wait trades immediate notification for consolidation. The repeat interval trades reminder against fatigue. These are policy-derived from response urgency, not universal constants.
 
-## Alert Design Best Practices
+Group payloads have size/member limits. A storm group summarizes counts and top failure domains with a query link rather than embedding thousands of instances.
 
-### Essential Alert Components
+## Inhibition, Silences, and Routing
 
-```yaml
-- alert: PaymentServiceErrors
-  # 1. Clear, specific name
-  
-  expr: |
-    sum(rate(http_requests_total{service="payment",status=~"5.."}[5m]))
-    / sum(rate(http_requests_total{service="payment"}[5m])) > 0.01
-  # 2. Meaningful threshold based on SLO/business impact
-  
-  for: 5m
-  # 3. Duration to prevent flapping
-  
-  labels:
-    severity: critical
-    team: payments
-    service: payment-service
-  # 4. Labels for routing and grouping
-  
-  annotations:
-    summary: "Payment service error rate > 1%"
-    description: |
-      Error rate: {{ $value | humanizePercentage }}
-      This may indicate payment gateway issues or database problems.
-    runbook: "https://wiki.internal/runbooks/payment-errors"
-    dashboard: "https://grafana/d/payments"
-  # 5. Context for responders
-```
+### Inhibition
 
-### Runbook Template
+Inhibition suppresses notification for an alert when a designated parent/cause alert is firing and labels match a declared relationship:
 
-```markdown
-# Payment Service High Error Rate
+~~~text
+region connectivity alert firing for region=A
+  inhibits service dependency symptoms where region=A
+~~~
 
-## Alert Meaning
-Payment API returning >1% errors to users.
+Safe inhibition requires:
 
-## Impact
-- Users cannot complete purchases
-- Revenue impact: ~$X per minute of outage
+- parent alert is at least as urgent and routes to a responsible team;
+- matching labels prove the same failure domain;
+- child evaluated state remains visible;
+- child can notify if parent resolves while child remains;
+- maximum inhibition scope/duration; and
+- tests for independent simultaneous failures.
 
-## Investigation Steps
-1. Check payment gateway status: https://status.stripe.com
-2. Check database connectivity: 
-   `kubectl logs -l app=payment -c app | grep -i database`
-3. Check recent deployments:
-   `kubectl rollout history deployment/payment`
-4. Check dependent services:
-   - User service: https://grafana/d/user-service
-   - Inventory service: https://grafana/d/inventory
-
-## Remediation
-- If gateway down: Enable backup gateway (see: /docs/failover)
-- If database: Failover to replica (see: /docs/db-failover)
-- If bad deploy: `kubectl rollout undo deployment/payment`
-
-## Escalation
-- Level 1: #payments-oncall
-- Level 2: @payments-lead
-- Level 3: @engineering-manager
-```
-
----
-
-## Alert Routing and Notification
-
-### Alertmanager Configuration
-
-```yaml
-# alertmanager.yml
-global:
-  resolve_timeout: 5m
-  slack_api_url: 'https://hooks.slack.com/services/xxx'
-
-route:
-  receiver: 'default'
-  group_by: ['alertname', 'service']
-  group_wait: 30s        # Wait to group related alerts
-  group_interval: 5m     # Time between grouped notifications
-  repeat_interval: 4h    # Re-notify if not resolved
-  
-  routes:
-    # Critical → PagerDuty immediately
-    - match:
-        severity: critical
-      receiver: 'pagerduty-critical'
-      continue: true  # Also send to Slack
-      
-    # Warnings → Slack during business hours only
-    - match:
-        severity: warning
-      receiver: 'slack-warnings'
-      mute_time_intervals:
-        - nights-and-weekends
-        
-    # Route by team
-    - match:
-        team: database
-      receiver: 'database-team-pagerduty'
-
-receivers:
-  - name: 'default'
-    slack_configs:
-      - channel: '#alerts'
-        
-  - name: 'pagerduty-critical'
-    pagerduty_configs:
-      - service_key: '<integration-key>'
-        severity: critical
-        description: '{{ .CommonAnnotations.summary }}'
-        
-  - name: 'slack-warnings'
-    slack_configs:
-      - channel: '#alerts-warnings'
-        send_resolved: true
-        title: '{{ .CommonAnnotations.summary }}'
-        text: '{{ .CommonAnnotations.description }}'
-
-# Silence overnight and weekends for non-critical
-time_intervals:
-  - name: nights-and-weekends
-    time_intervals:
-      - weekdays: ['saturday', 'sunday']
-      - times:
-          - start_time: '22:00'
-            end_time: '08:00'
-```
-
-### Alert Grouping
-
-```
-Without grouping:
-Alert: HighLatency - service=api, endpoint=/users
-Alert: HighLatency - service=api, endpoint=/orders  
-Alert: HighLatency - service=api, endpoint=/products
-Alert: HighLatency - service=api, endpoint=/cart
-→ 4 separate pages at 3 AM
-
-With grouping (group_by: [alertname, service]):
-Alert: HighLatency (4 endpoints affected)
-  - /users
-  - /orders
-  - /products
-  - /cart
-→ 1 page with full context
-```
-
----
-
-## Reducing Alert Noise
-
-### Deduplication
-
-```python
-# Alert states
-FIRING = "firing"
-RESOLVED = "resolved"
-
-class AlertDeduplicator:
-    def __init__(self, redis):
-        self.redis = redis
-    
-    def should_notify(self, alert):
-        key = f"alert:{alert.fingerprint}"
-        last_state = self.redis.get(key)
-        
-        # New alert
-        if not last_state:
-            self.redis.setex(key, 86400, FIRING)
-            return True
-        
-        # State change
-        if last_state.decode() != alert.state:
-            self.redis.setex(key, 86400, alert.state)
-            return True
-        
-        # Same state, already notified
-        return False
-```
-
-### Inhibition Rules
-
-```yaml
-# Suppress downstream alerts when upstream is firing
-inhibit_rules:
-  # If database is down, don't alert on services that depend on it
-  - source_match:
-      alertname: 'DatabaseDown'
-    target_match:
-      dependency: 'database'
-    equal: ['environment']
-    
-  # If cluster is unhealthy, don't alert on individual pods
-  - source_match:
-      alertname: 'KubernetesClusterUnhealthy'
-    target_match_re:
-      alertname: 'Pod.*'
-    equal: ['cluster']
-```
+Do not inhibit every downstream service merely because one dependency alert exists; partial routing or an unrelated service bug may coexist.
 
 ### Silences
 
-```bash
-# Create a silence for maintenance
-amtool silence add \
-  --alertmanager.url=http://alertmanager:9093 \
-  --author="jane@example.com" \
-  --comment="Planned database maintenance" \
-  --duration="2h" \
-  'service=database'
+A silence is an operator-created matcher set with:
 
-# Query active silences
-amtool silence query
+- creator identity and authorization;
+- reason/change/incident reference;
+- exact bounded matchers;
+- start and expiry;
+- affected receivers/severity;
+- review for broad or long scope; and
+- audit of creation, update, early expiry, and matches.
 
-# Expire a silence early
-amtool silence expire <silence-id>
-```
+Silence does not delete evidence or alert state. Maintenance should preferably be a versioned planned policy generated from the change system, avoiding forgotten manual muting.
 
----
+### Routing
 
-## On-Call Best Practices
+Routing maps normalized alert labels to:
 
-### Rotation Structure
+- team/rotation;
+- delivery channels;
+- escalation stages;
+- language/region;
+- notification template and permitted fields;
+- business-hours versus immediate behavior; and
+- fallback receiver.
 
-```
-Primary On-Call     Secondary On-Call
-     │                     │
-     │ Gets paged first    │ Escalation after 15 min
-     │                     │
-     ▼                     ▼
-┌─────────┐           ┌─────────┐
-│  Week 1 │ Alice     │ Alice   │ Bob
-│  Week 2 │ Bob       │ Bob     │ Carol
-│  Week 3 │ Carol     │ Carol   │ Alice
-└─────────┘           └─────────┘
+Every firing alert must match exactly one owned primary route or an explicit fallback that is itself monitored. Ambiguous overlapping routes and route-to-no-receiver are configuration errors.
 
-Escalation path:
-1. Primary (0-15 min)
-2. Secondary (15-30 min)
-3. Team Lead (30-45 min)
-4. Engineering Manager (45+ min)
-```
+Templates treat alert annotations as untrusted strings. Escape markup/links and prevent secrets or personal data from reaching broad chat/email receivers.
 
-### Incident Response
+## Notification Delivery and HA
 
-```
-1. ACKNOWLEDGE
-   - Acknowledge the page within 5 minutes
-   - This stops escalation, shows you're working on it
+### Delivery state
 
-2. ASSESS
-   - Check dashboards and runbook
-   - Determine scope and impact
-   - Decide if you need help
+~~~mermaid
+stateDiagram-v2
+    [*] --> TransitionQueued
+    TransitionQueued --> GroupWaiting
+    GroupWaiting --> Ready
+    Ready --> Sending
+    Sending --> Delivered
+    Sending --> Retrying: transient/ambiguous failure
+    Retrying --> Sending
+    Retrying --> Escalated: stage deadline
+    Sending --> FailedPermanent
+    Delivered --> Acknowledged: human/system acknowledgement
+~~~
 
-3. COMMUNICATE
-   - Update status page if customer-facing
-   - Notify stakeholders if significant
-   - Post updates every 15-30 minutes
+Define “delivered”: accepted by provider, delivered to device, acknowledged by a human, and incident opened are different.
 
-4. MITIGATE
-   - Focus on restoring service first
-   - Root cause can wait until stable
-   - "Rollback first, ask questions later"
+Notification attempts use a stable idempotency key:
 
-5. RESOLVE
-   - Confirm service restored
-   - Close incident
-   - Schedule postmortem if significant
-```
+~~~text
+alert group fingerprint
+state transition generation
+receiver and escalation stage
+routing policy revision
+~~~
 
-### Page Hygiene
+Provider retry after an ambiguous response may duplicate. Receivers and incident systems deduplicate this key.
 
-```
-Track and review:
-┌────────────────────────────────────────────────────────────────┐
-│  Weekly On-Call Report                                          │
-├─────────────────────────────────────────────────────────────────┤
-│  Total pages: 12                                                │
-│  After-hours: 4 (target: < 2)                                   │
-│  Actionable: 8 (67%)                                            │
-│  Time to acknowledge: 3.2 min avg                               │
-│  Time to resolve: 45 min avg                                    │
-│                                                                 │
-│  Top alerts:                                                    │
-│  1. HighLatency - 4 times (investigate threshold)               │
-│  2. DiskSpace - 3 times (add auto-cleanup)                      │
-│  3. HighErrorRate - 2 times (legitimate issues)                 │
-│                                                                 │
-│  Action items:                                                  │
-│  - Tune HighLatency threshold (too sensitive)                   │
-│  - Automate disk cleanup to prevent DiskSpace alerts            │
-└─────────────────────────────────────────────────────────────────┘
-```
+### HA evaluation
 
----
+Two common approaches:
 
-## Alerting Anti-Patterns
+- **active/active evaluation:** replicas evaluate all rules and downstream grouping/dedup removes duplicate transitions;
+- **partitioned ownership with failover:** one replica/lease owns a shard, requiring fencing and fast takeover.
 
-### 1. Alert on Everything
+Active/active is simpler and tolerates evaluator loss, but duplicate queries and notifications must be controlled. Partitioning reduces cost but lease/split-brain correctness becomes critical.
 
-```yaml
-# BAD: Alerts that aren't actionable
-- alert: CPUHigh
-  expr: cpu > 50  # What should I do about this?
+Replicas need not synchronize every Pending state if their evaluations are deterministic and notification dedup works, but clock, data view, and rule revision divergence can produce different transitions. Report evaluation and active policy revision per replica.
 
-- alert: PodsNotRunning
-  expr: kube_pod_status_phase{phase!="Running"} > 0
-  # Pods restart normally during deployments
+### HA notification
 
-- alert: AnyError
-  expr: increase(errors_total[1m]) > 0
-  # Some errors are expected
-```
+A cluster can gossip/replicate notification logs, but a regional partition may cause each side to notify. Decide whether duplicate paging during partition is preferable to no page—usually yes for high urgency—then deduplicate in the incident system when connectivity returns.
 
-### 2. Wrong Thresholds
+Never put all notification channels behind one provider or network path for critical pages. Maintain a tested fallback with independent credentials and routing.
 
-```yaml
-# BAD: Arbitrary thresholds
-- alert: HighMemory
-  expr: memory_usage > 70  # Why 70? Based on what?
+## Human Load and Policy Quality
 
-# GOOD: Threshold based on actual limits
-- alert: HighMemory
-  expr: |
-    container_memory_usage_bytes 
-    / container_spec_memory_limit_bytes > 0.9
-  # 90% of actual limit, leaves 10% headroom
-```
+Human attention is the scarce resource. Measure:
 
-### 3. Missing "for" Duration
+- pages per on-call hour/shift;
+- unique incidents versus notifications;
+- acknowledgements and escalations;
+- actionable pages;
+- pages requiring no action;
+- duplicate/stale/resolution-only noise;
+- time-to-acknowledge and time-to-mitigation;
+- after-hours interruption;
+- alerts without owner/runbook;
+- silences and inhibition duration; and
+- recurring alert families.
 
-```yaml
-# BAD: Alerts on momentary spikes
-- alert: HighLatency
-  expr: latency_p99 > 500
-  # Will fire on any brief spike
+Do not optimize acknowledgement time alone; responders can acknowledge quickly without understanding. Tie alert review to incident outcome and qualitative feedback.
 
-# GOOD: Sustained issue only
-- alert: HighLatency
-  expr: latency_p99 > 500
-  for: 5m  # Must persist for 5 minutes
-```
+### Page, ticket, or dashboard
 
-### 4. No Runbook
+| Response | Channel |
+|---|---|
+| Human action required now to prevent/mitigate material impact | page |
+| Action required within a business deadline | owned ticket/work queue |
+| Trend or diagnostic context with no discrete action | dashboard/report |
+| Expected automated recovery within budget | record/metric, not human notification |
 
-```yaml
-# BAD: Alert without guidance
-- alert: DatabaseReplicationLag
-  expr: replication_lag > 10
+An alert that never changes an operator decision is telemetry, not a page.
 
-# GOOD: Includes runbook
-- alert: DatabaseReplicationLag
-  expr: replication_lag > 10
-  annotations:
-    runbook: https://wiki/runbooks/db-replication-lag
-```
+## Capacity and Cost Model
 
----
+Assume:
 
-## Monitoring the Monitors
+- $R$ rules;
+- each rule evaluates every $I_r$ seconds;
+- $P_r$ is average samples/series scanned per evaluation;
+- $A$ active alert instances;
+- $G$ notification groups;
+- $\bar{m}$ average instances per group;
+- $d$ average delivery attempts per group transition; and
+- $c$ configured receivers per group.
 
-### Alerting Health Metrics
+Evaluation rate:
 
-```text
-# Alertmanager health
-up{job="alertmanager"} == 1
+$$
+\lambda_{\text{eval}} = \sum_{r=1}^{R}\frac{1}{I_r}.
+$$
 
-# Alert delivery success rate
-rate(alertmanager_notifications_total{status="success"}[5m])
-/ rate(alertmanager_notifications_total[5m])
+Approximate query scan work:
 
-# Time from alert to notification
-histogram_quantile(0.99, alertmanager_notification_latency_seconds_bucket)
+$$
+Q_{\text{scan}} =
+\sum_{r=1}^{R}\frac{P_r}{I_r}.
+$$
 
-# Number of active alerts
-ALERTS{alertstate="firing"}
-```
+Notification attempt rate during a transition burst:
 
-### Dead Man's Switch
+$$
+\lambda_{\text{notify}}
+\approx
+\lambda_{\text{group-transition}} d c.
+$$
 
-```yaml
-# "Watchdog" alert that always fires
-# If it stops firing, monitoring is broken
-- alert: Watchdog
-  expr: vector(1)
-  labels:
-    severity: none
-  annotations:
-    summary: "Alerting pipeline health check"
+State memory/storage scales with rule revisions, active fingerprints, pending history, notification log, silences, and inhibition indexes—not only rule count.
 
-# External service (like Deadman's Snitch) expects this alert
-# If not received, external service alerts you
-```
+### Exceptional load
+
+- one label mistake creates an alert per request/customer/pod;
+- telemetry replay reevaluates stale windows;
+- region outage fires every service rule;
+- routing outage retries every notification;
+- config rollout changes fingerprints;
+- silence expires across a storm;
+- evaluator recovery catches up missed intervals; and
+- global and regional rules both page.
+
+Bound alert instances per rule/tenant, notification group members, payload bytes, route fan-out, retry queue, and concurrent rule queries. Preserve high-urgency user-impact groups under overload and summarize the rest.
+
+Human capacity is also bounded. If $N_p$ pages arrive in period $T$ and each needs $\bar{t}$ minutes of attention, required responder time is:
+
+$$
+H_{\text{attention}} = \frac{N_p \bar{t}}{60}
+$$
+
+person-hours, before incident work. A policy that routinely exceeds staffed attention is unsafe even if the notification system can deliver it.
+
+## Security, Privacy, and Multi-Region Operations
+
+Alerts may contain tenant names, customer impact, vulnerabilities, internal links, and personal on-call data.
+
+- authenticate rule/silence/routing changes;
+- separate author from approver for broad critical silences;
+- scope receivers to authorized fields;
+- store contact endpoints and provider credentials as secrets;
+- redact query annotations and generated summaries;
+- audit bulk alert and silence access;
+- prevent external labels from choosing receiver/template; and
+- rate-limit attacker-triggerable alert instances.
+
+### Regional architecture
+
+Evaluate region-local impact from regional metrics so WAN failure cannot blind the affected region. Global journey/SLO alerts consume explicit regional coverage and deduplicate related incidents.
+
+During region partition:
+
+- regional pages continue to regional/on-duty responders;
+- global evaluator marks partial data;
+- notification logs may diverge;
+- incident IDs reconcile when connectivity returns;
+- silences and emergency routing have defined regional authority; and
+- routing/control policy uses bounded last-known-good with expiry.
+
+A global silence must not rely on propagation faster than the incident it is meant to suppress. Show active silence revision by region.
+
+## Failure Traces
+
+### Missing telemetry resolves an outage
+
+~~~text
+service fails -> exporter/metrics path also fails
+-> error series disappears
+-> rule treats absence as zero errors
+-> firing alert transitions to resolved
+-> responders stand down while users still fail
+~~~
+
+**Controls:** explicit unknown policy, denominator/traffic heartbeat, data freshness/coverage in rule, external probe, and resolution hold until valid recovery evidence.
+
+### HA replicas page twice
+
+~~~text
+notification cluster partitions
+-> both evaluators see the same firing transition
+-> each side lacks the other’s notification log
+-> both escalate through every receiver
+~~~
+
+**Controls:** stable idempotency key at incident/receiver, preferred regional authority where safe, partition-mode marker, bounded repeats, and reconciliation.
+
+### Inhibition hides an independent failure
+
+~~~text
+database alert fires in region A
+-> broad inhibition suppresses all service alerts globally
+-> unrelated auth outage in region B produces no page
+~~~
+
+**Controls:** exact failure-domain label matching, scope tests, visible inhibited state, maximum duration, and child notification after parent recovery.
+
+### Cardinality turns one incident into thousands of pages
+
+~~~text
+new rule fingerprints on pod and raw path
+-> deployment plus errors create thousands of instances
+-> grouping payloads overflow and provider throttles
+-> important page is delayed behind noise
+~~~
+
+**Controls:** compile-time label budget, maximum instances/group size, service-level fingerprint, priority queues, storm summary, and config rollback.
+
+## Operating the Alert System
+
+Track:
+
+- rule evaluation success, duration, missed intervals, data watermark, and active revision;
+- inactive/pending/firing/resolved/unknown instances;
+- fingerprints and new-instance rate by bounded rule/service;
+- inhibited/silenced counts and oldest/expiry;
+- groups, members, wait/repeat, payload truncation, and transitions;
+- notification queue age, attempt, provider acceptance, acknowledgement, escalation, and failure;
+- HA replica divergence, dedup hit, partition mode, and route revision;
+- unmatched/ambiguous routes and fallback usage;
+- page volume, duplicate/no-action rate, and responder load; and
+- external dead-man signal delivery.
+
+Alert on the alerting system through an independent path where possible.
+
+## Verification Strategy
+
+| Test layer | What to prove |
+|---|---|
+| Rule semantics | Known time-series fixtures produce correct condition and evidence |
+| State-machine tests | Pending, firing, gap, recovery, resolve, and rule migration |
+| Missing-data tests | Zero traffic, scrape loss, partial region, query error, stale data, and schema removal |
+| Fingerprint tests | Bounded stable identity and migration without duplicate incidents |
+| Group/inhibition tests | Correct matching, storm size, independent failures, and parent recovery |
+| Silence tests | Authorization, matcher scope, expiry, region propagation, and audit |
+| Routing tests | Exactly one owner/fallback, template escaping, redaction, and receiver failover |
+| HA tests | Evaluator crash, clock skew, split brain, notification partition, and dedup |
+| Load tests | Region outage, alert cardinality explosion, silence expiry, and provider throttle |
+| Human review | Every page maps to a concrete action and post-incident outcome |
+
+Replay historical incidents and quiet periods through candidate rules. Compare pages, time-to-first-page, duplicate groups, missing incidents, and human attention—not only expression truth.
+
+## Decision Framework
+
+1. What human decision or mitigation does this alert request?
+2. Is the signal user/business impact, imminent risk, or merely diagnostic cause?
+3. Which metric/log/probe semantics and data coverage does it require?
+4. What does missing, stale, partial, reset, and zero traffic mean?
+5. What fingerprint equals one unit of action?
+6. How long must the condition persist, and how are missed evaluations handled?
+7. Which related alerts group, and which exact parent-child relation inhibits?
+8. Who may silence it, at what scope and expiry?
+9. Which team/region/channel owns primary and fallback delivery?
+10. How do HA replicas deduplicate without creating a single point of loss?
+11. What storm and human-attention budgets apply?
+12. Which incident replay proves the candidate policy is better?
+
+## Key Takeaways
+
+1. Alerting is a stateful policy and delivery system, not a threshold in a dashboard.
+2. Missing data is a typed state and can be more dangerous than a high value.
+3. A fingerprint should equal one actionable failure domain.
+4. Grouping combines notifications; inhibition suppresses related symptoms; silence is an authorized override.
+5. Inhibited and silenced alerts remain evaluated and visible.
+6. HA evaluation may be redundant, but notification transitions need stable idempotency.
+7. Regional evaluation protects outage visibility; global alerts expose coverage.
+8. Notification acceptance, delivery, acknowledgement, and incident creation are different states.
+9. Human attention has capacity and must be measured like compute.
+10. Validate rules by replaying incidents, gaps, partitions, and quiet periods.
 
 ---
 
 ## References
 
-- [Google SRE Book - Alerting](https://sre.google/sre-book/alerting-on-slos/)
-- [My Philosophy on Alerting](https://docs.google.com/document/d/199PqyG3UsyXlwieHaqbGiWVa8eMWi8zzAn0YfcApr8Q/view)
-- [Alertmanager Documentation](https://prometheus.io/docs/alerting/latest/alertmanager/)
-- [PagerDuty Incident Response](https://response.pagerduty.com/)
-- [Atlassian Incident Management](https://www.atlassian.com/incident-management)
+- [Prometheus Alerting Rules](https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/) — pending/firing state and rule evaluation
+- [Prometheus Alertmanager](https://prometheus.io/docs/alerting/latest/alertmanager/) — grouping, inhibition, silences, routing, and HA deduplication
+- [Google SRE Workbook: Monitoring](https://sre.google/workbook/monitoring/) — monitoring strategy and signal design
+- [Google SRE Workbook: Alerting on SLOs](https://sre.google/workbook/alerting-on-slos/) — symptom-oriented multi-window alert behavior
+- [OASIS Common Alerting Protocol](https://docs.oasis-open.org/emergency/cap/v1.2/CAP-v1.2-os.html) — interoperable alert message structure
+- [Metrics Systems and Monitoring](./02-metrics-monitoring.md) — instrument, aggregation, missing series, and query behavior
+- [SLOs and Error-Budget Control](./05-slos-error-budgets.md) — burn math and reliability policy
+- [Incident Command and Learning](./07-incident-management.md) — page-to-incident transition, command, communications, and mitigation

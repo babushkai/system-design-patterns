@@ -8,6 +8,8 @@ A production design has two planes. The **indexing control plane** discovers sou
 
 Use long context when the authoritative corpus is small and request-scoped; use pipeline RAG when retrieval steps are stable; use agentic retrieval when query decomposition must adapt at runtime and each extra search has an evidence-based stopping rule. Fine-tuning changes model behavior, not current factual memory, and is not a substitute for retrieval.
 
+The Search section owns reusable retrieval-engine mechanics: [index architecture](../14-search-systems/01-inverted-indexes.md), [lexical execution](../14-search-systems/02-full-text-search.md), [vector retrieval](../14-search-systems/03-vector-search.md), and [ranking/evaluation](../14-search-systems/04-ranking-algorithms.md). This chapter owns the RAG-specific publication contract around those engines: corpus revisions and ACLs, evidence-packet assembly, grounded generation, claim-to-source provenance, abstention, and joint retrieval/generation evaluation. A vector database is therefore an implementation inside the query plane, not the RAG system boundary.
+
 ---
 
 ## Start with the Knowledge Contract
@@ -417,4 +419,5 @@ Do not select an embedding model from a generic leaderboard before building a re
 - [ARES: An Automated Evaluation Framework for Retrieval-Augmented Generation Systems](https://aclanthology.org/2024.naacl-long.20/) — synthetic training plus human-calibrated RAG judges
 - [BEIR: A Heterogeneous Benchmark for Zero-shot Evaluation of Information Retrieval Models](https://arxiv.org/abs/2104.08663) — heterogeneous retrieval evaluation
 - [ColBERT: Efficient and Effective Passage Search via Contextualized Late Interaction](https://arxiv.org/abs/2004.12832) — late-interaction retrieval
+- [Vector Retrieval Systems](../14-search-systems/03-vector-search.md) and [Ranking and Evaluation Systems](../14-search-systems/04-ranking-algorithms.md) — canonical retrieval-engine internals and evaluation boundaries
 - [OWASP: LLM Prompt Injection Prevention Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/LLM_Prompt_Injection_Prevention_Cheat_Sheet.html) — injection threats and structural mitigations

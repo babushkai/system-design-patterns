@@ -1,724 +1,242 @@
 # Distributed Transactions
 
-## TL;DR
+A distributed transaction makes one outcome authoritative across multiple independently durable participants. The central problem is not sending `COMMIT` twice. It is preserving atomicity when processes crash at every instruction boundary, messages are lost or duplicated, and some participants have made promises they can no longer revoke.
 
-Distributed transactions coordinate atomic operations across multiple nodes or services. Two-phase commit (2PC) is the classic approach but blocks on coordinator failure. Three-phase commit reduces blocking but adds latency. Sagas handle long-running transactions with compensating actions. Modern systems often avoid distributed transactions entirely, using eventual consistency with idempotency instead.
+This chapter owns **atomic commit across storage participants**, its interaction with isolation, and alternatives whose contracts are explicitly weaker. [ACID Transactions](../01-foundations/01-acid-transactions.md) and [Isolation Levels](../01-foundations/02-isolation-levels.md) define local transaction semantics. [Consensus Algorithms](./08-consensus-algorithms.md) owns replication of a participant or decision record. [Outbox Pattern](../05-messaging/07-outbox-pattern.md) owns reliable database-to-message publication, and [Database Sharding](../06-scaling/03-database-sharding.md) owns operational shard migration.
 
----
+## Define the outcome contract
 
-## Why Distributed Transactions Are Hard
+Three different problems are commonly called a distributed transaction:
 
-### The Problem
+1. **Atomic commit:** every participant commits, or every participant aborts.
+2. **Isolation:** concurrent transactions observe an allowed serial/snapshot order.
+3. **Durable workflow:** a sequence of local transactions eventually completes or compensates.
 
-```
-Transfer $100 from Account A (Node 1) to Account B (Node 2)
-
-Step 1: Debit A (-$100)   ← Node 1
-Step 2: Credit B (+$100)  ← Node 2
-
-What if:
-  - Node 2 crashes after Step 1?
-  - Network fails between steps?
-  - Either node says "no"?
-  
-Money disappears or duplicates!
-```
-
-### ACID in Distributed Systems
-
-```
-Atomicity:  All nodes commit or all abort
-Consistency: All nodes maintain invariants
-Isolation:  Concurrent transactions don't interfere
-Durability: Committed data survives failures
-
-Challenge: Achieving these across network boundaries
-```
-
----
-
-## Two-Phase Commit (2PC)
-
-### The Protocol
-
-```
-Phase 1: Prepare (Voting)
-  Coordinator → All participants: "Can you commit?"
-  Participants: Acquire locks, prepare to commit
-  Participants → Coordinator: "Yes" or "No"
-
-Phase 2: Commit (Decision)
-  If all voted "Yes":
-    Coordinator → All participants: "Commit"
-    Participants: Make changes permanent
-  Else:
-    Coordinator → All participants: "Abort"
-    Participants: Roll back
-```
-
-### Sequence Diagram
-
-```mermaid
-sequenceDiagram
-    participant C as Coordinator
-    participant A as Participant A
-    participant B as Participant B
-    C->>A: PREPARE
-    C->>B: PREPARE
-    A-->>C: VOTE_YES
-    B-->>C: VOTE_YES
-    C->>A: COMMIT
-    C->>B: COMMIT
-    A-->>C: ACK
-    B-->>C: ACK
-```
-
-### State Machine
-
-```
-Participant states:
-  INITIAL → PREPARED → COMMITTED
-                    ↘ ABORTED
-
-Coordinator states:
-  INITIAL → WAITING → COMMITTED/ABORTED
-
-Key rule: Once PREPARED, must wait for coordinator decision
-```
-
-### The Blocking Problem
-
-```
-Scenario: Coordinator crashes after sending PREPARE
-
-Participant A: PREPARED, waiting for decision...
-Participant B: PREPARED, waiting for decision...
-
-Both are blocked:
-  - Can't commit (don't know if others voted yes)
-  - Can't abort (coordinator might have decided commit)
-  - Resources locked indefinitely
-
-Solution: Wait for coordinator recovery (or timeout and abort)
-```
-
-### 2PC Implementation
-
-```python
-class Coordinator:
-    def execute_transaction(self, participants, operations):
-        # Phase 1: Prepare
-        votes = []
-        for p in participants:
-            try:
-                vote = p.prepare(operations[p])
-                votes.append(vote)
-                self.log.write(f"VOTE:{p}:{vote}")
-            except Timeout:
-                self.log.write(f"VOTE:{p}:TIMEOUT")
-                votes.append("NO")
-        
-        # Decision
-        if all(v == "YES" for v in votes):
-            decision = "COMMIT"
-        else:
-            decision = "ABORT"
-        
-        self.log.write(f"DECISION:{decision}")
-        self.log.fsync()  # Durable decision!
-        
-        # Phase 2: Execute decision
-        for p in participants:
-            p.execute_decision(decision)
-
-class Participant:
-    def prepare(self, operation):
-        self.acquire_locks(operation)
-        self.log.write(f"PREPARED:{operation}")
-        self.log.fsync()
-        return "YES"
-    
-    def execute_decision(self, decision):
-        if decision == "COMMIT":
-            self.apply_changes()
-            self.release_locks()
-        else:
-            self.rollback()
-            self.release_locks()
-```
-
----
-
-## Three-Phase Commit (3PC)
-
-### Motivation
-
-Add a "pre-commit" phase to reduce blocking.
-
-```
-Phase 1: CanCommit (Voting)
-  Coordinator → Participants: "Can you commit?"
-  Participants → Coordinator: "Yes" or "No"
-
-Phase 2: PreCommit
-  If all Yes: Coordinator → Participants: "PreCommit"
-  Participants acknowledge, prepare to commit
-
-Phase 3: DoCommit
-  Coordinator → Participants: "DoCommit"
-  Participants commit
-```
-
-### Non-Blocking Property
-
-```
-Key insight: Participant in PreCommit state knows:
-  - All participants voted Yes
-  - Safe to commit after timeout (no need to wait for coordinator)
-
-If coordinator crashes during PreCommit:
-  Participants can elect new coordinator
-  New coordinator can complete the commit
-```
-
-### Limitations
-
-```
-Problem: Network partition can still cause inconsistency
-
-Partition:
-  Coordinator + Participant A: Decide to abort
-  Participant B: In PreCommit, times out, commits
-
-Result: A aborted, B committed → Inconsistency
-
-3PC helps with coordinator crashes, not partitions
-```
-
----
-
-## Saga Pattern
-
-### Concept
-
-Long-running transaction as a sequence of local transactions.
-Each local transaction has a compensating transaction.
-
-```
-Saga: Book a trip
-  T1: Reserve flight    →  C1: Cancel flight reservation
-  T2: Reserve hotel     →  C2: Cancel hotel reservation
-  T3: Reserve car       →  C3: Cancel car reservation
-  T4: Charge credit card → C4: Refund credit card
-
-If T3 fails:
-  Run C2, C1 (reverse order)
-  Trip booking failed, all reservations released
-```
-
-### Choreography (Event-Driven)
-
-```
-Each service listens for events and reacts:
-
-Flight Service:
-  On "TripRequested" → Reserve flight, emit "FlightReserved"
-  On "HotelFailed" → Cancel flight, emit "FlightCancelled"
-
-Hotel Service:
-  On "FlightReserved" → Reserve hotel, emit "HotelReserved"
-  On failure → emit "HotelFailed"
-
-No central coordinator
-Services react to events
-```
-
-```mermaid
-graph LR
-    Flight["Flight<br/>Service"] -->|FlightReserved| Hotel["Hotel<br/>Service"]
-    Hotel -.->|HotelFailed| Flight
-    Flight -->|FlightCancelled| Done["[Done]"]
-    Hotel -->|HotelReserved| Car["Car<br/>Service"]
-```
+Two-phase commit solves the first problem. It does not by itself prevent write skew, lost updates, or phantoms; participants need strict two-phase locking, serializable MVCC/OCC, or another concurrency-control protocol. A saga solves the third problem and intentionally exposes intermediate states. Calling compensation a rollback hides a materially weaker contract.
 
-### Orchestration (Central Coordinator)
+For each use case, state:
 
-```
-Saga Coordinator:
-  1. Call Flight Service → Reserve flight
-  2. Call Hotel Service → Reserve hotel
-  3. If fail → Call Flight Service → Cancel
-  4. Call Car Service → Reserve car
-  5. If fail → Call Hotel → Cancel, Call Flight → Cancel
-  6. Success → Done
-
-Central coordinator knows the saga state
-Easier to understand and debug
-Single point of failure
-```
-
-```mermaid
-graph TD
-    SC["Saga Coordinator"]
-    F["Flight<br/>Service"]
-    H["Hotel<br/>Service"]
-    C["Car<br/>Service"]
-    SC --> F
-    SC --> H
-    SC --> C
-```
-
-### Compensating Transactions
-
-```python
-class BookTripSaga:
-    def execute(self, trip_request):
-        try:
-            flight = self.flight_service.reserve(trip_request.flight)
-            try:
-                hotel = self.hotel_service.reserve(trip_request.hotel)
-                try:
-                    car = self.car_service.reserve(trip_request.car)
-                    try:
-                        self.payment_service.charge(trip_request.payment)
-                    except PaymentError:
-                        self.car_service.cancel(car)
-                        raise
-                except CarError:
-                    self.hotel_service.cancel(hotel)
-                    raise
-            except HotelError:
-                self.flight_service.cancel(flight)
-                raise
-        except FlightError:
-            raise SagaFailed("Could not book trip")
-```
+- the participants and failure domains;
+- whether a client success response may precede cleanup at every participant;
+- the required isolation level;
+- the maximum time locks or intents may remain unresolved;
+- whether an irreversible external effect is inside the atomic boundary;
+- what a retry with the same transaction ID means.
 
-### Saga Guarantees
+A transfer inside one distributed database is different from “update a database, charge a third-party card, and publish an email.” The latter systems do not share one prepare/commit protocol, so atomic rollback is generally unavailable.
 
-```
-NOT ACID:
-  - No isolation (intermediate states visible)
-  - No atomicity (compensation is best-effort)
-
-ACD (Atomicity through saga, Consistency, Durability):
-  - Eventually consistent
-  - Compensation may fail (need retries, manual intervention)
-```
+## Durable state and atomicity invariants
 
----
+Let transaction `T` have coordinator `C` and participant set `P`. A recoverable protocol needs:
 
-## Transactional Outbox
+- a globally unique transaction ID;
+- the complete participant set or a durable way to discover it;
+- per-participant provisional writes, undo/redo information, and held locks/intents;
+- participant state such as `ACTIVE`, `PREPARED`, `COMMITTED`, or `ABORTED`;
+- one authoritative durable decision record;
+- idempotent handlers for repeated prepare, commit, abort, and status queries;
+- enough retention that a recovering participant can still learn the decision.
 
-### Problem
+The critical invariants are:
 
-How to update database AND send message atomically?
+1. A participant votes `YES` only after it can commit despite a local crash.
+2. After voting `YES`, a participant does not unilaterally abort or forget its prepared state.
+3. The coordinator records `COMMIT` durably only after every required participant voted `YES`.
+4. `COMMIT` and `ABORT` are mutually exclusive terminal decisions for one transaction ID.
+5. A client is told success only after the commit decision and all state needed to complete it are durable under the advertised failure model.
 
-```
-Naive approach:
-  1. Update database
-  2. Send message to queue
-  
-Failure mode:
-  Database updated, message send fails
-  OR
-  Message sent, database update fails
-```
+Atomicity is a recovery property. A transaction may temporarily be committed at A and still prepared at B after a lost message; the protocol remains atomic only if readers cannot expose an invalid mix under the isolation model and recovery inevitably drives B to the same durable decision.
 
-### Solution
-
-Write message to outbox table in same transaction.
-
-```sql
-BEGIN TRANSACTION;
-  -- Business update
-  UPDATE accounts SET balance = balance - 100 WHERE id = 1;
-  
-  -- Outbox entry
-  INSERT INTO outbox (id, payload, created_at)
-  VALUES (uuid(), '{"event":"Debited","amount":100}', NOW());
-COMMIT;
-```
+## Two-phase commit, precisely
 
-Separate process polls outbox, publishes messages:
-
-```python
-def publish_outbox():
-    while True:
-        events = db.query("SELECT * FROM outbox ORDER BY created_at LIMIT 100")
-        for event in events:
-            try:
-                message_queue.publish(event.payload)
-                db.execute("DELETE FROM outbox WHERE id = ?", event.id)
-            except PublishError:
-                pass  # Retry next iteration
-        sleep(100ms)
-```
+### Phase 1: prepare
 
-### CDC (Change Data Capture) Alternative
+The coordinator freezes the participant set and sends `PREPARE(T)`. Each participant:
 
-```
-Database transaction log → CDC → Message queue
+1. finishes execution and validates local constraints/concurrency control;
+2. obtains the locks or records the intents needed to prevent a conflicting outcome;
+3. writes a `PREPARED(T, digest, coordinator)` record and provisional data to stable storage;
+4. replies `YES` only after that state meets its crash-durability contract.
 
-Example: Debezium
-  Reads MySQL binlog
-  Publishes to Kafka
+A participant may reply `NO` before a `YES` promise, causing abort. A timeout is not evidence that it voted `NO`: its `YES` response may have been lost after the durable prepare.
 
-No polling, lower latency
-Guaranteed ordering
-```
+### Phase 2: decide and disseminate
 
----
+If any participant votes `NO` or the prepare deadline expires, the coordinator chooses abort. If every participant votes `YES`, it writes the commit decision durably **before** announcing it. It then repeatedly sends the decision until every participant acknowledges.
 
-## XA Transactions
+On `COMMIT`, a participant makes provisional state visible under its concurrency-control rules, records the terminal state, and releases locks. On `ABORT`, it discards/undoes provisional state and releases locks. Repeated decisions return the same result.
 
-### Standard Interface
+The coordinator does not need to wait for every phase-two acknowledgement before returning success if its decision is durable and a recovery service will continue dissemination. That optimization trades lower client latency for a potentially large background resolution queue. The API must not imply that every replica or downstream observer is already updated.
 
-```
-XA: eXtended Architecture (X/Open standard)
-
-Coordinator: Transaction Manager
-Participants: Resource Managers (databases, queues)
-
-Interface:
-  xa_start()    - Begin transaction
-  xa_end()      - End transaction branch
-  xa_prepare()  - Prepare to commit
-  xa_commit()   - Commit
-  xa_rollback() - Rollback
-```
+### Why prepared participants block
 
-### Java Example (JTA)
-
-```java
-// Get XA resources
-UserTransaction tx = (UserTransaction) ctx.lookup("java:comp/UserTransaction");
-
-try {
-    tx.begin();
-    
-    // Operation on database 1
-    Connection conn1 = dataSource1.getConnection();
-    conn1.prepareStatement("UPDATE accounts SET balance = balance - 100 WHERE id = 1")
-         .executeUpdate();
-    
-    // Operation on database 2
-    Connection conn2 = dataSource2.getConnection();
-    conn2.prepareStatement("UPDATE accounts SET balance = balance + 100 WHERE id = 2")
-         .executeUpdate();
-    
-    tx.commit();  // 2PC happens here
-} catch (Exception e) {
-    tx.rollback();
-}
-```
+Once prepared, a participant cannot safely infer the outcome from silence:
 
-### Limitations
+- the coordinator may have logged `COMMIT` and lost the outbound message;
+- another participant may have voted `NO`, so commit is illegal;
+- a replacement coordinator may be replaying the decision slowly.
 
-```
-- Performance overhead (prepare phase, logging)
-- Blocking (resources locked during 2PC)
-- Homogeneous participants (all must support XA)
-- Not widely supported in modern systems
-```
+Timing out and aborting can contradict an already durable commit. Timing out and committing can contradict an abort. Classic 2PC therefore blocks an uncertain prepared participant until it can learn the decision. Replicating the decision record reduces the coordinator failure window, but it does not let a participant invent an answer when the decision quorum or its own replica quorum is unavailable.
 
----
+## Failure traces
 
-## Avoiding Distributed Transactions
+### Participant crashes before voting
 
-### Design to Avoid
+1. A prepares; B crashes before a durable `PREPARED` record.
+2. The coordinator times out and durably decides abort.
+3. A receives abort and releases locks.
+4. B recovers with no prepared promise and treats `T` as aborted when it receives replay.
 
-```
-1. Single database per service
-   No cross-database transactions needed
-
-2. Eventual consistency with idempotency
-   Accept that operations complete asynchronously
-   
-3. Aggregate boundaries
-   All related data in one partition
-   
-4. Command Query Responsibility Segregation (CQRS)
-   Separate read and write models
-```
+No participant promised commit, so abort is safe.
 
-### Idempotent Operations
+### Vote is lost after durable prepare
 
-```
-Instead of distributed transaction:
+1. B writes `PREPARED(T)` and sends `YES`.
+2. The response is lost; the coordinator times out and decides abort.
+3. B must retain prepared state until abort arrives or it queries the decision record.
 
-1. Assign unique ID to operation
-2. Store ID with each change
-3. On retry, check if ID already processed
+If B presumed abort merely because the vote timed out, it could race a coordinator that actually received every `YES` and committed.
 
-No coordination needed
-Each service handles idempotency locally
-```
+### Coordinator crashes after recording commit
 
-### Reservation Pattern
+1. A and B vote `YES`.
+2. C durably records `COMMIT` and sends it only to A.
+3. A commits; C crashes; B remains prepared and holds locks/intents.
+4. C recovers—or another process reads the replicated decision—and replays `COMMIT` to B.
 
-```
-Instead of: Debit A, Credit B (distributed)
-
-Use:
-  1. Create pending transfer record
-  2. Reserve funds from A (mark as held)
-  3. Credit B
-  4. Complete transfer (release hold from A)
-
-Each step is local
-Failures leave system in recoverable state
-```
+The interval is partially applied but not an arbitrary outcome. Decision durability and idempotent replay are the recovery spine.
 
----
+### Decision record disappears too early
 
-## Comparison
+1. Every live participant acknowledges commit, so cleanup deletes the coordinator record.
+2. An old participant snapshot later rejoins with `PREPARED(T)`.
+3. No authority can prove commit versus abort.
 
-| Approach | Consistency | Latency | Complexity | Use Case |
-|----------|-------------|---------|------------|----------|
-| 2PC | Strong | High | Medium | Databases |
-| 3PC | Strong | Higher | High | Critical systems |
-| Saga | Eventual | Low | High | Microservices |
-| Outbox | Eventual | Low | Medium | Event-driven |
-| Avoid | Eventual | Lowest | Low | Most systems |
+Transaction metadata garbage collection requires a recovery horizon and membership rule. A replica older than that horizon must be rebuilt from a current snapshot, not allowed to ask questions whose answers were discarded.
 
----
+### Isolation fails despite atomic commit
 
-## 2PC Failure Scenarios
+1. `T1` reads doctors A and B as on call, then updates A off call.
+2. `T2` reads the same snapshot, then updates B off call.
+3. Each touches one participant and commits atomically.
+4. Both doctors are off call; the cross-row invariant failed through write skew.
 
-### Failure Scenarios
+Atomic all-or-nothing outcome is not serializable isolation. The read/write conflict protocol must cover the invariant.
 
-```
-Scenario 1: Coordinator crash after PREPARE, before COMMIT
-  - Participants voted YES, holding row locks, wrote PREPARED to WAL
-  - Coordinator is DOWN — decision log empty or incomplete
-  - Participants are "in-doubt": can't commit (others may have voted NO),
-    can't abort (coordinator may have decided COMMIT)
-  - Locked rows unavailable until coordinator recovers and replays log
-
-Scenario 2: Participant crash after PREPARE
-  - Coordinator waits for vote with timeout → timeout expires → ABORT
-  - Sends ABORT to other participants → they release locks
-  - On recovery: crashed participant checks WAL. No PREPARED? Implicit abort.
-    Has PREPARED? Asks coordinator for decision.
-
-Scenario 3: Network partition during COMMIT phase
-  - A receives COMMIT → commits. B's packet dropped → B still PREPARED.
-  - Coordinator retries COMMIT to B on reconnection.
-  - B holds locks until decision arrives. If coordinator also crashes →
-    manual intervention required.
-
-The blocking problem:
-  Single coordinator failure halts ALL participants. No participant can
-  decide unilaterally after voting YES. This is why 2PC is avoided across
-  service boundaries. Within a single DB cluster (cross-shard), it's
-  tolerable because coordinator and participants share fate.
-```
+## Making the coordinator and participants fault tolerant
 
-### XA In-Doubt Recovery (MySQL Example)
+In a sharded database, each participant is often a replicated state machine. Preparing a shard means committing the prepare/intents through that shard's consensus group. The coordinator decision may itself be a replicated transaction record.
 
-```sql
--- After crash, check for in-doubt XA transactions:
-mysql> XA RECOVER;
--- Returns formatID, gtrid_length, bqual_length, data for stuck txns
+This composition changes availability:
 
--- Manually resolve:
-mysql> XA COMMIT 'xid1';   -- or XA ROLLBACK 'xid1';
+- each touched shard needs its replica quorum;
+- the decision-record shard needs its quorum;
+- the transaction waits for the slowest required prepare path;
+- coordinator process loss is survivable because authority is in replicated state.
 
--- Monitor: XA RECOVER returning rows means locks are held.
--- In-doubt transactions block other InnoDB writes on those rows.
-```
+Spanner composes Paxos-replicated participants with 2PC. CockroachDB stores intents plus a transaction record; Parallel Commits uses a `STAGING` record declaring the write set so intent replication and record staging overlap. Another actor can prove commit only if every declared write is present. These are optimizations of the durable proof, not permission to skip it.
 
----
+Gray and Lamport's Paxos Commit replaces the single 2PC coordinator's volatile role with consensus on participant outcomes. It improves non-blocking progress under its quorum assumptions, while requiring more replicated protocol state and messages. Consensus and atomic commit remain distinct: consensus chooses one value within a replica group; atomic commit couples the outcomes of all resource managers.
 
-## Saga Pattern Deep Dive
+## Latency, throughput, and contention model
 
-### Choreography vs Orchestration Tradeoffs
+Let `p` be the number of participants. Prepare and decision dissemination send `O(p)` messages, and every participant must persist at least a prepare outcome plus terminal/cleanup state according to its logging design. With replicated participants, each “persist” is itself a quorum operation.
 
-```
-Choreography (event-driven):
-  + No single point of failure, loosely coupled
-  + Easy to add steps (subscribe to existing events)
-  - Hard to see full flow (logic spread across services)
-  - Circular dependency risk, difficult to debug
-  - Hard to answer: "what state is this saga in?"
-
-Orchestration (central coordinator):
-  + Full flow visible in one place, easy to test
-  + Clear ownership of saga state
-  - Coordinator is coupling point, must be HA
-  - Risk of becoming a "god service"
-
-Rule of thumb: Choreography for ≤3 steps. Orchestration for >3 steps.
-```
+A useful latency decomposition is:
 
-### Compensation Design Rules
+```text
+prepare_latency
+  = max over participants(execution + validation + durable_prepare)
 
-```
-1. MUST be idempotent: cancel_payment(id=123) called 3x → same as 1x
-2. MUST be retryable: network timeout → retry without side effects
-3. MUST handle already-completed states:
-   cancel_payment where never charged → no-op success
-   cancel_payment where already refunded → no-op success
-4. SHOULD be commutative: if T3 and C2 run concurrently, final state correct
+commit_latency
+  = prepare_latency
+  + durable_coordinator_decision
+  + client_visibility_requirement
 ```
 
-### Semantic Rollback: When You Can't Undo
+The last term is zero only if the client may return after a recoverable decision; it includes the slowest decision application if the contract requires every participant visible before success. Batching can amortize log sync and network packets but increases queue delay and the failure impact of one batch.
 
-```
-Some actions can't be reversed: email sent, item shipped, external API called.
+If participant availability during the commit window is `a_i` and the decision service availability is `a_c`, an independence approximation gives transaction-path availability `a_c * product(a_i)`. Correlated zones and shared dependencies make the real result worse. More participants narrow the window in which all required quorums are simultaneously available.
 
-Compensating strategies:
-  - Correction email, return shipment order, API cancel endpoint
-  - Write off cost if below threshold
+Lock or intent hold time begins before prepare and ends only after decision application:
 
-These are "semantic" compensations — business logic, not data rollback.
-Design sagas so irreversible steps come LAST.
+```text
+hold_time = execution + prepare + decision_delay + recovery_delay_if_any
 ```
-
-### Saga Execution Coordinator (SEC)
 
-```
-Persistent state machine per saga instance:
-  saga_id: "trip-001", state: COMPENSATING
-  steps: [ flight: COMPLETED+compensated, hotel: COMPLETED, car: FAILED ]
-
-On crash recovery:
-  1. Load in-progress sagas from durable storage
-  2. COMPENSATING → resume from last incomplete compensation step
-  3. EXECUTING → retry current step or begin compensation
-
-Storage: relational DB or embedded KV store — must survive restart.
-```
+One in-doubt transaction can therefore block unrelated work on every key it touched. Capacity models must include maximum prepared transactions, lock-table/intents bytes, decision-replay throughput, and the oldest unresolved age—not only committed transactions per second.
 
-### The Isolation Problem
+Tail latency also amplifies with fan-out. If each participant completion has CDF `F(t)` and were independent, all `p` complete by `t` with probability `F(t)^p`. A transaction coordinator observes the maximum, so a rare slow shard becomes common at high fan-out.
 
-```
-Sagas do NOT provide transaction isolation.
-
-Example: Saga 1 debits A (1000 → 900), hasn't credited B yet.
-  Saga 2 reads A.balance = 900 (intermediate state).
-  Saga 1 compensates → A back to 1000. Saga 2 made decisions on stale data.
-
-Mitigations:
-  - Semantic locks: mark records as "in-saga" so others wait or skip
-  - Commutative operations: correct results regardless of execution order
-  - Versioned values: optimistic concurrency with version checks
-  - Reread: verify assumptions before final step
-```
+## Optimizations and alternate execution models
 
----
+- **Read-only or single-participant fast paths:** skip distributed prepare only after proving the participant set cannot expand.
+- **Presumed abort/commit:** reduce log records for the common outcome by defining what missing recovery state means. The presumed outcome is a protocol rule, not a timeout guess after `YES`.
+- **Parallel prepare/commit work:** overlap independent replication while retaining a durable write-set proof.
+- **Timestamped MVCC:** reduce read locks, but still needs validation and an atomic outcome for writes.
+- **Deterministic ordering:** Calvin sequences transactions before execution and schedules known read/write sets deterministically. It exchanges per-transaction commit coordination for predeclared access sets, a replicated sequencer, and deterministic execution. Data-dependent interactive transactions do not automatically fit.
 
-## Calvin and Deterministic Transactions
+No optimization removes the need to identify which durable facts make success irrevocable after each crash point.
 
-### The Core Insight
+## Sagas are durable workflows, not atomic commit
 
-```
-Traditional: execute first → coordinate commit (2PC)
-Calvin:      coordinate order first → execute deterministically (no 2PC)
-
-If all replicas agree on transaction order AND execution is deterministic →
-  same final state, no 2PC needed, aborts are also deterministic.
-```
+A saga is a durable sequence of local transactions with compensating actions. Intermediate states are visible, and compensation is a new business operation—not time travel.
 
-### How Calvin Works
+For a trip workflow:
 
+```text
+reserve flight -> reserve hotel -> charge payment
+cancel flight <- cancel hotel <- refund payment
 ```
-1. Sequencing: all transactions go through a total-order sequencer
-   (Raft/Paxos). Output: ordered log of transaction intents.
-
-2. Scheduling: each replica reads the ordered log, analyzes read/write
-   sets, runs non-conflicting transactions concurrently.
 
-3. Execution: each replica executes in the agreed order. Deterministic
-   execution → same inputs, same outputs → no commit coordination.
+A refund can fail, arrive after a statement closes, or incur a fee. An email cannot be unsent. Inventory released by compensation may already have affected another customer. The contract is eventual business reconciliation, usually with explicit `PENDING`, `CONFIRMED`, `COMPENSATING`, `COMPENSATED`, and `MANUAL_REVIEW` states.
 
-Result: strong consistency without 2PC overhead per transaction.
-```
+An orchestrated saga stores the step state, attempt ID, result, next retry, and compensation progress in a durable coordinator. Choreography distributes transitions among event consumers; it removes one code owner but makes global state reconstruction and cycle prevention harder. Neither style is automatically more available—the relevant question is whether every transition and message is durable and idempotent.
 
-### Real-World Usage
+Use semantic locks, reservations, version checks, or rereads to limit the isolation anomalies caused by visible intermediate state. Put irreversible actions late when possible, and define an operator-owned terminal path when compensation cannot restore the original business state.
 
-```
-FaunaDB (now Fauna): Calvin-inspired, pre-declares read/write sets via
-  FQL, achieves serializable isolation across regions.
-
-SLOG (2019, Thomson & Abadi): extends Calvin — local transactions skip
-  global sequencing, only cross-region txns need global order.
-```
+For a database update plus event publication, a transactional outbox places the business row and event record in one local transaction; a publisher or CDC process delivers the event with retries. Delivery is normally at least once, so consumers deduplicate by stable event/operation ID. This solves a dual-write boundary without pretending the broker joined the database transaction.
 
-### Tradeoffs
+## Production operation and migration
 
-```
-Works well: OLTP with predictable access patterns, transactions that
-  can declare read/write sets upfront, short-lived workloads.
-
-Does NOT work: interactive/ad-hoc transactions, transactions where
-  reads determine writes, long-running analytical queries.
-
-Key limitation: transactions must be "pre-declared." The system needs
-  to know which keys will be read/written BEFORE execution begins.
-  Rules out SQL like: UPDATE t SET x = x+1 WHERE y > 10 (read set
-  depends on current data).
-```
+### Recovery is a continuously running subsystem
 
----
+Maintain indexed queues for prepared transactions, decisions awaiting acknowledgement, expired coordinator heartbeats, and intents requiring resolution. Recovery work needs reserved I/O and concurrency limits so an outage does not produce a repair storm that starves foreground commits.
 
-## Production Decision Framework
+Operators need a transaction-status query that reports participant set, authoritative decision, coordinator epoch, prepared age, held resources, and last recovery error. Manual “heuristic commit/abort” is a data-consistency decision; require audited approval and record that atomicity may have been broken.
 
-### When to Use What
+### Garbage collection needs a proof frontier
 
-```
-2PC/XA: single DB cluster (cross-shard), financial atomicity,
-  co-located nodes, both participants are databases you control
+Delete intents, undo, and decision records only after every possible recovering participant can determine the terminal outcome through newer durable state. Tie this to replica snapshots, log truncation, membership removal, and backup restore policy. A time-to-live without a stale-replica rule creates unrecoverable in-doubt transactions.
 
-Sagas: cross-service operations, long-running processes (minutes to days),
-  compensation is well-defined, eventual consistency acceptable
+### Migrate deliberately
 
-Calvin: building new storage engines, OLTP with predictable access
-  patterns, need cross-region ACID without per-transaction 2PC
+When introducing cross-shard atomicity, first assign stable transaction IDs and idempotent local handlers, then deploy durable participant/decision state, recovery, and observability before routing production multi-participant writes. Shadow the participant-discovery logic: an omitted index or constraint write is an atomicity bug even if 2PC works perfectly.
 
-Avoid both — redesign: co-locate related data on same shard/service,
-  redraw aggregate boundaries, use idempotent ops + eventual consistency
-```
+When removing 2PC in favor of a saga, change the API contract. Expose pending state, define compensation, update readers that previously assumed atomic visibility, and backfill a workflow state for in-flight transactions. It is not a transparent performance optimization.
 
-### Comparison Matrix
+### Test every durable boundary
 
-| Property     | 2PC          | 3PC            | Sagas        | Calvin      |
-|--------------|--------------|----------------|--------------|-------------|
-| Consistency  | Strong       | Strong         | Eventual     | Strong      |
-| Isolation    | Full         | Full           | None         | Full        |
-| Latency      | 2 RTT        | 3 RTT          | 1 RTT/step   | 1 RTT seq   |
-| Availability | Blocks on    | Unblocked on   | High         | High        |
-|              | coord fail   | coord fail     |              |             |
-| Partition    | Blocks       | Inconsistent   | Compensate   | Blocks seq  |
-| Complexity   | Medium       | High           | High         | High        |
-| Best for     | DB same DC   | Critical (rare)| Services     | New OLTP    |
+Crash the coordinator and each participant immediately before and after prepare persistence, vote send, decision persistence, decision send, participant application, acknowledgement, and garbage collection. Duplicate and reorder every message. Partition the decision-record quorum, restore an old participant snapshot, change membership mid-transaction, and force lock conflicts. History checking must assert both atomic outcomes and the advertised isolation level.
 
-RTT = round-trip time between participants
+## Decision framework
 
-### Decision Flowchart
+1. Is the requirement atomic visibility, serializable isolation, or eventual workflow completion?
+2. Can all invariant-related data be placed in one transaction participant?
+3. Which participants are discovered dynamically through indexes, constraints, or reads?
+4. What durable record makes commit irrevocable, and which quorum protects it?
+5. How long can prepared state block foreground work during the worst supported outage?
+6. What recovery and metadata-retention rule handles a replica restored from an old snapshot?
+7. Are external effects prepare/commit capable, or must they use outbox, idempotency, and compensation?
+8. Does the latency and availability budget tolerate the slowest of all touched participant quorums?
 
-```
-Need atomicity across services?
-  No  → eventual consistency + idempotency
-  Yes → Can you redesign to avoid it?
-    Yes → co-locate data, redraw boundaries
-    No  → All participants in same DB cluster?
-      Yes → 2PC (built into your DB)
-      No  → Can you define compensating actions?
-        Yes → Sagas
-        No  → design problem — reconsider service boundaries
-```
+## Primary references
 
----
-
-## Key Takeaways
-
-1. **2PC guarantees atomicity** - But blocks on failure
-2. **3PC reduces blocking** - But doesn't handle partitions
-3. **Sagas are eventual** - Compensation may fail
-4. **Outbox pattern is reliable** - Database + events atomically
-5. **XA is heavyweight** - Use only when necessary
-6. **Best approach: avoid** - Design for eventual consistency
-7. **Idempotency is key** - Makes retries safe
-8. **Each step should be recoverable** - Know how to compensate or retry
+- [Gray, *Notes on Data Base Operating Systems* (1978)](https://jimgray.azurewebsites.net/papers/dbos.pdf)
+- [Gray and Lamport, *Consensus on Transaction Commit* (ACM TODS 2006), Microsoft Research publication](https://www.microsoft.com/en-us/research/publication/consensus-on-transaction-commit/)
+- [Garcia-Molina and Salem, *Sagas* (SIGMOD 1987)](https://doi.org/10.1145/38713.38742)
+- [Corbett et al., *Spanner: Google's Globally-Distributed Database* (OSDI 2012)](https://www.usenix.org/system/files/conference/osdi12/osdi12-final-16.pdf)
+- [Peng and Dabek, *Large-scale Incremental Processing Using Distributed Transactions and Notifications* (OSDI 2010)](https://research.google/pubs/large-scale-incremental-processing-using-distributed-transactions-and-notifications/)
+- [Thomson et al., *Calvin: Fast Distributed Transactions for Partitioned Database Systems* (SIGMOD 2012)](https://cs.yale.edu/homes/thomson/publications/calvin-sigmod12.pdf)
+- [Taft et al., *CockroachDB: The Resilient Geo-Distributed SQL Database* (SIGMOD 2020)](https://www.cockroachlabs.com/pdf/cockroachdb-the-resilient-geo-distributed-sql-database-sigmod-2020.pdf)
+- [Helland, *Life Beyond Distributed Transactions: an Apostate's Opinion* (CIDR 2007)](https://www.cidrdb.org/cidr2007/papers/cidr07p15.pdf)

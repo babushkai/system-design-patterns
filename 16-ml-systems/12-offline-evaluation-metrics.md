@@ -395,7 +395,7 @@ The heuristic baseline is underrated. If a complex ML system barely beats "rank 
 
 ## Cost-Sensitive Evaluation
 
-Many production decisions have asymmetric and nonuniform costs. A false positive on a $5 transaction is not the same as a false positive on a $5,000 transaction. A false negative for severe abuse is not the same as a false negative for mild spam.
+Many production decisions have asymmetric and nonuniform costs. A false positive on a USD 5 transaction is not the same as a false positive on a USD 5,000 transaction. A false negative for severe abuse is not the same as a false negative for mild spam.
 
 Cost-sensitive evaluation translates confusion-matrix cells into business impact:
 

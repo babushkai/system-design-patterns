@@ -1,763 +1,227 @@
 # Leader Election
 
-## TL;DR
+Leader election assigns temporary authority over a resource. The safety problem is not preventing two processes from ever *believing* they are leader—pauses and partitions make that impossible to guarantee from local state. The safety problem is ensuring that only the current generation can make accepted changes to the protected system.
 
-Leader election designates one node to coordinate actions in a distributed system. Use consensus-based election (Raft/Paxos) for strong guarantees, or simpler approaches (bully algorithm, lease-based) for less critical systems. The key challenge is ensuring exactly one leader exists at any time—split-brain is the enemy. Fencing tokens prevent stale leaders from causing damage.
+This chapter owns **terms and leadership epochs, failure detection, leases, activation barriers, fencing tokens, failover, and operational handoff**. [Consensus Algorithms](./08-consensus-algorithms.md) owns replicated-log agreement and quorum safety. [Distributed Locks](../01-foundations/09-distributed-locks.md) owns the broader lock API and critical-section semantics. A consensus protocol may contain an election, but external work still needs the authority and fencing reasoning developed here.
 
----
+## Define the leadership contract
 
-## Why Elect a Leader?
+Leadership is always scoped:
 
-### Simplifies Coordination
+- leader for one consensus log;
+- primary for one database range;
+- scheduler for one tenant or queue partition;
+- controller for one reconciliation key;
+- writer for one external storage resource.
 
-```
-Without leader:
-  All nodes coordinate → O(n²) messages
-  Conflicts possible → complex resolution
-
-With leader:
-  Leader coordinates → O(n) messages
-  Single decision maker → no conflicts
-```
-
-### Use Cases
-
-```
-Database:     Leader accepts writes
-Queue:        Leader assigns partitions
-Cache:        Leader manages keys
-Scheduler:    Leader distributes tasks
-Lock service: Leader grants locks
-```
-
----
-
-## Election Algorithms
-
-### Bully Algorithm
-
-Highest-ranked node wins.
-
-```
-Nodes have ranks: A(1) < B(2) < C(3) < D(4) < E(5)
-
-C detects leader (E) failed:
-  1. C sends ELECTION to D, E (higher ranks)
-  2. D responds "I'm alive"
-  3. D sends ELECTION to E
-  4. E doesn't respond (failed)
-  5. D becomes leader, broadcasts COORDINATOR
-```
-
-```
-C           D           E (failed)
-│           │               │
-│──ELECTION►│               │
-│           │──ELECTION────►│
-│           │               ✗
-│◄──ALIVE───│               │
-│           │               │
-│◄──COORDINATOR─────────────│
-│           │               │
-    D is new leader
-```
-
-**Pros:**
-- Simple to implement
-- Deterministic winner
-
-**Cons:**
-- Assumes reliable failure detection
-- Highest rank always wins (inflexible)
-- Not partition-tolerant
-
-### Ring Algorithm
-
-Token-based election around a ring.
-
-```
-Nodes form logical ring: A → B → C → D → A
-
-B detects leader failed:
-  1. B sends ELECTION(B) to C
-  2. C adds self, sends ELECTION(B,C) to D
-  3. D adds self, sends ELECTION(B,C,D) to A
-  4. A adds self, sends ELECTION(B,C,D,A) to B
-  5. B sees complete ring, picks highest, broadcasts COORDINATOR
-```
-
-**Pros:**
-- No single point of failure
-- All nodes participate
-
-**Cons:**
-- Slow (O(n) messages)
-- Ring must be maintained
-- Sensitive to failures during election
-
-### Consensus-Based Election
-
-Use Raft/Paxos for leader election.
-
-```
-Election is just agreeing on a value:
-  "Who is the leader for term T?"
-
-Raft:
-  1. Candidate increments term
-  2. Requests votes
-  3. Majority grants → becomes leader
-  4. Leader sends heartbeats to maintain authority
-```
-
-**Pros:**
-- Partition-tolerant
-- Strong guarantees
-- Well-understood
-
-**Cons:**
-- Requires majority (2f+1 for f failures)
-- More complex to implement
-
----
-
-## Lease-Based Leadership
-
-### Concept
-
-Leader holds a time-limited lease.
-
-```
-Leader A acquires lease: valid until T+10s
-Other nodes know: "A is leader until T+10s"
-
-Before lease expires:
-  A renews lease → continues as leader
-  
-If A crashes:
-  Lease expires (T+10s)
-  Others can acquire new lease
-```
-
-### Implementation
-
-```python
-class LeaseBasedLeader:
-    def __init__(self, node_id, store):
-        self.node_id = node_id
-        self.store = store  # Distributed store like etcd
-        self.lease_ttl = 10  # seconds
-        
-    def try_become_leader(self):
-        # Try to acquire lease (atomic compare-and-swap)
-        success = self.store.put_if_absent(
-            key="/leader",
-            value=self.node_id,
-            ttl=self.lease_ttl
-        )
-        return success
-    
-    def renew_lease(self):
-        # Extend lease if still leader
-        current = self.store.get("/leader")
-        if current == self.node_id:
-            self.store.refresh("/leader", ttl=self.lease_ttl)
-            return True
-        return False
-    
-    def run(self):
-        while True:
-            if self.is_leader():
-                if not self.renew_lease():
-                    # Lost leadership
-                    self.step_down()
-            else:
-                if self.try_become_leader():
-                    self.become_leader()
-            sleep(self.lease_ttl / 3)  # Renew well before expiry
-```
-
-### Clock Considerations
-
-```
-Problem: Clock skew
-
-Leader:   thinks lease expires at 10:00:10
-Follower: thinks lease expires at 10:00:05 (clock behind)
-
-Follower might try to become leader early!
-
-Solutions:
-  1. Use distributed clock (NTP with tight bounds)
-  2. Conservative grace period
-  3. Fencing tokens (see below)
-```
-
----
-
-## Fencing Tokens
-
-### The Problem
-
-Stale leader doesn't know it's no longer leader.
-
-```
-Timeline:
-  T=0:   Leader A acquires lease
-  T=5:   A enters GC pause
-  T=10:  Lease expires, B becomes leader
-  T=15:  A wakes up, thinks it's still leader
-  T=16:  A writes data (stale leader!)
-  
-Split-brain: Both A and B think they're leader
-```
-
-### Solution: Fencing Tokens
-
-Monotonically increasing token with each lease.
-
-```
-Lease 1: token=100, holder=A
-Lease 2: token=101, holder=B
-
-Storage checks token on write:
-  A attempts write with token=100
-  Storage: "Current token is 101, rejecting 100"
-  
-Stale leader's writes rejected
-```
-
-### Implementation
-
-```python
-class FencedStorage:
-    def __init__(self):
-        self.current_token = 0
-        self.data = {}
-    
-    def write(self, key, value, fencing_token):
-        if fencing_token < self.current_token:
-            raise StaleLeaderError(
-                f"Token {fencing_token} < current {self.current_token}"
-            )
-        self.current_token = fencing_token
-        self.data[key] = value
-
-class Leader:
-    def __init__(self, lease_service, storage):
-        self.lease = lease_service
-        self.storage = storage
-        
-    def do_work(self):
-        token = self.lease.get_token()
-        # All operations include token
-        self.storage.write("key", "value", token)
-```
-
----
+A global singleton often creates an unnecessary bottleneck and failure domain. Prefer many independently elected leaders when operations commute across resources.
 
-## Leader Election in Practice
+For each resource, specify:
 
-### Using etcd
+- what actions only the leader may perform;
+- where authority is validated;
+- whether followers may serve stale or read-only work;
+- how long failover may take;
+- what state a new leader must catch up before activation;
+- what happens to commands issued by an old generation but delivered late;
+- whether the protected resource can enforce a fencing token.
 
-```go
-// Create session with TTL
-session, err := concurrency.NewSession(client, concurrency.WithTTL(10))
+“Only one pod runs the cron job” is not a safety contract. If the old pod pauses after charging a card and the new pod retries, the external effect needs its own idempotency or fencing boundary.
 
-// Create election on path
-election := concurrency.NewElection(session, "/my-election/")
+## State and invariants
 
-// Campaign to become leader (blocks until elected)
-err = election.Campaign(ctx, "node-1")
+A robust election carries these durable or replicated fields:
 
-// Now leader - do leader work
-doLeaderWork()
+- **resource ID:** the exact scope of authority;
+- **epoch/term/generation:** a monotonically increasing leadership number;
+- **candidate/leader identity:** unique across process reincarnations;
+- **membership and votes or lease grant:** evidence authorizing the generation;
+- **log/checkpoint position:** state the candidate has incorporated;
+- **lease deadline and renewal evidence**, if time bounds authority;
+- **fencing token:** the generation understood by the protected resource;
+- **activation state:** elected, catching up, active, draining, or revoked.
 
-// Resign if needed
-election.Resign(ctx)
-```
-
-### Using ZooKeeper
-
-```java
-// Create ephemeral sequential node
-String path = zk.create(
-    "/election/leader-",
-    nodeId.getBytes(),
-    ZooDefs.Ids.OPEN_ACL_UNSAFE,
-    CreateMode.EPHEMERAL_SEQUENTIAL
-);
-
-// Check if lowest sequence number
-List<String> children = zk.getChildren("/election", false);
-Collections.sort(children);
-
-if (children.get(0).equals(path.substring("/election/".length()))) {
-    // I am the leader
-    becomeLeader();
-} else {
-    // Watch the node before me
-    String watchPath = children.get(children.indexOf(myNode) - 1);
-    zk.exists("/election/" + watchPath, watchCallback);
-}
-```
-
-### Using Redis (Redlock)
-
-```python
-# Acquire lock with TTL
-lock_key = "leader-lock"
-lock_value = str(uuid.uuid4())  # Unique value for this node
-
-# SET if not exists, with TTL
-acquired = redis.set(lock_key, lock_value, nx=True, ex=10)
-
-if acquired:
-    try:
-        # I am leader
-        do_leader_work()
-    finally:
-        # Release only if still own the lock
-        lua_script = """
-        if redis.call("get", KEYS[1]) == ARGV[1] then
-            return redis.call("del", KEYS[1])
-        else
-            return 0
-        end
-        """
-        redis.eval(lua_script, 1, lock_key, lock_value)
-```
-
----
-
-## Handling Split-Brain
-
-### Detection
-
-```
-Symptoms:
-  - Multiple nodes claiming leadership
-  - Conflicting writes
-  - Inconsistent state
-
-Detection approaches:
-  1. Heartbeat monitoring
-  2. Quorum checks
-  3. Fencing token validation
-  4. State reconciliation
-```
-
-### Prevention
-
-```
-1. Majority quorum (can't have two majorities)
-   Election requires N/2 + 1 votes
-   
-2. Fencing tokens
-   Storage rejects old leaders
-
-3. STONITH (Shoot The Other Node In The Head)
-   Forcibly terminate other leader
-   
-4. Lease expiration
-   Old leader's lease must expire before new election
-```
-
-### Recovery
+The key invariants are:
 
-```
-If split-brain detected:
-  1. Stop all leaders
-  2. Compare states
-  3. Reconcile conflicts
-  4. Re-elect single leader
-  5. Resume operations
-```
+1. The election authority does not grant two leaders for the same resource and generation.
+2. A newer generation supersedes every older generation, even if an old process is still running.
+3. A protected resource rejects state-changing operations from an older generation.
+4. A leader does not serve authoritative work until its state satisfies the activation barrier.
+5. Losing renewal or quorum causes prompt self-demotion, but safety does not rely only on that self-demotion.
 
----
+An epoch orders leadership, not application operations by itself. The storage engine, queue, or downstream service must compare it on the operation that matters.
 
-## Leader Health Monitoring
+## Election mechanisms
 
-### Heartbeats
-
-```
-Leader sends periodic heartbeats:
-  Every 1 second: "I'm alive, term=5"
-
-Followers track:
-  last_heartbeat = now()
-  
-  if now() - last_heartbeat > election_timeout:
-      start_election()
-      
-Typical values:
-  Heartbeat interval: 100-500ms
-  Election timeout: 1-5 seconds
-```
+### Consensus-integrated election
 
-### Quorum-Based Liveness
+Raft candidates increase a term, persist their vote, and need a majority. Voters also require an up-to-date log, so a candidate missing committed entries cannot become leader. A server seeing a higher term steps down. Multi-Paxos and Viewstamped Replication use different mechanics but similarly stabilize one proposer/primary to drive progress.
 
-```
-Leader checks it can still reach quorum:
-
-def leader_loop():
-    while is_leader:
-        acks = send_heartbeat_to_all()
-        if count(acks) < quorum:
-            # Can't reach quorum, step down
-            step_down()
-        sleep(heartbeat_interval)
-```
+Majority intersection prevents two leaders in the same term under the protocol. It does not prevent an isolated term-4 leader from running concurrently in physical time with a term-5 leader. The consensus log rejects old-term replication, but a separate object store or payment API knows nothing about those terms unless the application propagates and validates them.
 
-### Application-Level Health
+Election timing and the detailed log-safety proof belong in [Consensus Algorithms](./08-consensus-algorithms.md) and the [Raft paper analysis](../09-whitepapers/07-raft.md). Operationally, the leader must still establish current-term state before serving linearizable reads or external work.
 
-```
-Sometimes leader is alive but unhealthy:
-  - Out of memory
-  - Disk full
-  - Can't process requests
-
-Application health check:
-  def is_healthy():
-      return (
-          memory_available() and
-          disk_available() and
-          can_process_request()
-      )
-  
-  if not is_healthy():
-      step_down()
-```
+### Coordination-service election
 
----
+A strongly consistent service such as Chubby, ZooKeeper, or etcd can serialize contenders. A common ZooKeeper recipe creates an ephemeral sequential node under an election path; the lowest sequence is leader, and each contender watches its predecessor rather than all contenders watching one node. Session expiry removes abandoned candidacies.
 
-## Graceful Leadership Transfer
+An etcd-style recipe uses a transaction to create an election key only if the prior version is absent and attaches it to a lease. The acquisition transaction's monotonic revision can identify the generation. A random lease ID or wall-clock expiry is not a fencing token.
 
-### Planned Handoff
+The coordination service chooses the winner; it does not fence another database automatically. The elected process must carry the sequence/revision to the protected resource, which must remember the greatest accepted generation.
 
-```
-For maintenance, upgrades, rebalancing:
-
-1. Current leader L1 prepares successor L2
-2. L1 ensures L2's log is up-to-date
-3. L1 sends TimeoutNow to L2 (start election immediately)
-4. L2 wins election (most up-to-date)
-5. L1 steps down
-
-No availability gap
-```
+### Lease-based authority
 
-### Raft Leadership Transfer
+A lease is a grant that remains exclusive for a bounded interval. It improves failover over an unbounded lock because authority eventually expires when a holder disappears. It also introduces time into the proof.
 
-```
-Leader L1 wants to transfer to L2:
-
-1. L1 stops accepting new client requests
-2. L1 replicates all entries to L2
-3. L1 sends TimeoutNow to L2
-4. L2 starts election with incremented term
-5. L2 wins (has all data)
-6. L1 becomes follower
-```
+The granting service measures expiry on its own monotonic time. A client receiving a lease cannot simply store `wall_clock_now + TTL`: its clock may differ, and the grant was already aging in transit. Safe clients use a conservative local deadline derived from monotonic elapsed time, subtract communication and clock uncertainty, renew well before that deadline, and enter a non-serving “jeopardy” state when renewal evidence is missing.
 
----
+A longer lease reduces renewal load and false failover but lengthens the worst crash-detection window. A shorter lease improves potential failover and increases sensitivity to scheduler pauses, overloaded coordination services, and network tails. Renewal cadence must come from measured delay and pause distributions plus the service's clock model; `TTL/3` is an implementation convention, not a proof.
 
-## Anti-Patterns
+Chubby combines sessions, leases, and **sequencers** so a protected service can reject a former lock holder. When sequencer validation is impossible, its lock-delay fallback merely waits before regranting; timing reduces risk but is weaker than fencing.
 
-### No Fencing
+### Static-rank and ring elections
 
-```
-Bad:
-  if am_i_leader():
-      do_write()
-      
-Problem: Leader status might have changed mid-operation
-
-Good:
-  token = get_fencing_token()
-  do_write(token)  # Storage validates token
-```
+Bully and ring algorithms can choose a deterministic candidate in a reliable, fully connected environment. Without quorum or an external fencing authority, two network components can each choose a winner. They are membership/discovery algorithms, not a safe basis for correctness-critical leadership under partitions.
 
-### Clock-Dependent Logic
+## Fencing the old leader
 
-```
-Bad:
-  if lease_expiry > now():
-      am_leader = True
-      
-Problem: Clocks can be wrong
-
-Good:
-  Use lease refresh mechanism
-  Include fencing tokens
-  Use distributed consensus
-```
+Consider a lease grant returning generation 100 to A and the next grant returning 101 to B. Every state-changing request includes the generation:
 
-### Ignoring Network Partitions
+```text
+resource.write(command, generation)
 
-```
-Bad:
-  if ping(other_nodes):
-      am_leader = True
-      
-Problem: Partition can create multiple "leaders"
-
-Good:
-  Require quorum
-  Use fencing tokens
-  Accept that minority partition can't elect leader
+if generation < greatest_generation_seen:
+    reject STALE_LEADER
+else:
+    durably advance greatest_generation_seen as required
+    apply command
 ```
-
----
-
-## Comparison of Approaches
 
-| Approach | Consistency | Availability | Complexity |
-|----------|-------------|--------------|------------|
-| Bully | Weak | Low | Low |
-| Ring | Weak | Medium | Low |
-| Consensus (Raft) | Strong | Medium | High |
-| Lease (etcd) | Strong | Medium | Medium |
-| Lease (Redis) | Medium | High | Medium |
+The validation and update must be atomic with respect to the protected operation. A check in application memory followed by an unfenced write has a time-of-check/time-of-use race.
 
----
+Tokens are scoped. If a job writes database X and object store Y, both must reject old generations; seeing token 101 at X does not teach Y about it. A newly elected leader may need to establish a fence at each resource before publishing itself active.
 
-## Lease-Based Leadership: Deep Dive
+If a third-party API cannot validate generations, alternatives are weaker or more expensive:
 
-### How Leases Work End-to-End
+- make each effect idempotent with a stable operation ID;
+- route all effects through a fenced proxy or transactional outbox;
+- physically isolate/terminate the old process before activating the new one (STONITH);
+- redesign the operation so duplicate execution is harmless.
 
-A lease is a time-bounded grant that a lock service issues to a node. The holder owns the lease until TTL expires. No explicit release required—if the holder crashes, the lease simply expires and another node acquires it.
+Killing the old process is an operational fence only if the kill authority and network isolation are themselves reliable. “The old leader should notice” is never a fence.
 
-```
-Lifecycle of a lease:
-
-  T=0   Node A: Grant(TTL=10s) → lease_id=abc123, revision=42
-  T=3   Node A: KeepAlive(abc123) → TTL reset to 10s from now
-  T=6   Node A: KeepAlive(abc123) → TTL reset to 10s from now
-  ...
-  T=22  Node A crashes. No more KeepAlive.
-  T=32  Lease expires. Key "/leader" deleted automatically.
-  T=32  Node B (watching "/leader") detects deletion → acquires new lease.
-```
+## Activation, service, and handoff protocol
 
-### Bounded Unavailability Window
-
-```
-Worst case unavailability = lease_ttl + election_time
-  e.g., 10s + 200ms ≈ 10.2s
-
-Compare with heartbeat-based detection:
-  unavailability = missed_heartbeats × interval + election_time
-  e.g., 3 × 2s + 5s = 11s (unbounded with unlucky timing)
-```
+Election victory should begin a transition, not immediately enable writes.
 
-### etcd Lease API
+### Activation barrier
 
-```go
-// Grant: create a new lease with a TTL
-resp, _ := client.Grant(ctx, 10) // 10 second TTL
+1. **Acquire generation:** obtain majority votes or a linearizable lease/election record.
+2. **Recover state:** replay the log, load checkpoints, and reconcile work left by the prior leader.
+3. **Establish current authority:** for a replicated log, commit or confirm a barrier in the new term and apply through it.
+4. **Fence dependencies:** make external resources reject older generations.
+5. **Publish readiness:** advertise the endpoint and accept leader-only work.
 
-// Attach the lease to a key (leader registration)
-_, _ = client.Put(ctx, "/service/leader", "node-1", clientv3.WithLease(resp.ID))
+The order prevents a log-stale winner or an elected-but-unfenced process from acting. A readiness probe should represent completion of this barrier, not merely process health.
 
-// KeepAlive: auto-renew the lease in the background
-// Returns a channel; lease is renewed every TTL/3 automatically
-keepAliveCh, _ := client.KeepAlive(ctx, resp.ID)
+### Losing authority
 
-// Revoke: explicitly release the lease (graceful shutdown)
-_, _ = client.Revoke(ctx, resp.ID)
-```
+On failed renewal, observed higher term, quorum loss, or explicit transfer, stop admitting new leader work, cancel or drain in-flight work according to its idempotency contract, and withdraw readiness. Some requests may already be buffered in the network; protected resources must still fence them.
 
-Followers watch for key deletion (`mvccpb.DELETE` event on `/service/leader`) and attempt to acquire a new lease when the leader's key disappears.
+### Graceful transfer
 
-### Clock Skew Risk
+For maintenance, catch the target up first, stop or bound new work, transfer/elect a higher generation, establish its barrier, and only then demote the old leader. A transfer protocol can reduce downtime, but “zero gap” and “zero overlap” are different goals. Fencing makes a brief physical overlap safe; clients retry through a brief service gap.
 
-```
-Lock service clock:  10:00:00  ──────────────────►  10:00:10 (lease expires)
-Leader clock (fast): 10:00:02  ──────────────────►  10:00:12
-
-Leader thinks it has 2 more seconds of valid lease.
-Lock service already expired at leader's 10:00:12 = service's 10:00:10.
-Window of danger: leader acts on an expired lease.
-```
+## Concrete failure traces
 
-**Mitigation: Conservative Renewal Cadence**
+### Process pause outlives its lease
 
-Renew at 1/3 of TTL. This gives 2/3 of the TTL as buffer for clock drift, network delay, and GC pauses.
+1. A obtains lease generation 40 and starts work.
+2. A pauses for garbage collection or host suspension.
+3. The lease expires; B obtains generation 41 and writes successfully.
+4. A resumes with stale local state and sends a delayed write.
 
-```
-TTL = 10s → renew every ~3.3s
-TTL = 30s → renew every ~10s
-
-If renewal fails:
-  - First miss: 6.7s remaining → retry immediately
-  - Second miss: 3.3s remaining → start stepping down
-  - Third miss: 0s → must stop all leader activity
-```
+Self-demotion could not run during the pause. The resource must reject generation 40, or the delayed write can corrupt state.
 
----
+### Isolated old consensus leader reaches an external API
 
-## Split-Brain and Fencing: Deep Dive
+1. Term-8 leader A loses contact with the majority but still reaches a payment service.
+2. The majority elects B in term 9.
+3. A cannot commit to the consensus log, but it can still call the external API.
 
-### The GC Pause Scenario
+Consensus protects the replicated log, not an unrelated effect. Put an outbox command in the log and execute it idempotently/fenced, or propagate term 9 authority to a validating proxy.
 
-```
-T=0    Leader A acquires lease (token=100), starts processing writes
-T=5    Leader A enters full GC pause (stop-the-world, 30 seconds)
-T=10   Lease expires on lock service
-T=11   Leader B acquires lease (token=101), starts accepting writes
-T=35   Leader A's GC finishes. Local state says "I'm leader."
-       A writes to storage → DATA CORRUPTION if unfenced
-```
+### Candidate is elected before catch-up
 
-This is not theoretical. JVM GC pauses of 10+ seconds are documented in production with large heaps.
+1. A coordination service grants leadership to C based only on liveness.
+2. C restored an hour-old checkpoint and immediately schedules jobs it believes incomplete.
+3. The prior leader had completed those jobs after the checkpoint.
 
-### Fencing Tokens as the Safety Net
+Election chose one process but did not choose correct state. Activation must include a durable progress barrier, and job execution must deduplicate by operation ID.
 
-Every lease grant returns a monotonically increasing token. Storage must reject writes with stale tokens.
+### Aggressive timeout creates leadership churn
 
-```
-  Lock Service          Leader A           Leader B           Storage
-       │                    │                  │                  │
-       │──lease(tok=100)──►│                  │                  │
-       │                    │──write(tok=100)─────────────────►  │ ✓ accepted
-       │                    │    (GC pause)    │                  │
-       │──lease(tok=101)──────────────────────►│                  │
-       │                    │                  │──write(tok=101)─►│ ✓ accepted
-       │                    │  (GC resumes)    │                  │
-       │                    │──write(tok=100)─────────────────►  │ ✗ REJECTED
-       │                    │                  │                  │   (100 < 101)
-```
+1. Election timeout is below the high-percentile durable-log or scheduler pause.
+2. A healthy leader occasionally misses the window.
+3. Followers start elections; requests pause, caches cold-start, and leadership moves load to another node.
+4. The load spike makes that node miss its window too.
 
-### ZooKeeper and etcd Fencing Values
+Failure detection should be tuned from end-to-end heartbeat processing tails, not median network RTT. Pre-vote-style checks can prevent an isolated node from inflating terms, but cannot fix an overloaded quorum.
 
-```
-ZooKeeper: use zxid (transaction ID) as fencing token.
-  Globally incremented on every write. Use zxid from session creation.
-
-etcd: use revision (global monotonic counter) as fencing token.
-  resp, _ := client.Grant(ctx, 10)
-  fencingToken := resp.Header.Revision  // monotonic across all keys
-```
+### Watch herd overloads the election service
 
-### STONITH: When Fencing Tokens Are Not Feasible
+1. Thousands of contenders watch one leader key.
+2. It disappears; every contender wakes, reads metadata, and attempts compare-and-set.
+3. The coordination service overload delays lease renewals for unrelated leaders.
 
-When storage does not support fencing tokens (legacy databases, third-party APIs), ensure the old leader is dead before the new one acts.
+Predecessor watches, randomized campaign backoff, sharded election scopes, and admission control bound this control-plane burst.
 
-```
-STONITH (Shoot The Other Node In The Head):
-  - Power-cycle via IPMI/BMC, terminate VM via hypervisor API
-  - Revoke network access via SDN rules
-
-Used by: Pacemaker/Corosync, VMware HA, AWS (terminate EC2 via API)
-
-Tradeoff:
-  + Guarantees old leader cannot act
-  - Requires infrastructure-level access and adds operational complexity
-```
+## Failover and capacity model
 
----
-
-## Leader Election in Practice: Ecosystem Patterns
-
-### Kubernetes Leader Election
-
-Kubernetes uses the `coordination.k8s.io/v1` Lease resource for built-in leader election. Controllers and operators use this to ensure only one instance is active.
-
-```yaml
-apiVersion: coordination.k8s.io/v1
-kind: Lease
-metadata:
-  name: my-controller-leader
-  namespace: kube-system
-spec:
-  holderIdentity: "controller-pod-abc"
-  leaseDurationSeconds: 15
-  acquireTime: "2025-01-15T10:00:00Z"
-  renewTime: "2025-01-15T10:00:10Z"
-  leaseTransitions: 3
-```
+Failover time has separable components:
 
-```
-Sidecar pattern:
-  Pod = leader election sidecar + main application container
-  Sidecar renews lease → exposes /healthz as "leader"
-  Main container checks /healthz before doing leader work
-  Lease lost → sidecar unhealthy → main stops leader tasks
+```text
+failover_time
+  = failure_detection_or_remaining_lease
+  + election
+  + state_catch_up
+  + activation/fencing
+  + client_reroute
 ```
 
-The `client-go` library provides `leaderelection.LeaderElector` with configurable callbacks for campaign, renewal, and step-down.
+Reporting only “election completed in 300 ms” ignores a 20-second lease remainder or minutes of state catch-up. Track and budget each term.
 
-### Redis RedLock: The Controversy
+For `M` independently leased resources renewed every `h` seconds, baseline keepalive demand is roughly `M/h` renewals per second, before retries and watches. A single global leader minimizes renewals but concentrates work; per-partition leaders distribute data-plane load while multiplying control-plane state. Proxying/aggregating sessions can reduce connections, as Chubby's production experience showed.
 
-Redlock attempts distributed locking across N independent Redis instances (typically 5). A lock is acquired when a majority (N/2+1) grant it within a time bound.
+If a successor lags by `L` log bytes and effective catch-up bandwidth is `B`, activation needs at least `L/B`, plus snapshot creation/install and replay. Reserve bandwidth for failover; a saturated leader cannot both serve peak traffic and seed a replacement quickly.
 
-```
-Redlock algorithm:
-  1. Get current time T1
-  2. SET key with NX + TTL on all N Redis instances
-  3. Lock acquired if majority (≥3/5) granted AND (T2-T1) < TTL
-  4. Effective TTL = original TTL - acquisition time
-
-Kleppmann critique: GC pauses break safety, no fencing tokens, assumes bounded drift
-Antirez response: clock drift bounded in practice with NTP
-
-Verdict:
-  ✓ Fine for distributed locks (mutual exclusion for efficiency)
-  ✗ Questionable for leader election requiring strong correctness
-```
-
-### Cloud-Native Approaches
-
-```
-AWS:
-  DynamoDB conditional writes:
-    PutItem with ConditionExpression:
-      "attribute_not_exists(leader_id) OR lease_expiry < :now"
-    Atomic, strongly consistent, no separate lock service needed.
-
-  ElastiCache (Redis) + Lua script:
-    Use SET NX EX for single-instance leader lock.
-    Avoid Redlock unless you need cross-AZ redundancy.
-
-GCP:
-  Cloud Spanner: TrueTime-based leases (bounded clock uncertainty).
-  Chubby (internal): lease-based lock service that inspired ZooKeeper.
-```
+Election timeouts must exceed normal end-to-end heartbeat delay, including leader scheduling, durable-log stalls if they share the event loop, follower scheduling, and network tails. Randomization should be wide enough to separate contenders under the measured distribution. Larger values improve stability and worsen detection latency; there is no topology-independent constant.
 
----
+## Production operation and migration
 
-## Election Protocol Comparison
+Observe current leader and generation per resource, leadership duration, renewal margin, campaign attempts, vote rejection reasons, changes per hour, activation-stage duration, log/checkpoint lag at election, stale-token rejections, unfenced external calls, watch backlog, and client reroute time. Frequent successful elections are still an availability problem.
 
-| Property | Raft | ZooKeeper ZNodes | etcd Lease | Bully |
-|---|---|---|---|---|
-| **Detection time** | 1-5s | 5-30s (session) | 5-30s (TTL) | 2× RTT |
-| **Fencing** | Term number | zxid | Revision | None |
-| **Split-brain safety** | Strong (quorum) | Strong (quorum) | Strong (Raft-backed) | Weak |
-| **Ops complexity** | High | Medium | Medium | Low |
-| **Partition behavior** | Minority loses leader | Minority loses sessions | Minority loses leases | Both elect |
-| **Consistency** | Linearizable | Linearizable (writes) | Linearizable | None |
+During rolling upgrades, keep election-record and token formats backward compatible. Drain leadership before stopping a node, but test abrupt termination too. Do not combine a membership change, election-protocol change, token-width change, and storage migration in one step; each changes a proof boundary.
 
-### When to Use Each
+To add fencing to an existing service, first deploy resource-side token storage and validation in observe-only mode, propagate tokens on every caller path, verify no unfenced writes remain, then enforce rejection. Starting token enforcement before all legitimate writers carry a generation creates an outage; generating tokens before resources validate them creates a false sense of safety.
 
-```
-Raft:       Already running Raft-based system, need strongest guarantees
-ZooKeeper:  Existing ZK infra (Kafka/HBase), need ordered succession
-etcd lease: Kubernetes-native, lightweight coordination, gRPC ecosystem
-Bully:      Single datacenter, no partition tolerance needed, prototyping
-```
+Test process pauses longer than leases, clock steps and monotonic-clock behavior, asymmetric partitions, lost renew replies, duplicate grants after restore, old packets released after new activation, coordination-service overload, successor catch-up failure, and fencing at every external resource. Assert history properties: no accepted lower-generation operation after a higher generation at that resource.
 
-> **Scope note:** For detailed coverage of the consensus mechanisms underlying these protocols, see `08-consensus-algorithms.md`. For transactional guarantees built on top of leader election, see `07-distributed-transactions.md`.
+## Decision framework
 
----
+1. What exact resource does one election govern, and can leadership be partitioned more finely?
+2. Which service serializes generations, and what failure model protects it?
+3. What state/log position must a winner reach before it becomes active?
+4. Where is the fencing token validated atomically with the protected operation?
+5. Which external effects cannot be fenced, and how are duplicates made safe?
+6. What are the measured detection, election, catch-up, fencing, and reroute components of failover?
+7. Can renewal/watch load survive a leader-loss herd without expiring healthy leases?
+8. How does restore or rolling upgrade preserve monotonic generations and identity?
 
-## Key Takeaways
+## Primary references
 
-1. **Leader simplifies coordination** - Single decision maker
-2. **Split-brain is the enemy** - Prevent with quorums + fencing
-3. **Fencing tokens are essential** - Reject stale leaders
-4. **Leases need renewal** - Grace period for failures
-5. **Consensus is safest** - Raft/Paxos for strong guarantees
-6. **Clocks are unreliable** - Don't trust timestamps alone
-7. **Monitor leader health** - Step down if unhealthy
-8. **Plan for handoff** - Graceful transfer for maintenance
+- [Gray and Cheriton, *Leases: an Efficient Fault-Tolerant Mechanism for Distributed File Cache Consistency* (SOSP 1989)](https://web.stanford.edu/class/cs240/readings/leases.pdf)
+- [Chandra and Toueg, *Unreliable Failure Detectors for Reliable Distributed Systems* (JACM 1996)](https://www.cs.cornell.edu/courses/cs734/2000FA/cached%20papers/ct96.pdf)
+- [Burrows, *The Chubby Lock Service for Loosely-Coupled Distributed Systems* (OSDI 2006)](https://research.google.com/archive/chubby-osdi06.pdf)
+- [Hunt et al., *ZooKeeper: Wait-free Coordination for Internet-scale Systems* (USENIX ATC 2010)](https://www.usenix.org/legacy/event/atc10/tech/full_papers/Hunt.pdf)
+- [Ongaro and Ousterhout, *In Search of an Understandable Consensus Algorithm* (USENIX ATC 2014)](https://www.usenix.org/system/files/conference/atc14/atc14-paper-ongaro.pdf)

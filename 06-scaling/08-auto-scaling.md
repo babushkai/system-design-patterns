@@ -1,1094 +1,420 @@
-# Auto-Scaling
+# Auto-Scaling: Delayed Feedback, Headroom, and Safe Scale-Down
 
 ## TL;DR
 
-Auto-scaling automatically adjusts compute capacity based on demand, adding resources during traffic spikes and removing them during lulls. This optimizes costs while maintaining performance. Key components include metrics collection, scaling policies, cooldown periods, and health checks. Modern systems use predictive scaling alongside reactive scaling for better responsiveness.
+Autoscaling is a delayed feedback-control loop. It observes a noisy, delayed signal, computes desired capacity, asks another control plane to create or remove resources, waits for them to become useful, and then observes the effect. A burst can fill queues and exhaust concurrency long before new capacity is ready, so [admission](./05-rate-limiting.md) and [backpressure](./07-backpressure.md) must keep the data plane safe during actuation.
+
+Choose a signal causally related to missing capacity, derive replica demand from per-replica service rate or target utilization, and include metric delay, decision period, provisioning, warm-up, and routing in the response budget. Use hysteresis, stabilization, and bounded step/rate changes to prevent oscillation. Scale down only after removing an instance from admission, draining or transferring work, and proving the remaining fleet can absorb load plus failure headroom.
 
 ---
 
-## Why Auto-Scaling?
+## 1. Scaling Contract
 
-Without auto-scaling:
+| Field | Required answer |
+|---|---|
+| **Objective** | Latency/goodput SLO, queue-drain objective, utilization band, or cost under a reliability constraint. |
+| **Scalable unit** | Process, pod, VM, node, shard, consumer, function concurrency, or vertically sized resource. |
+| **Capacity model** | Useful work/s per ready unit for the actual workload distribution and dependency limits. |
+| **Signal** | Metric definition, scope, aggregation, freshness, missing-data behavior, and causal relationship to demand. |
+| **Actuator** | Minimum/maximum, step/rate limits, quota, placement, provisioning and warm-up distribution. |
+| **Stability policy** | Deadband, scale-up/down evidence, stabilization windows, and conflicting-signal resolution. |
+| **Scale-down protocol** | Readiness removal, connection/lease drain, state transfer, termination deadline, and rollback. |
+| **Failure headroom** | Capacity retained for instance, zone, region, rollout, and dependency degradation. |
+| **Ownership** | Exactly which controller owns desired replica/resource count. |
 
-```
-Traffic Pattern:
-     ▲
-     │         ╱╲
-     │        ╱  ╲        ╱╲
-     │       ╱    ╲      ╱  ╲
-     │ ─────╱      ╲────╱    ╲─────
-     └────────────────────────────────► Time
+### Invariants
 
-Fixed Capacity (over-provisioned for peak):
-     ▲
-     │ ════════════════════════════════  ← Paying for unused capacity
-     │         ╱╲
-     │        ╱  ╲        ╱╲
-     │       ╱    ╲      ╱  ╲
-     │ ─────╱      ╲────╱    ╲─────
-     └────────────────────────────────► Time
-                    Wasted $$$ during low traffic
-```
-
-With auto-scaling:
-
-```
-Traffic Pattern:
-     ▲
-     │         ╱╲
-     │        ╱  ╲        ╱╲
-     │       ╱    ╲      ╱  ╲
-     │ ─────╱      ╲────╱    ╲─────
-     └────────────────────────────────► Time
-
-Auto-scaled Capacity:
-     ▲
-     │        ┌──┐       ┌──┐
-     │        │  │       │  │
-     │   ─────┘  └───────┘  └─────  ← Capacity follows demand
-     └────────────────────────────────► Time
-                    Pay only for what you use
-```
+1. The system remains bounded while the controller observes and capacity starts.
+2. Only ready, routed, and dependency-connected units count as serving capacity.
+3. Desired capacity has explicit lower, upper, quota, and rate-of-change bounds.
+4. One authoritative controller owns each scale field at a time.
+5. Scale-down stops new work before removing capacity and does not abandon owned state.
+6. The remaining fleet can serve admitted load plus the declared failure/rollout margin.
+7. Missing or stale metrics cannot trigger unsafe scale-down.
+8. Increasing replicas cannot silently multiply a global rate, retry, or connection budget.
 
 ---
 
-## Auto-Scaling Components
+## 2. The Feedback Loop
 
-```mermaid
-graph LR
-    I[Instances<br/>CPU, Mem] --> MC[Metrics<br/>Collector]
-    MC --> DE[Scaling<br/>Decision Engine]
-    DE --> SE[Scaling<br/>Executor]
-    DE --> SP[Scaling<br/>Policies]
-    SE --> HC[Health<br/>Checks]
-    SE --> I
-```
+~~~mermaid
+flowchart LR
+    D["Demand"]
+    A["Admission + bounded queue"]
+    W["Ready workers"]
+    Y["Goodput, latency,<br/>queue and utilization"]
+    M["Metric pipeline<br/>sample + aggregate"]
+    C["Controller<br/>estimate + policy"]
+    P["Provision / initialize<br/>warm + route"]
 
----
+    D --> A --> W --> Y
+    Y --> M --> C --> P --> W
+    C -.scale-down intent.-> W
+~~~
 
-## Scaling Metrics
+The loop’s delay is:
 
-### Target Tracking
+> response delay = metric collection + aggregation/export + controller period + API/scheduler + provisioning + initialization + readiness/routing
 
-```python
-from dataclasses import dataclass
-from enum import Enum
-from typing import List, Callable
+During that interval, the offered workload continues. Design the bounded backlog or pre-warmed headroom to survive the measured delay distribution, including control-plane incidents.
 
-class MetricType(Enum):
-    CPU_UTILIZATION = "cpu"
-    MEMORY_UTILIZATION = "memory"
-    REQUEST_COUNT = "request_count"
-    QUEUE_DEPTH = "queue_depth"
-    RESPONSE_TIME = "response_time"
-    CUSTOM = "custom"
-
-@dataclass
-class ScalingMetric:
-    metric_type: MetricType
-    target_value: float
-    scale_in_cooldown: int = 300   # seconds
-    scale_out_cooldown: int = 60   # seconds
-
-class TargetTrackingScaler:
-    """Scale to maintain target metric value"""
-    
-    def __init__(
-        self,
-        metric: ScalingMetric,
-        min_capacity: int = 1,
-        max_capacity: int = 100
-    ):
-        self.metric = metric
-        self.min_capacity = min_capacity
-        self.max_capacity = max_capacity
-    
-    def calculate_desired_capacity(
-        self, 
-        current_capacity: int,
-        current_value: float
-    ) -> int:
-        """
-        Calculate desired capacity based on target tracking.
-        
-        Formula: desired = current_capacity * (current_value / target_value)
-        """
-        if current_value == 0:
-            return self.min_capacity
-        
-        # Calculate proportional capacity
-        ratio = current_value / self.metric.target_value
-        desired = int(current_capacity * ratio)
-        
-        # Add buffer for scale-out (10% headroom)
-        if ratio > 1:
-            desired = int(desired * 1.1)
-        
-        # Clamp to bounds
-        return max(self.min_capacity, min(self.max_capacity, desired))
-
-# Example: Scale to maintain 70% CPU
-cpu_scaler = TargetTrackingScaler(
-    metric=ScalingMetric(
-        metric_type=MetricType.CPU_UTILIZATION,
-        target_value=70.0
-    ),
-    min_capacity=2,
-    max_capacity=50
-)
-
-# Current: 5 instances at 90% CPU
-# Desired: 5 * (90/70) * 1.1 = 7 instances
-desired = cpu_scaler.calculate_desired_capacity(
-    current_capacity=5,
-    current_value=90.0
-)
-```
-
-### Step Scaling
-
-```python
-from dataclasses import dataclass
-from typing import List, Optional
-
-@dataclass
-class StepAdjustment:
-    lower_bound: Optional[float]  # None = negative infinity
-    upper_bound: Optional[float]  # None = positive infinity
-    adjustment: int               # Number of instances to add/remove
-
-class StepScaler:
-    """Scale based on step thresholds"""
-    
-    def __init__(
-        self,
-        scale_out_steps: List[StepAdjustment],
-        scale_in_steps: List[StepAdjustment],
-        min_capacity: int = 1,
-        max_capacity: int = 100
-    ):
-        self.scale_out_steps = scale_out_steps
-        self.scale_in_steps = scale_in_steps
-        self.min_capacity = min_capacity
-        self.max_capacity = max_capacity
-    
-    def calculate_adjustment(
-        self,
-        current_capacity: int,
-        metric_value: float,
-        threshold: float
-    ) -> int:
-        """Calculate capacity adjustment based on breach amount"""
-        breach = metric_value - threshold
-        
-        if breach > 0:  # Scale out
-            for step in self.scale_out_steps:
-                if self._in_range(breach, step.lower_bound, step.upper_bound):
-                    new_capacity = current_capacity + step.adjustment
-                    return max(self.min_capacity, min(self.max_capacity, new_capacity))
-        elif breach < 0:  # Scale in
-            for step in self.scale_in_steps:
-                if self._in_range(abs(breach), step.lower_bound, step.upper_bound):
-                    new_capacity = current_capacity + step.adjustment
-                    return max(self.min_capacity, min(self.max_capacity, new_capacity))
-        
-        return current_capacity
-    
-    def _in_range(self, value: float, lower: Optional[float], upper: Optional[float]) -> bool:
-        if lower is not None and value < lower:
-            return False
-        if upper is not None and value >= upper:
-            return False
-        return True
-
-# Example: Aggressive scale-out, conservative scale-in
-step_scaler = StepScaler(
-    scale_out_steps=[
-        StepAdjustment(lower_bound=0, upper_bound=10, adjustment=1),
-        StepAdjustment(lower_bound=10, upper_bound=20, adjustment=2),
-        StepAdjustment(lower_bound=20, upper_bound=None, adjustment=5),
-    ],
-    scale_in_steps=[
-        StepAdjustment(lower_bound=0, upper_bound=20, adjustment=-1),
-        StepAdjustment(lower_bound=20, upper_bound=None, adjustment=-2),
-    ]
-)
-
-# CPU at 95%, threshold at 70%
-# Breach = 25% → add 5 instances
-```
-
-```
-Step Scaling Visualization:
-
-Metric Value (CPU %):
-
-100 ─┬─────────────────────────────────────
-     │ SCALE OUT: +5 instances
- 90 ─┼─────────────────────────────────────
-     │ SCALE OUT: +2 instances
- 80 ─┼─────────────────────────────────────
-     │ SCALE OUT: +1 instance
- 70 ─┼═════════════════════════════════════  ← Target (no action)
-     │ SCALE IN: -1 instance
- 50 ─┼─────────────────────────────────────
-     │ SCALE IN: -2 instances
- 30 ─┴─────────────────────────────────────
-```
-
-### Scheduled Scaling
-
-```python
-from datetime import datetime, time
-from dataclasses import dataclass
-from typing import List
-import croniter
-
-@dataclass
-class ScheduledAction:
-    name: str
-    schedule: str  # Cron expression
-    min_capacity: int
-    max_capacity: int
-    desired_capacity: int
-
-class ScheduledScaler:
-    """Scale based on known patterns (time-of-day, events)"""
-    
-    def __init__(self, schedules: List[ScheduledAction]):
-        self.schedules = schedules
-    
-    def get_capacity_at(self, dt: datetime) -> dict:
-        """Get scheduled capacity at given time"""
-        for schedule in self.schedules:
-            cron = croniter.croniter(schedule.schedule, dt)
-            # Check if we're within this schedule's active period
-            prev_run = cron.get_prev(datetime)
-            next_run = cron.get_next(datetime)
-            
-            # Simple: use most recent schedule
-            if (dt - prev_run).total_seconds() < 3600:  # Within 1 hour
-                return {
-                    'min': schedule.min_capacity,
-                    'max': schedule.max_capacity,
-                    'desired': schedule.desired_capacity,
-                    'schedule': schedule.name
-                }
-        
-        return None  # No active schedule
-
-# Example: Known traffic patterns
-schedules = [
-    # Business hours: high capacity
-    ScheduledAction(
-        name="business_hours",
-        schedule="0 9 * * MON-FRI",  # 9 AM weekdays
-        min_capacity=10,
-        max_capacity=100,
-        desired_capacity=20
-    ),
-    # Evening: medium capacity
-    ScheduledAction(
-        name="evening",
-        schedule="0 18 * * MON-FRI",  # 6 PM weekdays
-        min_capacity=5,
-        max_capacity=50,
-        desired_capacity=10
-    ),
-    # Night: low capacity
-    ScheduledAction(
-        name="night",
-        schedule="0 22 * * *",  # 10 PM daily
-        min_capacity=2,
-        max_capacity=20,
-        desired_capacity=3
-    ),
-    # Marketing event: pre-scale
-    ScheduledAction(
-        name="black_friday",
-        schedule="0 0 25 11 *",  # Nov 25, midnight
-        min_capacity=50,
-        max_capacity=500,
-        desired_capacity=100
-    ),
-]
-```
+The controller changes **desired capacity**. The actual plant includes scheduler constraints, image distribution, startup dependencies, cache warming, load-balancer convergence, and downstream bottlenecks. Desired replicas are not capacity.
 
 ---
 
-## Predictive Scaling
+## 3. Capacity Model before Metric Selection
 
-```python
-import numpy as np
-from sklearn.ensemble import RandomForestRegressor
-from datetime import datetime, timedelta
-from typing import List, Tuple
-from dataclasses import dataclass
+Benchmark one ready unit with:
 
-@dataclass
-class MetricDataPoint:
-    timestamp: datetime
-    value: float
+- realistic request/message cost distribution;
+- production concurrency and batching;
+- caches both cold and warm;
+- real downstream limits;
+- timeouts, retries, logging, encryption, and sidecars enabled;
+- sustained load long enough to expose throttling, garbage collection, and memory growth.
 
-class PredictiveScaler:
-    """ML-based scaling predictions"""
-    
-    def __init__(
-        self,
-        lookback_hours: int = 168,  # 1 week
-        forecast_hours: int = 2
-    ):
-        self.lookback_hours = lookback_hours
-        self.forecast_hours = forecast_hours
-        self.model = RandomForestRegressor(n_estimators=100)
-        self.is_trained = False
-    
-    def _extract_features(self, dt: datetime) -> List[float]:
-        """Extract time-based features"""
-        return [
-            dt.hour,
-            dt.weekday(),
-            dt.day,
-            dt.month,
-            1 if dt.weekday() >= 5 else 0,  # is_weekend
-            np.sin(2 * np.pi * dt.hour / 24),  # Hour cyclical
-            np.cos(2 * np.pi * dt.hour / 24),
-            np.sin(2 * np.pi * dt.weekday() / 7),  # Day cyclical
-            np.cos(2 * np.pi * dt.weekday() / 7),
-        ]
-    
-    def train(self, history: List[MetricDataPoint]):
-        """Train model on historical data"""
-        X = []
-        y = []
-        
-        for point in history:
-            features = self._extract_features(point.timestamp)
-            X.append(features)
-            y.append(point.value)
-        
-        self.model.fit(X, y)
-        self.is_trained = True
-    
-    def predict(self, current_time: datetime) -> List[Tuple[datetime, float]]:
-        """Predict metric values for next forecast_hours"""
-        if not self.is_trained:
-            raise ValueError("Model not trained")
-        
-        predictions = []
-        for hours_ahead in range(self.forecast_hours):
-            future_time = current_time + timedelta(hours=hours_ahead)
-            features = self._extract_features(future_time)
-            predicted_value = self.model.predict([features])[0]
-            predictions.append((future_time, predicted_value))
-        
-        return predictions
-    
-    def get_recommended_capacity(
-        self,
-        predictions: List[Tuple[datetime, float]],
-        capacity_per_unit: float,
-        target_utilization: float = 0.7
-    ) -> int:
-        """Convert predicted load to recommended capacity"""
-        max_predicted = max(p[1] for p in predictions)
-        # Scale to target utilization
-        required_capacity = max_predicted / (capacity_per_unit * target_utilization)
-        return int(np.ceil(required_capacity))
+Let <code>mu_unit</code> be sustainable useful completions/s per unit at the target tail latency, not the peak throughput at collapse. With arrival <code>lambda</code> and fractional headroom <code>h</code>:
 
-# Usage
-predictor = PredictiveScaler()
+> base units ≥ ceil(lambda / (mu_unit × (1 − h)))
 
-# Train on historical data
-historical_data = load_metrics_last_week()
-predictor.train(historical_data)
+Headroom must also cover the selected failure domain. If losing a fraction <code>f</code> of units is in scope, normal placement/capacity must satisfy useful demand after that loss; do not assume the autoscaler creates replacements during the failure.
 
-# Predict next 2 hours
-predictions = predictor.predict(datetime.now())
-recommended = predictor.get_recommended_capacity(
-    predictions,
-    capacity_per_unit=100,  # Each instance handles 100 req/s
-    target_utilization=0.7
-)
-```
+Some workloads do not scale linearly:
 
-```
-Predictive Scaling Timeline:
+- a database or external API caps total throughput;
+- partition count caps active consumers;
+- one hot key stays on one worker;
+- coordination and cache miss rates grow with replicas;
+- node/network/storage bandwidth becomes shared;
+- each replica opens connection pools that overload the dependency.
 
-     Predicted Traffic
-          ▲
-          │           ╭────╮
-          │       ╭───╯    ╰───╮
-          │   ╭───╯            ╰───╮
-          │───╯                    ╰───
-          └─────────────────────────────► Time
-              │   │        │
-              Now │        │
-                  │        └── Predicted peak: scale up NOW
-                  │
-                  └── Lead time for instances to start
-
-Traditional (reactive): Scales AFTER traffic increases
-Predictive: Scales BEFORE traffic increases
-```
+Scale the bottleneck or shed work; adding workers beyond the constraint can reduce goodput.
 
 ---
 
-## Cooldown and Stabilization
+## 4. Choosing Signals
 
-```python
-from dataclasses import dataclass
-from datetime import datetime, timedelta
-from typing import Optional
+### Resource utilization
 
-@dataclass
-class ScalingActivity:
-    timestamp: datetime
-    action: str  # 'scale_out' or 'scale_in'
-    from_capacity: int
-    to_capacity: int
+CPU utilization works when CPU is the binding resource and per-unit work is stable. It fails when:
 
-class CooldownManager:
-    """Prevent scaling thrashing"""
-    
-    def __init__(
-        self,
-        scale_out_cooldown: int = 60,    # seconds
-        scale_in_cooldown: int = 300,    # seconds
-        stabilization_window: int = 300  # seconds
-    ):
-        self.scale_out_cooldown = scale_out_cooldown
-        self.scale_in_cooldown = scale_in_cooldown
-        self.stabilization_window = stabilization_window
-        self.activities: List[ScalingActivity] = []
-        self.metric_history: List[Tuple[datetime, float]] = []
-    
-    def can_scale_out(self) -> bool:
-        """Check if scale-out is allowed (cooldown passed)"""
-        last_scale_out = self._get_last_activity('scale_out')
-        if not last_scale_out:
-            return True
-        
-        elapsed = (datetime.now() - last_scale_out.timestamp).total_seconds()
-        return elapsed >= self.scale_out_cooldown
-    
-    def can_scale_in(self) -> bool:
-        """Check if scale-in is allowed (cooldown and stabilization)"""
-        # Check cooldown
-        last_activity = self._get_last_activity()
-        if last_activity:
-            elapsed = (datetime.now() - last_activity.timestamp).total_seconds()
-            if elapsed < self.scale_in_cooldown:
-                return False
-        
-        # Check stabilization: metrics must be stable
-        return self._is_metric_stable()
-    
-    def _is_metric_stable(self) -> bool:
-        """Check if metric has been below threshold for stabilization window"""
-        if not self.metric_history:
-            return False
-        
-        window_start = datetime.now() - timedelta(seconds=self.stabilization_window)
-        recent_metrics = [
-            m for t, m in self.metric_history 
-            if t >= window_start
-        ]
-        
-        if not recent_metrics:
-            return False
-        
-        # All values in window must be below threshold
-        return all(m < self.scale_in_threshold for m in recent_metrics)
-    
-    def _get_last_activity(self, action: str = None) -> Optional[ScalingActivity]:
-        if not self.activities:
-            return None
-        
-        if action:
-            matching = [a for a in self.activities if a.action == action]
-            return matching[-1] if matching else None
-        
-        return self.activities[-1]
-    
-    def record_activity(self, activity: ScalingActivity):
-        self.activities.append(activity)
-        # Keep only last 100 activities
-        self.activities = self.activities[-100:]
-    
-    def record_metric(self, value: float):
-        self.metric_history.append((datetime.now(), value))
-        # Keep only metrics within stabilization window
-        cutoff = datetime.now() - timedelta(seconds=self.stabilization_window * 2)
-        self.metric_history = [
-            (t, v) for t, v in self.metric_history if t >= cutoff
-        ]
-```
+- requests wait on I/O while CPU is low;
+- CPU throttling distorts observed usage;
+- work is rejected before consuming CPU;
+- one container/tenant is hot but an average is low;
+- missing resource requests make the utilization denominator meaningless;
+- a downstream bottleneck dominates latency.
 
-```
-Cooldown Prevents Thrashing:
+Memory is often state rather than load and may not fall after traffic drops. Scaling replicas does not cure a leak.
 
-Without cooldown:
-Time ──────────────────────────────────────────────►
-      ↑scale  ↓scale  ↑scale  ↓scale  ↑scale  ↓scale
-      out     in      out     in      out     in
-      
-Instances: 5 → 7 → 5 → 8 → 5 → 7 → 5  (thrashing!)
+### Concurrency
 
-With cooldown (300s scale-in):
-Time ──────────────────────────────────────────────►
-      ↑scale                              ↓scale
-      out                                 in
-      │←───── cooldown (wait) ────────────│
-      
-Instances: 5 → 7 ────────────────────────► 5  (stable)
-```
+In-flight work maps directly to occupied permits for synchronous services. Scale from utilization of a tested per-unit concurrency limit, but separate running from queued and abandoned calls.
+
+### Queue backlog and age
+
+Backlog is useful for asynchronous workers. Depth alone ignores arrival rate, service cost, expired messages, partition parallelism, and drain objective. Oldest age is often closer to user impact.
+
+For backlog <code>B</code>, new arrival <code>lambda</code>, per-worker sustainable completion <code>mu</code>, and desired drain time <code>T</code>:
+
+> required workers ≥ ceil((lambda + B/T) / mu)
+
+This requires <code>mu</code> measured for the current message mix and eligible parallelism. If a partition/key ordering constraint allows only <code>P</code> active consumers, useful workers are capped by <code>P</code>.
+
+### Request rate
+
+External request rate can be a leading demand signal when work per request is predictable. Derive desired units directly from tested <code>mu_unit</code>. If request cost varies, scale on weighted work or separate classes.
+
+### Latency and error rate
+
+Tail latency and errors are objectives but usually late, nonlinear scaling signals. By the time queueing raises p99, the fleet may already be saturated. Use them as guards/validation and pair with a leading signal.
+
+### Multiple metrics
+
+Compute a capacity recommendation per constraint and normally choose the maximum safe recommendation for scale-up. For scale-down, missing or conflicting metrics should retain capacity. Document aggregation: mean hides a hot replica, max can chase one pathological request, and percentile estimation has window delay.
 
 ---
 
-## AWS Auto Scaling Configuration
+## 5. Controller Algorithms
 
-```python
-import boto3
-from typing import List
+### Proportional target tracking
 
-class AWSAutoScalingManager:
-    def __init__(self, region: str = 'us-east-1'):
-        self.autoscaling = boto3.client('autoscaling', region_name=region)
-        self.cloudwatch = boto3.client('cloudwatch', region_name=region)
-    
-    def create_auto_scaling_group(
-        self,
-        name: str,
-        launch_template_id: str,
-        min_size: int,
-        max_size: int,
-        desired_capacity: int,
-        vpc_zone_ids: List[str],
-        target_group_arns: List[str]
-    ):
-        """Create an Auto Scaling Group"""
-        return self.autoscaling.create_auto_scaling_group(
-            AutoScalingGroupName=name,
-            LaunchTemplate={
-                'LaunchTemplateId': launch_template_id,
-                'Version': '$Latest'
-            },
-            MinSize=min_size,
-            MaxSize=max_size,
-            DesiredCapacity=desired_capacity,
-            VPCZoneIdentifier=','.join(vpc_zone_ids),
-            TargetGroupARNs=target_group_arns,
-            HealthCheckType='ELB',
-            HealthCheckGracePeriod=300,
-            Tags=[
-                {
-                    'Key': 'Name',
-                    'Value': name,
-                    'PropagateAtLaunch': True
-                }
-            ]
-        )
-    
-    def create_target_tracking_policy(
-        self,
-        asg_name: str,
-        policy_name: str,
-        target_value: float,
-        metric_type: str = 'ASGAverageCPUUtilization'
-    ):
-        """Create target tracking scaling policy"""
-        return self.autoscaling.put_scaling_policy(
-            AutoScalingGroupName=asg_name,
-            PolicyName=policy_name,
-            PolicyType='TargetTrackingScaling',
-            TargetTrackingConfiguration={
-                'PredefinedMetricSpecification': {
-                    'PredefinedMetricType': metric_type
-                },
-                'TargetValue': target_value,
-                'ScaleInCooldown': 300,
-                'ScaleOutCooldown': 60
-            }
-        )
-    
-    def create_step_scaling_policy(
-        self,
-        asg_name: str,
-        policy_name: str,
-        adjustment_type: str,
-        step_adjustments: List[dict]
-    ):
-        """Create step scaling policy"""
-        return self.autoscaling.put_scaling_policy(
-            AutoScalingGroupName=asg_name,
-            PolicyName=policy_name,
-            PolicyType='StepScaling',
-            AdjustmentType=adjustment_type,
-            StepAdjustments=step_adjustments,
-            MetricAggregationType='Average'
-        )
-    
-    def create_scheduled_action(
-        self,
-        asg_name: str,
-        action_name: str,
-        schedule: str,  # Cron format
-        min_size: int,
-        max_size: int,
-        desired_capacity: int
-    ):
-        """Create scheduled scaling action"""
-        return self.autoscaling.put_scheduled_update_group_action(
-            AutoScalingGroupName=asg_name,
-            ScheduledActionName=action_name,
-            Recurrence=schedule,
-            MinSize=min_size,
-            MaxSize=max_size,
-            DesiredCapacity=desired_capacity
-        )
+For a per-unit metric <code>m_current</code> with target <code>m_target</code> and <code>N</code> current units:
 
-# Usage example
-manager = AWSAutoScalingManager()
+> desired units = ceil(N × m_current / m_target)
 
-# Create ASG
-manager.create_auto_scaling_group(
-    name='web-servers',
-    launch_template_id='lt-0123456789',
-    min_size=2,
-    max_size=50,
-    desired_capacity=5,
-    vpc_zone_ids=['subnet-abc', 'subnet-def'],
-    target_group_arns=['arn:aws:elasticloadbalancing:...']
-)
+This assumes metric load approximately divides across replicas. It does not hold for hot keys or shared bottlenecks. Exclude or conservatively treat not-ready/missing-metric units so startup does not cause an unsafe reverse decision.
 
-# Add target tracking policy
-manager.create_target_tracking_policy(
-    asg_name='web-servers',
-    policy_name='cpu-target-70',
-    target_value=70.0
-)
+For a total external metric, derive units from total demand divided by target work/unit rather than averaging over current replicas.
 
-# Add scheduled scaling for known peaks
-manager.create_scheduled_action(
-    asg_name='web-servers',
-    action_name='business-hours-scale-up',
-    schedule='0 9 * * MON-FRI',
-    min_size=10,
-    max_size=100,
-    desired_capacity=20
-)
-```
+### Deadband and hysteresis
+
+Measurement noise near target can alternate scale-up/down. A deadband takes no action for small error. Hysteresis can use separate evidence for entering and leaving a capacity level. Derive it from metric variance, unit granularity, and cost/SLO tradeoff rather than a copied percentage.
+
+### Stabilization
+
+Retain recent recommendations:
+
+- scale up using evidence fast enough to protect the SLO, subject to false-signal risk;
+- scale down using the highest recent safe recommendation so a brief dip does not remove capacity;
+- rate-limit additions/removals to what scheduler, dependencies, and drain can tolerate.
+
+Stabilization is not a blind cooldown that ignores a worsening incident. Continue measuring and permit emergency scale-up or stop scale-down.
+
+### Step scaling
+
+Discrete steps suit large indivisible units or known thresholds, but every boundary needs hysteresis. Simulate step response with metric/actuation delay; an aggressive step based on stale backlog can overshoot after work already drained.
+
+### Feedforward plus feedback
+
+Scheduled or predictive scaling is feedforward: provision before known demand. It should not replace feedback because forecasts miss launches, incidents, and workload mix. Combine:
+
+> desired = max(forecast capacity, feedback capacity, failure floor)
+
+then apply bounds and placement. Record forecast error and its cost.
 
 ---
 
-## Kubernetes Horizontal Pod Autoscaler
+## 6. Cold Start and Scale-to-Zero
 
-```yaml
-# Basic HPA with CPU
-apiVersion: autoscaling/v2
-kind: HorizontalPodAutoscaler
-metadata:
-  name: web-app-hpa
-spec:
-  scaleTargetRef:
-    apiVersion: apps/v1
-    kind: Deployment
-    name: web-app
-  minReplicas: 3
-  maxReplicas: 100
-  metrics:
-  - type: Resource
-    resource:
-      name: cpu
-      target:
-        type: Utilization
-        averageUtilization: 70
-  - type: Resource
-    resource:
-      name: memory
-      target:
-        type: Utilization
-        averageUtilization: 80
-  behavior:
-    scaleDown:
-      stabilizationWindowSeconds: 300
-      policies:
-      - type: Percent
-        value: 10
-        periodSeconds: 60
-    scaleUp:
-      stabilizationWindowSeconds: 0
-      policies:
-      - type: Percent
-        value: 100
-        periodSeconds: 15
-      - type: Pods
-        value: 4
-        periodSeconds: 15
-      selectPolicy: Max
+Cold-start path:
 
----
-# Custom metrics HPA
-apiVersion: autoscaling/v2
-kind: HorizontalPodAutoscaler
-metadata:
-  name: queue-processor-hpa
-spec:
-  scaleTargetRef:
-    apiVersion: apps/v1
-    kind: Deployment
-    name: queue-processor
-  minReplicas: 1
-  maxReplicas: 50
-  metrics:
-  # Scale based on queue depth
-  - type: External
-    external:
-      metric:
-        name: sqs_queue_messages_visible
-        selector:
-          matchLabels:
-            queue: "orders-queue"
-      target:
-        type: AverageValue
-        averageValue: 10  # 10 messages per pod
+1. The controller detects need.
+2. Quota and scheduler accept placement.
+3. A node/VM exists or is provisioned.
+4. The image/artifact downloads.
+5. The process starts and loads configuration, keys, code, model, or cache.
+6. Dependencies establish pools/leases.
+7. Readiness passes.
+8. Routing converges.
+9. The new unit reaches sustainable goodput.
 
----
-# KEDA ScaledObject for advanced scaling
-apiVersion: keda.sh/v1alpha1
-kind: ScaledObject
-metadata:
-  name: kafka-consumer-scaler
-spec:
-  scaleTargetRef:
-    name: kafka-consumer
-  minReplicaCount: 0  # Scale to zero!
-  maxReplicaCount: 100
-  triggers:
-  - type: kafka
-    metadata:
-      bootstrapServers: kafka:9092
-      consumerGroup: my-group
-      topic: events
-      lagThreshold: '100'  # Scale up when lag > 100
-```
+Measure time-to-first-ready and time-to-full-capacity separately. A process that passes readiness while loading a large cache can draw traffic and worsen the incident.
+
+Options:
+
+- keep a minimum warm fleet;
+- maintain warm pools or pre-pulled artifacts;
+- provision ahead from forecast;
+- reduce initialization dependencies and artifact size;
+- lazy-load optional state while readiness protects expensive routes;
+- buffer only within the deadline/retention bound.
+
+Scale-to-zero is appropriate when cold-start latency fits the product contract or an upstream durable queue can hold work safely. It is not appropriate for a synchronous path whose deadline is shorter than the measured cold start.
 
 ---
 
-## Scaling Patterns
+## 7. Safe Scale-Down
 
-### Scale by Queue Depth
+A capacity unit may own:
 
-```python
-from dataclasses import dataclass
-import math
+- active requests/streams;
+- queue partitions and unacknowledged messages;
+- leases, locks, or shard leadership;
+- local state/cache needed by sessions;
+- connection pools seen by upstreams.
 
-@dataclass
-class QueueMetrics:
-    visible_messages: int
-    in_flight_messages: int
-    messages_per_second: float
+Protocol:
 
-class QueueBasedScaler:
-    """Scale based on queue depth"""
-    
-    def __init__(
-        self,
-        messages_per_worker: int = 10,
-        processing_time_seconds: float = 1.0,
-        min_workers: int = 1,
-        max_workers: int = 100
-    ):
-        self.messages_per_worker = messages_per_worker
-        self.processing_time = processing_time_seconds
-        self.min_workers = min_workers
-        self.max_workers = max_workers
-    
-    def calculate_desired_workers(self, metrics: QueueMetrics) -> int:
-        """Calculate workers needed to drain queue in reasonable time"""
-        total_messages = metrics.visible_messages + metrics.in_flight_messages
-        
-        if total_messages == 0:
-            return self.min_workers
-        
-        # Calculate based on target drain time
-        target_drain_time = 60  # seconds
-        messages_per_worker_per_second = 1 / self.processing_time
-        
-        # Workers needed = messages / (messages_per_worker_per_second * time)
-        workers_needed = math.ceil(
-            total_messages / (messages_per_worker_per_second * target_drain_time)
-        )
-        
-        # Also consider incoming rate
-        workers_for_incoming = math.ceil(
-            metrics.messages_per_second * self.processing_time
-        )
-        
-        desired = max(workers_needed, workers_for_incoming)
-        return max(self.min_workers, min(self.max_workers, desired))
+1. The controller marks the unit draining and stops new assignment.
+2. Service discovery/load balancing removes it from new traffic.
+3. Producers observe the change.
+4. Active work completes, transfers, checkpoints, or reaches a defined termination policy.
+5. Leases, partitions, and leadership are released or fenced.
+6. The remaining fleet is re-evaluated under the new load.
+7. The unit terminates; forced termination is recorded and reconciled.
 
-# Usage
-scaler = QueueBasedScaler(
-    messages_per_worker=10,
-    processing_time_seconds=0.5,
-    max_workers=50
-)
+Scale-down capacity should include terminating units separately from ready capacity. A drain that takes longer than the controller’s scale-down interval can cause multiple overlapping removals.
 
-metrics = QueueMetrics(
-    visible_messages=1000,
-    in_flight_messages=50,
-    messages_per_second=100
-)
+### Stateful and partitioned workers
 
-desired_workers = scaler.calculate_desired_workers(metrics)
-```
+Rebalance can temporarily reduce goodput and amplify network/storage. Scale one step, observe rebalance completion, then continue. For sticky keys or caches, the cold-cache cost may exceed the saved compute.
 
-### Scale by Request Latency
+### Multiple controllers
 
-```python
-class LatencyBasedScaler:
-    """Scale to maintain target latency"""
-    
-    def __init__(
-        self,
-        target_p99_ms: float = 100,
-        max_latency_ms: float = 500,
-        min_instances: int = 2,
-        max_instances: int = 100
-    ):
-        self.target_p99 = target_p99_ms
-        self.max_latency = max_latency_ms
-        self.min_instances = min_instances
-        self.max_instances = max_instances
-    
-    def calculate_desired_instances(
-        self,
-        current_instances: int,
-        current_p99_ms: float,
-        requests_per_second: float
-    ) -> int:
-        if current_p99_ms <= self.target_p99:
-            # Latency OK, might be able to scale in
-            headroom = self.target_p99 / current_p99_ms
-            if headroom > 1.5:  # 50% headroom
-                new_instances = int(current_instances / headroom)
-                return max(self.min_instances, new_instances)
-            return current_instances
-        
-        # Latency too high, scale out
-        if current_p99_ms >= self.max_latency:
-            # Emergency scale
-            return min(self.max_instances, current_instances * 2)
-        
-        # Proportional scale
-        ratio = current_p99_ms / self.target_p99
-        new_instances = int(current_instances * ratio)
-        return min(self.max_instances, new_instances)
-```
+Deployment configuration, autoscaler, rollout controller, manual operator, vertical scaler, and node scaler can fight over replicas/resources. Establish field ownership. When introducing an autoscaler, transfer ownership without applying a stale static replica value that collapses the fleet.
 
 ---
 
-## Health Checks and Replacement
+## 8. Horizontal, Vertical, and Node Scaling
 
-```python
-from enum import Enum
-from dataclasses import dataclass
-from typing import Optional
-import asyncio
+- **Horizontal:** adds parallel units; works for partitionable work and increases coordination/connection footprint.
+- **Vertical:** changes CPU/memory; may require restart and has resource/host limits.
+- **Node/cluster:** supplies placement capacity underneath workload scaling; usually slower and can make pending workload metrics misleading.
 
-class HealthStatus(Enum):
-    HEALTHY = "healthy"
-    UNHEALTHY = "unhealthy"
-    UNKNOWN = "unknown"
+Nested loops need separated timescales and observability. Workload scale-up may create pending units, triggering node scale-up; once nodes arrive, workload metrics may already have changed. Scale-down loops can evict workload while another loop tries to add it.
 
-@dataclass 
-class InstanceHealth:
-    instance_id: str
-    status: HealthStatus
-    consecutive_failures: int
-    last_check: float
-
-class HealthCheckManager:
-    """Manage instance health for auto-scaling"""
-    
-    def __init__(
-        self,
-        health_check_interval: int = 30,
-        unhealthy_threshold: int = 3,
-        healthy_threshold: int = 2,
-        grace_period: int = 300
-    ):
-        self.interval = health_check_interval
-        self.unhealthy_threshold = unhealthy_threshold
-        self.healthy_threshold = healthy_threshold
-        self.grace_period = grace_period
-        self.instances: dict[str, InstanceHealth] = {}
-    
-    async def check_instance(self, instance_id: str, endpoint: str) -> bool:
-        """Perform health check on instance"""
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    endpoint,
-                    timeout=aiohttp.ClientTimeout(total=5)
-                ) as response:
-                    return response.status == 200
-        except Exception:
-            return False
-    
-    async def run_health_checks(self, instances: dict[str, str]):
-        """Run health checks on all instances"""
-        tasks = []
-        for instance_id, endpoint in instances.items():
-            task = self._check_and_update(instance_id, endpoint)
-            tasks.append(task)
-        
-        await asyncio.gather(*tasks)
-    
-    async def _check_and_update(self, instance_id: str, endpoint: str):
-        is_healthy = await self.check_instance(instance_id, endpoint)
-        
-        if instance_id not in self.instances:
-            self.instances[instance_id] = InstanceHealth(
-                instance_id=instance_id,
-                status=HealthStatus.UNKNOWN,
-                consecutive_failures=0,
-                last_check=time.time()
-            )
-        
-        health = self.instances[instance_id]
-        health.last_check = time.time()
-        
-        if is_healthy:
-            health.consecutive_failures = 0
-            if health.status != HealthStatus.HEALTHY:
-                # Need consecutive successes to become healthy
-                health.consecutive_successes = getattr(health, 'consecutive_successes', 0) + 1
-                if health.consecutive_successes >= self.healthy_threshold:
-                    health.status = HealthStatus.HEALTHY
-        else:
-            health.consecutive_failures += 1
-            health.consecutive_successes = 0
-            if health.consecutive_failures >= self.unhealthy_threshold:
-                health.status = HealthStatus.UNHEALTHY
-    
-    def get_unhealthy_instances(self) -> List[str]:
-        """Get list of unhealthy instances for replacement"""
-        return [
-            h.instance_id 
-            for h in self.instances.values() 
-            if h.status == HealthStatus.UNHEALTHY
-        ]
-```
+Reserve node capacity for fast workload scale-up or model the full two-stage delay. Placement constraints, disruption budgets, and zone balance can make nominal free capacity unusable.
 
 ---
 
-## Scaling Costs Optimization
+## 9. Concrete Failure Trace: Queue Metric Oscillation
 
-```python
-from dataclasses import dataclass
-from typing import List
-from enum import Enum
+1. A burst creates backlog <code>B</code>.
+2. Queue metrics export after delay; the controller requests many workers.
+3. Existing workers continue draining during provisioning.
+4. New workers become ready after most backlog is gone.
+5. They all prefetch, open dependency pools, and drive the queue metric near zero.
+6. The controller immediately scales down from the stale low signal.
+7. Draining/rebalance pauses consumption; new arrivals rebuild the queue.
+8. Delayed high metrics trigger another large scale-up.
 
-class InstanceType(Enum):
-    ON_DEMAND = "on_demand"
-    SPOT = "spot"
-    RESERVED = "reserved"
-
-@dataclass
-class InstanceCost:
-    instance_type: str
-    pricing_type: InstanceType
-    hourly_cost: float
-    capacity_units: int
-
-class CostOptimizedScaler:
-    """Optimize scaling for cost"""
-    
-    def __init__(
-        self,
-        reserved_capacity: int,    # Always-on reserved instances
-        spot_percentage: float,    # Percentage of on-demand to use spot
-        spot_fallback_to_on_demand: bool = True
-    ):
-        self.reserved_capacity = reserved_capacity
-        self.spot_percentage = spot_percentage
-        self.spot_fallback = spot_fallback_to_on_demand
-    
-    def calculate_instance_mix(self, desired_capacity: int) -> dict:
-        """Calculate optimal mix of instance types"""
-        mix = {
-            InstanceType.RESERVED: 0,
-            InstanceType.SPOT: 0,
-            InstanceType.ON_DEMAND: 0
-        }
-        
-        remaining = desired_capacity
-        
-        # First, use reserved capacity
-        mix[InstanceType.RESERVED] = min(remaining, self.reserved_capacity)
-        remaining -= mix[InstanceType.RESERVED]
-        
-        if remaining <= 0:
-            return mix
-        
-        # Then, use spot for percentage of remaining
-        spot_count = int(remaining * self.spot_percentage)
-        mix[InstanceType.SPOT] = spot_count
-        remaining -= spot_count
-        
-        # Rest is on-demand
-        mix[InstanceType.ON_DEMAND] = remaining
-        
-        return mix
-    
-    def estimate_hourly_cost(
-        self,
-        mix: dict,
-        costs: dict[InstanceType, float]
-    ) -> float:
-        """Estimate hourly cost for instance mix"""
-        return sum(
-            count * costs.get(instance_type, 0)
-            for instance_type, count in mix.items()
-        )
-
-# Example costs
-costs = {
-    InstanceType.RESERVED: 0.05,   # ~60% discount
-    InstanceType.SPOT: 0.03,       # ~75% discount (variable)
-    InstanceType.ON_DEMAND: 0.12
-}
-
-scaler = CostOptimizedScaler(
-    reserved_capacity=10,     # 10 reserved for baseline
-    spot_percentage=0.7       # 70% spot for variable load
-)
-
-# For 50 instances:
-# Reserved: 10 (baseline)
-# Spot: (50-10) * 0.7 = 28
-# On-demand: 40 - 28 = 12
-mix = scaler.calculate_instance_mix(50)
-hourly_cost = scaler.estimate_hourly_cost(mix, costs)
-```
+Fix it by calculating workers from arrival + drain objective, including actuation delay, bounding scale rate, using scale-down stabilization, observing ready/starting/draining separately, limiting prefetch and dependency concurrency, and retaining a minimum/failure floor.
 
 ---
 
-## Key Takeaways
+## 10. Composition with Overload Budgets
 
-1. **Use multiple metrics**: Combine CPU, memory, and application metrics (queue depth, latency) for accurate scaling
+Autoscaling changes capacity after other controls decide what survives:
 
-2. **Prefer target tracking**: Simpler and usually more effective than step scaling for most use cases
+- rate-limit global entitlement independent of replica count;
+- bound per-replica and aggregate dependency concurrency;
+- keep queues finite and propagate saturation;
+- cap retries/hedges so they do not masquerade as new demand;
+- retain multi-region failover headroom without depending on just-in-time scaling.
 
-3. **Implement cooldowns**: Prevent thrashing with appropriate cooldown periods (faster scale-out, slower scale-in)
+Decide which traffic metric counts:
 
-4. **Add scheduled scaling**: Pre-scale for known traffic patterns (business hours, events)
+> original demand ≠ attempts ≠ admitted work ≠ completed goodput
 
-5. **Consider predictive scaling**: Use ML to anticipate traffic spikes before they happen
+Scaling on retries can amplify a retry storm. Scaling on admitted work alone can hide rejected legitimate demand. Observe all four and use the objective’s correct one.
 
-6. **Health checks matter**: Fast detection and replacement of unhealthy instances prevents capacity loss
+---
 
-7. **Optimize costs**: Use mix of reserved, spot, and on-demand instances based on workload predictability
+## 11. Capacity and Cost Model
+
+Let:
+
+- <code>N_ready</code>, <code>N_starting</code>, <code>N_draining</code>: actual lifecycle counts;
+- <code>mu_unit</code>: useful completions/s per ready unit;
+- <code>T_act</code>: chosen percentile of full scale-out actuation delay;
+- <code>lambda_peak</code>: peak offered/admitted work rate as appropriate;
+- <code>B_free</code>: safe free backlog capacity;
+- <code>c_unit</code>: cost per unit time;
+- <code>c_start</code>: one-time startup/warm/cache/dependency cost.
+
+The backlog added during actuation is at least:
+
+> B_added = max(0, lambda_peak − N_ready × mu_unit) × T_act
+
+Require <code>B_free ≥ B_added</code> or shed enough work to satisfy it.
+
+Scale-out must also respect downstream aggregate limits. If each replica can open <code>k</code> dependency calls, total potential dependency concurrency is <code>N_ready × k</code>; allocate a global/regional budget or reduce <code>k</code> as N grows.
+
+Approximate capacity cost:
+
+> steady cost = integral of ready + starting + draining unit-time × c_unit
+>
+> churn cost = scale events × c_start + cache/rebalance/egress work
+
+Optimize cost per useful completion while meeting failure and latency objectives. A controller that flaps can appear to reduce average replicas while increasing startup and downstream cost.
+
+---
+
+## 12. Operations and Migration
+
+### Rollout
+
+1. Establish the per-unit capacity curve and actuation distribution.
+2. Shadow recommendations against current capacity.
+3. Set minimum, maximum, quota, and emergency manual bounds.
+4. Enable scale-up only for a cohort.
+5. Validate readiness, routing, connection budgets, and cold-cache impact.
+6. Introduce conservative drain-aware scale-down.
+7. Test rollout and failure-domain loss while scaling.
+8. Transfer ownership from static configuration/controllers explicitly.
+
+### Runbooks
+
+- max reached: determine whether quota, placement, dependency, or true demand is limiting;
+- pending units: inspect node capacity, affinity, images, secrets, and startup dependencies;
+- ready but no goodput: inspect routing, warm-up, hot partitions, and downstream limits;
+- oscillation: compare signal timestamp with action/effect timeline;
+- unsafe scale-down: freeze removals, restore floor, reconcile interrupted work;
+- metric outage: hold safe capacity and alert rather than infer zero.
+
+Autoscaler config is production code. Version, review, canary, and roll it back.
+
+---
+
+## 13. Security and Governance
+
+- Authenticate and authorize scale-policy and manual-bound changes.
+- Prevent untrusted tenants from directly controlling global scaling metrics.
+- Bound cardinality and validate external metric labels/values.
+- Protect metric/control APIs from spoofing, replay, and stale writes.
+- Audit changes to minimum, maximum, signal, target, and manual overrides.
+- Restrict workload identity so new units receive only required secrets/resources.
+- Ensure scale-out does not exceed licensed, privacy, regional, or budget constraints.
+- Treat denial-of-wallet separately from denial-of-service: admission still caps abusive demand.
+
+Scaling is not a security control; it can turn attack traffic into a cost incident.
+
+---
+
+## 14. Observability
+
+Overlay on one timeline:
+
+- offered/original demand, attempts, admitted work, completion goodput;
+- signal value, timestamp, freshness, and missing samples;
+- controller recommendation, clamp/rate/stabilization reason;
+- desired, pending, starting, ready, draining, failed units;
+- scheduler/provision/start/readiness/routing durations;
+- per-unit throughput, concurrency, utilization, latency, and distribution skew;
+- queue depth/bytes/oldest age and predicted drain time;
+- downstream connection/concurrency and throttling;
+- scale event/churn/startup cost and forecast error.
+
+Alert on inability to meet the contract: actuation slower than buffer headroom, max/quota saturation, no goodput from new capacity, unsafe drain, stale metrics, or repeated oscillation.
+
+---
+
+## 15. Verification
+
+- replay measured demand traces through an offline controller simulation;
+- step, ramp, burst, periodic, and workload-mix changes;
+- delay, drop, duplicate, and reorder metric samples;
+- make provisioning and warm-up slower than normal;
+- exhaust placement quota and node capacity;
+- add replicas against a fixed downstream bottleneck;
+- create one hot key/partition while fleet average remains low;
+- scale during rollout and failure-domain loss;
+- terminate units with active streams, leases, and unacknowledged work;
+- run multiple controllers and verify field ownership;
+- push beyond saturation, remove the trigger, and prove the loop converges without oscillation;
+- compare predicted capacity, ready capacity, and actual goodput.
+
+A load test that begins with a fully warm maximum fleet does not test autoscaling.
+
+---
+
+## 16. Decision Framework
+
+| Workload property | Scaling direction |
+|---|---|
+| Parallel stateless work, stable per-request cost | Horizontal target tracking on leading demand/concurrency |
+| Durable queue with known service rate | Arrival + backlog drain-time model |
+| Known scheduled demand and long startup | Feedforward pre-scaling plus feedback |
+| Large memory state/cache, poor partitionability | Vertical or shard-aware scaling |
+| Scale unit starts after request deadline | Maintain warm floor; do not rely on reactive scale |
+| Fixed downstream capacity | Admission/concurrency first; extra replicas may hurt |
+| Rare workload tolerates cold start | Scale-to-zero may fit |
+| Strong hot-key skew | Repartition/isolate key before adding fleet capacity |
+
+Choose the simplest stable controller whose signal leads the objective and whose actuation fits the buffer/headroom envelope. Manual capacity with alerts is better than an unstable automatic loop.
+
+---
+
+## Primary References
+
+- Kubernetes, [Horizontal Pod Autoscaling](https://kubernetes.io/docs/concepts/workloads/autoscaling/horizontal-pod-autoscale/), including the control loop and replica-ratio algorithm.
+- Kubernetes, [Pod Lifecycle and Termination](https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/).
+- Kubernetes, [Disruptions](https://kubernetes.io/docs/concepts/workloads/pods/disruptions/).
+- KEDA, [Scaling Deployments and StatefulSets](https://keda.sh/docs/latest/concepts/scaling-deployments/).
+- AWS Builders’ Library, [Static Stability Using Availability Zones](https://aws.amazon.com/builders-library/static-stability-using-availability-zones/).
+- Google SRE Workbook, [Managing Load](https://sre.google/workbook/managing-load/).
+
+---
+
+**Next:** [Multi-Region Architecture](./09-multi-region-architecture.md) defines authority, routing, replication, and the capacity floor when an entire region leaves service.

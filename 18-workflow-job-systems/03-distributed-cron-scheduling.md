@@ -1,197 +1,649 @@
-# Distributed Cron and Scheduling
+# Distributed Scheduling and Timer Services
 
 ## TL;DR
 
-Distributed cron is the problem of running scheduled work reliably across a fleet where any node can die and no two clocks agree. Single-machine cron is trivial — one daemon, one clock, one crontab — but it is a single point of failure. The naive distributed fix, running cron on every node, fires every job N times. The entire discipline of distributed cron exists to thread the needle between two symmetric, equally bad failures: **double-firing**, where a tick produces duplicate side effects, and **missed-firing**, where a scheduled tick is silently skipped. Getting this right requires coordinating *who owns the schedule* (a leader or a lease), *what time it actually is* (clock discipline, time zones, and DST), and *what is owed* after a failover (durable last-fire tracking plus idempotent execution). The schedule decides *when*; the execution is a separate concern that usually hands off to a [worker pool](./02-background-jobs-worker-pools.md).
+A distributed scheduler turns time-based intent into durable, claimable work. The difficult parts are not parsing cron expressions. They are materializing each logical occurrence exactly once in scheduler state, surviving missed ticks and failover, preventing stale owners from committing, distributing millions of timers without hot partitions, admitting only work the fleet can finish, and preserving schedule semantics across time zones and version changes.
+
+Separate two responsibilities:
+
+- the **schedule/timer control plane** decides *which logical occurrence is due*;
+- the **execution plane** claims, runs, and records attempts at least once.
+
+Give every occurrence a stable identity, persist it before dispatch, use compare-and-swap claims with fencing epochs, make effects safe under redelivery, and expose deterministic repair operations. A lease may ensure that one scheduler normally owns a shard; it does not make worker effects exactly once.
 
 ---
 
-## Why Single-Machine Cron Does Not Generalize
+## 1. Workload and Contract
 
-Unix cron — Brian Kernighan's original, hardened into Paul Vixie's `cron` in 1987 and still shipping in every Linux distribution — is one of the most successful pieces of system software ever written, and it works because it assumes a world that distributed systems destroy. It assumes one machine: local disk holds the crontab, the local clock defines "now", the local process starts the work, and the local syslog is a sufficient audit trail. Each minute the daemon wakes, compares the current wall-clock time against each crontab line, and forks the matching commands. There is no coordination problem because there is nothing to coordinate with.
+Scheduling workloads fall into three families:
 
-That simplicity is also the failure. If the one machine running cron dies, every scheduled job on it silently stops, and nobody is paged because nothing *failed* — the jobs just never ran. A nightly billing run, a cache warm, a database backup: all skipped, discovered hours or days later. For anything that matters, a single cron daemon is an unacceptable single point of failure.
+1. **recurring schedules:** “run at 02:00 Europe/Amsterdam each business day”;
+2. **one-shot timers:** “wake workflow 30 days after approval”;
+3. **deferred jobs:** “make this job eligible no earlier than 2026-08-01T10:00Z.”
 
-The obvious reflex — put the crontab on every machine in the fleet so the job survives any single death — trades one bad failure for the opposite bad failure. Now all N machines wake at 00:00, all N see the schedule is due, and all N fire the job. The backup runs N times, the invoice emails N times, the idempotency-violating side effect happens N times. You have eliminated missed-firing by guaranteeing double-firing. Distributed cron is the search for a design that has *neither* property: a job fires **once per scheduled tick, despite node failures**.
+The service contract should state:
 
----
+- time expression and time-zone semantics;
+- earliest eligible time and optional deadline;
+- misfire policy after downtime;
+- overlap/concurrency policy;
+- delivery and effect semantics;
+- cancellation and update behavior;
+- schedule/occurrence retention;
+- payload schema and code revision;
+- tenancy, priority, quota, and resource class.
 
-## The Two Failure Modes Are Symmetric — and Both Are Bad
+### 1.1 Core invariants
 
-It helps to state the target property precisely, because almost every design decision in distributed scheduling is a trade between the two ways to miss it.
+1. **Unique occurrence:** one logical schedule time maps to one occurrence identity.
+2. **Durable materialization:** a due occurrence is stored before dispatch can be lost.
+3. **At-least-once execution:** an unacknowledged occurrence becomes claimable again.
+4. **Fenced ownership:** a stale scheduler or worker cannot overwrite a newer owner.
+5. **Monotonic terminal state:** success is not reverted by a late timeout or cancellation.
+6. **Explicit misfire:** downtime behavior is a declared policy, not an accidental burst.
+7. **Bounded admission:** accepted work has a capacity or rejection/defer policy.
+8. **Tenant isolation:** one tenant's hot schedule cannot monopolize scan or worker capacity.
+9. **Versioned semantics:** changing time expression, payload, or handler code does not reinterpret past occurrences.
+10. **Repairability:** missed, duplicated, stuck, or corrupt state can be inspected and repaired through audited operations.
 
-**Double-firing** happens when more than one node believes it owns a tick, or when a single node retries a tick it already fired without remembering it did. The cost is duplicate side effects: two charges, two emails, two rows, two pages. For a non-idempotent job, double-firing is a correctness bug that reaches customers.
-
-**Missed-firing** happens when no node fires a tick that was due — because the owner died between "tick is due" and "work started", or because a failover gap straddled the scheduled time, or because a clock was far enough off that the boundary was never observed. The cost is a silent gap: the backup that did not happen, the report that was never generated.
-
-The two failures are mirror images, and which one you fear more dictates your whole approach. A scheduler can be tuned toward **at-most-once** firing (never double-fire, but accept that a tick might be lost in a failover) or **at-least-once** firing (never lose a tick, but accept that a tick might fire twice). There is no free lunch here — it is the same fundamental tension between safety and liveness that runs through all of distributed systems, and the [CAP-style](../01-foundations/03-cap-theorem.md) reality is that during a partition or a failover you cannot have both guarantees simultaneously. The escape hatch, discussed below, is to make the work **idempotent** so that at-least-once delivery becomes effectively exactly-once *effect*. That single design choice is what makes reliable distributed cron tractable.
-
----
-
-## Why This Needs Coordination
-
-To fire a tick exactly once across a fleet, the fleet must agree on a single actor responsible for that tick. There are two standard ways to manufacture that agreement, and they sit on a spectrum of cost and strength.
-
-The first is **leader election**: the nodes run a consensus protocol so that exactly one of them is the scheduler at any time, and only the leader evaluates schedules and fires ticks. This is how most production schedulers stay singular — Airflow's scheduler historically relied on a single active instance, and HashiCorp Nomad and Kubernetes controllers elect a leader through their consensus layer. Leader election gives a strong guarantee (at most one leader per term) but requires a real consensus substrate such as Raft or ZAB underneath it; see [leader election](../02-distributed-databases/09-leader-election.md) and the [consensus algorithms](../02-distributed-databases/08-consensus-algorithms.md) that make it safe.
-
-The second, lighter-weight mechanism is a **lease**: a node acquires a time-bounded, durably stored claim on the schedule (or on an individual tick) and must renew it to keep ownership. Whoever holds the lease is the scheduler; if the holder dies, the lease expires and another node takes over. Quartz Scheduler's clustered mode is the canonical example — a Quartz cluster coordinates through row locks in a shared database, so exactly one node fires each trigger even though every node is running. Leases are cheaper than full consensus and recover automatically, but they are only as safe as your clock assumptions, because lease expiry is a statement about *time*, and time is exactly the thing distributed systems cannot agree on. The detailed mechanics — lease duration versus heartbeat interval, fencing tokens to defeat a paused-then-resumed old owner — live in [leases, heartbeats, and recovery](./08-leases-heartbeats-recovery.md) and [distributed locks](../01-foundations/09-distributed-locks.md).
-
-Whether by election or by lease, the goal is identical: collapse N candidate firers down to one owner per tick, so that the default behavior is single-firing and double-firing requires an actual coordination bug.
-
----
-
-## The Clock Problem: You Cannot Trust Wall-Clock Equality
-
-The deepest difficulty in distributed cron is that "fire at 00:00:00" is a statement about time, and time in a distributed system is a fiction maintained at considerable effort. Every machine has its own crystal oscillator, drifting at its own rate, disciplined by NTP toward a reference but never perfectly. In a well-run fleet, NTP keeps machines within a few milliseconds to low tens of milliseconds of each other; a misconfigured or network-isolated host can drift by seconds or, after a bad time-sync event, jump backward entirely. The full treatment of why this is unavoidable is in [distributed time](../01-foundations/05-distributed-time.md), but the consequence for scheduling is sharp.
-
-The naive scheduler checks `if now() == scheduled_time` (or rounds `now()` to the minute and compares). On a single machine this is fine. Across a fleet it is a double-firing and missed-firing generator, because two nodes evaluating "is it 00:00 yet?" against two slightly different clocks will disagree about the instant the tick is due. If both believe they are due, you double-fire. If a clock jumps past the boundary, that node never observes equality and the tick is missed. Wall-clock equality is never a safe trigger predicate.
-
-The robust pattern is to never compare clocks for equality and to never depend on cross-node clock agreement for correctness. Instead, store the *next fire time* durably and treat a tick as due when `now() >= next_fire_time`, deriving correctness from a single authoritative clock (typically the database server's time, used by every scheduler node) rather than from each node's local clock. Identity, crucially, comes from the schedule and its nominal time — `(schedule_id, scheduled_time)` — never from "the current time rounded to a minute". When two would-be schedulers both decide schedule A is due for `2026-06-15T00:00:00Z`, they compute the *same* identity and converge on the same tick instead of creating two.
-
-Time zones and daylight-saving time turn this from hard to notorious. A schedule expressed as "every day at 02:30 America/New_York" is ambiguous twice a year: on spring-forward night 02:30 does not exist, and on fall-back night it exists *twice*. A scheduler that stores a numeric UTC offset instead of the IANA zone name (`America/New_York`, not `-05:00`) will silently fire an hour early or late after every DST transition, because the offset it cached is no longer the offset in effect. The defenses are concrete: store the IANA zone, not an offset; compute fire times against an up-to-date tz database; and make the spring-forward (skip or shift) and fall-back (fire once or twice) policies *explicit and user-visible*, because a hidden default here becomes a billing or compliance incident. DST bugs are a perennial source of real outages precisely because they hide until a transition night and then misfire every affected schedule at once.
+“Exactly once at 09:00” is usually two requirements incorrectly combined. The scheduler can uniquely materialize occurrence `O`; delivery and external effects still require the protocols in [Effect Commit Protocols](./06-retry-idempotency-compensation.md).
 
 ---
 
-## What About the Tick We Missed While the Leader Was Down?
+## 2. Data Model and State Machines
 
-Failover is not instantaneous. When the scheduler leader dies, there is a gap — lease expiry plus election plus warm-up — before a new leader takes over, and a scheduled tick can fall inside that gap. The new leader must answer a question the single-machine cron never had to: *what do I owe?* This is the single most important design decision in a distributed scheduler, and it has two parts: knowing what was missed, and deciding what to do about it.
+```text
+schedule:
+  tenant_id
+  schedule_id
+  schedule_revision
+  expression
+  time_zone
+  calendar_policy
+  misfire_policy
+  overlap_policy
+  payload_template
+  handler_revision
+  priority_class
+  shard_key
+  next_fire_at
+  state
+  created_at
+  updated_at
 
-Knowing requires durable state. The new leader cannot ask "what time is it now and what is due now"; it must ask "what was the last tick I successfully fired, and what should have fired between then and now". That demands persisting the **last-known-good fire time** for every schedule to durable storage, so a failover leader can reconstruct the backlog rather than guessing. This is the central lesson of Google's Borgcron, described in *Reliable Cron across the Planet* (ACM Queue, 2016) and Chapter 24 of the Google SRE book: the scheduler keeps a small amount of hard state — which jobs have launched and which have not — replicated across datacenters via Paxos, so that a newly-elected leader knows exactly what the dead leader had and had not done. Without that durable record, every failover risks either re-firing recently-fired ticks (double-fire) or skipping in-flight ones (missed-fire).
-
-Deciding what to do is a **catch-up versus skip** policy, and the right answer depends entirely on the semantics of the job:
-
-| Missed-run policy | Use when | Risk if misapplied |
-|---|---|---|
-| Skip the gap | Freshness beats completeness — cache warms, health pings | Lost periods that were actually required |
-| Catch up every missed tick | Each period is legally or financially mandated — hourly billing, regulatory reports | Catch-up storm saturates workers after a long outage |
-| Catch up only the latest | State is overwritten anyway — full snapshot sync | Intermediate periods genuinely needed are lost |
-| Bounded catch-up | Old work is useful only within a freshness window | Tuning the window wrong silently drops or floods |
-
-Catch-up has a sharp edge: after a multi-hour outage, "fire every missed tick" can dump hundreds of backlogged runs onto the fleet at once — a self-inflicted thundering herd. Borgcron and every mature scheduler bound this, and the backfilled runs should not share unlimited capacity with live ticks; route them to a separate queue or lower priority class so catch-up cannot starve real-time work. Airflow exposes exactly this tension through its `catchup` flag and `max_active_runs` limit, which is a per-schedule answer to "how much past am I willing to relive at once".
-
-The policy only stays safe if a re-fired tick is harmless, which is why **idempotency** is the load-bearing assumption underneath all of this. If executing the same `(schedule_id, scheduled_time)` twice produces the same effect as executing it once, then catch-up is safe, at-least-once delivery is safe, and an overzealous failover is a non-event. The patterns that make a tick idempotent — idempotency keys, dedupe tables, compensating actions — are covered in [retry, idempotency, and compensation](./06-retry-idempotency-compensation.md) and the foundational [idempotency](../01-foundations/08-idempotency.md) treatment. Build the job to be idempotent and you convert the hardest correctness problem in scheduling into a tuning problem.
-
----
-
-## Schedule Versus Execution
-
-A recurring confusion is to conflate the *schedule* (a recurring rule about when work should happen) with the *execution* (the concrete job that one tick produces). They have different lifecycles and different identities, and keeping them separate is what makes a scheduler debuggable.
-
-| Object | Example | Identity | Mutability |
-|---|---|---|---|
-| Schedule | "Every day at 09:00 Asia/Tokyo" | `schedule_id` | Mutable by users/config |
-| Run (execution) | "schedule A for 2026-06-15T00:00:00Z" | `(schedule_id, scheduled_time)` | Immutable identity, mutable status |
-
-The schedule is the *when*; firing it produces an immutable run record that is the *what*. That run record is the audit trail and, more importantly, the deduplication key. A clean way to enforce single-firing is to make the run record's creation an atomic, idempotent insert keyed on the tick identity:
-
-```sql
-INSERT INTO scheduled_runs (schedule_id, scheduled_time, status, created_at)
-VALUES (:schedule_id, :scheduled_time, 'created', now())
-ON CONFLICT (schedule_id, scheduled_time) DO NOTHING;
+occurrence:
+  tenant_id
+  occurrence_id
+  schedule_id
+  schedule_revision
+  logical_fire_at
+  eligible_at
+  deadline_at
+  payload_ref
+  state
+  claim_epoch
+  claimed_by
+  lease_expires_at
+  attempt_count
+  result_ref
+  created_at
+  terminal_at
 ```
 
-This turns "did this tick already fire?" from a distributed coordination question into a database uniqueness constraint: whichever scheduler wins the insert owns the tick, and the loser's `DO NOTHING` is a no-op rather than a duplicate. A scheduler crash *after* the insert but before launching the work is recoverable, because a reconciler can scan for runs stuck in `created` and enqueue them — the durable run record is what closes the gap between "decided to fire" and "actually fired".
+A recurring occurrence ID can be derived from:
 
-Crucially, creating the run is where the scheduler's job usually *ends*. The scheduler decides a tick is due and emits a durable run; a separate [worker pool](./02-background-jobs-worker-pools.md) actually executes it. This separation is deliberate: scheduling is a low-throughput, coordination-heavy control-plane concern, while execution is a high-throughput, elastic, data-plane concern that wants independent [auto-scaling](../06-scaling/08-auto-scaling.md). Coupling them means a slow job blocks the next tick's evaluation; decoupling them means the scheduler stays a tiny, fast, single-owner component and the heavy lifting scales horizontally.
+```text
+occurrence_id = hash(
+  tenant_id,
+  schedule_id,
+  schedule_revision,
+  canonical_logical_fire_at
+)
+```
 
----
+The unique constraint on that tuple makes repeated materialization harmless.
 
-## Overlapping Runs: When a Job Outlasts Its Interval
+### 2.1 Schedule state
 
-A schedule that fires every five minutes assumes each run finishes in well under five minutes. Reality disagrees: a job slows down, a dependency stalls, the data volume grows, and run N is still going when run N+1 comes due. This is not an edge case; it is a guaranteed eventuality, and a scheduler that has no opinion about it will quietly do the most dangerous thing — start a second copy. There are exactly three policies, and the choice is a real design decision:
+```text
+DRAFT -> ACTIVE -> PAUSED -> ACTIVE
+ACTIVE -> DRAINING -> RETIRED
+ACTIVE/PAUSED -> INVALID
+```
 
-- **Skip** the new tick while the previous run is still active. Correct for jobs that are not safe to run concurrently and where a missed period is acceptable — a sync that will simply pick up more on its next successful run. Kubernetes CronJob exposes this directly as `concurrencyPolicy: Forbid`.
-- **Queue** the new tick to run after the current one finishes. Correct when every period must eventually run but two cannot run at once — serializing them preserves both completeness and mutual exclusion, at the cost of falling progressively behind if the slowdown persists.
-- **Allow concurrent** runs. Correct only when the job is genuinely independent per-tick and idempotent or partitioned, so two copies do not corrupt shared state. Kubernetes CronJob's default `Allow` is convenient and exactly the setting that produces overlapping-pileup incidents when applied thoughtlessly.
+`PAUSED` prevents new occurrences but retains state. `DRAINING` prevents new materialization while existing occurrences finish. `RETIRED` is terminal after retention requirements are met.
 
-The pathological version is **overlap pileup**: with `Allow` and a job that has permanently slowed below its interval, every tick launches another concurrent copy, each contending for the same resources, each making the others slower, until the fleet melts. The guidance is concrete — default to `Forbid` or `Skip` for any job touching shared mutable state, reserve `Allow` for verified-independent work, and always cap concurrency so a slow job degrades gracefully instead of recruiting the whole fleet into its own slowdown.
+### 2.2 Occurrence state
 
----
+```text
+SCHEDULED -> READY -> CLAIMED -> RUNNING -> SUCCEEDED
+                       |          |       -> FAILED_FINAL
+                       |          -> READY       # lease expiry/retry
+                       -> CANCELLED
 
-## Sharding and Multi-Region: Staying Singular at Scale
+READY/RUNNING -> DEAD_LETTERED
+```
 
-A single elected scheduler is simple but eventually becomes a throughput bottleneck — a fleet running millions of schedules cannot evaluate all of them from one node every tick. The answer is to **shard schedule ownership**: partition schedules across scheduler instances (by hash of `schedule_id`, by time bucket, or by tenant), with each shard independently electing or leasing its own owner. The invariant to preserve through sharding is unchanged — exactly one owner per schedule — so a schedule must belong to exactly one shard, and shard reassignment during scaling must hand off ownership cleanly rather than letting two shards briefly both claim it. A useful refinement at scale is to separate the read-heavy *schedule scan* (which schedules are due?) from the write-heavy *run creation* (emit the durable tick), because they have different load profiles and scaling needs.
+Keep logical occurrence and execution attempts separate. One occurrence can have multiple attempts:
 
-Multi-region multiplies the difficulty, because now two regions can each believe they own a schedule — a geographic version of split-brain. Active-active scheduling needs either a single home region per schedule (with explicit, deliberate failover when that region is lost) or a globally-consistent run identity (a cross-region unique constraint on `(schedule_id, scheduled_time)`) so that even simultaneous firing in two regions converges on one run. Borgcron solves this by running the cron service as a single Paxos-replicated state machine across datacenters: many replicas, one leader, one authoritative record of what has fired. The standing guidance for any job with external side effects is unambiguous — a cross-region *duplicate* tick is almost always worse than a *late* tick, so prefer stable ownership with explicit failover over racing active-active firers.
+```text
+attempt:
+  occurrence_id
+  attempt_number
+  claim_epoch
+  worker_id
+  started_at
+  heartbeat_at
+  finished_at
+  outcome
+  error_class
+```
 
----
-
-## Operational Visibility
-
-A scheduler fails silently by nature — a missed tick produces no error, just an absence — so observability is not optional; it is how you detect the failure mode that has no exception. The signals worth alerting on are the ones that reveal the scheduler is falling behind or misbehaving before a customer notices: **schedule scan lag** (how stale is the oldest un-evaluated schedule), **tick-to-execution latency** (how long from due to actually fired), **duplicate-run conflict count** (how often two schedulers race for the same tick — a low non-zero number is healthy coordination working; a spike is split-brain), **missed-run count by policy**, **catch-up backlog depth**, and **leader/lease ownership churn** (frequent failovers point at clock or network trouble). The single most important alert is "oldest due schedule not yet evaluated", because it fires on the missed-firing failure that produces no log line of its own.
-
----
-
-## Failure Modes
-
-The characteristic failures of distributed schedulers recur across organizations, and naming them is most of preventing them.
-
-**Double fire** — two nodes each believe they own a tick, or one node re-fires after a crash without remembering it already fired. Root cause is missing or weak single-ownership coordination, or a non-durable last-fire record. Defense: lease-or-elect a single owner, key runs on `(schedule_id, scheduled_time)`, and make execution idempotent so a duplicate is harmless rather than a customer-visible bug.
-
-**Missed fire** — no node fires a due tick, usually because the owner died inside the due window or a clock jumped past the boundary. Defense: durable last-known-good fire time plus a catch-up policy, and a reconciler that enqueues runs stuck in `created`.
-
-**Overlap pileup** — a job that runs longer than its interval launches concurrent copies that compound the slowdown. Defense: a per-schedule concurrency policy (`Forbid`/`Skip` by default) and a hard concurrency cap.
-
-**Clock skew** — local-clock disagreement causes early, late, double, or missed ticks. Defense: discipline clocks with NTP, never trigger on wall-clock equality, and derive due-ness from a single authoritative clock.
-
-**DST and time-zone bugs** — schedules fire an hour early/late, twice, or not at all around transitions. Defense: store IANA zone names not offsets, keep the tz database current, and make spring-forward/fall-back policy explicit and user-visible.
-
-**Leader split-brain** — a paused-then-resumed old leader fires alongside the new one. Defense: fencing tokens and short, well-tuned leases so a stale owner is rejected when it tries to act. See [leases, heartbeats, and recovery](./08-leases-heartbeats-recovery.md).
-
-**Catch-up storm** — an unbounded backfill after an outage dumps hundreds of runs at once and saturates the fleet. Defense: bounded catch-up, a separate queue or priority class for backfill, and a per-schedule cap on active runs.
-
----
-
-## Decision Framework
-
-The right scheduler is the cheapest design whose guarantees match the job's criticality and idempotency. Three questions resolve almost every case.
-
-*Is the job idempotent, and how bad is a duplicate or a miss?* This dominates everything. An idempotent job that overwrites state can tolerate at-least-once firing and a much simpler scheduler. A non-idempotent job with customer-visible side effects (charges, emails, payouts) needs strict single-firing and durable dedupe, and should be made idempotent if at all possible before anything else.
-
-*How critical is the job, and how big is the fleet?* These select the mechanism:
-
-- **Single-node cron (Vixie cron, a systemd timer)** — correct for low-criticality, single-host jobs where a missed run during host downtime is acceptable. Simplest possible thing; do not over-engineer a log-rotation job into a distributed system.
-- **Kubernetes CronJob** — the right default for containerized fleets needing survivability without standing up bespoke coordination. The control plane elects a controller, so the schedule survives any single node, and `concurrencyPolicy` plus `startingDeadlineSeconds` give explicit overlap and missed-run handling. Be aware its guarantee is roughly at-least-once: it can occasionally skip or double-fire around control-plane disruptions, so the job must still be idempotent.
-- **A coordinated distributed scheduler (Quartz clustered, Airflow, Temporal cron workflows, or a Borgcron-style service)** — warranted for large fleets, many tenants, time-zone-aware business schedules, SLA-backed windows, and jobs where missed or duplicate firing has financial or regulatory weight. This is where durable last-fire tracking, sharded ownership, multi-region home regions, and explicit catch-up policy earn their complexity.
-
-*At-most-once or at-least-once?* Decide deliberately, because during a failover you cannot have both. If a duplicate is worse than a miss, lean at-most-once and accept occasional gaps. If a miss is worse than a duplicate, lean at-least-once and make the work idempotent so the duplicates are free. The wrong answer here is to not choose, and to discover your scheduler's implicit choice during an incident.
+This avoids losing forensic history when a new attempt overwrites a `RUNNING` row.
 
 ---
 
-## Key Takeaways
+## 3. Materializing Recurring Schedules
 
-1. A single cron daemon is a single point of failure; running cron on every node fires every job N times — distributed cron exists to achieve neither, firing once per scheduled tick despite node failures.
-2. The two failure modes are symmetric and both bad: double-firing causes duplicate side effects, missed-firing silently skips a tick. Decide which you fear more, because during a failover you cannot rule out both.
-3. Idempotency is the load-bearing assumption: make a re-fired `(schedule_id, scheduled_time)` harmless, and at-least-once firing becomes effectively exactly-once effect.
-4. Manufacture single ownership through leader election or a lease; never trust N nodes to independently agree on who fires a tick.
-5. Never trigger on wall-clock equality across machines — derive due-ness from `now() >= next_fire_time` against one authoritative clock, and identify ticks by schedule plus nominal time, not by the current minute.
-6. Store IANA time zones, not numeric offsets, and make DST spring-forward/fall-back policy explicit; transition nights are a perennial source of misfire incidents.
-7. A failover leader must know what it owes: persist the last-known-good fire time durably (the Borgcron lesson) and apply a deliberate skip-versus-catch-up policy, bounding catch-up so it cannot become a thundering herd.
-8. Decide an explicit overlap policy — skip, queue, or allow concurrent — for any job that can outlast its interval; default to forbidding overlap for jobs touching shared state.
-9. Separate the schedule (when) from the execution (the resulting run), and hand execution off to an independently-scaled worker pool.
-10. Match the mechanism to criticality and fleet size: single-node cron for trivial jobs, Kubernetes CronJob for containerized fleets, a coordinated distributed scheduler for critical, multi-tenant, time-zone-aware work.
+A scheduler shard repeatedly:
+
+1. reads active schedules whose `next_fire_at` is within a lookahead horizon;
+2. computes due logical fire times under the stored schedule revision;
+3. inserts occurrences using the unique occurrence identity;
+4. advances `next_fire_at` with compare-and-swap;
+5. commits occurrence insertion and cursor advancement atomically;
+6. publishes a wake-up hint or lets executors scan durable `READY` state.
+
+### 3.1 Transactional materialization
+
+```text
+BEGIN
+  SELECT schedule WHERE id = ? FOR UPDATE
+  due = compute_occurrences(next_fire_at, now, misfire_policy)
+  INSERT due occurrences ON CONFLICT DO NOTHING
+  UPDATE schedule
+    SET next_fire_at = compute_next(...)
+    WHERE schedule_revision = expected_revision
+COMMIT
+```
+
+If the process crashes before commit, neither cursor nor occurrences advance. If it crashes after commit but before notifying workers, durable occurrences remain discoverable. The notification is an optimization, not the source of truth.
+
+### 3.2 Lookahead horizon
+
+Materializing slightly ahead of time hides storage and dispatch latency. Too short a horizon risks late work during control-plane pauses; too long creates unnecessary state and makes schedule edits/cancellations harder.
+
+Let:
+
+- maximum expected control-plane outage be 40 seconds;
+- p99 materialization plus publication latency be 3 seconds;
+- clock and operational margin be 7 seconds.
+
+Then a minimum lookahead is:
+
+```text
+40 s + 3 s + 7 s = 50 s
+```
+
+Choose based on the service's failure envelope, not a universal constant. One-shot timers months away should not all become active queue entries months early; keep them in a timer index until within the execution horizon.
 
 ---
 
-## Related Patterns
+## 4. Timer Indexes
 
-- [Background Jobs and Worker Pools](./02-background-jobs-worker-pools.md) — where executions actually run after a tick fires
-- [Retry, Idempotency, and Compensation](./06-retry-idempotency-compensation.md) — making a re-fired tick safe
-- [Leases, Heartbeats, and Recovery](./08-leases-heartbeats-recovery.md) — single-owner mechanics and fencing
-- [Distributed Time](../01-foundations/05-distributed-time.md) — why clocks cannot be trusted for equality
-- [Leader Election](../02-distributed-databases/09-leader-election.md) and [Consensus Algorithms](../02-distributed-databases/08-consensus-algorithms.md) — electing one scheduler
-- [Distributed Locks](../01-foundations/09-distributed-locks.md) and [Idempotency](../01-foundations/08-idempotency.md)
-- [Auto-Scaling](../06-scaling/08-auto-scaling.md) — scaling the execution tier independently of the scheduler
+A full table scan for every tick is not a scheduler.
+
+### 4.1 Ordered time buckets
+
+Partition timers by coarse time bucket and shard:
+
+```text
+partition = UTC_date_or_hour(eligible_at)
+shard = hash(tenant_id, timer_id) mod N
+sort key = eligible_at, timer_id
+```
+
+Workers query only current and recovery buckets. Include a tie-breaker so pagination is stable. Avoid a partition key that is only the minute/hour; every timer due at a round boundary would land on one hot partition.
+
+### 4.2 Hierarchical timing wheel
+
+A timing wheel groups deadlines into circular buckets at multiple resolutions:
+
+```text
+level 0: seconds within a minute
+level 1: minutes within an hour
+level 2: hours within a day
+level 3: days within a larger horizon
+```
+
+As time advances, higher-level buckets cascade into lower levels. Insert and expiry can be close to constant time, making wheels effective for large in-memory timer sets. Durable systems checkpoint wheel state or rebuild it from an authoritative timer store after restart.
+
+Resolution creates bounded lateness. A one-second wheel cannot promise microsecond dispatch. Cascading also creates bursts at bucket boundaries; shard buckets and cap work per tick.
+
+### 4.3 Calendar queues and ordered heaps
+
+A priority heap offers simple exact ordering but costs logarithmic insertion/removal and becomes a single-memory bottleneck. Calendar queues bucket by expected inter-arrival spacing and can approach constant-time operations when distributions are stable, but need resizing when density changes.
+
+Choose the index by timer count, mutation rate, required resolution, persistence model, and distribution. Many durable schedulers use a database/index for long horizon and an in-memory heap or wheel for the near horizon.
 
 ---
 
-## References
+## 5. Time Semantics
 
-1. [Reliable Cron across the Planet](https://queue.acm.org/detail.cfm?id=2745840) — Štěpán Davidovič and Kavita Guliani, ACM Queue, 2016 (the Borgcron design)
-2. [Site Reliability Engineering, Chapter 24: Distributed Periodic Scheduling with Cron](https://sre.google/sre-book/distributed-periodic-scheduling/) — Google, 2016
-3. [Vixie cron](https://man7.org/linux/man-pages/man8/cron.8.html) — Paul Vixie, 1987, the de facto Unix cron
-4. [Kubernetes CronJob](https://kubernetes.io/docs/concepts/workloads/controllers/cron-jobs/) — concurrency policy, starting deadline, and at-least-once semantics
-5. [Quartz Scheduler: Configuring Clustering](https://www.quartz-scheduler.org/documentation/quartz-2.3.0/configuration/ConfigJDBCJobStoreClustering.html) — database-row-lock coordination
-6. [Apache Airflow: DAG Runs, catchup, and max_active_runs](https://airflow.apache.org/docs/apache-airflow/stable/authoring-and-scheduling/dag-run.html)
-7. [Temporal: Schedules and Cron](https://docs.temporal.io/workflows#schedule) — durable-execution scheduling with exactly-once semantics
-8. [IANA Time Zone Database](https://www.iana.org/time-zones) — why zones, not offsets, are the correct unit
+### 5.1 Use wall time for intent, monotonic time for elapsed durations
+
+Recurring calendar intent depends on civil time and a named time zone. Lease duration and timeout measurement depend on elapsed time and should use a monotonic clock within a process.
+
+Do not compare wall clocks from two nodes to decide which owner is current. Ownership comes from a consensus-backed transaction/lease and monotonically increasing epoch.
+
+### 5.2 Time zones and daylight-saving transitions
+
+Store the IANA time-zone identifier and schedule revision, not only a UTC offset. Offsets change.
+
+For a local time that does not exist during a spring-forward transition, policy might be:
+
+- skip;
+- run at the next valid instant;
+- run at an explicitly mapped UTC time.
+
+For an ambiguous local time repeated during fall-back:
+
+- run once at the first instance;
+- run once at the second;
+- run twice with distinct logical instants.
+
+There is no universally correct answer. Persist the selected calendar policy and include the canonical UTC logical time in occurrence identity.
+
+### 5.3 Leap seconds and clock corrections
+
+Most application schedulers rely on platform time behavior rather than modeling leap seconds directly. They must still tolerate time moving forward in steps or being smeared. Derive each next occurrence from the prior logical schedule time, not by repeatedly adding a measured duration to “now,” or calendar schedules drift.
+
+---
+
+## 6. Claims, Leases, and Fencing
+
+Executors claim ready work atomically:
+
+```text
+UPDATE occurrence
+SET state = 'CLAIMED',
+    claimed_by = worker,
+    claim_epoch = claim_epoch + 1,
+    lease_expires_at = authority_now + lease_duration
+WHERE occurrence_id = ?
+  AND state = 'READY'
+RETURNING claim_epoch
+```
+
+On expiry, a recovery transaction changes `CLAIMED/RUNNING` back to `READY` and increments or preserves a fencing epoch according to the storage design.
+
+### 6.1 Why leader election is insufficient
+
+A scheduler leader can pause beyond its lease, recover, and continue dispatching. The new leader also dispatches. Consensus elects a current leader; it cannot erase messages already emitted by the stale one.
+
+Downstream state accepts only the current `claim_epoch`, or effects use stable operation identity. See [Leases, Heartbeats, and Recovery](./08-leases-heartbeats-recovery.md) for the ownership protocol.
+
+### 6.2 Heartbeat and lease sizing
+
+Let:
+
+- heartbeat interval be `H`;
+- tolerated missed heartbeats be `K`;
+- p99.9 stop-the-world/network pause be `P`;
+- storage transaction margin be `M`.
+
+A starting lease bound is:
+
+```text
+lease_duration >= K * H + P + M
+```
+
+Shorter leases recover faster but produce false takeovers. Longer leases delay recovery. For long work, checkpoint progress and renew; do not set a six-hour lease merely because a job may run six hours.
+
+---
+
+## 7. Misfires, Catch-Up, and Overlap
+
+After downtime, a schedule may have thousands of missed occurrences. Declare a policy:
+
+| Policy | Behavior | Suitable for |
+|---|---|---|
+| Skip | advance to next future occurrence | sampling, cache refresh |
+| Fire once now | collapse missed times into one run | reconciliation, “ensure current” tasks |
+| Catch up all | materialize each missed occurrence | ledgers, interval-complete pipelines |
+| Catch up bounded | materialize last N or last duration | operational maintenance |
+| Fail for review | pause and surface ambiguity | high-risk external effects |
+
+Catch-up identity must preserve the original logical fire time so retries and downstream partitions remain stable.
+
+### 7.1 Overlap policies
+
+- **allow:** multiple occurrences run concurrently;
+- **forbid:** later occurrence waits or skips while one is active;
+- **replace:** request cancellation of prior work, then start new;
+- **serialize:** queue all occurrences in logical order;
+- **coalesce:** combine several due occurrences into a larger interval.
+
+`replace` is only safe if cancellation is meaningful and effect commit handles races. “Forbid overlap” needs an authority record; querying whether a worker appears active is racy.
+
+### 7.2 Backfill amplification
+
+If 100,000 schedules fire every minute and the control plane is down for 30 minutes, “catch up all” creates:
+
+```text
+100,000 * 30 = 3,000,000 occurrences
+```
+
+Releasing them instantly produces a recovery storm. Materialize durably, then admit through tenant and resource-class budgets.
+
+---
+
+## 8. Sharding and Hot Partitions
+
+Separate schedule ownership from occurrence execution.
+
+Control-plane shards can own ranges of `hash(tenant_id, schedule_id)`. Each shard uses a lease/epoch stored in a consensus-backed system, periodically checkpoints scan cursors, and is recoverable by another owner.
+
+Execution queues may shard by tenant, resource class, priority, or occurrence ID. The best control-plane distribution is not always the best worker distribution.
+
+### 8.1 Resharding protocol
+
+1. publish routing map revision `R+1`;
+2. stop old shard materialization at a recorded cursor;
+3. transfer or rebuild near-horizon timer state;
+4. acquire new shard epoch;
+5. rescan an overlap window;
+6. rely on unique occurrence inserts to absorb duplicates;
+7. retire old ownership only after observed convergence.
+
+An overlap scan is safer than a gap. Uniqueness turns overlap into extra reads; a gap loses occurrences.
+
+### 8.2 Hot tenants and synchronized schedules
+
+Round times such as midnight and the top of the hour create natural spikes. Mitigations:
+
+- allow a declared jitter/window for tasks that do not require exact wall time;
+- shard one large tenant's schedules without losing tenant quotas;
+- pre-materialize within a lookahead;
+- reserve worker capacity by deadline/priority;
+- spread maintenance schedules administratively;
+- isolate high-risk or high-volume tenants.
+
+Never silently jitter a financial or legal deadline. Timing flexibility is part of the schedule contract.
+
+---
+
+## 9. Admission, Fairness, and Capacity
+
+Scheduling decides eligibility; admission decides whether execution can begin.
+
+Suppose:
+
+- steady arrival is 12,000 occurrences per second;
+- mean service time is 2.5 seconds;
+- target utilization is 70 percent;
+- workers run 40 concurrent slots each.
+
+Required concurrent slots at target utilization:
+
+```text
+12,000 * 2.5 / 0.70 = 42,858 slots
+```
+
+Required workers:
+
+```text
+ceil(42,858 / 40) = 1,072 workers
+```
+
+This mean-based estimate is insufficient when service times are heavy-tailed or resource classes differ. Size CPU, memory, accelerator, network, and downstream concurrency independently; simulate bursts and retries.
+
+### 9.1 Drain-time model
+
+For backlog `B`, arrival rate `lambda`, and service rate `mu` where `mu > lambda`:
+
+```text
+drain_time = B / (mu - lambda)
+```
+
+If `mu <= lambda`, backlog never drains. Scaling on queue depth alone can lag; include oldest eligible age, arrival/service rates, and startup delay.
+
+### 9.2 Scheduling policy
+
+The execution scheduler should support:
+
+- bounded priority classes with aging;
+- weighted or deficit fairness across tenants;
+- per-tenant and per-resource concurrency quotas;
+- deadline-aware admission where deadlines are trustworthy;
+- retry work charged to the originating tenant and effect budget;
+- separate capacity for control-plane repair.
+
+The canonical fairness algorithms and overload boundary belong to [Priority, Fairness, and Backpressure](./07-priority-fairness-backpressure.md).
+
+---
+
+## 10. Schedule Evolution and Payload Versioning
+
+Editing a schedule creates a new revision. Define what happens to already materialized occurrences:
+
+- keep them bound to old revision;
+- cancel future unclaimed old-revision occurrences;
+- regenerate under new revision with an audited mapping;
+- let an operator choose at edit time.
+
+Do not mutate occurrence meaning in place. Store handler/code revision and payload schema version so old work remains decodable.
+
+Large payloads should live in immutable object storage or a durable record referenced by digest. Embedding megabytes in queue records increases replication, scan, and retry cost. The reference must remain valid through the maximum execution and repair horizon.
+
+Worker rollouts need compatibility across queued payload versions. Use upcasters or versioned handlers, and verify replay of the oldest retained payload before retiring code.
+
+---
+
+## 11. Multi-Region Design
+
+Common models:
+
+### Home region per schedule
+
+One region materializes and normally executes each schedule. Failover transfers shard epoch and rescans an overlap. Simple uniqueness; higher latency for remote effects.
+
+### Global materialization, regional execution
+
+A globally consistent ledger creates occurrences; regional queues execute according to data locality. Strong control plane, potentially expensive/latent writes.
+
+### Disjoint regional ownership
+
+Schedules belong permanently to regions. Simple and scalable, but global tenants need explicit ownership and failover mapping.
+
+Avoid active-active materialization from eventually consistent copies without a uniqueness authority. Two regions can both decide the same occurrence is due.
+
+During region failover:
+
+1. fence old shard ownership;
+2. load durable schedule cursors;
+3. rebuild the near-horizon index;
+4. rescan an overlap window;
+5. insert occurrences idempotently;
+6. release work through recovery admission budgets.
+
+Recovery point for schedules includes the ledger, timer state, payload references, occurrence states, and effect outcomes—not merely cron definitions.
+
+---
+
+## 12. Security and Multi-Tenant Isolation
+
+Scheduling is authority to execute future code. Protect:
+
+- schedule creation, update, pause, and manual fire with scoped authorization;
+- handler allowlists and versioned payload schemas;
+- tenant-bound queue and storage keys;
+- per-tenant quotas for schedule count, fire rate, payload size, and concurrency;
+- signed internal dispatch envelopes;
+- workload identity for workers;
+- secrets resolved at execution time, not copied into durable payloads;
+- audit history for mutations and manual repair;
+- retention and deletion propagation to occurrences, payloads, logs, and dead letters.
+
+Cron expressions, time zones, and payload templates are untrusted input. Bound expansion: reject expressions that exceed permitted fire rate, cyclic calendar rules, oversized target lists, or payloads that cause uncontrolled fan-out.
+
+A tenant must not infer another tenant's schedule timing from shared identifiers or retrieve its results through predictable occurrence IDs. Authorize before lookup and include tenant scope in identities.
+
+---
+
+## 13. Failure Traces
+
+### 13.1 Cursor advances before occurrence commit
+
+1. Scheduler computes the 10:00 occurrence.
+2. It updates `next_fire_at` to 11:00.
+3. Process crashes before inserting the occurrence.
+4. 10:00 is never discovered again.
+
+**Prevention:** insert occurrence and advance cursor in one transaction.
+
+### 13.2 Notification lost after commit
+
+1. Occurrence commits.
+2. Queue notification fails.
+3. No worker receives the hint.
+
+**Prevention:** executors scan durable ready state or an outbox republishes; notification is not authority.
+
+### 13.3 Failover duplicates a tick
+
+1. Old leader pauses after dispatch.
+2. Lease transfers and new leader rescans overlap.
+3. Both materialize the same logical time.
+
+**Prevention:** unique occurrence identity absorbs duplicate materialization; effect identity absorbs duplicate dispatch.
+
+### 13.4 DST produces a double payroll
+
+1. “01:30 local” occurs twice at fall-back.
+2. Scheduler keys by formatted local string without offset/fold.
+3. It either collides unpredictably or runs twice unintentionally.
+
+**Prevention:** explicit ambiguous-time policy and canonical UTC logical instant.
+
+### 13.5 Misfire storm overloads dependency
+
+1. Scheduler is unavailable for an hour.
+2. Every missed occurrence becomes immediately ready.
+3. Worker autoscaling floods a database with catch-up traffic.
+4. Recovery causes a second outage.
+
+**Prevention:** durable catch-up plus admission budgets, fairness, and dependency-specific concurrency caps.
+
+### 13.6 Stale worker commits after lease transfer
+
+1. Worker A pauses beyond lease.
+2. Worker B claims with epoch 18 and succeeds.
+3. Worker A resumes with epoch 17 and writes a result.
+
+**Prevention:** downstream fence on epoch or stable idempotent effect key; monotonic terminal state.
+
+### 13.7 Schedule edit rewrites history
+
+1. Payload template changes in place.
+2. A queued old occurrence dereferences the mutable template.
+3. It runs with new parameters but old occurrence identity.
+
+**Prevention:** bind occurrence to immutable schedule revision and payload digest.
+
+---
+
+## 14. Observability and Repair
+
+Control-plane signals:
+
+- schedules scanned and materialized by shard/revision;
+- scan cursor lag and lookahead coverage;
+- materialization transaction conflicts;
+- duplicate occurrence insert rate;
+- timer-bucket size and cascade latency;
+- shard lease age, failover, and stale-owner rejection;
+- invalid schedule and expansion-limit rejection.
+
+Execution-plane signals:
+
+- ready/claimed/running/terminal counts;
+- oldest eligible age and deadline misses;
+- arrival, service, retry, and completion rates;
+- lease expiry and reclaim rate;
+- attempts per occurrence;
+- concurrency and resource saturation by class/tenant;
+- misfire/catch-up volume and drain-time estimate;
+- dead-letter and repair backlog age.
+
+Repair APIs should support:
+
+- recompute and preview occurrences for a time range;
+- rescan a shard overlap window;
+- materialize a missing occurrence idempotently;
+- cancel/requeue with expected phase revision;
+- move a corrupt item to quarantine;
+- rebuild the near-horizon timer index;
+- compare authoritative occurrence state with queue/index projections.
+
+Every repair emits an audit event and uses the same transition rules as normal execution.
+
+---
+
+## 15. Verification
+
+1. **Calendar vectors:** DST gaps/folds, leap days, month ends, time-zone rule updates.
+2. **State-machine properties:** terminal monotonicity, unique occurrence, legal phase transitions.
+3. **Crash-point tests:** before/after occurrence insert, cursor advance, notification, claim, outcome, ack.
+4. **Clock fault tests:** skew, jumps, smear, monotonic/wall divergence.
+5. **Failover tests:** paused old leader, overlapping scan, routing-map update, regional evacuation.
+6. **Load tests:** synchronized boundaries, hot tenants, millions of long timers, heavy-tailed job duration.
+7. **Misfire tests:** each policy after controlled downtime, with admission limits.
+8. **Schema tests:** oldest retained payload on newest worker and mixed-version fleets.
+9. **Tenant tests:** quotas, cross-tenant lookup, fair-share under one tenant flood.
+10. **Model-based simulation:** random schedules, crashes, leases, retries, edits, and repairs checked against invariants.
+
+Use a virtual clock in deterministic simulation. Wall-clock integration tests alone are slow and miss rare interleavings.
+
+---
+
+## 16. Decision Framework
+
+Use operating-system cron when one host, best-effort execution, and manual recovery are acceptable. Use a database-backed scheduler when volume is moderate, transactional materialization is valuable, and the database can sustain indexed due-time scans. Use a broker's delayed delivery when delays fit its retention/resolution contract and recurring-calendar semantics are minimal. Use a durable workflow engine when timers are part of a long-running state machine with replay, cancellation, and effect recovery.
+
+Before designing a scheduler, answer:
+
+1. What is the unique identity of a logical occurrence?
+2. Which time semantics apply: UTC instant, elapsed delay, or named-zone calendar?
+3. What happens to missed and overlapping occurrences?
+4. How many timers exist, how often do they mutate, and how synchronized are deadlines?
+5. Where is occurrence materialization committed?
+6. How are stale schedulers and workers fenced?
+7. Can accepted backlog finish before its deadlines?
+8. How are tenant fairness and downstream limits enforced?
+9. Which schedule and payload revisions must old work retain?
+10. How is state reconstructed after regional loss?
+11. What repair operations exist for a missing, duplicated, or stuck occurrence?
+
+The smallest scheduler is usually the best one, but “small” still requires durable identity and explicit failure semantics. Adding replicas without those properties only duplicates the uncertainty.
+
+---
+
+## Primary References
+
+- [Varghese and Lauck: Hashed and Hierarchical Timing Wheels](https://dl.acm.org/doi/10.1145/41457.37504)
+- [Brown: Calendar Queues](https://dl.acm.org/doi/10.1145/63039.63045)
+- [RFC 5545: Internet Calendaring and Scheduling Core Object Specification](https://www.rfc-editor.org/rfc/rfc5545)
+- [Kubernetes: CronJob](https://kubernetes.io/docs/concepts/workloads/controllers/cron-jobs/)
+- [Temporal Documentation: Timers](https://docs.temporal.io/develop/java/timers)
+- [Google Research: Large-scale Cluster Management at Google with Borg](https://research.google/pubs/large-scale-cluster-management-at-google-with-borg/)
+
+---
+
+## Related Chapters
+
+- [Background Jobs and Worker Pools](./02-background-jobs-worker-pools.md)
+- [Effect Commit Protocols for Workflows](./06-retry-idempotency-compensation.md)
+- [Priority, Fairness, and Backpressure](./07-priority-fairness-backpressure.md)
+- [Leases, Heartbeats, and Recovery](./08-leases-heartbeats-recovery.md)
+- [Durable Execution and Workflow Engines](./04-durable-execution-workflow-engines.md)

@@ -1,643 +1,238 @@
 # SSTables and Compaction
 
-## TL;DR
+An SSTable is an immutable sorted run plus the metadata needed to search and validate it. Immutability makes publication, caching, replication, and recovery tractable; it also means updates and deletes accumulate as newer records. Compaction is the background protocol that rewrites overlapping runs into a new authoritative set without losing snapshots, resurrecting deleted values, or exposing half-built files.
 
-Sorted String Tables (SSTables) are immutable, sorted files that form the on-disk layer of LSM trees. Compaction merges SSTables to reclaim space, remove obsolete data, and maintain read performance. Choosing the right compaction strategy—size-tiered, leveled, or FIFO—depends on your workload's read/write balance and latency requirements.
+This chapter owns the **immutable sorted-run lifecycle**: file format state, publication, lookup across runs, compaction selection and commit, version/tombstone collection, and compaction capacity. [LSM Trees](./02-lsm-trees.md) owns the complete write path from WAL and memtable through the LSM architecture. [Bloom Filters](./05-bloom-filters.md) owns filter design. [Column-Oriented Storage](./06-column-storage.md) owns analytical column layout, pruning, and vectorized execution; a Parquet row group is not an SSTable level merely because both may be immutable.
 
----
+## Workload and storage contract
 
-## SSTable Structure
+Sorted runs fit workloads where random updates can first become sequential output and reads can tolerate consulting multiple immutable components. The file layer should promise:
 
-### File Layout
+- keys ordered by one stable byte comparator;
+- checksummed blocks and metadata;
+- an index that finds candidate blocks without scanning the file;
+- optional membership filters that have no false negatives for the represented key domain;
+- snapshot-aware version ordering;
+- atomic publication of a new live-file set;
+- recovery that distinguishes live files, obsolete files, and incomplete output.
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                        SSTable File                        │
-├─────────────────────────────────────────────────────────────┤
-│  Data Block 1  │  Data Block 2  │  ...  │  Data Block N    │
-├─────────────────────────────────────────────────────────────┤
-│               Meta Block (Bloom Filter)                    │
-├─────────────────────────────────────────────────────────────┤
-│                    Index Block                              │
-├─────────────────────────────────────────────────────────────┤
-│                       Footer                                │
-└─────────────────────────────────────────────────────────────┘
-```
+The format is not one universal diagram. Bigtable SSTables, LevelDB tables, RocksDB block-based tables, and other engines differ in block indexes, filters, compression, range deletions, properties, and footer versions. The invariant is that readers can interpret a fully published immutable file and the manifest can name exactly which files form one database version.
 
-### Data Blocks
+## File and manifest state
 
-```
-Block structure:
-┌────────────────────────────────────────┐
-│  Entry 1  │  Entry 2  │  ...  │ Entry N │
-├────────────────────────────────────────┤
-│           Restart Points               │
-├────────────────────────────────────────┤
-│  Num Restarts (4 bytes)  │  CRC (4)    │
-└────────────────────────────────────────┘
+A block-based sorted table commonly contains:
 
-Entry format:
-  [shared_prefix_len][unshared_len][value_len][unshared_key][value]
-  
-Prefix compression:
-  Keys often share prefixes
-  Only store the difference
-  "user:1000" → "user:1001" stored as "01" suffix
+- sorted data blocks with prefix-compressed keys and values;
+- restart points or another mechanism for local binary search;
+- a block index mapping separator keys to block handles;
+- filter and properties blocks;
+- per-block checksums and compression identifiers;
+- a meta-index and fixed footer locating top-level metadata.
+
+File metadata held by the version/manifest normally includes file number or object ID, byte size, smallest and largest key, smallest and largest sequence number, level/run identity, checksum or unique ID, and format version.
+
+Many LSM engines sort an **internal key** rather than only the application key:
+
+```text
+(user_key ascending, sequence descending, record_kind)
 ```
 
-### Index Block
+For one user key, newer versions appear first. A point tombstone is another record kind. A reader at snapshot sequence `S` chooses the newest version whose sequence is at most `S`; versions newer than the snapshot are invisible. Exact encoding differs by engine, but comparator stability is non-negotiable. Changing it can make already-sorted files unreadable or cause two components to disagree about overlap.
 
-```
-Sparse index:
-  Every N-th key → block offset
+The manifest is the authority over file membership. A directory listing is not: it can contain incomplete outputs, obsolete inputs retained for readers, temporary files, logs, and files from a failed compaction.
 
-┌───────────────────────────────────┐
-│  "aaa" → Block 0 @ offset 0       │
-│  "abc" → Block 1 @ offset 4096    │
-│  "def" → Block 2 @ offset 8192    │
-│  ...                              │
-└───────────────────────────────────┘
+## Flush and publication protocol
 
-Lookup:
-  1. Binary search index for >= key
-  2. Read data block
-  3. Binary search within block
-```
+A safe memtable flush follows a state transition:
 
-### Footer
+1. freeze a sorted memtable and assign its immutable sequence range;
+2. stream entries into one or more temporary table files;
+3. finish indexes, filters, properties, footer, and checksums;
+4. make the output durable under the filesystem/object-store contract;
+5. atomically append and persist a manifest/version edit that adds the files;
+6. expose the new version to readers;
+7. release the covered WAL only when every recovery path can reconstruct the data.
 
-```
-┌─────────────────────────────────────────┐
-│  Metaindex Handle (offset, size)        │
-│  Index Handle (offset, size)            │
-│  Padding                                │
-│  Magic Number (8 bytes)                 │
-└─────────────────────────────────────────┘
+The ordering handles both crash sides. A complete file not named by a durable manifest is an orphan and can be collected. A manifest that names output whose bytes or footer were not made durable can make recovery fail or silently lose keys. On local filesystems, rename and file sync do not necessarily persist the parent directory entry; implementations must follow their actual filesystem contract. On object storage, an immutable upload plus a separately committed manifest avoids relying on directory rename semantics.
 
-Fixed size, always at end of file
-Contains pointers to index and meta blocks
-```
+Readers pin a version of the manifest. Publishing a new version does not invalidate an in-flight reader's old version. Obsolete files are physically removed only after no pinned version, snapshot, iterator, backup, or checkpoint can reference them.
 
----
+## Read protocol across runs
 
-## SSTable Operations
+### Point lookup
 
-### Creating SSTable (Flush)
+A point read first checks mutable/immutable memtables, then candidate SSTables in recency order consistent with the engine's level rules. For each file it can:
 
-```python
-def create_sstable(memtable, filename):
-    writer = SSTableWriter(filename)
-    
-    # Iterate memtable in sorted order
-    for key, value in memtable.sorted_iterator():
-        writer.add(key, value)
-    
-    # Finalize: write index, bloom filter, footer
-    writer.finish()
-    
-    return SSTable(filename)
+1. reject the key outside the file's smallest/largest range;
+2. ask a Bloom or partitioned filter whether the key may occur;
+3. use the top-level index to locate a data block;
+4. verify/decompress the block and seek the internal key;
+5. stop when it finds the newest visible value or tombstone whose placement rules prove older files cannot win.
 
-class SSTableWriter:
-    def __init__(self, filename):
-        self.file = open(filename, 'wb')
-        self.index = []
-        self.bloom_filter = BloomFilter()
-        self.current_block = DataBlock()
-        self.block_offset = 0
-        
-    def add(self, key, value):
-        self.bloom_filter.add(key)
-        
-        if self.current_block.size() > BLOCK_SIZE:
-            self.flush_block()
-        
-        self.current_block.add(key, value)
-    
-    def flush_block(self):
-        # Write block
-        data = self.current_block.serialize()
-        self.file.write(data)
-        
-        # Record in index
-        first_key = self.current_block.first_key
-        self.index.append((first_key, self.block_offset))
-        
-        self.block_offset += len(data)
-        self.current_block = DataBlock()
-```
+Level 0 files often overlap and may need to be searched newest first. In a leveled organization, files within levels 1 and below usually have non-overlapping user-key ranges, so at most one file per such level is a candidate. Filters reduce negative disk reads but do not remove index/filter-cache or CPU cost.
 
-### Reading from SSTable
+### Range scan
 
-```python
-class SSTable:
-    def get(self, key):
-        # Check bloom filter first
-        if not self.bloom_filter.might_contain(key):
-            return None  # Definitely not here
-        
-        # Binary search in index
-        block_offset = self.find_block(key)
-        
-        # Read and search block
-        block = self.read_block(block_offset)
-        return block.search(key)
-    
-    def find_block(self, key):
-        # Binary search for last index entry <= key
-        lo, hi = 0, len(self.index) - 1
-        while lo < hi:
-            mid = (lo + hi + 1) // 2
-            if self.index[mid].key <= key:
-                lo = mid
-            else:
-                hi = mid - 1
-        return self.index[lo].offset
-```
+A range iterator performs a k-way merge over all overlapping memtables and table iterators. It orders internal keys, suppresses shadowed versions, applies point/range tombstones, and respects the snapshot. For `E` visited entries across `k` runs, a heap-based merge has roughly `O(E log k)` comparison work; blocked/loser-tree variants change constants. When many obsolete versions survive, physical entries visited can greatly exceed logical rows returned.
 
-### Scanning Range
+Range scans make compaction quality visible: filters do little when the requested range really overlaps every run. Read-ahead, block cache, compression, and the number of overlapping runs determine throughput.
 
-```python
-def scan(self, start_key, end_key):
-    # Find starting block
-    block_offset = self.find_block(start_key)
-    
-    results = []
-    while block_offset < self.data_size:
-        block = self.read_block(block_offset)
-        
-        for key, value in block.entries():
-            if key > end_key:
-                return results
-            if key >= start_key:
-                results.append((key, value))
-        
-        block_offset = self.next_block_offset(block_offset)
-    
-    return results
-```
+## Compaction as a versioned transaction
 
----
+A compaction is not “merge files and delete the old ones.” It is an atomic metadata replacement:
 
-## Compaction Strategies
+1. choose an input set whose overlap closure satisfies the strategy;
+2. pin that input version and reserve output file IDs;
+3. merge entries in comparator order;
+4. apply snapshot/version/tombstone retention rules;
+5. split output at target boundaries without splitting an indivisible record incorrectly;
+6. finish, checksum, and durably publish every output file;
+7. persist one manifest edit that adds outputs and removes inputs;
+8. expose the new version;
+9. delete inputs only after old references drain.
 
-### Size-Tiered Compaction (STCS)
+If the worker crashes before step 7, outputs are unreferenced garbage. If it crashes after the durable edit, recovery uses outputs and treats inputs as obsolete. The manifest edit is the commit point.
 
-```
-Group SSTables by size, merge when count exceeds threshold.
+Compaction may also update per-file sequence bounds, range-deletion metadata, blob/value-log references, and encryption/checksum metadata. Every side structure must change consistently with the manifest or retain a recoverable reconciliation path.
 
-Before:
-  Tier 0 (small): [1MB] [1MB] [1MB] [1MB]  ← 4 files, trigger!
-  Tier 1 (medium): [4MB]
-  Tier 2 (large): [16MB]
+## Choosing a compaction shape
 
-After:
-  Tier 0: []
-  Tier 1: [4MB] [4MB]  ← merged output
-  Tier 2: [16MB]
-```
+### Leveled compaction
 
-**Algorithm:**
-```python
-def size_tiered_compaction():
-    for tier in tiers:
-        if tier.file_count >= MIN_THRESHOLD:
-            # Pick similar-sized files
-            files = tier.select_files(MIN_THRESHOLD)
-            
-            # Merge into new file
-            merged = merge(files)
-            
-            # Add to appropriate tier
-            next_tier = find_tier_for_size(merged.size)
-            next_tier.add(merged)
-            
-            # Remove old files
-            tier.remove(files)
+Level 0 accepts overlapping flushes. Lower levels have increasing byte targets and non-overlapping key ranges within each level. When a level exceeds its target or creates too much overlap, selected files merge with all overlapping files in the next level.
+
+Leveled compaction bounds point-read candidates and usually keeps space amplification low. It repeatedly rewrites keys as they descend and can incur high write amplification, especially when a small incoming range overlaps a large amount of next-level data. Compaction pointers, overlap-aware selection, trivial moves, and subcompactions distribute that work but do not remove it.
+
+### Tiered, size-tiered, and universal compaction
+
+Tiered policies accumulate similarly sized sorted runs and merge several into a larger run. Universal compaction is a flexible run-based form used by RocksDB. Keys are typically rewritten fewer times on the write path, while more overlapping runs remain visible to reads and transient/live space can be larger.
+
+This suits write-heavy or short-lived data when read amplification and spare space are affordable. A giant final merge can create severe temporary space and I/O demand; run count and size ratio need explicit caps.
+
+### FIFO and time-window policies
+
+FIFO drops old files rather than merging the full key space. Time-window policies compact data within time windows and expire whole old windows. They are powerful only when retention semantics align with file boundaries and late updates/deletes cannot require an expired file.
+
+If a late write for an old timestamp lands in a new file, file creation time may not equal data expiry time. If a tombstone expires before the older value file, deletion can resurrect. The policy must use trustworthy per-file time bounds and a late-arrival contract, not merely file names.
+
+### Hybrid policies
+
+Real engines may use tiering near the write frontier and leveling below it, different compression by level, or workload-specific compaction per column family. The correct unit of choice is a workload with measured point reads, scans, overwrites, deletes, TTL, value size, and available background resources.
+
+## Version and tombstone collection
+
+Compaction sees several versions of one key, but it can discard one only if no supported reader or unselected file can need it.
+
+An old value can be removed when a newer visible value shadows it for every retained snapshot. A point tombstone can be dropped only when:
+
+1. no retained snapshot may need to observe the deletion event or an older value;
+2. the compaction covers every place an older value for that key could exist, or level metadata proves none exists below;
+3. replication/backup/restore policy will not reintroduce an older value outside this local file set.
+
+“At the bottom level” is a sufficient shortcut in some designs, not the general proof. An engine can sometimes drop earlier with complete range-coverage metadata; it must sometimes retain at the bottom for snapshots or external replication semantics.
+
+Range tombstones are harder because one deletion interval may overlap many output files and snapshots. Implementations fragment or replicate tombstone metadata at output boundaries and must preserve ordering against point keys. A boundary error can expose values in only part of a deleted range.
+
+TTL expiry has the same shape. Treat expiration as a versioned deletion under the database's time semantics, and decide whether historical snapshots may read pre-expiry values.
+
+## Concrete failure traces
+
+### Manifest references non-durable output
+
+1. Compaction writes `out-91.sst` into buffered filesystem state.
+2. It durably appends a manifest edit replacing inputs with `out-91` but never syncs the file.
+3. Power fails; the manifest survives, while some output blocks do not.
+4. Recovery trusts the manifest and encounters missing/corrupt committed state.
+
+Output durability must precede manifest commit.
+
+### Inputs deleted while a reader pins the old version
+
+1. Reader R opens manifest version 30 and begins a long scan of files A and B.
+2. Compaction publishes version 31 replacing A/B with C.
+3. A cleanup thread deletes A/B immediately.
+4. R seeks its next block and fails even though its snapshot should remain valid.
+
+Version/reference pinning must control physical deletion.
+
+### Tombstone resurrection through incomplete overlap
+
+1. Level 1 file N contains tombstone `k@200`; level 3 file O contains value `k@100`.
+2. A compaction rewrites N without including or proving absence in lower overlaps and drops the tombstone.
+3. A later read reaches O and returns `k@100`.
+
+Garbage collection needs whole-tree coverage proof, not only “the tombstone is old.”
+
+### Snapshot pins write amplification and space
+
+1. A backup opens snapshot sequence 1,000 and runs for hours.
+2. Foreground writes replace the same hot keys thousands of times.
+3. Compaction must retain versions visible to the snapshot.
+4. Output files grow and repeated compactions carry old values forward.
+
+Long snapshots are a storage-capacity input. Limit, isolate, or account for them rather than blaming compaction after space is exhausted.
+
+### Compaction debt becomes a write outage
+
+1. Logical ingest exceeds the background rewrite capacity during a burst.
+2. Overlapping L0 runs and pending bytes grow.
+3. Negative reads and scans touch more files; cache churn and latency rise.
+4. The engine slows or stops flushes to keep L0/recovery state bounded.
+
+The stall is backpressure from an unsustainable file-lifecycle rate, not a random engine pause.
+
+## Capacity and cost model
+
+Measure the three amplifications from engine counters. For compaction-capacity work, define `F` as the initial encoded/compressed flush bytes produced per second and define file-layer write amplification against that baseline:
+
+```text
+file_write_amplification = (flush + compaction output bytes) / initial flush bytes
+read_amplification  = physical_blocks_or_bytes_read / logical_result_blocks_or_bytes
+space_amplification = live_physical_bytes / live_logical_bytes
 ```
 
-**Characteristics:**
-| Aspect | Value |
-|--------|-------|
-| Write amplification | ~3-5x |
-| Space amplification | Up to 2x |
-| Read amplification | O(tiers × files per tier) |
-| Best for | Write-heavy workloads |
+Application bytes become `F` after record framing, key/value encoding, compression, and flush fragmentation. Also report a conventional end-to-end write amplification against application bytes, but define whether WAL, compaction input reads, replication, and compression are included before comparing systems. A leveled formula depends on size ratio, number of levels, overlap, overwrite distribution, file selection, and the chosen numerator. Fixed claims such as “leveled is 20x” are workload observations, not strategy constants.
 
-### Leveled Compaction (LCS)
+If usable device write bandwidth after reserving foreground reads and safety margin is `C_write`, and measured file-layer write amplification is `WA_file`, sustainable flush output is bounded by:
 
-```
-Organize files into levels with size limits.
-Each level (except L0) has non-overlapping key ranges.
-
-Level 0: 4 files max (may overlap)
-Level 1: 10 MB total
-Level 2: 100 MB total
-Level 3: 1000 MB total
-...
-
-Compaction:
-  When level exceeds limit, pick file and merge with overlapping files in next level.
+```text
+F <= C_write / WA_file
 ```
 
-```
-Before:
-  L0: [a-d] [c-f] [e-h]  ← overlapping
-  L1: [a-c] [d-f] [g-i]  ← non-overlapping
+After the initial flush, approximate background output demand is `F * (WA_file - 1)`. If allowed background capacity is lower, pending compaction debt grows. If debt is `D` bytes of required physical work and spare catch-up capacity is `C_spare`, recovery takes at least `D/C_spare`; `C_spare <= 0` means the system never catches up without throttling ingest or adding resources.
 
-L0 exceeds limit, compact [c-f]:
-  Overlaps with L1's [d-f]
-  Merge them
+Point-read I/O depends on candidate runs and filter false positives. For negative lookups with candidate filters of false-positive probability `p_i`, expected false-positive data-block reads are approximately `sum(p_i)` if filter and index metadata are cached. Cache misses, L0 overlap, and correlations add cost.
 
-After:
-  L0: [a-d] [e-h]
-  L1: [a-c] [c-f'] [g-i]  ← f' is merged result
-```
+Peak disk space must cover current live files, new compaction outputs before commit, old inputs retained by readers/checkpoints, write bursts, and safety reserve. A job merging `I` input bytes may produce output near the surviving logical bytes, but the inputs cannot be reclaimed until publication and reference drain. Large universal/tiered merges can temporarily approach another full run's size.
 
-**Algorithm:**
-```python
-def leveled_compaction():
-    for level in range(MAX_LEVELS - 1):
-        if level_size(level) > size_limit(level):
-            # Pick file to compact (round-robin or by overlap)
-            file = pick_file_to_compact(level)
-            
-            # Find overlapping files in next level
-            overlapping = find_overlapping(level + 1, file.key_range)
-            
-            # Merge
-            merged_files = merge(file, overlapping)
-            
-            # Add to next level
-            add_to_level(level + 1, merged_files)
-            
-            # Remove old
-            remove_files([file] + overlapping)
-```
+Compaction can be CPU-bound: checksum, key comparison, decompression, recompression, encryption, filter construction, and range-tombstone processing all consume cores. Track logical and physical bytes per CPU second rather than assuming NVMe bandwidth is the limit.
 
-**Characteristics:**
-| Aspect | Value |
-|--------|-------|
-| Write amplification | ~10-30x |
-| Space amplification | ~1.1x |
-| Read amplification | O(levels) |
-| Best for | Read-heavy, space-sensitive |
+## Production operation and migration
 
-### FIFO Compaction
+Monitor pending compaction bytes/work, L0 and run counts, bytes read/written by level and reason, logical ingest, write/read/space amplification, compaction CPU, stall/slowdown duration, oldest snapshot, obsolete bytes pinned by readers, tombstone/expired-version ratios, cache hit by block type, and checksum failures. Node-wide disk utilization can look healthy while one column family accumulates fatal debt.
 
-```
-Delete oldest files when total size exceeds limit.
-No merging, just time-based deletion.
+Rate limiting should preserve foreground latency and enough compaction progress to avoid an eventual hard stall. Prioritize write-frontier work that bounds run count, but prevent bottom-level starvation. Manual full compaction is a major rewrite with transient space and cache effects; estimate inputs, outputs, duration, and rollback before invoking it.
 
-├── newest_file.sst
-├── file_2.sst
-├── file_3.sst
-├── oldest_file.sst  ← Delete when over limit
-```
+File-format migration needs readers that understand old and new footers/encodings, new writers enabled only after compatibility deploys, and compaction or explicit rewrite to retire the old form gradually. Comparator changes generally require a full rebuild into a separate database because mixed sorted orders cannot safely share one merge.
 
-**Use case:**
-- Time-series data with natural TTL
-- Logs that expire after N days
-- Metrics with fixed retention
+Crash tests should stop the process after every file sync, rename/upload, manifest append, manifest sync, version install, and obsolete-file deletion. Corrupt blocks, footers, filters, and manifests independently. Property tests should compare arbitrary flush/compaction schedules against a simple MVCC model across snapshots, point/range tombstones, TTL, and comparator edge cases. Restore old checkpoints only as non-authoritative copies unless their log/file generation is proven current.
 
-### Time-Window Compaction (TWCS)
+## Decision framework
 
-```
-Combine STCS within time windows, FIFO across windows.
+1. What point-read, scan, overwrite, delete, TTL, and snapshot distributions must the run layout support?
+2. Which manifest edit is the atomic publication point, and what durability ordering precedes it?
+3. How many overlapping runs can a read encounter in steady state and during debt?
+4. What proof permits each old version, point tombstone, or range tombstone to be dropped?
+5. What measured write amplification and background bandwidth bound sustainable ingest?
+6. How much transient space can the largest compaction and longest reader require?
+7. Can recovery distinguish orphan outputs from live files without trusting a directory listing?
+8. How will format, comparator, and encryption changes coexist during migration?
 
-Time windows:
-  [Today]  [Yesterday]  [2 days ago]  [3 days ago] ...
-  
-Within each window: Size-tiered compaction
-When window expires: Drop entirely
+## Primary references
 
-Good for time-series with TTL
-Avoids mixing old and new data
-```
-
----
-
-## Merge Process
-
-### N-Way Merge
-
-```python
-def merge(sstables):
-    # Use min-heap for efficient N-way merge
-    heap = MinHeap()
-    iterators = [sst.iterator() for sst in sstables]
-    
-    # Initialize heap with first entry from each
-    for i, it in enumerate(iterators):
-        if it.valid():
-            heap.push((it.key(), it.value(), i))
-            it.next()
-    
-    writer = SSTableWriter()
-    last_key = None
-    
-    while not heap.empty():
-        key, value, sst_idx = heap.pop()
-        
-        # Keep only latest version of each key
-        if key != last_key:
-            if not is_tombstone(value) or not at_bottom_level:
-                writer.add(key, value)
-            last_key = key
-        
-        # Advance that SSTable's iterator
-        it = iterators[sst_idx]
-        if it.valid():
-            heap.push((it.key(), it.value(), sst_idx))
-            it.next()
-    
-    return writer.finish()
-```
-
-### Handling Versions
-
-```
-Same key in multiple SSTables:
-  [key: "a", value: "v1", seq: 100]  ← older
-  [key: "a", value: "v2", seq: 150]  ← newer
-
-Merge keeps seq: 150 (latest)
-But if snapshot active at seq: 120, must keep both!
-```
-
-### Handling Tombstones
-
-```
-Tombstone (delete marker):
-  [key: "a", TOMBSTONE, seq: 200]
-
-Can only be garbage collected when:
-  - At bottom level
-  - All older versions are in this compaction
-  - No active snapshots before tombstone seq
-```
-
----
-
-## Compaction Scheduling
-
-### When to Compact
-
-```
-Triggers:
-  1. L0 file count exceeds threshold
-  2. Level size exceeds limit
-  3. Tombstone ratio too high
-  4. Manual trigger
-
-Priority:
-  L0 compaction > Other levels
-  (L0 blocks writes when too many files)
-```
-
-### Rate Limiting
-
-```
-Problem: Compaction uses disk I/O
-  - Competes with foreground reads/writes
-  - Can cause latency spikes
-
-Solutions:
-  - Rate limit compaction I/O (bytes/sec)
-  - Priority I/O scheduling (ionice)
-  - Adaptive rate based on workload
-```
-
-### Thread Pool
-
-```
-Typical configuration:
-  - 1-2 threads for L0→L1 (critical path)
-  - Multiple threads for other levels
-  - Separate thread pool for flushing
-```
-
----
-
-## Compaction Trade-offs
-
-### Write Amplification Deep Dive
-
-```
-Leveled with ratio R=10:
-
-Key written to MemTable: 1 write
-Flushed to L0: 1 write
-Compacted L0→L1: ~1 write
-Compacted L1→L2: ~10 writes (merged with 10 L1 files)
-Compacted L2→L3: ~10 writes
-...
-
-Total: 1 + 1 + 1 + 10 + 10 + 10 + ... = O(10 * L)
-
-For 4 levels: ~40x write amplification
-```
-
-### Space Amplification Deep Dive
-
-```
-Size-tiered worst case:
-  4 files in tier, about to merge
-  + space for merged output
-  = 2x space temporarily
-
-Leveled:
-  Non-overlapping files
-  Only small compaction in progress
-  ~1.1x typical
-```
-
-### Read Amplification Deep Dive
-
-```
-Size-tiered:
-  Check all tiers (O(T))
-  Check all files in tier (O(F))
-  Total: O(T * F)
-
-Leveled:
-  L0: Check all files (small count)
-  L1+: One file per level (non-overlapping)
-  Total: O(L0 files + Levels)
-  
-Bloom filters reduce actual disk reads significantly
-```
-
----
-
-## Monitoring Compaction
-
-### Key Metrics
-
-```
-Compaction pending bytes:
-  How much work is queued
-  Growing = compaction falling behind
-
-Compaction I/O rate:
-  MB/s written by compaction
-  Compare to write rate
-
-L0 file count:
-  Should stay below stall threshold
-  Spikes = write bursts or slow compaction
-
-Write stalls:
-  Time spent waiting for compaction
-  Should be near zero normally
-```
-
-### RocksDB Statistics
-
-```
-db.getProperty("rocksdb.compaction-pending")
-db.getProperty("rocksdb.num-files-at-level0")
-db.getProperty("rocksdb.estimate-pending-compaction-bytes")
-db.getProperty("rocksdb.compaction-reason")
-```
-
----
-
-## Optimizations
-
-### Trivial Moves
-
-```
-If L(n) file doesn't overlap with L(n+1):
-  Just move file pointer, don't rewrite!
-  
-Huge win for sequential insert patterns
-```
-
-### Subcompaction
-
-```
-Split large compaction into parallel sub-ranges:
-
-File [a-z] overlaps with 10 files in next level
-Split into:
-  [a-j] + overlapping → thread 1
-  [k-z] + overlapping → thread 2
-
-Parallel merge, faster completion
-```
-
-### Dynamic Level Targets
-
-```
-RocksDB's dynamic leveling:
-  Adjust level targets based on actual data size
-  Avoids extra compaction when data is small
-  Grows naturally as data grows
-```
-
----
-
-## Compaction Debt: The Throughput Equation
-
-Compaction is a producer-consumer system, and it has a capacity equation that most outages violate:
-
-```
-Sustainable ingest = usable device write bandwidth / write amplification
-
-Example (leveled, WA ≈ 20, NVMe with 2 GB/s sustained writes,
-reserving half the bandwidth for reads and flushes):
-  sustainable ingest ≈ (2 GB/s × 0.5) / 20 = 50 MB/s of app writes
-
-Ingest above that rate doesn't fail — it accrues DEBT:
-  pending compaction bytes grow
-  → more overlapping runs per read (read amp climbs first)
-  → L0 count crosses slowdown trigger (writes throttled)
-  → L0 count crosses stop trigger (writes stall — outage)
-
-The insidious part: a burst 3× over sustainable rate for one hour
-creates hours of catch-up work. Debt is repaid at
-(compaction bandwidth − ongoing ingest × WA), which may be nearly
-zero if steady-state ingest is close to the limit.
-```
-
-Operational rules that follow: size steady-state ingest at **≤50–70% of the sustainable rate** so bursts have repayment headroom; treat *pending compaction bytes* as a first-class SLO signal (it is the leading indicator — read latency and stalls are trailing); and when catching up, either rate-limit ingest explicitly or temporarily relax the strategy (universal/tiered) — letting the stall triggers do the throttling delivers the worst possible latency profile.
-
-### Where the time actually goes
-
-```
-A compaction job is a pipeline: read blocks → decompress → merge-sort
-→ (re)compress → write blocks → sync + manifest update.
-
-CPU can be the bottleneck, not the disk: zstd on the bottom level
-compresses at a few hundred MB/s per core — a 4-thread compaction
-budget caps at ~1 GB/s of logical throughput regardless of NVMe
-speed. This is why per-level compression config (LZ4 up top, zstd
-at the bottom) is a throughput decision, not just a space one.
-```
-
----
-
-## Tombstone GC Hazards
-
-The mechanics above said tombstones drop at the bottom level; production adds two constraints that make tombstones a recurring incident class:
-
-```
-Resurrection window (Cassandra): a tombstone may only be GC'd after
-gc_grace_seconds (default 10 days). Why: a replica that was DOWN when
-the delete happened never got the tombstone. If the other replicas GC
-it before that node is repaired, repair copies the node's old value
-BACK — the deleted row resurrects cluster-wide.
-  → gc_grace_seconds must exceed your worst repair interval
-  → dropping it to reclaim space faster trades disk for resurrections
-
-The tombstone scan problem: reads over ranges with many deletes must
-iterate every tombstone to prove rows dead. A table used as a queue
-(insert → consume → delete at the head) degrades until every poll
-scans millions of tombstones — Cassandra aborts such reads with
-TombstoneOverwhelmingException. Fixes: don't build queues on LSM
-tables; use time-bucketed tables dropped whole, or FIFO/TWCS where
-expiry deletes files instead of rows.
-
-Targeted tombstone compaction: engines can compact a single SSTable
-when its tombstone ratio is high (Cassandra tombstone_threshold,
-default 0.2; RocksDB CompactOnDeletionCollector) — worth enabling on
-delete-heavy tables so tombstones don't wait for shape-driven
-compaction to find them.
-```
-
----
-
-## Compaction Off the Box: Tiered and Remote
-
-Because SSTables are immutable and self-contained, neither the files nor the merge work has to live on the serving node:
-
-```
-Tiered storage: bottom-level SSTables (≈90% of bytes, coldest data)
-move to object storage; the node keeps hot levels + indexes/filters
-locally. Reads to cold data pay object-store latency (see
-Object Storage chapter); economics usually win for logs/time-series.
-
-Remote compaction: the merge itself runs on stateless workers reading
-and writing SSTables in object storage (RocksDB-Cloud, and the
-pattern behind several cloud-native engines). The serving node stops
-paying compaction CPU/IO entirely — the amplification triangle's
-write-amp corner becomes an elastic, separately-billed compute pool.
-The cost: coordination (which worker owns which file set) moves into
-a manifest/metadata service — the same "truth in a small pointer,
-bytes in immutable objects" pattern as lakehouse table formats.
-```
-
-This is the direction of travel for cloud LSMs: the SSTable's immutability, designed in 1996 to avoid disk seeks, turns out to be exactly the property that makes storage-compute separation workable.
-
----
-
-## Key Takeaways
-
-1. **SSTables are immutable** - Write once, read many
-2. **Compaction is the core trade-off** - Writes vs reads vs space
-3. **Size-tiered favors writes** - But wastes space
-4. **Leveled favors reads** - But more write amplification
-5. **FIFO for time-series** - When old data expires naturally
-6. **L0 is critical** - Too many files stalls writes
-7. **Bloom filters are essential** - Reduce disk reads dramatically
-8. **Monitor compaction debt** - Falling behind hurts performance
+- [O'Neil et al., *The Log-Structured Merge-Tree (LSM-Tree)* (Acta Informatica 1996)](https://doi.org/10.1007/s002360050048)
+- [Chang et al., *Bigtable: A Distributed Storage System for Structured Data* (OSDI 2006)](https://storage.googleapis.com/gweb-research2023-media/pubtools/4443.pdf)
+- [Google LevelDB, official table-format specification](https://github.com/google/leveldb/blob/main/doc/table_format.md)
+- [Facebook RocksDB, official leveled-compaction description](https://github.com/facebook/rocksdb/wiki/Leveled-Compaction)
+- [Dayan, Athanassoulis, and Idreos, *Monkey: Optimal Navigable Key-Value Store* (SIGMOD 2017), author publication page](https://stratos.seas.harvard.edu/publications/monkey-optimal-navigable-key-value-store)
+- [Dayan and Idreos, *Dostoevsky: Better Space-Time Trade-Offs for LSM-Tree Based Key-Value Stores* (SIGMOD 2018), author publication page](https://stratos.seas.harvard.edu/publications/dostoevsky-better-space-time-trade-offs-lsm-tree-based-key-value-stores)

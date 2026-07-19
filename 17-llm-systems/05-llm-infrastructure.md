@@ -8,6 +8,8 @@ Separate the global **control plane**—model catalog, policy, evaluation eviden
 
 Optimize for goodput—the rate of requests that meet correctness, latency, and policy bounds—and report cost efficiency beside it. Raw GPU utilization, tokens per second, low API price, or goodput alone can each improve while another product constraint gets worse.
 
+This chapter owns the gateway, provider/self-hosted abstraction, global model/policy control plane, regional admission/routing/streaming data plane, and fleet operations. [GPU Inference Internals](./11-gpu-inference-internals.md) owns the device byte/compute/communication ledger; [Agent Inference](./12-agent-inference.md) owns multi-turn session scheduling, KV residency, fan-out, and task-level goodput; [Harness Engineering](./09-harness-engineering.md) owns tool authority, side-effect commit, sandboxing, and durable agent state. Keeping those boundaries explicit prevents a serving router from becoming an accidental workflow or authorization engine.
+
 ---
 
 ## Begin with the Workload and SLO

@@ -1,76 +1,197 @@
 # Amazon DynamoDB (2022): Predictability as the Product
 
-## Paper Overview
+## Publication Boundary
 
-- **Title**: Amazon DynamoDB: A Scalable, Predictably Performant, and Fully Managed NoSQL Database Service
-- **Authors**: Mostafa Elhemali, Niall Gallagher, et al. (Amazon)
-- **Published**: USENIX ATC 2022
-- **Context**: Fifteen years after the 2007 Dynamo paper — and a near-total philosophical reversal. The service that runs Amazon retail, Alexa, and hundreds of thousands of customer tables explains what a decade of multi-tenant operation taught
+- **Paper:** *Amazon DynamoDB: A Scalable, Predictably Performant, and Fully Managed NoSQL Database Service*
+- **Venue and version:** USENIX Annual Technical Conference 2022 proceedings paper
+- **Evaluated system:** DynamoDB as described through 2021, with selected production observations and one YCSB microbenchmark
 
-## TL;DR
+This is not the 2007 Dynamo architecture. It is also not current product documentation. Capacity-unit definitions, on-demand behavior, backup retention, and features can evolve; the values below are pinned to the paper.
 
-The 2022 paper's quiet bombshell: **DynamoDB is not Dynamo**. The leaderless, eventually-consistent, gossip-based design of [the 2007 paper](./02-dynamo.md) was abandoned — operationally too sharp-edged — in favor of **Multi-Paxos-led replication groups per partition**, strong consistency on offer, and a control plane that does the hard work. The paper's actual thesis is one word: **predictability**. A multi-tenant database's product is not peak performance but *consistent single-digit-millisecond latency at any scale*, which demands: admission control evolved from per-partition allocations to **global admission control** (because static per-partition splits punish skew), automatic **split-for-consumption** driven by observed heat, **on-demand** mode that removes capacity math from customers entirely, and durability treated as a continuous *verification* problem (checksums everywhere, continuous restore testing, formal methods — TLA+ — on the protocols). It is the best public account of what "fully managed" costs the people who manage it.
+## Workload and Published Context
 
----
+The service provides managed key-value/document tables with single-digit-millisecond performance as a design goal across widely varying table sizes and traffic. During the 66 hours of Amazon's 2021 Prime Day event, Amazon systems made trillions of DynamoDB calls and the paper reported a peak of 89.2 million requests/s.
 
-## From Dynamo (2007) to DynamoDB (2022)
+That number describes an Amazon event window, not every customer, one table, one region, or a sustained global benchmark. The paper's central subject is predictable multitenant operation: skew, partitions, failures, changing capacity, and control-plane independence.
 
-| | Dynamo 2007 | DynamoDB 2022 |
-|---|---|---|
-| Replication | Leaderless, sloppy quorums, hinted handoff | **Multi-Paxos leader per replication group** |
-| Consistency | Eventual; vector clocks, app-side merge | Strong or eventual *by request flag*; no conflicts to merge |
-| Membership | Gossip, peer-to-peer | Central control plane (AutoAdmin) |
-| Operability | Each team runs its own ring | One fully managed multi-tenant fleet |
-| Conflict story | Shopping-cart merge ([Conflict Resolution](../02-distributed-databases/04-conflict-resolution.md)) | Single-writer per partition ([Leader Election](../02-distributed-databases/09-leader-election.md)) |
+## Data and Consistency Contract
 
-The retreat from leaderless is the lesson: eventual consistency pushed merge complexity onto every application team, and operating gossip-based rings per service didn't scale *organizationally*. A leader per partition group plus a real control plane traded peak-theoretical availability for something customers value more — comprehensibility and uniform behavior ([Single-Leader Replication](../02-distributed-databases/01-single-leader-replication.md) winning on operational grounds).
+Table items are addressed by a partition key and optionally a sort key. Contiguous key ranges are assigned to partitions. Each partition is replicated across Availability Zones.
 
-### Architecture in one diagram
+The paper-era capacity units were:
+
+- one read capacity unit: one strongly consistent read/s for an item up to 4 KiB,
+- one write capacity unit: one write/s for an item up to 1 KiB.
+
+Larger items consume multiple units, and eventually consistent reads have different accounting. Capacity admission and storage placement are distinct: a logical table budget should not be rigidly divided by the number of physical partitions.
+
+Within a replication group, Multi-Paxos and leases establish a leader. The leader serves writes and strongly consistent reads; an eventually consistent read can use another replica. A write is acknowledged after a quorum has durably persisted its write-ahead-log record.
+
+Key invariants are:
+
+1. One valid leader/lease controls a partition's write order.
+2. A committed write survives the loss of a minority of replicas.
+3. Strong reads observe leader-ordered state; eventual reads may lag.
+4. Table-level admission stays within the purchased/derived budget while local limits protect shared nodes.
+5. Partition maps and cached dependencies allow the data plane to continue through many control-plane failures.
+
+## Partition Replication and Storage
 
 ```mermaid
-graph TD
-    REQ["Request routers<br/>(stateless, authn/authz,<br/>route by partition map)"] --> RG["Replication group per partition:<br/>Multi-Paxos leader + replicas<br/>(WAL + B-tree storage nodes)"]
-    RG --> LOGR["Log replicas:<br/>WAL-only members — cheap quorum<br/>repair during node loss"]
-    AA["AutoAdmin control plane:<br/>partition maps, splits/moves,<br/>health, fleet balancing"] -.-> RG
-    GAC["Global Admission Control<br/>(token buckets per table,<br/>shared via GAC servers)"] -.-> REQ
+flowchart TB
+    C[Client] --> R[Request router]
+    R -->|partition map| L[Partition leader]
+    L --> S1[(Storage replica\nB-tree + WAL)]
+    L --> S2[(Storage replica\nB-tree + WAL)]
+    L --> LR[(Log-only replica\nrecent WAL)]
+    CP[AutoAdmin control plane] -.-> R
+    CP -.-> L
+    G[Global admission control] -.-> R
 ```
 
-Two details worth stealing: **log replicas** (acceptors that store only the recent WAL, no B-tree) let a replication group restore its durability quorum in seconds rather than the minutes a full storage copy takes — distinguishing *durability repair* (urgent, cheap) from *capacity repair* (slow, background). And request routers consult a **partition map** kept by the control plane — the [thin-router pattern](../06-scaling/11-cell-based-architecture.md) at database scale.
+The paper describes three full storage replicas with B-trees and WALs, distributed across failure domains. It also describes a **log-only replica** that can store recent WAL without first copying the full B-tree. After a failure, this role can restore a durability quorum in seconds; a full storage replica can take minutes to build.
 
----
+The distinction is valuable:
 
-## The Heart of the Paper: Admission Control vs. Skew
+- **durability repair** needs another durable copy of new log records immediately,
+- **capacity/read repair** needs a complete storage image eventually.
 
-DynamoDB sells provisioned throughput (RCUs/WCUs). The naive implementation — divide a table's capacity statically among its partitions — produced the service's worst customer pain, and the paper narrates the fix in stages:
+Combining both into one full-copy operation would leave the group under-replicated longer.
 
-1. **Static per-partition allocation** (original): a table with 10K WCU across 10 partitions gives each 1K. Real traffic is skewed and time-varying ([hot keys](../02-distributed-databases/05-partitioning-strategies.md)), so customers were throttled *below* their paid capacity — and splitting a hot partition made it worse (capacity divided again: **throughput dilution**).
-2. **Bursting + adaptive capacity:** let partitions tap unused headroom on their node (burst), and re-allocate a table's budget toward its hot partitions reactively. Better, still laggy.
-3. **Global Admission Control (GAC):** the table's budget lives in a *logically central* token bucket (GAC service); request routers maintain local sub-buckets refilled from it. Admission becomes table-level and immediate — a partition is no longer a capacity unit at all, only a placement unit. Node-level token buckets remain as the backstop protecting co-tenants.
-4. **Split for consumption:** partitions split based on *observed access heat* (not just size), with key-distribution-aware split points — and the system declines to split when it wouldn't help (single hot item, access already spanning the keyspace).
-5. **On-demand:** with GAC + heat-driven splitting in place, capacity planning itself becomes deletable for customers — the system observes, pre-provisions headroom, and bills per request.
+## Admission Control: From Partitions to Tables
 
-The arc generalizes to every multi-tenant system: **static partitioned budgets always lose to skew; admission control wants to be global, enforcement local** ([Rate Limiting](../06-scaling/05-rate-limiting.md), [Multi-Tenancy](../06-scaling/12-multi-tenancy.md) — this is the noisy-neighbor problem solved at AWS scale).
+### Why static partition budgets fail
 
-## Durability and Correctness as Continuous Processes
+Suppose a table buys $C$ write units and has $P$ partitions. A static allocation gives each partition $C/P$. If one partition receives most writes, it throttles even while the table has unused capacity elsewhere. Splitting that partition can make the apparent budget per child smaller—**throughput dilution**.
 
-- **Checksums on everything** (every log entry, message, archive object); WALs archived to S3 ([3-2-1 thinking](../15-deployment/05-disaster-recovery.md)) before truncation.
-- **Continuous verification:** archived data is *re-read and re-verified* against live replicas as an always-on background process — the paper's stance is that durability isn't a property you have but an activity you do ([restore testing](../15-deployment/05-disaster-recovery.md), institutionalized).
-- **Formal methods:** core replication/recovery protocols specified in TLA+ and model-checked; the authors credit it with catching subtle bugs pre-production and — as important — making changes *safe to evolve*. Paired with failure-injection testing for the implementation gap the spec can't see.
-- **Gray failure handling:** routers and replicas cross-check each other's connectivity before acting on "leader is down" suspicions, damping the false-failover churn that [gray failures](../01-foundations/06-failure-modes.md) otherwise cause.
-- **Static stability:** during Availability-Zone outages, the data plane continues on cached partition maps and existing leases without needing the control plane — the same [static stability doctrine](../06-scaling/09-multi-region-architecture.md) AWS preaches, practiced by its flagship database.
+The paper describes an evolution:
 
----
+1. **Static allocation:** simple but punishes skew.
+2. **Burst capacity:** token buckets let a partition temporarily consume unused capacity.
+3. **Adaptive capacity:** observations reallocate more table budget toward hot partitions. It is reactive and best effort; the paper says it eliminated more than 99.99% of throttling caused by skew in the measured deployment.
+4. **Global admission control (GAC):** ephemeral services track table-level tokens; routers receive time-limited local token grants refreshed every few seconds. Per-partition and per-node defenses still protect physical resources.
 
-## Influence on System Design
+The architecture is logically centralized and physically distributed:
 
-- **"Predictability over peak"** became the stated design goal of serious multi-tenant platforms — p99 *uniformity* at any scale is the product, and burst/adaptive/global admission control is the standard escalation path this paper documented.
-- **The leaderless retreat** reframed the 2007 paper: Dynamo's ideas (consistent hashing, quorums, merge semantics) remain foundational *concepts*, but the operational verdict — coordination via leaders plus a strong control plane is easier to run honestly — is now the default for managed databases.
-- **Durability-as-verification** (continuous checksum audits, restore drills, formal specs) moved from exotic to expected in infrastructure engineering culture.
-- Together with [Aurora](./09-aurora.md) and [FoundationDB](./13-foundationdb.md), it completes the modern triptych: separate the log, quarantine consensus, and make the control plane — not the data plane — carry the cleverness.
+$$
+\sum_{r\in Routers} grant_r(t) \leq Budget_{table}(t)+Burst(t)
+$$
 
-## References
+subject to grant expiry and reconciliation. Expiring leases/tokens bound overspend when a router disconnects. Local enforcement keeps admission available without consulting a central service per request.
 
-- [Amazon DynamoDB: A Scalable, Predictably Performant, and Fully Managed NoSQL Database Service (USENIX ATC '22)](https://www.usenix.org/conference/atc22/presentation/elhemali)
-- [Dynamo: Amazon's Highly Available Key-value Store (2007)](./02-dynamo.md) — the ancestor, and the contrast that makes this paper interesting
-- [How Amazon web services uses formal methods (CACM 2015)](https://cacm.acm.org/research/how-amazon-web-services-uses-formal-methods/) — the TLA+ practice behind §6
-- [Cell-Based Architecture](../06-scaling/11-cell-based-architecture.md) and [Multi-Tenancy](../06-scaling/12-multi-tenancy.md) — the patterns this paper's admission-control story exemplifies
+GAC does not make a single hot item infinitely scalable. One item remains on one replication group and one leader path.
+
+## Split for Consumption
+
+Size-only splitting does not necessarily help a small but hot partition. DynamoDB observes access distribution and can split a partition for **consumption**, choosing a boundary that separates hot key ranges.
+
+The operation takes minutes in the paper's account, so it is not an instantaneous response to a burst. Splitting is avoided when it would not distribute load—for example, one hot item or a sequential access pattern concentrated at one moving edge.
+
+Partition design remains an application responsibility. A random write suffix can spread a hot logical counter but makes reads fan out; a time bucket can bound fan-out but creates rollover hotspots. See [Partitioning Strategies](../02-distributed-databases/05-partitioning-strategies.md).
+
+## On-Demand Capacity
+
+In the paper-era description, on-demand mode could immediately accommodate up to twice a table's previous peak and then scale with observed traffic. This is not “unlimited instant capacity.” New tables, sudden jumps beyond the learned peak, one hot key, and physical partition creation remain constrained.
+
+The managed service converts capacity planning into an internal feedback loop, but conservation still applies:
+
+$$
+\text{admitted work} \leq \min(\text{table budget},\ \text{partition capacity},\ \text{node capacity})
+$$
+
+Routers should reject excess load before queues destroy latency predictability.
+
+## Durability as Continuous Verification
+
+DynamoDB keeps three WAL copies across Availability Zones and archives logs to S3. The paper emphasizes verifying data at multiple layers:
+
+- checksums on log entries, messages, and files,
+- archive validation and detection of missing log segments,
+- scrubbing that compares all three replicas,
+- offline reconstruction of a replica and comparison with live state,
+- failure injection against implementation behavior,
+- TLA+ specifications and model checking for core protocols.
+
+Checksums detect corruption; they do not repair it. Independent replicas, archives, and reconstruction paths provide candidate correct copies. A restore test is valuable only if it reaches a queryable, compared result rather than merely proving bytes can be downloaded.
+
+The paper-era backup service produced a consistent backup to the nearest second and point-in-time recovery for the preceding 35 days. These are historical paper claims, not current product limits.
+
+## Failure Detection, Leases, and Gray Failures
+
+With three Availability-Zone replicas, a 2-of-3 quorum can continue after one replica/AZ path is lost. On leader failure, a new leader normally waits for the prior lease to expire—described as a couple of seconds—unless the old leader gracefully relinquishes it.
+
+Gray failures are harder: one node may believe the leader is unreachable while peers can still reach it. Before triggering failover, a follower asks peers about their view. This corroboration reduces unnecessary elections and lease waits caused by one asymmetric network path.
+
+During failover, safety outranks immediate availability. Serving two leaders before the old lease expires risks divergent write order.
+
+## Static Stability
+
+The data plane caches partition maps and security dependencies. IAM and KMS-derived information is cached and refreshed asynchronously so request traffic does not scale backend dependency traffic. Control services manage splits, movement, and health, but existing partitions can keep serving during many control-plane outages.
+
+Static stability does not mean “no dependencies.” It means the steady-state data path does not require a new control-plane round trip for each request and cached state has safe expiry/failure rules.
+
+## Quantitative Evaluation
+
+The controlled benchmark used YCSB workloads A and B, uniformly distributed keys, 900-byte items, and a production deployment in Northern Virginia. Offered load rose from 100,000 to 1 million operations/s. The paper's graphs showed little variation in p50 and p99 read/write latency across that range.
+
+The text does not provide precise numerical latency values for every curve. Reading pixels from a graph and reporting them as exact measurements would create false precision. The benchmark establishes predictability for uniform 900-byte access under the selected topology; it does not evaluate hot keys, large items, transactions, or every region.
+
+The Prime Day 89.2 million requests/s figure and this YCSB experiment have different workloads and scopes. They must not be combined into one throughput/latency claim.
+
+## Failure Analysis
+
+| Failure | Data-plane behavior | Residual risk |
+|---|---|---|
+| One storage replica/AZ lost | Quorum continues; add log-only replica quickly | Reduced failure margin until repair |
+| Leader unreachable | Corroborate gray failure; elect after safe lease boundary | Seconds of unavailability |
+| Control plane unavailable | Existing maps/leases continue | No timely split or rebalance |
+| GAC server/router partition | Time-limited local tokens expire; local defenses remain | Temporary under- or over-admission within bounds |
+| One hot item | Per-item leader saturates | Splitting range does not help |
+| Rapid traffic > learned peak | Throttle while capacity catches up | “On demand” is not unbounded |
+| Replica corruption | Checksums/scrub/rebuild from independent copy | Correlated software bugs can affect copies |
+| IAM/KMS dependency outage | Serve from valid cache where policy permits | Expiry must fail according to security contract |
+
+## Assumptions and Limits
+
+1. The paper focuses mainly on the single-region data plane; global tables and transaction internals are not its subject.
+2. It is vendor-authored and reports selected operational evidence, not a reproducible full-system artifact.
+3. Uniform YCSB keys omit the skew that motivates much of the architecture.
+4. Multi-Paxos leadership differs fundamentally from Dynamo 2007's leaderless conflict reconciliation.
+5. Adaptive capacity is reactive and best effort; GAC cannot exceed a physical hot partition.
+6. Capacity-unit and backup details are dated to the publication.
+7. Cached control/security data needs explicit safe expiration; static stability is not permission to serve indefinitely stale authorization.
+
+## Design-Review Questions
+
+1. Is the customer's capacity unit also a physical partition budget? If so, how does skew waste purchased capacity?
+2. How are global token grants bounded when routers or GAC servers partition?
+3. Which local resource limit overrides table-level admission?
+4. Can the observed key distribution be split, or is one item/sequential edge hot?
+5. How long does consumption-based splitting take at p99, and what absorbs traffic meanwhile?
+6. Which replicas acknowledge a write, and how is the old leader fenced before election?
+7. Can durability be restored before a full data copy by separating log and storage roles?
+8. Which corruption checks compare independently reconstructed state rather than replicas produced by the same bug?
+9. Does the latency benchmark include realistic skew, item sizes, consistency modes, and background repair?
+10. Which operations continue if every control-plane dependency is unavailable for an hour?
+
+## Lessons That Generalize
+
+1. In multitenant systems, admission belongs at the customer's logical budget while enforcement also remains local to physical bottlenecks.
+2. Partition count is a placement detail; tying quota directly to it creates dilution under splits.
+3. Restore durability quorum quickly with a log-only role, then restore full read capacity in the background.
+4. Predictable tails require early admission and static stability, not merely fast storage engines.
+5. Durability is a continuous verification process: checksum, compare, reconstruct, and exercise restore.
+6. A managed service can hide capacity controls from customers but cannot abolish hot keys, feedback delay, or finite hardware.
+
+## Primary Reference
+
+- [Amazon DynamoDB: A Scalable, Predictably Performant, and Fully Managed NoSQL Database Service — USENIX ATC 2022](https://www.usenix.org/system/files/atc22-elhemali.pdf)
+
+## Related Chapters
+
+- [Dynamo (2007)](./02-dynamo.md)
+- [Partitioning Strategies](../02-distributed-databases/05-partitioning-strategies.md)
+- [Leader Election](../02-distributed-databases/09-leader-election.md)
+- [Rate Limiting](../06-scaling/05-rate-limiting.md)
+- [Multi-Tenancy](../06-scaling/12-multi-tenancy.md)
+- [Disaster Recovery](../15-deployment/05-disaster-recovery.md)

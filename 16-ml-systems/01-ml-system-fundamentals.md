@@ -302,6 +302,36 @@ The reference architecture above is not speculative; it is the shape that severa
 
 ---
 
+## Threat Surfaces Across the ML Lifecycle
+
+ML adds attack paths to ordinary application and infrastructure threats. Use a lifecycle threat ledger rather than a single “secure model” control:
+
+| Phase | Adversary objective | State that contains or exposes the incident |
+|---|---|---|
+| collection and labeling | poison examples, labels, exclusions, or feedback | source identity, append-only label events, contributor concentration, dataset manifests |
+| training | introduce a backdoor, steal data/weights, or publish an untrusted artifact | isolated workers, pinned code/images, step-scoped identity, checkpoint and lineage hashes |
+| evaluation and promotion | choose a favorable slice, contaminate a benchmark, or substitute an artifact after approval | immutable cases, evaluator revision, release manifest, separation of duties |
+| serving | craft evasion inputs, extract behavior/weights, infer membership, or exhaust expensive capacity | abuse quotas, minimized outputs, release-bound telemetry, slice/anomaly detection |
+| feedback and retraining | manufacture engagement/labels so the deployed policy amplifies the attacker | exposure provenance, abuse scoring, exploration controls, delayed-label corrections |
+
+Poisoning is an integrity attack on future behavior; evasion manipulates a decision-time input; privacy attacks attempt to infer training membership, reconstruct sensitive data, or extract model behavior; availability attacks exploit asymmetric inference cost or training resources. These categories overlap. A poisoned source may create a privacy backdoor, and aggressive extraction queries may also exhaust serving capacity.
+
+The containment index is lineage. When source revision, contributor, labeling rule, training image, or checkpoint is compromised, the platform must query every dataset, run, candidate, active release, cache, and decision epoch that consumed it. Friendly aliases such as `latest` cannot answer that question; immutable identities can. Quarantine prevents affected roots from becoming eligible, and rollout state removes already-active bindings without deleting forensic evidence.
+
+Incident response follows the lifecycle in reverse:
+
+1. fence promotion and mutable aliases;
+2. preserve query, source, training, and decision evidence under the applicable privacy policy;
+3. quarantine affected datasets, features, images, checkpoints, models, or traffic principals;
+4. traverse lineage to bound deployed and historical impact;
+5. move serving to a retained qualified release or deterministic fallback;
+6. repair source/labels, rebuild downstream artifacts, and requalify them through ordinary gates;
+7. add the incident slice/attack to monitoring and regression evaluation.
+
+[Dataset Management and Versioning](./11-dataset-management-versioning.md) owns publication and poisoning provenance, [Training Pipelines](./05-training-pipelines.md) owns worker/artifact supply-chain boundaries, [Model Serving](./03-model-serving.md) owns extraction/privacy/abuse controls on the request path, and [ML Risk and Governance](./09-ml-risk-governance.md) owns authority, notification, contestability, and incident evidence. This chapter owns the cross-lifecycle threat map so those controls compose.
+
+---
+
 ## Failure Modes
 
 The characteristic failures of ML systems recur across organizations, and naming them is half of preventing them. They share a family resemblance: each is invisible to the tools built for deterministic software.
@@ -362,3 +392,4 @@ The strongest architectures are usually *hybrids*: deterministic rules define th
 3. [TFX: A TensorFlow-Based Production-Scale Machine Learning Platform](https://dl.acm.org/doi/10.1145/3097983.3098021) — Baylor et al., 2017
 4. [Data Validation for Machine Learning](https://mlsys.org/Conferences/2019/doc/2019/167.pdf) — Breck et al., 2019
 5. [Machine Learning: The High-Interest Credit Card of Technical Debt](https://research.google/pubs/pub43146/) — Sculley et al., 2014
+6. [NIST AI 100-2 E2025: Adversarial Machine Learning—A Taxonomy and Terminology of Attacks and Mitigations](https://csrc.nist.gov/pubs/ai/100/2/e2025/final) — lifecycle attack taxonomy, mitigations, and limitations

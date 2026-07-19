@@ -1,90 +1,256 @@
 # Cloudflare System Design
 
-## TL;DR
+## Scope and Evidence Contract
 
-Cloudflare runs one of the largest edge networks on earth (300+ cities, tens of millions of requests per second) on a contrarian doctrine: **every server runs every service**. There is no "CDN tier" and "Workers tier" — one homogeneous fleet, with **anycast** steering each user to the nearest city and any machine able to answer anything. The consequences cascade: DDoS absorption becomes a side effect of the architecture (attack traffic disperses across the planet instead of concentrating); compute-at-edge needed a runtime three orders of magnitude lighter than containers (**V8 isolates** — Workers); configuration for millions of customers must reach every machine in seconds (**Quicksilver**, a read-optimized replicated KV); and stateful coordination gets a deliberately *non*-edge answer (**Durable Objects** — one single-writer actor per key, placed once, moved as needed). It is the most complete public example of [cell-less](../06-scaling/11-cell-based-architecture.md) horizontal uniformity — isolation by dispersion rather than partition.
+Cloudflare publishes unusually detailed engineering accounts, but each article describes a component, date, and measurement boundary. This chapter uses three labels:
 
----
+- **Documented fact:** a statement in a dated Cloudflare source.
+- **Inference:** a design consequence derived from those facts.
+- **Reference design:** a composite assembled for review. It must not be read as Cloudflare's documented end-to-end request path.
 
-## Core Requirements
+That distinction is essential here. Anycast ingress, Unimog, Pingora, Workers, Quicksilver, and Durable Objects are all documented systems. Public sources do **not** establish that every request traverses all of them, in that order, on one machine.
 
-### Functional
-1. **Reverse proxy/CDN** for a large fraction of the web — caching, TLS, HTTP routing
-2. **DDoS mitigation** at line rate, without human reaction time
-3. **Programmable edge** — customer code running in every city
-4. **Edge data** — config instantly everywhere; KV/queues/objects/state for apps
-5. **DNS** — one of the largest authoritative + recursive (1.1.1.1) deployments
+## The Workload Is Several Systems, Not One Pipeline
 
-### Non-Functional
-1. **Latency** — terminate TLS within ~10–50ms of most humans on earth
-2. **Absorption** — survive multi-Tbps attacks as routine, not incidents
-3. **Uniformity** — any machine, any city serves any customer (no special boxes)
-4. **Change velocity** — config changes visible globally in < ~5 seconds
+An edge platform must solve at least four different placement problems:
 
----
+1. **Packets:** attract traffic to a reachable nearby location and absorb attacks.
+2. **Connections:** assign flows to healthy machines and reuse expensive origin connections.
+3. **Code and configuration:** execute tenant logic and read request-path configuration locally.
+4. **Mutable state:** choose where serialization occurs when an application needs coordination.
 
-## Anycast + Homogeneous Fleet: The Doctrine
+The mechanisms differ because their invariants differ:
+
+| Plane | Primary invariant | Dominant resource | Failure preference |
+|---|---|---|---|
+| Ingress | A healthy site can accept the advertised address | Network capacity and packets/s | Reroute or disperse |
+| L4/L7 proxy | A flow reaches a viable handler; protocol state remains valid | CPU, memory, sockets | Retry only when semantics permit |
+| Configuration | Reads remain local and updates retain an ordered lineage | Memory/storage and propagation delay | Serve the last applied version |
+| Tenant compute | Isolation and bounded resource use | CPU time and memory | Terminate or shed one tenant |
+| Coordinated state | One serialized history per object identity | Storage I/O and geographic latency | Route to the object's home |
+
+## Documented Systems, Pinned to Their Sources
+
+### Anycast and “every service everywhere”
+
+Cloudflare announces service addresses from many locations using BGP anycast. Routing policy sends a client toward a reachable announcement according to Internet topology and policy—not necessarily the geographically closest building.
+
+**Documented fact (2021).** Cloudflare described its network as designed to run every service in every server and every location. This homogeneous-fleet goal lets capacity be shared across products and lets newly deployed services inherit the existing footprint.
+
+**Inference.** Anycast disperses a geographically distributed attack because each source tends to enter through its own routed location. That helps absorption, but it is not a proof that load is uniform. Route leaks, hot peering links, localized attacks, and uneven site capacity still require traffic engineering and admission control.
+
+See [Multi-Region Architecture](../06-scaling/09-multi-region-architecture.md) for the distinction between routing reachability and application consistency.
+
+### Unimog: load balancing inside an edge location
+
+**Documented fact (2020).** At publication, Cloudflare said its network covered more than 200 cities. Within a data center, any server could handle any service or IP. Unimog made each server participate in L4 load balancing rather than placing a dedicated appliance tier in front.
+
+Unimog built on an earlier XDP/eBPF packet-processing layer called `l4drop`. XDP runs before the ordinary kernel networking stack, making early drops and redirects cheap. A control system supplied dynamic load information; the data plane selected a viable destination for a flow while preserving flow affinity.
+
+The article reported less than 1% CPU overhead in its measurement. That result is evidence for the tested deployment, not a universal XDP budget and not an end-to-end proxy cost.
 
 ```mermaid
-graph TD
-    U1["User (Tokyo)"] -->|"BGP: nearest<br/>announcement wins"| T["Tokyo PoP"]
-    U2["User (Berlin)"] --> B["Berlin PoP"]
-    ATK["Botnet (everywhere)"] -->|"anycast disperses<br/>attack to ALL PoPs"| T & B & N["…300+ cities"]
-    subgraph POP["Inside every PoP — identical stack"]
-        L4["Unimog: L4 load balancer<br/>(XDP/eBPF, every server<br/>is also the LB)"]
-        PX["Pingora-based proxies<br/>(Rust; replaced NGINX)"]
-        WK["Workers runtime<br/>(V8 isolates)"]
-        QS["Quicksilver replica<br/>(full config KV copy)"]
-        DNS["DNS, WAF, R2 gateway, …"]
-        L4 --> PX --> WK
-        QS -.-> PX & WK & DNS
-    end
+flowchart LR
+    I[Packet reaches anycast site] --> X[XDP/eBPF ingress]
+    X -->|drop policy| D[Drop]
+    X -->|flow assignment| H[Selected server]
+    H --> L7[L7 service or proxy]
+    C[Load and health control state] -.-> X
 ```
 
-- **Anycast everywhere:** the same IP prefixes announced from every city; BGP routes each user to the topologically nearest PoP ([Multi-Region routing](../06-scaling/09-multi-region-architecture.md) taken to its limit — no GeoDNS, no TTL staleness, rerouting at BGP convergence speed when a PoP drains).
-- **DDoS defense is the topology.** A botnet's traffic enters at *its* nearest PoPs — the attack is automatically sharded across the fleet, so no single site eats the aggregate. Per-machine filtering then happens in **XDP/eBPF before the kernel stack** (the L4 layer and dropping logic run at NIC line rate), turning "mitigation" into a property rather than a procedure.
-- **Every server runs every service.** No service-specific hardware pools: utilization smooths (capacity follows total demand, not per-product forecasts), any-machine failure is absorbed by identical neighbors ([static stability](../06-scaling/09-multi-region-architecture.md)), and a new product inherits 300 cities on day one. The price: every service must be a well-behaved multi-tenant citizen on shared boxes — strict per-tenant budgets and [shuffle-shard-style](../06-scaling/11-cell-based-architecture.md) blast-radius thinking inside each machine.
-- **Pingora:** the NGINX-based proxy layer was rewritten in Rust — memory safety for the code that touches *all* traffic, connection-reuse and customization wins, and (open-sourced) it became the substrate of their proxy products.
+The separation is important: BGP chooses a site; Unimog chooses a machine within that site; an L7 service then interprets HTTP or another application protocol.
 
-## Workers: Isolates, Not Containers
+### Pingora: the origin-facing HTTP proxy substrate
 
-Edge compute with containers fails the math: thousands of customers × hundreds of PoPs × cold-start seconds × container memory = impossible. Workers instead runs customer code as **V8 isolates** — the same sandboxing Chrome uses per-tab — thousands per process:
+**Documented fact (2022).** Cloudflare said Pingora handled almost all HTTP traffic that interacted with origins. The Rust system replaced an older NGINX-based service, allowing tighter control over connection pooling and request behavior.
 
-| | Container/microVM | V8 isolate (Workers) |
+The published before/after measurements included:
+
+| Reported comparison | Result in the 2022 article |
+|---|---:|
+| Median time to first byte | 5 ms lower |
+| p95 time to first byte | 80 ms lower |
+| New origin connections | About one third as many |
+| One large customer's reuse ratio | 87.1% to 99.92% |
+| New connections for that customer | 160× fewer |
+| CPU at equivalent traffic | About 70% lower |
+| Memory at equivalent traffic | About 67% lower |
+
+These figures do not isolate one causal change: a new implementation, different pooling, and deployment evolution all participated. They also do not mean every Cloudflare request hits an origin; cache hits need not.
+
+Cloudflare open-sourced Pingora under Apache 2.0 in 2024. That is later evolution and does not change the boundary of the 2022 production comparison.
+
+### Workers: high-density tenant compute
+
+Workers uses V8 isolates rather than assigning a conventional process or virtual machine to every tenant script. Isolates share a process while retaining separate JavaScript heaps and capability-limited host interfaces.
+
+**Documented fact (2020).** Cloudflare reported isolate startup below 5 ms. For HTTPS, it described prewarming a Worker after observing SNI in the TLS ClientHello, overlapping startup with the remaining handshake.
+
+The accurate conclusion is “startup can be hidden on that path,” not “cold starts are zero.” HTTP without that signal, code distribution, eviction, overload, and other runtime work can still contribute latency.
+
+The architecture exchanges general-purpose host access for density and control:
+
+- Tenant code uses platform capabilities rather than raw process privileges.
+- CPU time, memory, subrequests, and other resources can be metered at request boundaries.
+- Shared-process isolation requires defense in depth; a language sandbox is not equivalent to a hardware VM boundary.
+- A location can keep many tenant programs ready without one OS image per tenant.
+
+This is the runtime-level version of [Multi-Tenancy](../06-scaling/12-multi-tenancy.md): isolation, scheduling, and accounting are one design problem.
+
+### Quicksilver: configuration distribution optimized for reads
+
+Request handling repeatedly consults customer configuration. A remote database lookup on that path would multiply latency and create a dependency whose outage could stop the edge.
+
+**Documented fact (2020).** Quicksilver distributed ordered configuration changes while each edge machine served reads from local LMDB. The article reported:
+
+- 14 million peak HTTP requests/s, more than 200 cities in 90 countries, and 26 million Internet properties as deployment context at publication.
+- About 2.5 trillion configuration reads/day with average read latency in microseconds.
+- New configuration reaching the network within seconds.
+- A monotonically increasing transaction-log sequence used for fan-out and catch-up.
+
+The system optimized global distribution, not globally concurrent writes. A disconnected data center could keep serving its last locally applied state and catch up later.
+
+The predecessor benchmark explains the redesign. With 20 fixed two-byte key/value reads, the reported Kyoto Tycoon p99/p99.9 latency was 9/15 ms without writes. One sequential 40 KiB writer raised it to 154/250 ms; two writers raised it to 701/1,215 ms. Those are benchmark-specific tail measurements, but they expose read/write interference on a configuration path.
+
+A useful invariant is:
+
+$$
+v_{local}(t) \leq v_{committed}(t), \qquad v_{local}(t+1) \geq v_{local}(t)
+$$
+
+for each replica's applied sequence $v$. Reads may be stale during disconnection, but a correctly recovering replica does not move backward through committed configuration versions.
+
+### Durable Objects: one home for coordination
+
+**Documented fact (2020 beta).** A Durable Object has a globally unique identity, is active in one location at a time, and owns private strongly consistent transactional storage. Requests for an identity are routed to its active instance. Its single-threaded execution model supplies a serialization point for application logic.
+
+That is not “active-active state everywhere.” It chooses one home per object and pays network latency when callers are far from that home. It also creates a per-object throughput ceiling; scale comes from using many object identities.
+
+**Later evolution (2024).** Cloudflare documented SQLite-backed Durable Object storage with code colocated with SQLite. Its storage replication system batches write-ahead-log updates for at most 10 seconds or 16 MB, snapshots when logs exceed database size, and can reconstruct with downloads bounded to at most about twice database size in the described design.
+
+Those storage internals should not be projected backward onto the 2020 beta, and Durable Objects should not be placed on every generic proxy request path.
+
+## Reference Design: Composite Edge Platform
+
+The following is a **reference design synthesis**. Arrows express plausible interfaces, not one documented Cloudflare deployment graph.
+
+```mermaid
+flowchart TB
+    U[Clients and attack sources] -->|BGP anycast| POP[Chosen edge location]
+
+    subgraph POP[Edge location]
+        X[XDP / L4 flow steering]
+        P[HTTP proxy and cache]
+        W[Isolate runtime]
+        Q[(Local configuration replica)]
+        X --> P
+        P -->|only for applicable routes| W
+        Q -.-> P
+        Q -.-> W
+    end
+
+    P -->|cache miss / proxy route| O[Origin]
+    W -->|stateful application call| R[Durable Object router]
+    R --> DO[One active object home]
+    LOG[Ordered configuration log] --> Q
+```
+
+The optional edges matter. A cached static request need not execute a Worker or contact an origin. A Worker need not use a Durable Object. A Durable Object may live in another location. Quicksilver-style configuration distribution and Durable Object application storage solve different consistency problems.
+
+## Illustrative Capacity and Tail-Latency Reasoning
+
+### Configuration fan-out
+
+Assume—not as Cloudflare data—$N=250{,}000$ edge replicas, an update stream of $u=2{,}000$ changes/s, and $s=600$ encoded bytes/change. Naive origin fan-out would emit:
+
+$$
+B = N \times u \times s = 300\ \text{GB/s}
+$$
+
+before protocol and replication overhead. A tree or regional relay hierarchy with fan-out $f$ reduces connections at the source, but not total delivered bytes. Capacity reviews therefore need both root egress and aggregate relay/disk budgets, plus catch-up bandwidth after a disconnected site returns.
+
+### Origin connection reuse
+
+If a site proxies $R=200{,}000$ origin requests/s and the probability of needing a new connection falls from 12.9% to 0.08%, the illustrative handshake rate changes from:
+
+$$
+25{,}800\ \text{connections/s} \quad \text{to} \quad 160\ \text{connections/s}
+$$
+
+The percentages echo the shape of one published customer example, but this workload and arithmetic are illustrative. The benefit is nonlinear when handshakes also consume origin CPU, ephemeral ports, and congestion windows.
+
+### Tail composition
+
+For an origin-bound dynamic request, a useful decomposition is:
+
+$$
+T_{request}=T_{route}+T_{queue}+T_{edge}+T_{origin\ connection}+T_{origin}
+$$
+
+Do not add independent p99 values and call the result a p99. Preserve per-request traces or replay joint distributions: queueing, new-connection probability, and origin slowness are correlated during overload.
+
+## Failure Analysis
+
+| Failure | Desired behavior | Mechanism | Remaining trade-off |
+|---|---|---|---|
+| One edge location unreachable | Traffic reaches another advertisement | BGP withdrawal/route convergence | Sessions may reconnect; path may be farther |
+| One server overloaded | Existing and new flows avoid it | Dynamic L4 load state and health | Stale control data can misroute briefly |
+| Packet flood | Expensive work is bypassed | XDP/eBPF early filtering | Link capacity can saturate before software |
+| Origin is slow | Edge remains bounded | Timeouts, connection pools, admission control, caching | Retrying non-idempotent requests is unsafe |
+| Config source unavailable | Edge serves last applied state | Local replica and ordered catch-up | Updates are stale until recovery |
+| Replica misses log history | Recover monotonic state | Snapshot/full sync plus sequence boundary | Catch-up can compete with live traffic |
+| Tenant script loops or allocates heavily | Other tenants retain service | Runtime quotas and termination | Shared-process bugs expand blast radius |
+| Durable Object host fails | One history resumes elsewhere | Storage recovery and single active placement | Object is temporarily unavailable; callers are remote |
+| One object becomes globally hot | Fleet remains healthy | Per-object backpressure and key partitioning | Atomic operations across split identities need redesign |
+
+## Design Boundaries
+
+| Need | Strong fit | Poor fit |
 |---|---|---|
-| Cold start | 100ms–seconds | **~ms or less** (often pre-warmed by the HTTP handshake) |
-| Memory per tenant | 10s–100s of MB | ~few MB |
-| Density per machine | Dozens–hundreds | **Thousands** |
-| Isolation boundary | Kernel/VM | V8 sandbox + process-level defenses |
-| Tenant code model | Anything | JS/WASM, CPU-time-capped, no raw sockets |
+| Small, read-dominant configuration needed everywhere | Ordered fan-out plus full local replicas | Large mutable datasets with multi-writer transactions |
+| Stateless request transformation | Isolate-based edge compute | Arbitrary privileged binaries or long unbounded jobs |
+| Per-key coordination | Single-home actor/object | One global counter requiring unlimited write throughput |
+| Origin proxying | Shared connection pools and protocol-aware proxy | Assuming every request can be retried safely |
+| Volumetric dispersion | Anycast plus distributed capacity | Treating route choice as a latency or balance guarantee |
 
-The trade is real: a constrained runtime (JS/WASM, capability-style APIs) in exchange for density that makes "run on every machine in every city" economically sane — the [multi-tenancy admission-control story](../06-scaling/12-multi-tenancy.md) executed at the runtime layer (CPU-time limits per request, not best-effort fairness). Spectre-class risks of shared-process tenancy are handled with mitigations plus the option to quarantine suspicious tenants into separate processes.
+Cells and a homogeneous fleet are not opposites at every layer. Cloudflare can expose a uniform global service while still using process, machine, object, or storage failure domains internally. See [Cell-Based Architecture](../06-scaling/11-cell-based-architecture.md).
 
-## Quicksilver: Config as a Replicated Read Path
+## Design-Review Questions
 
-Every request consults customer configuration (WAF rules, routing, certs, Workers code). That lookup must be **local and microsecond-fast** on every machine, yet updates (millions/day) must reach the planet in seconds:
+1. Which routing layer chooses the site, machine, process, and state owner, and how stale can each decision be?
+2. What percentage of traffic can be rejected before allocating connection or application state?
+3. When configuration distribution is disconnected, is stale service safer than fail-closed behavior for this setting?
+4. What proves ordered catch-up has no gap, duplicate, or rollback?
+5. Is a cold start measured from code absent, isolate absent, or first byte of customer execution?
+6. Which requests are safe to retry after a proxy loses the origin response?
+7. What is the maximum object-level arrival rate, and can the key be partitioned without breaking its invariant?
+8. Does the reference diagram accidentally imply that optional products are on a universal request path?
+9. Are performance numbers pinned to workload, date, percentile, and comparison baseline?
 
-- One **write path** at the core accepts changes and appends them to a replication log; every machine holds a **full local replica** (LMDB-style memory-mapped store) applying the log — reads never leave the box ([read-local/write-global](../06-scaling/09-multi-region-architecture.md) in miniature, replacing the prior Kyoto-Tycoon system that buckled at this fan-out).
-- Properties worth copying: read amplification handled by replicate-everything (config is small relative to traffic); bounded propagation (~seconds) is *measured and alerted on* as a product SLO ([freshness SLI](../11-observability/05-slos-error-budgets.md)); and the log is the interface — new consumers (Workers code distribution) ride the same pipe ([CDC-shaped thinking](../13-data-pipelines/04-change-data-capture.md)).
+## Lessons That Generalize
 
-## Durable Objects: Admitting the Edge Needs a Home for State
+1. Route selection is hierarchical: global anycast, local flow steering, application routing, and state placement solve different problems.
+2. Put read-mostly control data beside the hot path, but preserve an ordered version boundary for recovery and observability.
+3. High tenant density comes from constraining the execution model; isolation and economics must be reviewed together.
+4. Connection reuse is a capacity feature, not merely a latency optimization.
+5. Edge state still obeys physics. Strong coordination requires a serialization point, and callers pay distance to it.
+6. A component catalog is not an architecture diagram. Mark optional edges and evidence boundaries explicitly.
 
-Stateless edge + global KV (eventually consistent, cached) covers reads, but coordination — a chat room, a counter, a booking — needs a serialization point. Cloudflare's answer is the actor model productized: a **Durable Object** is a named single-threaded object with private storage; the platform places **exactly one live instance** somewhere, routes all requests for that ID to it, and migrates it toward its traffic. Strong consistency comes from [single-writer-per-key](../01-foundations/09-distributed-locks.md) rather than consensus-per-operation; storage is journaled (now SQLite-backed with replicated WAL). The honest geometry: your object lives in *one* place — latency is great near it and intercontinental far from it — i.e., the edge platform converges back to [partitioned active-active](../06-scaling/09-multi-region-architecture.md) with per-key homes, because physics doesn't exempt edge networks.
+## Primary References
 
----
+- [Unimog: Cloudflare's edge load balancer (2020)](https://blog.cloudflare.com/unimog-cloudflares-edge-load-balancer/)
+- [Every service everywhere (2021)](https://blog.cloudflare.com/magic-makes-your-network-faster/)
+- [Introducing Quicksilver: configuration distribution at Internet scale (2020)](https://blog.cloudflare.com/introducing-quicksilver-configuration-distribution-at-internet-scale/)
+- [Pingora: the proxy that connects Cloudflare to the Internet (2022)](https://blog.cloudflare.com/how-we-built-pingora-the-proxy-that-connects-cloudflare-to-the-internet/)
+- [Pingora open source (2024, later evolution)](https://blog.cloudflare.com/pingora-open-source/)
+- [Eliminating cold starts with Cloudflare Workers (2020)](https://blog.cloudflare.com/eliminating-cold-starts-with-cloudflare-workers/)
+- [Introducing Workers Durable Objects (2020 beta)](https://blog.cloudflare.com/introducing-workers-durable-objects/)
+- [SQLite in Durable Objects (2024, later evolution)](https://blog.cloudflare.com/sqlite-in-durable-objects/)
 
-## Lessons
+## Related Chapters
 
-1. **Dispersion is an isolation strategy.** Anycast + homogeneity turns attack and load concentration into fleet-wide dilution — the inverse of cells, suited when requests are small, stateless, and tenant-mixed.
-2. **Density dictates the runtime.** "Code in 300 cities" was a sandbox-economics problem; isolates over containers is the kind of order-of-magnitude move that creates product categories.
-3. **Replicate small data totally; route to big state singly.** Quicksilver (copy everything everywhere) and Durable Objects (one home per key) are the two clean endpoints; most "edge state" confusion comes from wanting both at once.
-4. **Rewrite the hot sheet-metal in a safe language:** Pingora's Rust rewrite of the all-traffic proxy is the strongest public case for memory safety as an availability investment.
-5. **Make the dangerous path the fast path:** DDoS filtering in XDP, config reads from local memory — the architecture pre-decides what happens under stress, instead of asking software to react ([static stability](../06-scaling/09-multi-region-architecture.md), again).
-
-## References
-
-- [A Brief Primer on Anycast](https://blog.cloudflare.com/a-brief-anycast-primer/) and [Unimog: Cloudflare's edge load balancer](https://blog.cloudflare.com/unimog-cloudflares-edge-load-balancer/)
-- [How Workers works: isolates](https://developers.cloudflare.com/workers/reference/how-workers-works/) and [Cloud Computing without Containers](https://blog.cloudflare.com/cloud-computing-without-containers/)
-- [Introducing Quicksilver: configuration distribution at internet scale](https://blog.cloudflare.com/introducing-quicksilver-configuration-distribution-at-internet-scale/)
-- [Durable Objects](https://blog.cloudflare.com/introducing-workers-durable-objects/) and [Zero-latency SQLite storage in every Durable Object](https://blog.cloudflare.com/sqlite-in-durable-objects/)
-- [Introducing Pingora](https://blog.cloudflare.com/introducing-pingora/) — the Rust proxy rationale
+- [Content Delivery Networks](../06-scaling/04-cdn-architecture.md)
+- [Multi-Region Architecture](../06-scaling/09-multi-region-architecture.md)
+- [Multi-Tenancy](../06-scaling/12-multi-tenancy.md)
+- [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md)
+- [SLOs and Error Budgets](../11-observability/05-slos-error-budgets.md)

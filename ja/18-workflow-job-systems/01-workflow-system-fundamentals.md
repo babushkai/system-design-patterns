@@ -159,6 +159,6 @@ Control planeは「何を実行すべきか」を決め、ワーカーは副作�
 
 - [メッセージキュー](../05-messaging/01-message-queues.md)
 - [配送保証](../05-messaging/04-delivery-guarantees.md)
-- [Sagaパターン](../05-messaging/09-saga-pattern.md)
+- [分散トランザクションとSaga](../02-distributed-databases/07-distributed-transactions.md#saga-pattern-deep-dive)
 - [冪等性](../01-foundations/08-idempotency.md)
 - [分散ロック](../01-foundations/09-distributed-locks.md)

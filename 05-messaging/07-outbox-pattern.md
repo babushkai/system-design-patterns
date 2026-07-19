@@ -1,734 +1,269 @@
-# Outbox Pattern
+# Transactional Outbox, Inbox, and CDC Publication
 
-## TL;DR
+The transactional outbox closes one specific dual-write gap: domain state and an intent to publish are committed in the same local transaction. A relay then delivers that durable intent to a broker at least once. The transactional inbox closes the corresponding consumer gap by committing message identity, local effect, and progress in one local transaction. Together they provide recoverable publication and effectively-once local effects without pretending two independent systems share one atomic commit.
 
-The outbox pattern ensures reliable message publishing by writing messages to a database table (outbox) in the same transaction as business data. A separate process reads from the outbox and publishes to the message broker. This guarantees atomicity between database writes and message publishing, solving the dual-write problem.
+This chapter is the canonical treatment of outbox/inbox mechanics and CDC-based relay. [Delivery Guarantees](04-delivery-guarantees.md) defines the end-to-end semantics; [Change Data Capture](../13-data-pipelines/04-change-data-capture.md) owns general database-log architecture, snapshots, and schema capture.
 
----
+## Workload and contract
 
-## The Dual-Write Problem
+The producer transaction is:
 
-### Naive Approach
-
-```python
-def create_order(order):
-    # Step 1: Save to database
-    db.save(order)
-    
-    # Step 2: Publish event
-    message_queue.publish(OrderCreated(order))
+```text
+BEGIN
+  mutate domain rows
+  insert outbox event with stable identity and aggregate/source version
+COMMIT
 ```
 
-### Failure Scenarios
+The asynchronous path is:
 
-```
-Scenario 1: DB succeeds, publish fails
-  db.save(order)     ✓ (committed)
-  mq.publish(event)  ✗ (failed)
-  
-  Result: Order exists, but no event
-  Downstream systems never know
-
-Scenario 2: Publish succeeds, DB fails
-  db.save(order)     (pending)
-  mq.publish(event)  ✓ (published)
-  db.commit()        ✗ (rolled back)
-  
-  Result: Event exists, but no order
-  Downstream systems process phantom order
+```text
+committed outbox row
+  -> poller or CDC reader
+  -> broker append with stable event identity
+  -> consumer delivery
+  -> inbox + local effect + checkpoint transaction
+  -> broker acknowledgement
 ```
 
-### Why Distributed Transactions Don't Help
+Define:
 
-```
-XA/2PC:
-  - Not supported by most message brokers
-  - Slow (blocks on coordinator)
-  - Complex failure handling
-  
-Need simpler, more reliable approach
-```
+- which local transaction makes the event eligible;
+- event identity, aggregate/source version, partition key, schema, and destinations;
+- relay durability, retry, lease, ordering, and deletion/retention policy;
+- maximum commit-to-broker freshness and tolerated outage backlog;
+- consumer idempotency/effect scope and inbox retention;
+- CDC slot/log retention and bootstrap/recovery behavior;
+- payload ownership, size, privacy, encryption, and claim-check lifecycle;
+- reconciliation from domain state to outbox, broker, and consumer effects.
 
----
+An outbox guarantees **no committed domain transition is missing its publication intent** if application code writes both correctly. It does not guarantee one broker record, one delivery, one consumer attempt, or one external effect.
 
-## The Outbox Solution
+## State and invariants
 
-### Architecture
+Producer-side state includes domain rows/event stream, outbox rows, relay claim/attempt state or CDC position, broker publication evidence, and cleanup watermark. Consumer-side state includes inbox identities, domain/projection effects, source/entity versions, and checkpoints.
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                      Database                           │
-│  ┌─────────────┐    ┌─────────────────────────────┐    │
-│  │   Orders    │    │         Outbox              │    │
-│  │  ┌───────┐  │    │  ┌─────────────────────┐    │    │
-│  │  │ Order │  │◄───┼──│ id, payload, status │    │    │
-│  │  └───────┘  │    │  └─────────────────────┘    │    │
-│  └─────────────┘    └─────────────────────────────┘    │
-└─────────────────────────────────────────────────────────┘
-         ▲                      │
-         │                      │ Poll
-         │                      ▼
-┌────────┴──────┐    ┌─────────────────────┐    ┌────────┐
-│  Application  │    │ Outbox Publisher    │───►│ Broker │
-└───────────────┘    └─────────────────────┘    └────────┘
-```
+Enforce:
 
-### How It Works
+**Local atomicity.** Domain mutation and outbox insert both commit or both roll back.
 
-```
-1. Application writes business data AND outbox record
-   in SAME transaction
+**Stable identity.** Every relay retry and CDC restart preserves `event_id`; consumers do not depend on a transport-assigned ID.
 
-2. Transaction commits atomically
-   Both order and outbox record exist, or neither
+**Source provenance.** Outbox records identify aggregate/entity, source version or commit position, event type/schema, actor/tenant, and transaction/causation context.
 
-3. Background process polls outbox
-   Reads unpublished messages
+**Claim fencing.** A polling relay marks success only while holding the current claim generation; a stale worker cannot delete/mark another worker’s row.
 
-4. Publisher sends to message broker
-   Message delivered to queue/topic
+**Deletion follows durable evidence.** Rows are not reclaimed until the chosen relay can restart/reconcile without losing unpublished intent.
 
-5. Publisher marks outbox record as published
-   Prevents duplicate publishing
+**Inbox and local effect commit together.** A duplicate inbox identity proves the corresponding local transaction committed.
+
+**Retention horizons align.** Outbox history, CDC log/slot, broker replay, inbox identity, and external idempotency cover the declared recovery window.
+
+## Outbox schema and write path
+
+A minimal logical record contains:
+
+```text
+outbox_id / event_id            immutable globally unique identity
+aggregate_type, aggregate_id    routing and provenance
+aggregate_version               domain ordering/version gate
+event_type, schema_id           contract
+payload                         immutable bytes or claim-check reference
+headers                         bounded typed metadata
+created_at / commit_position    freshness and source order
+destination_contract            logical route, not necessarily vendor topic
+status/claim fields             only for polling relay
 ```
 
----
+Enforce uniqueness on `event_id` and, where appropriate, `(aggregate_id, aggregate_version, event_type)`. The latter is domain-specific; one aggregate version may legitimately emit multiple event types.
 
-## Implementation
+The application does not publish after commit as a “best effort.” It writes the outbox in the same repository/unit-of-work call as the state mutation. Tests should fail if a state transition requiring publication lacks an outbox record. Database constraints or event-sourced append APIs can make this harder to omit.
 
-### Outbox Table Schema
+Keep outbox rows append-only in semantic fields. Relay status is mutable operational state. Updating payload after commit makes replay nondeterministic and can let a compromised relay alter domain facts.
 
-```sql
-CREATE TABLE outbox (
-    id UUID PRIMARY KEY,
-    aggregate_type VARCHAR(255) NOT NULL,
-    aggregate_id VARCHAR(255) NOT NULL,
-    event_type VARCHAR(255) NOT NULL,
-    payload JSONB NOT NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    published_at TIMESTAMP NULL,
-    
-    INDEX idx_outbox_unpublished (published_at) WHERE published_at IS NULL
-);
+Payloads should be self-contained enough for consumers to act without synchronously calling the producer for mutable state. Reference-only events reintroduce temporal coupling: by fetch time the entity may have changed or disappeared. For large data, use an immutable content-addressed claim-check object with digest, schema, encryption metadata, and retention tied to the outbox/broker contract.
+
+## Polling relay protocol
+
+A scalable poller uses leased claims:
+
+1. select a bounded batch of eligible rows ordered within the required scope, skipping rows locked/claimed by live workers;
+2. atomically set `claim_owner`, increment `claim_generation`, and set `claim_until`;
+3. publish each event using stable `event_id` and partition key;
+4. wait for the broker durability acknowledgement;
+5. mark published only if owner/generation still match;
+6. release or let the lease expire after ambiguous failure;
+7. clean up later under a separate watermark.
+
+The publish/mark step cannot be atomic across database and broker. If publish succeeds and marking fails, the row is republished. This is why stable IDs and consumer inbox/effect idempotency are mandatory. Marking before broker acknowledgement creates loss.
+
+Batching database claims and broker appends improves throughput, but preserve per-aggregate sequence. Publishing rows concurrently can reorder versions even if selected in order. Route each aggregate to one ordered lane/partition or gate completion/claim by preceding version. Cross-aggregate global order is normally not required.
+
+Use absolute retry deadlines and backpressure from broker health. A relay outage grows the outbox; unbounded retries should not hold database transactions open. The relay claims, commits, then performs network I/O.
+
+Polling indexes should cover eligibility without indexing large payloads. Partition rows by creation/commit range so cleanup drops sealed partitions rather than issuing huge deletes. Measure vacuum/compaction and primary-cache impact.
+
+## CDC relay protocol
+
+Log-based CDC reads committed changes from the database’s replication/change log. Because the outbox insert shares the domain transaction, the log exposes it only on commit and in database commit order. A connector transforms the row into the public envelope and publishes it.
+
+CDC state includes source database identity/timeline, log position, transaction boundaries, schema history, connector generation, destination partition mapping, and last committed destination/checkpoint. Restart can replay from the last committed source position, so duplicates remain possible.
+
+The database log is not infinite. A replication slot or equivalent retention mechanism can pin WAL/binlog while the connector is down and fill the primary disk. Cap and alert based on retained bytes/time and disk reserve. If the slot is lost or falls behind retained history, recovery needs an authoritative outbox/backfill or snapshot-plus-log protocol; “create a new slot at latest” silently loses publications.
+
+Deleting outbox table rows does not necessarily remove their already-recorded log entries, but cleanup policy must account for connector recovery. If CDC position is lost and rows were deleted, there may be no source for replay. Keep a publication archive/reconciliation path or treat slot/checkpoint backup as tier-zero state.
+
+CDC conveys database row schema; the public event contract is the outbox payload/schema, not arbitrary table-change events. Publishing raw domain-table CDC across team boundaries couples consumers to storage schema and can expose rolled-up implementation details. Use raw CDC for owned projections and explicit outbox events for integration intent.
+
+## Polling versus CDC
+
+Choose polling when volume is moderate, operational simplicity and database portability matter, and a well-indexed work table fits the primary. Choose CDC when publication volume/latency justifies operating log readers, source-log retention, schema history, connector recovery, and transactional ordering.
+
+The outbox contract remains stable across both. Migration can run old and new relays in shadow using the same event IDs. Compare event identity/position coverage, then fence one publisher generation before activating the other. Running both without destination deduplication produces duplicates by design.
+
+CDC is not inherently “exactly once.” Source read, destination append, and source checkpoint still have crash windows unless they share a proven transaction protocol; downstream effect idempotency remains required.
+
+## Transactional inbox and local effects
+
+For each consumer/effect scope, create an inbox with a unique key:
+
+```text
+BEGIN
+  INSERT inbox(consumer_name, event_id, request_digest, source_position)
+  -- if exact duplicate already committed: return prior outcome
+  validate entity/source version and gap policy
+  mutate local domain/projection rows
+  update contiguous checkpoint or entity version
+  insert local outbox records for further publication if needed
+COMMIT
+ack broker
 ```
 
-### Writing to Outbox
-
-```python
-def create_order(order_data):
-    with db.transaction():
-        # Create order
-        order = Order(**order_data)
-        db.add(order)
-        
-        # Write to outbox (same transaction)
-        outbox_entry = OutboxEntry(
-            id=uuid4(),
-            aggregate_type="Order",
-            aggregate_id=str(order.id),
-            event_type="OrderCreated",
-            payload=json.dumps({
-                "order_id": str(order.id),
-                "customer_id": order.customer_id,
-                "total": order.total
-            })
-        )
-        db.add(outbox_entry)
-    
-    # Transaction commits atomically
-    return order
-```
-
-### Outbox Publisher (Polling)
-
-```python
-class OutboxPublisher:
-    def __init__(self, db, broker):
-        self.db = db
-        self.broker = broker
-    
-    def run(self):
-        while True:
-            self.publish_pending()
-            sleep(100)  # Poll interval
-    
-    def publish_pending(self):
-        # Get unpublished messages
-        entries = self.db.query("""
-            SELECT * FROM outbox 
-            WHERE published_at IS NULL 
-            ORDER BY created_at 
-            LIMIT 100
-            FOR UPDATE SKIP LOCKED
-        """)
-        
-        for entry in entries:
-            try:
-                # Publish to broker
-                self.broker.publish(
-                    topic=f"{entry.aggregate_type}.{entry.event_type}",
-                    message=entry.payload,
-                    headers={"event_id": str(entry.id)}
-                )
-                
-                # Mark as published
-                self.db.execute("""
-                    UPDATE outbox 
-                    SET published_at = NOW() 
-                    WHERE id = %s
-                """, entry.id)
-                
-            except BrokerError:
-                # Will retry on next poll
-                log.error(f"Failed to publish {entry.id}")
-```
-
----
-
-## CDC-Based Outbox
-
-### Using Change Data Capture
-
-```
-Instead of polling, use database log
-
-Database ──► CDC (Debezium) ──► Kafka
-
-Outbox table changes captured from binlog/WAL
-Lower latency than polling
-No separate publisher process
-```
-
-### Debezium Configuration
-
-```json
-{
-  "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
-  "database.hostname": "db.example.com",
-  "database.dbname": "myapp",
-  "table.include.list": "public.outbox",
-  "transforms": "outbox",
-  "transforms.outbox.type": "io.debezium.transforms.outbox.EventRouter",
-  "transforms.outbox.table.field.event.type": "event_type",
-  "transforms.outbox.table.field.event.payload": "payload"
-}
-```
-
-### CDC Benefits
-
-```
-+ Lower latency (near real-time)
-+ No polling load on database
-+ Guaranteed ordering (from log)
-+ No missed messages
-
-- More infrastructure (Debezium, Kafka Connect)
-- CDC setup complexity
-- Database must support log access
-```
-
----
-
-## Handling Duplicates
-
-### Why Duplicates Happen
-
-```
-Scenario:
-  1. Publisher reads message from outbox
-  2. Publisher sends to broker ✓
-  3. Publisher crashes before marking published
-  4. New publisher instance starts
-  5. Same message published again
-
-Consumer receives duplicate message
-```
-
-### Idempotent Consumers
-
-```python
-class OrderEventConsumer:
-    def handle(self, event):
-        event_id = event.headers["event_id"]
-        
-        # Check if already processed
-        if self.is_processed(event_id):
-            log.info(f"Duplicate event {event_id}, skipping")
-            return
-        
-        # Process event
-        self.process(event)
-        
-        # Mark as processed
-        self.mark_processed(event_id)
-    
-    def is_processed(self, event_id):
-        return redis.sismember("processed_events", event_id)
-    
-    def mark_processed(self, event_id):
-        redis.sadd("processed_events", event_id)
-        redis.expire("processed_events", 86400)  # 24h
-```
-
-### Transactional Deduplication
-
-```python
-def handle(event):
-    event_id = event.headers["event_id"]
-    
-    with db.transaction():
-        # Try to insert processing record
-        try:
-            db.execute("""
-                INSERT INTO processed_events (event_id, processed_at)
-                VALUES (%s, NOW())
-            """, event_id)
-        except UniqueViolation:
-            # Already processed
-            return
-        
-        # Process event (same transaction)
-        process(event)
-```
-
----
-
-## Ordering Guarantees
-
-### Per-Aggregate Ordering
-
-```sql
--- Outbox entries ordered by aggregate
-SELECT * FROM outbox 
-WHERE published_at IS NULL 
-ORDER BY aggregate_id, created_at
-FOR UPDATE SKIP LOCKED
-```
-
-### Partition by Aggregate
-
-```python
-def publish(entry):
-    broker.publish(
-        topic="order-events",
-        key=entry.aggregate_id,  # Same aggregate → same partition
-        value=entry.payload
-    )
-```
-
-### Handling Out-of-Order
-
-```
-If strict ordering required:
-  1. Single publisher per aggregate type
-  2. Or: Sequence numbers in messages
-  3. Or: Consumer reordering buffer
-```
-
----
-
-## Cleanup Strategies
-
-### Delete After Publishing
-
-```python
-# Immediately delete after successful publish
-db.execute("DELETE FROM outbox WHERE id = %s", entry.id)
-```
-
-### Soft Delete with Cleanup
-
-```python
-# Mark as published
-db.execute("""
-    UPDATE outbox SET published_at = NOW() WHERE id = %s
-""", entry.id)
-
-# Separate cleanup job
-@scheduled(cron="0 * * * *")  # Hourly
-def cleanup_outbox():
-    db.execute("""
-        DELETE FROM outbox 
-        WHERE published_at < NOW() - INTERVAL '7 days'
-    """)
-```
-
-### Archive Before Delete
-
-```python
-@scheduled(cron="0 0 * * *")  # Daily
-def archive_outbox():
-    # Move to archive table
-    db.execute("""
-        INSERT INTO outbox_archive
-        SELECT * FROM outbox 
-        WHERE published_at < NOW() - INTERVAL '7 days'
-    """)
-    
-    # Delete from main table
-    db.execute("""
-        DELETE FROM outbox 
-        WHERE published_at < NOW() - INTERVAL '7 days'
-    """)
-```
-
----
-
-## Monitoring
-
-### Key Metrics
-
-```
-Outbox lag:
-  Count of unpublished messages
-  Should stay low
-
-Publish latency:
-  Time from created_at to published_at
-  Indicates processing speed
-
-Publish failures:
-  Rate of failed publish attempts
-  Indicates broker issues
-
-Outbox size:
-  Total table size
-  Should be bounded
-```
-
-### Alerting
-
-```yaml
-alerts:
-  - name: OutboxLagHigh
-    condition: count(unpublished) > 1000
-    for: 5m
-    
-  - name: OutboxLatencyHigh
-    condition: avg(publish_latency) > 30s
-    for: 5m
-    
-  - name: OutboxPublishFailing
-    condition: publish_error_rate > 0.01
-    for: 5m
-```
-
-### Health Check
-
-```python
-def outbox_health():
-    oldest_unpublished = db.query("""
-        SELECT MIN(created_at) 
-        FROM outbox 
-        WHERE published_at IS NULL
-    """)
-    
-    if oldest_unpublished:
-        age = now() - oldest_unpublished
-        if age > timedelta(minutes=5):
-            return Health.DEGRADED
-    
-    return Health.HEALTHY
-```
-
----
-
-## Variations
-
-### Inbox Pattern (Idempotent Consumer)
-
-```
-Mirror of outbox for consumers
-
-Message arrives → Write to inbox → Process → Mark processed
-
-Inbox table:
-  id, message_id, payload, processed_at
-
-Guarantees idempotency at consumer
-```
-
-### Transactional Inbox
-
-```python
-def handle_message(message):
-    with db.transaction():
-        # Check/insert inbox record
-        result = db.execute("""
-            INSERT INTO inbox (message_id, received_at)
-            VALUES (%s, NOW())
-            ON CONFLICT (message_id) DO NOTHING
-            RETURNING id
-        """, message.id)
-        
-        if not result:
-            return  # Already processed
-        
-        # Process in same transaction
-        process(message)
-```
-
----
-
-## Debezium CDC Implementation
-
-### Architecture Deep Dive
-
-Debezium is a distributed platform for change data capture built on top of Kafka Connect. For the outbox pattern, Debezium reads the database transaction log directly — no polling queries, no application-level hooks — and publishes row-level changes to Kafka topics.
-
-```
-Database Transaction Log ──► Debezium Connector ──► Kafka Connect ──► Kafka Topic
-     (WAL / binlog)            (source connector)    (worker cluster)    (outbox.events.*)
-```
-
-### PostgreSQL: Logical Replication
-
-PostgreSQL uses Write-Ahead Logging (WAL) for crash recovery. Debezium creates a **logical replication slot** using the `pgoutput` plugin (built-in since PostgreSQL 10) to stream changes.
-
-- Replication slot guarantees no WAL segments are recycled before Debezium consumes them
-- `pgoutput` decodes WAL entries into logical change events (INSERT, UPDATE, DELETE)
-- No polling of the outbox table — changes are pushed from WAL as they commit
-- Requires `wal_level = logical` in `postgresql.conf`
-
-### MySQL: Binlog Consumption
-
-MySQL's binary log records all data modifications. Debezium connects as a replica:
-
-- Reads binlog events, filters for the outbox table via `table.include.list`
-- Supports both row-based and mixed binlog formats (row-based required for full change capture)
-- Connector tracks binlog filename + position for resume after restart
-
-### Connector Configuration
-
-```json
-{
-  "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
-  "database.hostname": "db-primary",
-  "database.port": "5432",
-  "database.user": "debezium_replication",
-  "database.dbname": "app",
-  "slot.name": "outbox_slot",
-  "plugin.name": "pgoutput",
-  "table.include.list": "public.outbox_events",
-  "transforms": "outbox",
-  "transforms.outbox.type": "io.debezium.transforms.outbox.EventRouter",
-  "transforms.outbox.table.field.event.key": "aggregate_id",
-  "transforms.outbox.table.field.event.type": "event_type",
-  "transforms.outbox.table.field.event.payload": "payload",
-  "transforms.outbox.route.topic.replacement": "outbox.events.${routedByValue}"
-}
-```
-
-### EventRouter Transform
-
-The `EventRouter` Single Message Transform (SMT) is the critical piece that makes Debezium outbox-aware:
-
-- Extracts the event payload from the outbox row's `payload` column — no envelope wrapping
-- Routes to the correct Kafka topic based on `aggregate_type` (e.g., `outbox.events.Order`)
-- Sets the Kafka message key to `aggregate_id` — ensures partition-level ordering per entity
-- Optionally removes the outbox row after publishing (via `route.tombstone.on.empty.payload`)
-
-### Ordering Guarantee
-
-Events are published in WAL commit order within a single Kafka partition. Since `aggregate_id` is the partition key, all events for the same aggregate land in the same partition and arrive in the exact order they were committed to the database. Cross-aggregate ordering is not guaranteed across partitions — this is by design.
-
----
-
-## Outbox Table Schema Design
-
-### Minimal Schema
-
-```sql
-CREATE TABLE outbox_events (
-    id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    aggregate_type VARCHAR(255) NOT NULL,   -- e.g., 'Order', 'Payment'
-    aggregate_id  VARCHAR(255) NOT NULL,   -- entity's business ID
-    event_type    VARCHAR(255) NOT NULL,   -- e.g., 'OrderCreated', 'PaymentFailed'
-    payload       JSONB       NOT NULL,    -- full event body
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-```
-
-### Why `aggregate_id` Matters
-
-The `aggregate_id` column serves dual purpose:
-
-1. **Kafka partition key** — Debezium's EventRouter (or the polling publisher) uses this as the message key. Kafka hashes it to a partition, guaranteeing all events for the same entity arrive in order.
-2. **Consumer correlation** — downstream services use `aggregate_id` to reconstruct entity state without querying the source.
-
-### Payload Strategy: Full vs Reference
-
-| Strategy | Tradeoff |
-|---|---|
-| **Full payload** (entire event body in JSONB) | Self-contained events, larger rows, consumers need nothing else |
-| **Reference** (event ID + type, consumer fetches details) | Small outbox rows, but introduces coupling — consumer must call back to source service |
-
-Prefer full payload unless event size routinely exceeds 1MB. Self-contained events decouple services more effectively.
-
-### Retention and Cleanup
-
-With CDC (Debezium), processed rows can be deleted immediately — Debezium tracks its position in the WAL via the replication slot, not by reading the outbox table. Keeping the table small reduces vacuum overhead and index bloat.
-
-For polling-based implementations, retain rows until `published_at` is set, then delete via a scheduled cleanup job.
-
-### Indexes
-
-- **Primary key on `id`** — required for deduplication and lookups
-- **Partial index on `created_at WHERE published_at IS NULL`** — for polling-based publishers to find unpublished rows efficiently
-- Avoid indexing `payload` — JSONB GIN indexes on the outbox table add write overhead with no read benefit
-
-### Table Partitioning
-
-For high-throughput systems, partition the outbox table by `created_at` using PostgreSQL's native partitioning or `pg_partman`:
+This composes across services: each local transaction consumes an inbox event, changes local state, and emits its own outbox fact. It does not create one global transaction, but every boundary is durable and replayable.
 
-```sql
-CREATE TABLE outbox_events (
-    id UUID NOT NULL DEFAULT gen_random_uuid(),
-    aggregate_type VARCHAR(255) NOT NULL,
-    aggregate_id VARCHAR(255) NOT NULL,
-    event_type VARCHAR(255) NOT NULL,
-    payload JSONB NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-) PARTITION BY RANGE (created_at);
-```
+The inbox key includes consumer/effect contract because two independent projections should each apply the same event. Bind the ID to a payload/request digest so an attacker or bug cannot reuse an ID with different content.
 
-Partitioning enables `DROP`-based cleanup (dropping old partitions) instead of row-level `DELETE`, avoiding table bloat and long-running vacuum operations.
+Inbox cleanup uses the maximum of broker replay, operator redrive, disaster recovery, and upstream outbox retention. Natural business uniqueness or entity version may allow compacting identities. Never delete inbox state merely because the broker’s normal retry window is short if operators can replay months later.
 
----
+If an effect is in a remote system, the local inbox transaction can record an intent/outbox to call it; it cannot mark the remote effect complete. Pass a stable downstream idempotency key and reconcile ambiguous outcomes, or use a durable workflow.
 
-## Polling vs CDC Tradeoffs
+## Ordering and transaction boundaries
 
-### Comparison Matrix
+Database commit position provides a total order within its source log, but broker partitioning may preserve only per-key order. Carry aggregate version and route consistently. Consumers should version-gate or repair gaps instead of depending on wall-clock timestamps.
 
-| Aspect | Polling | CDC (Debezium) |
-|---|---|---|
-| **Latency** | Polling interval bound (100ms–5s typical) | Near-real-time (<100ms from commit) |
-| **Ordering** | `ORDER BY created_at` may have gaps under concurrent writes | WAL order is exact commit order |
-| **Database load** | Repeated queries on outbox table; mitigated with `FOR UPDATE SKIP LOCKED` | Reads from replication slot — minimal incremental load |
-| **Operational complexity** | Simple SQL query + cron or loop | Debezium + Kafka Connect cluster + monitoring |
-| **Failure recovery** | Re-poll from last processed ID or `published_at IS NULL` | Debezium resumes from stored WAL offset |
-| **Infrastructure** | Application + database only | Kafka, Kafka Connect, Debezium, Schema Registry |
-| **Throughput ceiling** | Limited by poll query speed + batch size | WAL streaming scales with database write throughput |
+One database transaction can emit multiple outbox rows. Include a transaction/batch ID and indices if consumers require atomic group visibility. Otherwise events to different partitions can arrive independently. Do not imply a cross-aggregate atomic view unless the destination protocol/consumer supports it.
 
-### When to Choose Polling
+Multiple source databases have no shared commit order. A relay timestamp does not create causality. Model cross-database processes as workflows with explicit correlation/dependencies, or consolidate the invariant into one transaction boundary.
 
-- Small-to-medium event volume (< 1,000 events/second)
-- No existing Kafka infrastructure and no plan to adopt it
-- Team prefers operational simplicity over latency
-- Events are not latency-sensitive (batch processing, daily reports)
+## Cleanup and archival
 
-### When to Choose CDC
+Separate status update from physical deletion. A cleanup watermark advances only when:
 
-- High throughput (> 1,000 events/second sustained)
-- Strict ordering requirements within an aggregate
-- Existing Kafka infrastructure with operational expertise
-- Near-real-time event propagation is a business requirement
-- Multiple consumers need the same event stream (Kafka topic fan-out)
+- the relay has durable publication evidence/checkpoint beyond the rows;
+- no active claim can still mark them;
+- the recovery/reconciliation window is satisfied;
+- required audit/legal/privacy policy is applied;
+- external claim-check payload ownership is transferred or expired safely.
 
-### Hybrid Approach
+Time/range partitions make reclamation predictable. Archive only if there is a real replay/audit requirement; otherwise the broker or authoritative domain store may be the archive. Every extra archive becomes another sensitive copy and recovery dependency.
 
-Some systems start with polling and migrate to CDC as scale demands. The outbox table schema remains identical — only the publisher mechanism changes. This makes polling a safe starting point with a clear upgrade path.
+Periodic reconciliation samples or scans domain transitions requiring events and verifies corresponding outbox IDs, broker identities, consumer source versions, and effect invariants. Count equality is insufficient because duplicates can hide omissions.
 
----
+## Schema and relay migration
 
-## Outbox Pattern Failure Modes
+Outbox event schemas evolve like public APIs. Producers write registered schema IDs. Relays preserve identity/type and do not apply mutable “latest” transforms without version provenance. Consumers deploy compatible readers before producers emit new required semantics.
 
-### Replication Slot Bloat (CDC)
+Relay changes use generations:
 
-When Debezium is down or unable to consume, PostgreSQL retains WAL segments referenced by the replication slot. Unchecked, this fills disk and crashes the database.
+1. pin source positions and old/new relay artifacts;
+2. shadow publish to an isolated destination or compare envelopes before send;
+3. reconcile IDs, routing keys, schemas, and order;
+4. fence old relay generation;
+5. activate new generation from a declared source position;
+6. keep rollback checkpoint and artifacts;
+7. monitor duplicates/gaps through the retention window.
 
-**Detection:** Monitor `pg_replication_slots` — compare `confirmed_flush_lsn` against `pg_current_wal_lsn()`. A growing delta indicates Debezium is falling behind.
+Changing partition keys is an ordering migration requiring a barrier as described in the ordering chapter.
 
-```sql
-SELECT slot_name,
-       pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn) AS bytes_behind
-FROM pg_replication_slots
-WHERE slot_name = 'outbox_slot';
-```
+## Capacity and cost model
 
-**Mitigation:** Set `max_slot_wal_keep_size` (PostgreSQL 13+) to cap retained WAL. Alert when lag exceeds a threshold (e.g., 1GB). If Debezium is unrecoverable, drop and recreate the slot — accept that some events may need re-publishing from the outbox table.
+Illustrative producer database:
 
-### Duplicate Events on Consumer Restart
+- 18,000 domain transactions/s;
+- 35% create one outbox event;
+- average outbox row 1.4 KiB including indexes;
+- polling batch 500 rows;
+- broker acknowledgement batch latency measured at 12 ms p50, 80 ms p99;
+- broker outage budget 6 hours;
+- three database replicas.
 
-If a consumer crashes after processing an event but before committing its offset, it will re-receive the event on restart. Consumers must be idempotent. See `04-delivery-guarantees.md` for patterns.
+Outbox rate is 6,300/s and logical growth about 8.6 MiB/s. Six hours of outage accumulates 136 million rows and roughly 185 GiB logical before table/index/WAL amplification; three replicas plus WAL can multiply primary storage substantially. Preallocate reserve and test catch-up impact.
 
-### Schema Evolution
+At 500 rows/batch, steady polling needs 12.6 batches/s. If one worker holds one batch until broker confirmation, p99 80 ms permits only 12.5 batches/s—already near steady rate. Parallel leased batches are needed, but per-key order and database/broker budgets cap concurrency.
 
-Adding or removing fields in the outbox payload breaks consumers that expect a fixed structure. Strategies:
+To drain the six-hour backlog in three hours while live ingress continues, relay throughput must be `6,300 + 136M/10,800`, about 18,900 events/s. Broker and consumer capacity must support catch-up without overload.
 
-- **Avro + Schema Registry:** Enforce forward and backward compatibility at the schema level. Debezium natively integrates with Confluent Schema Registry.
-- **JSONB with additive changes only:** Never remove fields, only add optional ones. Consumers ignore unknown fields.
-- **Versioned event types:** Use `OrderCreated.v2` as the `event_type` to distinguish incompatible schema versions.
+Inbox storage at 6,300/s and 30-day replay is 16.3 billion identities. At a measured 72 bytes/identity, one logical copy is about 1.09 TiB. Partition/compact by time and effect scope, use natural uniqueness where valid, and align replay policy deliberately.
 
-### Large Payloads
+## Concrete failure trace: lost CDC slot after cleanup
 
-Outbox rows with large JSONB payloads (>100KB) slow down WAL replication and increase Kafka message size. Options:
+A CDC relay is down for two days. The replication slot is accidentally dropped, and an aggressive job has already deleted published-looking outbox rows older than one day. A new slot starts at the current WAL position. Domain transactions from the missing day have neither replayable rows nor retained log entries, so their integration events disappear silently.
 
-- Store the full payload in a separate table; the outbox row holds a reference (event ID + aggregate type). Consumers fetch the payload from an API or object store.
-- Compress payloads before writing to the outbox column.
-- Claim-check pattern: write the payload to S3/GCS, store the object key in the outbox row.
+Containment stops the connector and downstream claims of completeness. Repair reconstructs required events from the authoritative domain/event store using stable deterministic IDs and publishes through a controlled backfill. Prevention backs up/checks connector source positions, ties cleanup watermark to recoverable publication evidence rather than row age, monitors retained WAL, and rehearses slot-loss recovery.
 
-### Transaction Ordering Across Aggregates
+## Operations and observability
 
-A single database transaction may write outbox entries for multiple aggregates (e.g., `Order` and `Payment`). These events land on different Kafka partitions and may arrive at consumers in any order. Design consumers to handle this:
+Track by source DB/shard, destination, relay generation, event type, consumer, and tenant:
 
-- Do not assume cross-aggregate causal ordering
-- Use explicit correlation IDs if downstream logic requires coordinated processing
-- If strict cross-aggregate ordering is required, route all related events through the same `aggregate_id` — but this limits partition parallelism
+- outbox insert rate/bytes and transactions missing required event intents;
+- oldest unpublished/claimed row age, claim expiries, attempts, and backlog drain ETA;
+- broker publish acknowledgement, timeout, duplicates, and routing/schema rejects;
+- CDC source position, slot/log retained bytes, transaction lag, schema-history health;
+- cleanup watermark, table/index/WAL bytes, partitions eligible/blocked for deletion;
+- inbox duplicate/conflict rate, apply/checkpoint latency, and retention horizon;
+- end-to-end source commit-to-effect lag and source/effect reconciliation mismatch;
+- claim-check missing/orphaned objects and deletion progress.
 
----
+Runbooks cover relay outage, broker ambiguity, database overload, stuck claims, CDC slot/log loss, schema rejection, duplicate storm, cleanup error, and replay beyond inbox retention.
 
-## Alternatives to Outbox
+## Security and privacy
 
-### Listen/Notify (PostgreSQL)
+Application roles may insert outbox rows only through owned domain transactions. Relay roles read/claim/publish but cannot mutate domain state or alter payloads. CDC connectors receive least-privilege replication access and isolate schema-history/checkpoint credentials.
 
-PostgreSQL's `NOTIFY` can be issued inside the same transaction as the business write. A listening process receives the notification and publishes to the broker.
+Authenticate destination routes from trusted configuration, not payload-supplied topic names. Validate event type/schema, tenant, size, compression ratio, headers, and claim-check digest. Encrypt outbox/inbox, WAL archives, broker, and payload objects according to data classification.
 
-```sql
--- Inside transaction
-INSERT INTO orders (...) VALUES (...);
-NOTIFY order_events, '{"order_id": "abc", "type": "OrderCreated"}';
-```
+Replay, seek, cleanup, connector reset, and bulk redrive are privileged audited operations. An event ID is not a secret, but allowing callers to choose another tenant’s ID can suppress effects through inbox uniqueness; namespace and bind identity to authenticated source plus digest.
 
-**Limitation:** Notifications are not persisted. If the listener is disconnected or crashes, events are lost permanently. No replay capability. Only suitable for non-critical, best-effort notifications.
+## Verification strategy
 
-### Transactional Messaging (XA/2PC)
-
-Enlist both the database and the message broker in a distributed transaction using XA. Both commit or both roll back.
-
-**Limitation:** Most message brokers (Kafka, RabbitMQ, SQS) do not support XA. Even where supported, 2PC is slow (coordinator round-trips), fragile (coordinator failure blocks all participants), and operationally painful. The outbox pattern exists precisely because XA is impractical at scale.
-
-### Domain Events Published After Commit
-
-```python
-def create_order(order_data):
-    order = save_to_db(order_data)
-    # DB committed, now publish
-    broker.publish(OrderCreated(order))  # crash here = lost event
-```
-
-The gap between commit and publish is the exact vulnerability the outbox pattern eliminates. Any crash, network timeout, or process kill in that window causes a lost event with no recovery path.
-
-### Event Table with Application Polling
-
-Similar to outbox but without the formal outbox structure — the application writes events to a generic table and polls it for publishing. Functionally equivalent to the outbox pattern but often lacks the explicit `aggregate_id` partitioning and idempotency design.
-
-### When Outbox Is Overkill
-
-- Internal service communication where the caller retries on failure (synchronous HTTP with retry)
-- Non-critical notifications (email, Slack alerts) where occasional loss is acceptable
-- Single-service architectures with no downstream consumers
-- Prototyping or MVP stages where operational simplicity outweighs reliability guarantees
-
----
-
-## Key Takeaways
-
-1. **Solves dual-write problem** - Atomic database + message
-2. **Same transaction is key** - Business data + outbox together
-3. **Polling or CDC** - Choose based on latency needs
-4. **Duplicates will happen** - Consumers must be idempotent
-5. **Order by aggregate** - Preserve per-entity ordering
-6. **Clean up regularly** - Don't let outbox grow unbounded
-7. **Monitor lag** - Detect publishing problems early
-8. **Inbox for consumers** - Same pattern on receive side
+- transaction tests prove every committed domain transition has its required outbox row and rollbacks publish none;
+- kill pollers before/after broker acknowledgement and mark-published to prove duplicates but no loss;
+- partition/fence poller claim generations and relay generations;
+- restart CDC from checkpoints, lose a slot/log range, and execute the documented backfill;
+- crash consumers before/after inbox/effect/checkpoint commit;
+- replay beyond normal windows and verify retention contracts or explicit rejection;
+- compare domain/outbox/broker/inbox/effect IDs and source versions under reconciliation;
+- load-test six-hour outage accumulation plus bounded catch-up against primary/broker/downstream capacity.
+
+## Decision framework
+
+Use outbox when a local transaction must reliably cause asynchronous publication to another transactional domain. Use a simple local job table if the work remains inside the same database/service and a broker adds no value. Consider distributed transactions only when every participant supports the protocol and blocking/availability trade-offs fit; see [Distributed Transactions](../02-distributed-databases/07-distributed-transactions.md).
+
+Choose relay and consumer design by answering:
+
+1. What exact local transaction creates publication intent?
+2. Which stable identity/version/order fields survive every retry?
+3. Does polling or CDC fit volume and operational capability?
+4. What outage backlog and catch-up rate can every tier sustain?
+5. When can rows/logs/inbox identities/payloads be safely reclaimed?
+6. How does each consumer commit inbox, effect, and progress atomically?
+7. What source reconstructs missing publications after catastrophic relay-state loss?
+
+## References
+
+- [Chris Richardson: Transactional Outbox Pattern](https://microservices.io/patterns/data/transactional-outbox.html)
+- [Debezium: Outbox Event Router](https://debezium.io/documentation/reference/stable/transformations/outbox-event-router.html)
+- [PostgreSQL: Logical Decoding Concepts](https://www.postgresql.org/docs/current/logicaldecoding-explanation.html)
+- [PostgreSQL: Replication Slots](https://www.postgresql.org/docs/current/warm-standby.html#STREAMING-REPLICATION-SLOTS)
+- [AWS Prescriptive Guidance: Transactional Outbox Pattern](https://docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/transactional-outbox.html)
+- [Martin Kleppmann et al.: Online Event Processing—Achieving Consistency Where Distributed Transactions Have Failed](https://doi.org/10.1145/3329672.3329679)

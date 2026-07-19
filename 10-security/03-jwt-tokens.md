@@ -1,644 +1,567 @@
-# JSON Web Tokens (JWT)
+# JOSE and JSON Web Token Verification
 
 ## TL;DR
 
-JWTs are self-contained tokens that encode claims as JSON, signed to ensure integrity. They enable stateless authentication but come with trade-offs around revocation and size. Most JWT security issues stem from implementation errors, not protocol flaws.
+A JSON Web Token (JWT) is a claims container. JOSE defines how that container is signed (JWS) or encrypted (JWE). Neither format decides whether a token is appropriate for a request.
+
+Secure use begins with a token-type-specific validation contract:
+
+- expected issuer and audience/resource;
+- allowed signature algorithms fixed by configuration;
+- trusted key source bound to that issuer;
+- required `typ` and claims;
+- time, nonce, assurance, or sender-binding rules;
+- authorization semantics and maximum lifetime;
+- key-rotation and revocation behavior.
+
+Parse only after applying size/format limits, verify cryptography before trusting claims, then validate the full semantic contract. Never choose algorithms, issuer metadata, or key URLs from untrusted token content. ID tokens, access tokens, session tokens, email links, and DPoP proofs are different token kinds even if all are JWTs.
 
 ---
 
-## JWT Structure
+## 1. Format and Trust Boundary
 
-A JWT consists of three base64url-encoded parts separated by dots:
+A compact JWS has:
 
-```
-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.
-eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4iLCJpYXQiOjE1MTYyMzkwMjJ9.
-SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c
-
-Header.Payload.Signature
-```
-
-### Header
-
-```json
-{
-    "alg": "HS256",    // Signing algorithm
-    "typ": "JWT"       // Token type
-}
+```text
+BASE64URL(protected_header)
+.
+BASE64URL(payload)
+.
+BASE64URL(signature)
 ```
 
-Common algorithms:
-- **HS256**: HMAC with SHA-256 (symmetric)
-- **RS256**: RSA signature with SHA-256 (asymmetric)
-- **ES256**: ECDSA with SHA-256 (asymmetric)
+The header and payload are encoded, not encrypted. Anyone holding the token can normally read them.
 
-### Payload (Claims)
+A compact JWE has five parts:
 
-```json
-{
-    "iss": "https://auth.example.com",  // Issuer
-    "sub": "user_12345",                // Subject (user ID)
-    "aud": "my_api",                    // Audience
-    "exp": 1704067200,                  // Expiration (Unix timestamp)
-    "iat": 1704063600,                  // Issued at
-    "nbf": 1704063600,                  // Not valid before
-    "jti": "unique-token-id",           // JWT ID (for revocation)
-    
-    // Custom claims
-    "role": "admin",
-    "permissions": ["read", "write"]
-}
+```text
+protected_header
+.
+encrypted_key
+.
+initialization_vector
+.
+ciphertext
+.
+authentication_tag
 ```
 
-### Signature
+JWS provides integrity/authenticity when verified with the intended key and algorithm. JWE provides confidentiality and integrity under a configured encryption contract. A JWT may be a JWS, a JWE, or nested.
 
-```
-HMACSHA256(
-    base64UrlEncode(header) + "." + base64UrlEncode(payload),
-    secret
-)
-```
+### 1.1 Core invariants
+
+1. **Token-type separation:** one validator accepts one semantic token profile.
+2. **Algorithm allowlist:** allowed algorithms come from configuration, never the token alone.
+3. **Issuer-key binding:** keys are selected only from metadata configured for the expected issuer.
+4. **Audience binding:** the consumer accepts only tokens intended for it.
+5. **Required claims:** absence is an error, not a permissive default.
+6. **Bounded time:** expiry, not-before, issued-at, and maximum age follow the profile.
+7. **Key ambiguity rejection:** zero or multiple matching keys fail safely.
+8. **No claim-before-verify authority:** unverified claims do not select tenant, issuer, key URL, or authorization.
+9. **Bounded input:** token size, nesting, compression, and JSON complexity are limited.
+10. **Auditable result:** decisions record token type, issuer, key ID, validation reason, and policy revision without logging token content.
 
 ---
 
-## Symmetric vs. Asymmetric Signing
+## 2. Build a Validator per Token Type
 
-### Symmetric (HS256)
+Do not expose one generic `verifyJwt(token)` to the whole application. Define profiles:
 
-Same secret for signing and verification.
-
-```
-┌─────────────────┐         ┌─────────────────┐
-│  Auth Server    │         │  API Server     │
-│  (signs JWT)    │         │  (verifies JWT) │
-│                 │         │                 │
-│  secret: xyz    │         │  secret: xyz    │
-└─────────────────┘         └─────────────────┘
-
-Problem: Every service that verifies needs the secret
-         If any service is compromised, attacker can forge tokens
+```text
+OidcIdTokenValidator
+OAuthAccessTokenValidator
+ApplicationSessionTokenValidator
+EmailActionTokenValidator
+DPoPProofValidator
+WorkloadAssertionValidator
 ```
 
-### Asymmetric (RS256/ES256)
+Each profile fixes:
 
-Private key signs, public key verifies.
-
-```
-┌─────────────────┐         ┌─────────────────┐
-│  Auth Server    │         │  API Server     │
-│  (signs JWT)    │         │  (verifies JWT) │
-│                 │         │                 │
-│  PRIVATE key    │         │  PUBLIC key     │
-│  (kept secret)  │         │  (shareable)    │
-└─────────────────┘         └─────────────────┘
-
-Advantage: 
-- Only auth server can create tokens
-- Compromised API server can't forge tokens
-- Public keys can be published via JWKS
+```text
+expected_typ
+expected_issuer
+accepted_audiences/resources
+allowed_algorithms
+trusted_jwks_source
+required_claims
+maximum_lifetime
+clock_skew_policy
+replay/nonce policy
+subject/client rules
+sender-confirmation rules
 ```
 
-### When to Use Which
+This prevents cross-JWT confusion: a token valid under one protocol is accepted in another context because a generic verifier checked only signature and expiry.
 
-| Scenario | Recommendation |
-|----------|----------------|
-| Single monolithic app | HS256 (simpler) |
-| Microservices | RS256/ES256 |
-| Third-party integration | RS256/ES256 |
-| High-security environments | ES256 (smaller, faster) |
+### 2.1 Validation pipeline
+
+```text
+1. enforce transport/header/token size limits
+2. split serialization; reject wrong part count
+3. decode protected header under strict JSON rules
+4. check token type and configured algorithm
+5. select expected issuer configuration from request context
+6. select exactly one trusted key by allowed key metadata
+7. verify signature/authentication tag
+8. decode claims under strict JSON rules
+9. validate issuer, audience, times, required claims
+10. validate profile-specific nonce/subject/client/binding
+11. perform current authorization/resource checks
+```
+
+Some libraries decode payload before signature verification to locate claims. Treat that data as tainted; do not use an unverified `iss` to fetch arbitrary metadata or an unverified tenant to choose authorization context.
 
 ---
 
-## Creating JWTs
+## 3. Algorithm and Key Confusion
 
-### Shell-Level Construction
+### 3.1 `alg: none`
 
-Build a JWT by hand to understand the structure:
+An unsecured JWT is valid only in an explicitly designed profile. Ordinary authentication/authorization validators reject it. Do not allow a library's default set to include `none`.
 
-```bash
-# 1. Create the header
-HEADER=$(echo -n '{"alg":"HS256","typ":"JWT"}' | base64 | tr '+/' '-_' | tr -d '=')
+### 3.2 Symmetric/asymmetric confusion
 
-# 2. Create the payload
-NOW=$(date +%s)
-EXP=$((NOW + 3600))
-PAYLOAD=$(echo -n "{\"sub\":\"user_123\",\"iat\":$NOW,\"exp\":$EXP,\"iss\":\"my-auth-server\",\"aud\":\"my-api\",\"role\":\"admin\"}" \
-  | base64 | tr '+/' '-_' | tr -d '=')
+If a validator accepts both HMAC and RSA/ECDSA algorithms and passes one “key” object generically, an attacker may choose HMAC and use a public verification key as the HMAC secret. Fix algorithm family and key type per issuer/token profile.
 
-# 3. Create the signature (HS256 = HMAC-SHA256)
-SIGNATURE=$(echo -n "$HEADER.$PAYLOAD" \
-  | openssl dgst -sha256 -hmac "your-256-bit-secret" -binary \
-  | base64 | tr '+/' '-_' | tr -d '=')
+### 3.3 Header-controlled key locations
 
-# 4. Assemble the JWT
-JWT="$HEADER.$PAYLOAD.$SIGNATURE"
-echo "$JWT"
-```
+JOSE headers can contain `jku`, `x5u`, `jwk`, `kid`, and certificate chains. Do not fetch or trust arbitrary attacker-supplied key material.
 
-For **RS256** (asymmetric), sign with a private key instead:
+Use `kid` only as an index inside the issuer's configured, trusted key set. Treat it as untrusted input:
 
-```bash
-# Generate an RSA key pair (one-time setup)
-openssl genrsa -out private.pem 2048
-openssl rsa -in private.pem -pubout -out public.pem
+- cap length;
+- compare exact opaque values;
+- do not concatenate into file paths or SQL;
+- do not use it as a URL;
+- reject duplicate keys with the same ID/algorithm/use.
 
-# Header for RS256
-HEADER=$(echo -n '{"alg":"RS256","typ":"JWT"}' | base64 | tr '+/' '-_' | tr -d '=')
+### 3.4 Critical headers
 
-# Sign with the private key
-SIGNATURE=$(echo -n "$HEADER.$PAYLOAD" \
-  | openssl dgst -sha256 -sign private.pem -binary \
-  | base64 | tr '+/' '-_' | tr -d '=')
+The `crit` header declares extensions that must be understood. Reject a token containing unsupported critical parameters. Ignoring them can change signing semantics.
 
-JWT="$HEADER.$PAYLOAD.$SIGNATURE"
-```
+### 3.5 ECDSA and implementation quality
 
-### Node.js Example (jsonwebtoken)
-
-```javascript
-const jwt = require('jsonwebtoken');
-
-// Create token
-const token = jwt.sign(
-    {
-        sub: 'user_123',
-        role: 'admin'
-    },
-    process.env.JWT_SECRET,
-    {
-        algorithm: 'HS256',
-        expiresIn: '1h',
-        issuer: 'my-auth-server',
-        audience: 'my-api'
-    }
-);
-```
+Use maintained cryptographic libraries. Signature encoding, curve validation, randomness, and low-level key checks are not application code. Enforce algorithm/key-size/curve policy through the library and issuer configuration.
 
 ---
 
-## Validating JWTs
+## 4. Claims Validation
 
-### Validation Checklist
+### 4.1 Issuer
 
-```bash
-# 1. Decode header and payload (does NOT verify signature)
-HEADER=$(echo "$JWT" | cut -d. -f1 | base64 -d 2>/dev/null)
-CLAIMS=$(echo "$JWT" | cut -d. -f2 | base64 -d 2>/dev/null)
+`iss` is an exact identifier. Compare against configured issuer value. Do not normalize surprising trailing slashes, case, or aliases unless the profile defines them.
 
-echo "$HEADER" | jq
-echo "$CLAIMS" | jq
+Key the subject by `(issuer, sub)`; `sub` alone can collide across issuers.
 
-# 2. Verify algorithm is expected (reject 'none' or unexpected algorithms)
-ALG=$(echo "$HEADER" | jq -r '.alg')
-[ "$ALG" = "RS256" ] || { echo "Unexpected algorithm: $ALG"; exit 1; }
+### 4.2 Audience and authorized party
 
-# 3. Verify standard claims
-echo "$CLAIMS" | jq -e '.iss == "my-auth-server"'       # Issuer
-echo "$CLAIMS" | jq -e '.aud == "my-api"'                # Audience
-echo "$CLAIMS" | jq -e ".exp > $(date +%s)"              # Not expired
-echo "$CLAIMS" | jq -e 'has("sub", "iat")'               # Required claims present
+`aud` can be a string or array. Require the intended consumer/resource. Do not accept any token from a trusted issuer regardless of audience.
 
-# 4. Verify signature (RS256) — fetch JWKS, then verify with openssl
-curl -s https://auth.example.com/.well-known/jwks.json | jq '.keys[0]'
-# Extract the public key matching the "kid" from the header, then:
-echo -n "$(echo "$JWT" | cut -d. -f1-2)" \
-  | openssl dgst -sha256 -verify public.pem \
-    -signature <(echo "$JWT" | cut -d. -f3 | tr '_-' '/+' | base64 -d 2>/dev/null)
+Profiles such as OIDC may require `azp` checks when multiple audiences exist. OAuth access-token profiles may distinguish client ID, subject, and resource.
 
-# 5. Additional business logic
-ROLE=$(echo "$CLAIMS" | jq -r '.role')
-[[ "$ROLE" == "admin" || "$ROLE" == "user" ]] || { echo "Invalid role"; exit 1; }
-```
+### 4.3 Time
 
-### Critical: Always Specify Algorithm
+- `exp`: reject at/after expiry according to profile.
+- `nbf`: reject before token becomes valid.
+- `iat`: validate presence/plausibility and maximum token age where required.
+- `auth_time`: use for recent-authentication/step-up policy, not general expiry.
 
-```
-VULNERABLE: Libraries that read "alg" from the token header and trust it.
-  - Attacker sets alg=none → unsigned token accepted
-  - Attacker sets alg=HS256 when server expects RS256 →
-    uses public key as HMAC secret to forge tokens
+Clock skew allowance handles bounded operational drift, not arbitrarily old tokens. Monitor clocks and token age distribution.
 
-SECURE: Always enforce expected algorithm on the verification side.
-  - Check the header "alg" matches exactly what you expect
-  - Never allow 'none'
-  - Never allow both symmetric and asymmetric algorithms
-```
+### 4.4 Token identity and replay
+
+`jti` is a token identifier, not automatic replay prevention. Replay protection requires durable or bounded state scoped by issuer/token type plus an operation/nonce policy.
+
+For one-time action links or DPoP proofs, atomically consume `jti`/nonce. For ordinary bearer access tokens, a unique `jti` mainly aids audit/revocation unless the resource checks current state.
+
+### 4.5 Private claims
+
+Namespace private claims and version their schema. Avoid:
+
+- mutable complete permission sets with long lifetime;
+- secrets or personal data;
+- large tenant/group lists;
+- claims consumed by only one service but exposed to every holder.
+
+Resource authorization uses current domain state when required. A signed stale role is still stale.
 
 ---
 
-## JWT Security Vulnerabilities
+## 5. JWK Sets and Key Distribution
 
-### 1. Algorithm Confusion Attack
-
-```
-Attack scenario:
-1. Server expects RS256 (asymmetric)
-2. Attacker takes PUBLIC key (which is public)
-3. Attacker creates token with alg=HS256
-4. Attacker signs with public key as HMAC secret
-5. Server (misconfigured) verifies HS256 using public key as secret
-6. Signature matches! Attacker forges tokens.
-
-Prevention:
-- NEVER accept algorithm from token header
-- Always specify expected algorithm in verification
+```mermaid
+flowchart LR
+    KMS[Key generation / HSM / KMS] --> ISS[Token issuer]
+    ISS --> JWKS[Issuer metadata and JWKS]
+    JWKS --> C1[Resource-server cache]
+    JWKS --> C2[Gateway cache]
+    JWKS --> C3[Client cache]
+    ISS --> AUD[(Key-use audit)]
 ```
 
-### 2. None Algorithm Attack
+A JWK set can contain multiple active/retiring public keys. Consumers:
 
-```
-Attack scenario:
-1. Attacker sets header: {"alg": "none"}
-2. Attacker removes signature
-3. Poorly configured library accepts unsigned token
+1. bind JWKS URL to configured issuer metadata;
+2. cache by HTTP semantics plus local bounds;
+3. select keys by `kid`, algorithm, key type, and intended use;
+4. refresh on unknown key through a coalesced/rate-limited path;
+5. retain last-known-good keys during transient publication outage;
+6. reject if no unique compatible key exists.
 
-Prevention:
-- Explicitly specify algorithms=['RS256'] in decode
-- Never include 'none' in allowed algorithms
-```
+### 5.1 Unknown-key storm
 
-### 3. Weak Secrets
+An attacker can send tokens with random `kid` values. If every miss triggers a JWKS fetch, the verifier becomes a reflector against the issuer. Use:
 
-```bash
-# BAD - easily brute-forced
-SECRET="secret"
-SECRET="password123"
+- singleflight refresh;
+- minimum refresh interval;
+- negative cache for unknown key IDs;
+- rate limits;
+- cached last-known-good set;
+- maximum key-set size.
 
-# GOOD - cryptographically random (256 bits)
-SECRET=$(openssl rand -hex 32)
-echo "$SECRET"
-# e.g. a3f1b7c9d4e8f2...64 hex chars (32 bytes = 256 bits)
-```
+### 5.2 Rotation protocol
 
-**Brute Force Reality:**
+1. create new key in protected key service;
+2. publish public key;
+3. observe verifier convergence;
+4. begin signing new tokens with new `kid`;
+5. stop old signing;
+6. retain old public key for maximum remaining token lifetime plus cache/clock margin;
+7. remove old private/public material according to compromise/retention policy.
 
-```
-Secret length  | Time to crack (modern GPU)
----------------|---------------------------
-8 chars        | Seconds to minutes
-16 chars       | Days to weeks
-32 chars       | Computationally infeasible
-```
+Publish-before-sign prevents unknown-key outage. Retain-after-stop preserves validation of already issued tokens.
 
-### 4. Token Stored in Vulnerable Location
+### 5.3 Emergency compromise
 
-```javascript
-// BAD - XSS can steal token
-localStorage.setItem('token', jwt);
+Normal expiry may be too slow. Options:
 
-// BAD - Same issue
-sessionStorage.setItem('token', jwt);
+- revoke tokens/key IDs in a current-state service;
+- shorten accepted maximum age;
+- rotate and block compromised key;
+- require introspection for high-risk operations;
+- revoke sessions/grants;
+- force reauthentication.
 
-// BETTER - Not accessible via JavaScript
-// Set via HttpOnly cookie from server
-
-// BEST - Keep in memory, use refresh token rotation
-let accessToken = null; // In-memory only
-```
-
-### 5. No Expiration or Too Long
-
-```bash
-NOW=$(date +%s)
-
-# BAD - No expiration
-PAYLOAD='{"sub":"user123"}'
-
-# BAD - 30-day access token
-PAYLOAD="{\"sub\":\"user123\",\"exp\":$((NOW + 2592000))}"
-
-# GOOD - Short-lived access token (15 minutes)
-PAYLOAD="{\"sub\":\"user123\",\"exp\":$((NOW + 900))}"
-```
+Every option trades availability/state load for response speed. Rehearse it.
 
 ---
 
-## Token Revocation Strategies
+## 6. Access Tokens, ID Tokens, and Sessions
 
-JWTs are stateless - by design, you can't revoke them. Here are workarounds:
+### 6.1 OAuth access token
 
-### Strategy 1: Short Expiration + Refresh Tokens
+Consumed by the resource server. Validate resource/audience, issuer, token type/profile, expiry, client/subject, scopes, and sender binding. Then perform resource authorization.
 
-```
-Access Token:  15 minutes
-Refresh Token: 7 days (stored in DB, revocable)
+RFC 9068 defines one JWT access-token profile; not every JWT access token follows it. Agree on a profile between issuer and resources.
 
-Flow:
-1. User logs out
-2. Delete refresh token from DB
-3. Access token still valid for up to 15 min (acceptable)
-4. After 15 min, refresh fails, user must re-login
-```
+### 6.2 OIDC ID token
 
-### Strategy 2: Token Blacklist
+Consumed by the OIDC client. Validate client audience, issuer, nonce/profile, subject, authentication time/assurance as required. Do not present it to an API as access authorization.
 
-```bash
-# Redis-based blacklist — revoke a token by its jti claim
-JTI=$(echo "$JWT" | cut -d. -f2 | base64 -d 2>/dev/null | jq -r '.jti')
-EXP=$(echo "$JWT" | cut -d. -f2 | base64 -d 2>/dev/null | jq -r '.exp')
-TTL=$((EXP - $(date +%s)))
+### 6.3 Application session
 
-# Add to blacklist with TTL matching token expiration
-redis-cli SETEX "blacklist:$JTI" "$TTL" "revoked"
+A session token may be opaque or JWT. A JWT cookie does not remove server state if the application needs revocation, device/session inventory, rolling expiry, or account disable.
 
-# On every request, check if the token is blacklisted
-redis-cli EXISTS "blacklist:$JTI"
-# Returns 1 → token revoked, reject with 401
-# Returns 0 → token not revoked, proceed
-```
+For browser sessions, secure cookie delivery, CSRF controls, fixation prevention, and logout behavior matter more than token format. See [Authentication Systems](./01-authentication-fundamentals.md).
 
-**Trade-off:** Adds database lookup to every request, partially negating stateless benefit.
+### 6.4 One-time action tokens
 
-### Strategy 3: Token Versioning
+Password reset, email verification, and destructive confirmation tokens need:
 
-```bash
-# Store token version per user in DB/cache.
-# When user logs out or changes password, increment the version.
+- exact action/resource binding;
+- short expiry;
+- one-time atomic consumption;
+- subject/account version binding;
+- no sensitive claims in readable payload;
+- protection against URL/referrer/log leakage.
 
-# Token creation — include current version in the payload:
-# {"sub":"user_123","token_version":3,"exp":...}
-
-# Token validation — decode and compare version against DB:
-TOKEN_VER=$(echo "$JWT" | cut -d. -f2 | base64 -d 2>/dev/null | jq -r '.token_version')
-USER_ID=$(echo "$JWT" | cut -d. -f2 | base64 -d 2>/dev/null | jq -r '.sub')
-
-# Fetch current version from DB/cache (e.g., Redis)
-CURRENT_VER=$(redis-cli GET "user:$USER_ID:token_version")
-
-# If they don't match, the token has been invalidated
-[ "$TOKEN_VER" = "$CURRENT_VER" ] \
-  && echo "Token version valid" \
-  || echo "Token invalidated — return 401"
-```
-
-### Strategy 4: Hybrid Approach
-
-```
-Short-lived JWT (15 min) for most requests
-  ↓ Expired?
-Refresh with refresh token (checked against DB)
-  ↓ Valid?
-Issue new access token
-  ↓ Invalid?
-Force re-authentication
-
-Critical actions (password change, payment):
-  - Always verify against DB regardless of JWT validity
-```
+A signed JWT without consumption state is replayable until expiry.
 
 ---
 
-## JWT Size Considerations
+## 7. JWE and Nested Tokens
 
-JWTs can get large, impacting performance.
+Use JWE when token claims must remain confidential from the holder/intermediary and a token format is appropriate. Encryption does not solve:
 
-### Size Breakdown
+- replay;
+- overbroad authorization;
+- long lifetime;
+- unsafe storage;
+- confused token type;
+- recipient compromise.
 
-```
-Typical JWT:
-  Header:    ~36 bytes (base64)
-  Payload:   ~200-500 bytes (base64)
-  Signature: ~86 bytes (RS256) or ~43 bytes (HS256)
-  Total:     ~300-700 bytes
+Fix key-management and content-encryption algorithms by profile. Use authenticated encryption supported by mature JOSE libraries.
 
-Problematic JWT (too many claims):
-  Payload with roles, permissions, user data: 2-4 KB
-```
+### 7.1 Sign then encrypt
 
-### Size Impact
+A common nested pattern signs claims, then encrypts the JWS for a recipient. The recipient decrypts and then validates the inner signature/profile. Require explicit `cty`/type rules so nesting cannot be confused.
 
-```
-Every HTTP request includes JWT in header:
-  Authorization: Bearer <token>
+### 7.2 Compression
 
-If token is 2KB and user makes 100 requests:
-  200KB of bandwidth just for tokens
+Compression before encryption can leak secrets when an attacker influences plaintext and observes ciphertext length. It also enables decompression bombs. Disable compression unless a reviewed profile needs it; cap compressed/uncompressed sizes and nesting depth.
 
-Mobile/slow networks: Significant latency impact
-```
+### 7.3 Why not put sensitive data in a token?
 
-### Size Reduction Strategies
-
-```json
-// BAD — embedding all user data inflates the token
-{
-    "sub": "user123",
-    "name": "John Doe",
-    "email": "john@example.com",
-    "address": { "...": "..." },
-    "permissions": ["read:users", "write:users", "...50 more..."],
-    "roles": ["admin", "manager"]
-}
-
-// GOOD — minimal claims, fetch details when needed
-{
-    "sub": "user123",
-    "role": "admin",
-    "exp": 1704067200
-}
-// Fetch full permissions from cache/DB when needed
-```
+Tokens travel through clients, proxies, logs, traces, browser storage, support tools, and crash reports. Prefer a reference/opaque handle when data is sensitive or mutable. Encryption centralizes decryption-key access but does not reduce all copies of ciphertext.
 
 ---
 
-## Access Token vs. ID Token
+## 8. Revocation and Freshness
 
-### Access Token
+Self-contained validation is a choice:
 
-- **Purpose:** Authorize access to resources
-- **Audience:** Resource server (API)
-- **Contents:** Permissions, scopes
-- **Validation:** Resource server validates
-- **Opacity:** Can be opaque (not JWT) or JWT
-
-### ID Token (OpenID Connect)
-
-- **Purpose:** Authenticate user identity
-- **Audience:** Client application
-- **Contents:** User identity claims
-- **Validation:** Client validates
-- **Format:** Always JWT
-
-```bash
-# Access token — for API calls to the resource server
-curl -H "Authorization: Bearer $ACCESS_TOKEN" \
-  https://api.example.com/data
-
-# ID token — decode locally to get user info in the client
-echo "$ID_TOKEN" | cut -d. -f2 | base64 -d 2>/dev/null | jq
-# {
-#   "sub": "user_12345",
-#   "email": "john@example.com",
-#   "name": "John Doe",
-#   ...
-# }
+```text
+authorization freshness <= token lifetime + accepted clock/cache margin
 ```
 
-**Important:** Never send ID token to resource servers. It's not for authorization.
+Revocation mechanisms:
+
+| Mechanism | Freshness | Serving dependency | State/cost |
+|---|---|---|---|
+| short access-token lifetime | bounded by expiry | none per request | refresh load |
+| token/grant denylist | near current | local/distributed lookup | high-cardinality state |
+| introspection | current at AS | network call/cache | central load |
+| subject/session version | current per user cache | lookup/cache | compact but coarse |
+| key revocation | broad/emergency | key/deny distribution | revokes many tokens |
+
+Choose by action risk. A public profile read may tolerate bounded expiry; a privileged financial action may require current account/session status and recent authentication.
+
+Logout and revocation semantics belong to the protocol using the JWT. Cryptographic validity alone does not mean current authorization.
 
 ---
 
-## Implementation Patterns
+## 9. Capacity and Availability
 
-### Middleware Pattern
+Assume:
 
-```bash
-# Validate JWT before accessing a protected endpoint
-TOKEN="$1"  # Passed as argument or extracted from request
+- 1.6 million protected requests per second;
+- 70 percent carry a locally verified JWT;
+- verification consumes 35 microseconds CPU on measured production hardware;
+- target CPU utilization is 60 percent;
+- JWKS has 8 keys and serialized size 12 KiB;
+- 25,000 verifier processes poll every 10 minutes with jitter.
 
-# 1. Check token is present
-[ -z "$TOKEN" ] && { echo '{"error":"Missing token"}'; exit 1; }
+Verification CPU:
 
-# 2. Decode and verify claims
-CLAIMS=$(echo "$TOKEN" | cut -d. -f2 | base64 -d 2>/dev/null)
-ALG=$(echo "$TOKEN" | cut -d. -f1 | base64 -d 2>/dev/null | jq -r '.alg')
-
-[ "$ALG" = "RS256" ] || { echo '{"error":"Invalid algorithm"}'; exit 1; }
-echo "$CLAIMS" | jq -e ".exp > $(date +%s)" > /dev/null 2>&1 \
-  || { echo '{"error":"Token expired"}'; exit 1; }
-echo "$CLAIMS" | jq -e '.aud == "my-api"' > /dev/null 2>&1 \
-  || { echo '{"error":"Invalid audience"}'; exit 1; }
-
-# 3. Call the protected resource
-curl -s -H "Authorization: Bearer $TOKEN" https://api.example.com/protected
-# {"user": "user_123"}
+```text
+1,600,000 * 0.70 * 35 us
+= 39.2 CPU-seconds per wall-second
 ```
 
-### Scope-Based Authorization
+At 60 percent target utilization:
 
-```bash
-# Verify the token has the required scope before allowing access
-REQUIRED_SCOPE="admin:read"
-
-CLAIMS=$(echo "$TOKEN" | cut -d. -f2 | base64 -d 2>/dev/null)
-SCOPES=$(echo "$CLAIMS" | jq -r '.scope')
-
-echo "$SCOPES" | tr ' ' '\n' | grep -qx "$REQUIRED_SCOPE" \
-  && curl -s -H "Authorization: Bearer $TOKEN" https://api.example.com/admin \
-  || echo '{"error":"Insufficient scope"}  # 403 Forbidden'
+```text
+39.2 / 0.60 = 65.4 CPU cores
 ```
 
-### Node.js Example (Express Middleware)
+This illustrative lower bound excludes parsing, authorization, and tail behavior. Benchmark exact algorithms/libraries/key types.
 
-```javascript
-const jwt = require('jsonwebtoken');
+JWKS average egress:
 
-function requireAuth(req, res, next) {
-    const token = (req.headers.authorization || '').replace('Bearer ', '');
-    if (!token) return res.status(401).json({ error: 'Missing token' });
-
-    try {
-        req.user = jwt.verify(token, publicKey, {
-            algorithms: ['RS256'],
-            audience: 'my-api'
-        });
-        next();
-    } catch (err) {
-        res.status(401).json({ error: err.message });
-    }
-}
-
-function requireScope(scope) {
-    return [requireAuth, (req, res, next) => {
-        const scopes = (req.user.scope || '').split(' ');
-        if (!scopes.includes(scope)) {
-            return res.status(403).json({ error: 'Insufficient scope' });
-        }
-        next();
-    }];
-}
-
-app.get('/protected', requireAuth, (req, res) => {
-    res.json({ user: req.user.sub });
-});
-
-app.get('/admin', ...requireScope('admin:read'), (req, res) => {
-    res.json({ admin: true });
-});
+```text
+25,000 * 12 KiB / 600 s
+= about 500 KiB/s
 ```
+
+Average is easy; synchronized cache expiry or unknown-`kid` attacks cause bursts. Jitter, HTTP caching, regional distribution, and singleflight are availability controls.
+
+### 9.1 Failures
+
+- cached valid keys can keep verification available through metadata outage;
+- unknown new key should fail safely until trusted publication is obtained;
+- introspection-dependent paths need explicit fail-closed/cache behavior;
+- clock failures can reject valid tokens or accept expired ones;
+- parser/crypto CPU exhaustion requires input bounds and admission controls.
+
+Do not disable signature/audience checks during issuer outage.
 
 ---
 
-## Testing JWTs
+## 10. Multi-Region and Multi-Tenant Design
 
-### Generating Test Tokens
+Issuer identity and key authority should be globally unambiguous. Options:
 
-```bash
-# Helper: create a test JWT (HS256) with optional claim overrides
-create_test_token() {
-  local NOW=$(date +%s)
-  local EXP=${1:-$((NOW + 3600))}
-  local AUD=${2:-"test-audience"}
+- one issuer with globally replicated key metadata and token state;
+- regional issuers with distinct exact issuer IDs;
+- tenant-specific issuers under controlled registration.
 
-  local HEADER=$(echo -n '{"alg":"HS256","typ":"JWT"}' | base64 | tr '+/' '-_' | tr -d '=')
-  local PAYLOAD=$(echo -n "{\"sub\":\"test_user\",\"iat\":$NOW,\"exp\":$EXP,\"iss\":\"test-issuer\",\"aud\":\"$AUD\"}" \
-    | base64 | tr '+/' '-_' | tr -d '=')
-  local SIG=$(echo -n "$HEADER.$PAYLOAD" \
-    | openssl dgst -sha256 -hmac "test-secret" -binary \
-    | base64 | tr '+/' '-_' | tr -d '=')
+Resource servers select expected issuer from trusted routing/configuration, then validate token `iss`. Do not fetch configuration for an arbitrary unverified issuer string.
 
-  echo "$HEADER.$PAYLOAD.$SIG"
-}
+For multi-tenant tokens, bind:
 
-# Test: expired token should return 401
-EXPIRED_TOKEN=$(create_test_token $(($(date +%s) - 3600)))
-curl -s -o /dev/null -w "%{http_code}" \
-  -H "Authorization: Bearer $EXPIRED_TOKEN" \
-  https://api.example.com/protected
-# Expected: 401
+- tenant in subject/session/grant;
+- resource server lookup;
+- authorization decision;
+- decision/token cache key.
 
-# Test: wrong audience should return 401
-WRONG_AUD_TOKEN=$(create_test_token $(($(date +%s) + 3600)) "wrong-audience")
-curl -s -o /dev/null -w "%{http_code}" \
-  -H "Authorization: Bearer $WRONG_AUD_TOKEN" \
-  https://api.example.com/protected
-# Expected: 401
-```
+A tenant claim signed by a trusted issuer is not sufficient if the subject is no longer a member. Define claim freshness.
 
-### JWT Debugging
-
-```bash
-# Decode JWT without verification (for debugging only!)
-echo "eyJhbGciOiJIUzI1NiIs..." | cut -d. -f2 | base64 -d | jq
-
-# Or use jwt.io (NEVER paste production tokens!)
-```
+Key rotation must converge across regions before signing switches. Refresh/revocation state needs authority consistent with its replay guarantee; two regions cannot independently accept the same one-time token unless deduplication is global.
 
 ---
 
-## Best Practices Summary
+## 11. Security Logging and Privacy
 
-```
-Token Creation:
-□ Use RS256/ES256 for distributed systems
-□ Include standard claims (iss, sub, aud, exp, iat)
-□ Keep payload minimal
-□ Use cryptographically strong secrets (≥256 bits)
-□ Short expiration (15 min for access tokens)
+Record:
 
-Token Validation:
-□ Always specify allowed algorithms explicitly
-□ Validate all standard claims (iss, aud, exp)
-□ Use constant-time comparison for signatures
-□ Handle validation errors gracefully
+- token profile/type;
+- configured issuer;
+- audience/resource result;
+- `kid` and algorithm after validation;
+- token age bucket;
+- validation failure reason;
+- subject/client/tenant through access-controlled stable references;
+- policy/key-set revision;
+- sender-binding result.
 
-Storage:
-□ Never store in localStorage/sessionStorage
-□ Use HttpOnly cookies or in-memory storage
-□ Implement secure refresh token rotation
+Never log raw tokens, signatures as reusable artifacts, complete claims, or decryption plaintext. URL/query/header logs are common leak paths.
 
-Revocation:
-□ Implement refresh token rotation
-□ Consider token blacklist for critical apps
-□ Increment token version on security events
-```
+Metrics:
+
+- validation success/failure by reason/profile/issuer;
+- unknown-key and JWKS refresh;
+- algorithm/type mismatch;
+- expired/not-yet-valid;
+- audience/issuer mismatch;
+- token age distribution;
+- signature verification latency/CPU;
+- key-set staleness;
+- revocation/introspection latency and cache age;
+- oversized/malformed token rejection.
+
+Avoid subject, tenant, `jti`, or `kid` of unbounded cardinality in metric labels.
 
 ---
 
-## References
+## 12. Failure Traces
 
-- [RFC 7519: JSON Web Token](https://datatracker.ietf.org/doc/html/rfc7519)
-- [RFC 7515: JSON Web Signature](https://datatracker.ietf.org/doc/html/rfc7515)
-- [RFC 7518: JSON Web Algorithms](https://datatracker.ietf.org/doc/html/rfc7518)
-- [JWT Best Practices (Auth0)](https://auth0.com/blog/jwt-security-best-practices/)
-- [Critical vulnerabilities in JSON Web Token libraries](https://auth0.com/blog/critical-vulnerabilities-in-json-web-token-libraries/)
+### 12.1 Signature-only validation
+
+1. API trusts issuer key.
+2. It verifies signature and expiry.
+3. It ignores audience.
+4. ID token for another client is accepted as API access.
+
+**Prevention:** token-profile validator with audience/type contract.
+
+### 12.2 Algorithm confusion
+
+1. Validator allows RSA and HMAC.
+2. Attacker chooses HMAC and signs with public RSA key bytes as secret.
+3. generic library verifies.
+
+**Prevention:** fixed algorithm/key-type allowlist per profile.
+
+### 12.3 SSRF through key URL
+
+1. Token header supplies `jku`.
+2. verifier fetches it.
+3. attacker targets metadata/internal service and supplies own key.
+
+**Prevention:** issuer-configured JWKS only; no token-directed fetch.
+
+### 12.4 Unknown-key denial of service
+
+1. attacker sends random `kid` values.
+2. each request fetches JWKS.
+3. issuer/egress/verifier saturates.
+
+**Prevention:** coalesced/rate-limited refresh and negative cache.
+
+### 12.5 Key removed too early
+
+1. issuer stops old signing and deletes old public JWK.
+2. unexpired tokens still reference it.
+3. fleet rejects valid users.
+
+**Prevention:** retain through maximum token lifetime plus margins.
+
+### 12.6 Stale role remains valid
+
+1. admin role removed.
+2. long-lived token embeds role.
+3. resource trusts claim until expiry.
+4. revoked admin acts.
+
+**Prevention:** short lifetime/current-state authorization for high-risk actions.
+
+### 12.7 One-time token replay
+
+1. email action JWT is signed and unexpired.
+2. action endpoint never stores consumption.
+3. copied link executes repeatedly.
+
+**Prevention:** atomic nonce/`jti` consumption and action/resource binding.
+
+### 12.8 Cross-tenant token cache
+
+1. authorization cache keys by subject/action only.
+2. same subject has different rights across tenants.
+3. allow leaks between tenants.
+
+**Prevention:** tenant/resource/policy revision in semantic cache key.
+
+---
+
+## 13. Verification
+
+1. **Known-answer vectors:** valid/invalid signatures for every allowed algorithm.
+2. **Cross-profile substitution:** ID/access/session/action/DPoP tokens against every wrong validator.
+3. **Header adversarial tests:** `none`, wrong alg, `jku`/`x5u`/`jwk`, duplicate `kid`, unsupported `crit`.
+4. **Claim tests:** wrong/missing issuer/audience/type/time/subject/nonce.
+5. **Parser tests:** duplicate JSON keys, invalid UTF-8, huge numbers, deep nesting, oversized token.
+6. **Rotation tests:** publish-before-sign, old-key retention, cache outage, unknown-key storm.
+7. **Revocation tests:** logout, role removal, account disable, emergency key compromise.
+8. **JWE tests:** wrong recipient/algorithm/tag, nested type, decompression bound.
+9. **Multi-region tests:** stale JWKS, regional issuer confusion, one-time replay.
+10. **Security tests:** token leakage in logs/URLs/traces/support tools.
+11. **Performance tests:** exact library/algorithm/key set under malformed-input load.
+12. **Differential tests:** compare independent conformant libraries on a corpus to expose parser differences.
+
+Use maintained JOSE libraries, but wrap them in profile-specific validators whose configuration and tests are application-owned.
+
+---
+
+## 14. Decision Framework
+
+Use a signed JWT when multiple consumers need offline verification of bounded, stable claims and can tolerate freshness limited by token lifetime. Use an opaque reference plus introspection when current revocation, claim confidentiality, or centralized policy outweighs request-time dependency. Use a server-side session when browser lifecycle/revocation/device inventory matters. Use JWE only when a reviewed token transport needs claim confidentiality.
+
+Before choosing JWT:
+
+1. What exact token type/profile is this?
+2. Who issues it, who consumes it, and what audience/resource is bound?
+3. Which algorithms and key source are configured?
+4. Which claims are required and how fresh must they be?
+5. What is the maximum lifetime and revocation path?
+6. Can the holder read every claim safely?
+7. Is replay acceptable, sender-constrained, or statefully prevented?
+8. How do key rotation and issuer outage behave?
+9. Can another token type from the same issuer be substituted?
+10. How are tenant and resource authorization checked?
+11. What happens under malformed/unknown-key load?
+12. Why is a self-contained token better than an opaque handle here?
+
+JWT reduces a lookup; it does not eliminate identity, authorization, revocation, key management, or state.
+
+---
+
+## Primary References
+
+- [RFC 7515: JSON Web Signature](https://www.rfc-editor.org/rfc/rfc7515)
+- [RFC 7516: JSON Web Encryption](https://www.rfc-editor.org/rfc/rfc7516)
+- [RFC 7517: JSON Web Key](https://www.rfc-editor.org/rfc/rfc7517)
+- [RFC 7518: JSON Web Algorithms](https://www.rfc-editor.org/rfc/rfc7518)
+- [RFC 7519: JSON Web Token](https://www.rfc-editor.org/rfc/rfc7519)
+- [RFC 8725: JSON Web Token Best Current Practices](https://www.rfc-editor.org/rfc/rfc8725)
+- [RFC 9068: JWT Profile for OAuth 2.0 Access Tokens](https://www.rfc-editor.org/rfc/rfc9068)
+- [OpenID Connect Core 1.0](https://openid.net/specs/openid-connect-core-1_0.html)
+
+---
+
+## Related Chapters
+
+- [OAuth 2.0 and OpenID Connect](./02-oauth2-openid-connect.md)
+- [Authentication Systems](./01-authentication-fundamentals.md)
+- [Authorization at Scale](./07-authorization-patterns.md)
+- [Encryption Patterns](./06-encryption.md)

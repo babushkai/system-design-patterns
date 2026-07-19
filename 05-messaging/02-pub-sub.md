@@ -1,722 +1,239 @@
-# Publish-Subscribe (Pub/Sub)
-
-## TL;DR
-
-Pub/Sub decouples message producers from consumers through topics. Publishers send messages to topics without knowing subscribers. Subscribers receive copies of all messages from topics they subscribe to. Enables event-driven architectures, real-time updates, and loose coupling. Key considerations: fan-out cost, ordering, filtering, and backpressure.
-
----
-
-## Core Concepts
-
-### Architecture
-
-```mermaid
-graph TD
-    Topic["Topic<br/>user.events"]
-    Topic --> SubA["Sub A<br/>Email Service"]
-    Topic --> SubB["Sub B<br/>Analytics Service"]
-    Topic --> SubC["Sub C<br/>Audit Service"]
-```
-
-Publisher doesn't know about subscribers.
-Each subscriber gets a copy of every message.
-
-### vs Point-to-Point
-
-```
-Point-to-Point (Queue):
-  Message ──► [Queue] ──► ONE consumer
-  Work distribution
-
-Pub/Sub (Topic):
-  Message ──► [Topic] ──► ALL subscribers
-  Event broadcasting
-```
-
-### Message Flow
-
-```
-1. Publisher sends event to topic
-2. Broker stores message
-3. Broker fans out to all subscribers
-4. Each subscriber processes independently
-5. Subscribers acknowledge individually
-```
-
----
-
-## Subscription Models
-
-### Push vs Pull
-
-**Push (Broker pushes to subscriber):**
-```
-Broker ──push──► Subscriber endpoint
-
-Pros:
-  - Low latency
-  - Simple subscriber
-
-Cons:
-  - Subscriber must handle load
-  - Need webhook endpoint
-  
-Example: Google Pub/Sub push subscriptions
-```
-
-**Pull (Subscriber pulls from broker):**
-```
-Subscriber ──pull──► Broker
-
-Pros:
-  - Subscriber controls rate
-  - Works behind firewalls
-
-Cons:
-  - Polling overhead
-  - Higher latency possible
-
-Example: Kafka consumer groups
-```
-
-### Durable vs Ephemeral
-
-**Durable Subscription:**
-```
-Subscriber disconnects at T=0
-Messages arrive at T=1, T=2, T=3
-Subscriber reconnects at T=4
-
-Gets all messages (T=1, T=2, T=3)
-Broker stored them during disconnect
-```
-
-**Ephemeral Subscription:**
-```
-Only receives messages while connected
-Missed messages during disconnect are lost
-
-Use for: Real-time displays, live updates
-```
-
----
-
-## Topic Design
-
-### Hierarchical Topics
-
-```
-events.user.created
-events.user.updated
-events.user.deleted
-events.order.placed
-events.order.shipped
-
-Wildcards:
-  events.user.*     → All user events
-  events.*.created  → All creation events
-  events.#          → Everything under events
-```
-
-### Topic Naming Conventions
-
-```
-Pattern: <domain>.<entity>.<action>
-
-Examples:
-  payment.transaction.completed
-  inventory.stock.low
-  user.profile.updated
-  
-Benefits:
-  - Clear ownership
-  - Easy filtering
-  - Logical grouping
-```
-
-### Single vs Multiple Topics
-
-```
-Single topic (events):
-  All events in one place
-  Consumers filter by type
-  Simpler infrastructure
-
-Multiple topics (events.user, events.order):
-  Natural partitioning
-  Subscribe to relevant topics only
-  Better access control
-  
-Recommendation: Start with fewer topics, split when needed
-```
-
----
-
-## Fan-Out Patterns
-
-### Simple Fan-Out
-
-One message → N copies.
-
-```mermaid
-graph LR
-    Publisher --> Topic
-    Topic --> S1["Sub 1 (email)"]
-    Topic --> S2["Sub 2 (push)"]
-    Topic --> S3["Sub 3 (analytics)"]
-```
-
-Each gets same message. Process independently.
-
-### Fan-Out with Filtering
-
-Not all subscribers want all messages.
-
-```mermaid
-graph TD
-    Publisher --> Topic["Topic: user.events"]
-    Topic -->|"filter: type=signup"| Email["Email Service"]
-    Topic -->|"filter: type=purchase"| Analytics
-    Topic -->|"filter: country=US"| USTeam["US Team"]
-```
-
-### Implementation
-
-```python
-# Google Cloud Pub/Sub with filter
-subscriber.create_subscription(
-    name="email-signups",
-    topic="user-events",
-    filter='attributes.type = "signup"'
-)
-
-# Kafka: Consumer reads all, filters in code
-for message in consumer:
-    if message.value['type'] == 'signup':
-        process_signup(message)
-```
-
----
-
-## Ordering Guarantees
-
-### No Ordering (Default)
-
-```
-Published: A, B, C
-Subscriber 1 sees: B, A, C
-Subscriber 2 sees: A, C, B
-
-No guarantee between subscribers or even for one subscriber
-```
-
-### Per-Publisher Ordering
-
-```
-Publisher 1: A1, B1, C1 → Subscriber sees A1, B1, C1
-Publisher 2: A2, B2, C2 → Subscriber sees A2, B2, C2
-
-But A1 and A2 may interleave arbitrarily
-```
-
-### Partition-Based Ordering
-
-```
-Messages with same key → same partition → ordered
-
-user_123 events: login, view, purchase
-  All go to partition 3
-  Subscriber sees in order
-
-Different users may interleave
-```
-
-### Total Ordering
-
-```
-All messages in strict global order
-Very expensive (single bottleneck)
-Rarely needed
-```
-
----
-
-## Implementations
-
-### Apache Kafka
-
-```mermaid
-graph LR
-    Producer --> Topic
-    Topic --> P0["Partition 0"]
-    Topic --> P1["Partition 1"]
-    Topic --> P2["Partition 2"]
-    P0 --> CG["Consumer Group A<br/>(each partition to one consumer)"]
-    P1 --> CG
-    P2 --> CG
-```
-
-Features:
-- Log-based (replay possible)
-- Consumer groups for scaling
-- Ordered within partition
-- High throughput
-
-### Google Cloud Pub/Sub
-
-```mermaid
-graph LR
-    Publisher --> Topic
-    Topic --> SA["Subscription A"] --> S1["Subscriber 1"]
-    Topic --> SB["Subscription B"] --> S2["Subscriber 2"]
-```
-
-Features:
-- Managed service
-- Push and pull
-- Message filtering
-- At-least-once (exactly-once preview)
-
-### Amazon SNS + SQS
-
-```mermaid
-graph LR
-    Publisher --> SNS["SNS Topic"]
-    SNS --> QA["SQS Queue A"] --> CA["Consumer A"]
-    SNS --> QB["SQS Queue B"] --> CB["Consumer B"]
-    SNS --> Lambda["Lambda (direct)"]
-```
-
-Features:
-- SNS for fan-out
-- SQS for durability and processing
-- Multiple protocols (HTTP, email, SMS)
-
-### Redis Pub/Sub
-
-```
-Simple in-memory pub/sub
-
-PUBLISH user-events '{"type":"login"}'
-SUBSCRIBE user-events
-
-Features:
-  - Very fast
-  - No persistence (ephemeral)
-  - No consumer groups
-  - Good for real-time
-```
-
----
-
-## Handling Backpressure
-
-### The Problem
-
-```
-Publisher: 10,000 msg/sec
-Subscriber A: Can handle 10,000 msg/sec ✓
-Subscriber B: Can handle 1,000 msg/sec ✗
-
-Subscriber B falls behind
-Queue grows unbounded
-Eventually: OOM or dropped messages
-```
-
-### Solutions
-
-**Per-Subscriber Queues:**
-```mermaid
-graph LR
-    Topic --> QA["Queue A (fast subscriber)"]
-    Topic --> QB["Queue B (slow subscriber)"]
-```
-
-Each queue buffers independently. Slow subscriber doesn't affect fast one.
-
-**Backpressure Signals:**
-```
-Subscriber signals "slow down"
-Broker reduces send rate
-Or: Subscriber pulls at own pace
-```
-
-**Dead Letter after Timeout:**
-```
-Message unacked for > 1 hour
-Move to dead letter queue
-Alert and manual handling
-```
-
----
-
-## Exactly-Once Challenges
-
-### Duplicate Delivery
-
-```
-Scenario:
-  1. Broker sends message to subscriber
-  2. Subscriber processes
-  3. Ack lost in network
-  4. Broker re-sends (thinks it failed)
-  5. Subscriber processes again
-
-Result: Processed twice
-```
-
-### Solutions
-
-```
-1. Idempotent subscriber
-   Track processed message IDs
-   Skip if already seen
-
-2. Transactional processing
-   Process + ack in same transaction
-   (Not always possible)
-
-3. Deduplication at broker
-   Broker tracks delivered message IDs
-   (Limited time window)
-```
-
----
-
-## Event Schema Evolution
-
-### The Challenge
-
-```
-Version 1:
-  {user_id: 123, name: "Alice"}
-
-Version 2 (add field):
-  {user_id: 123, name: "Alice", email: "..."}
-
-Old subscribers must handle new fields
-New subscribers must handle missing fields
-```
-
-### Best Practices
-
-```
-1. Only add optional fields
-2. Never remove or rename fields
-3. Use schema registry
-4. Version in message (or use schema ID)
-
-{
-  "schema_version": 2,
-  "user_id": 123,
-  "name": "Alice",
-  "email": "alice@example.com"  // Optional
+# Publish-Subscribe Architecture
+
+Publish-subscribe turns one committed fact into independent consumption streams. Its central abstraction is not “send to many services”; it is a durable event plus subscription state that allows each consumer to progress, pause, replay, filter, and fail without changing another consumer’s position.
+
+This chapter owns topic contracts, fan-out architecture, subscription state, replay/bootstrap, filtering, and schema governance. It deliberately does not re-teach [Ordering](03-message-ordering.md) or [Delivery Guarantees](04-delivery-guarantees.md). Atomic domain publication belongs to [Outbox and Inbox](07-outbox-pattern.md). Multi-step business execution belongs to [Durable Workflows](../18-workflow-job-systems/04-durable-execution-workflow-engines.md) and [Retry, Idempotency, and Compensation](../18-workflow-job-systems/06-retry-idempotency-compensation.md).
+
+## Workload and contract
+
+A publisher emits a versioned fact:
+
+```text
+EventEnvelope {
+  event_id
+  event_type
+  schema_id
+  source
+  subject
+  source_version
+  occurred_at
+  recorded_at
+  partition_key
+  payload
+  trace_context?
 }
 ```
 
-### Schema Registry
+The broker exposes topic and subscription operations:
 
-```
-Publisher:
-  1. Register schema with registry
-  2. Get schema ID
-  3. Include schema ID in message
-
-Subscriber:
-  1. Get schema ID from message
-  2. Fetch schema from registry
-  3. Deserialize with correct schema
+```text
+publish(topic, envelope, durability_policy)
+create_subscription(topic, start_policy, filter, retention_policy)
+fetch(subscription, capacity, deadline)
+checkpoint(subscription, partition, position, generation)
+seek(subscription, replay_point)
 ```
 
----
+An event is a statement in the past tense—`OrderAccepted`—not an imperative `SendShipment`. Commands have one intended owner and belong in a work queue or workflow. Facts can have zero, one, or many consumers, including consumers added later.
 
-## Use Cases
+Define:
 
-### Event-Driven Architecture
+- who owns and may publish each event type;
+- whether the topic is a transient notification channel or replayable event stream;
+- subscription start policy (`latest`, earliest retained, timestamp, source version, explicit snapshot checkpoint);
+- independent retention and replay limits;
+- filtering semantics and whether filtered events advance progress;
+- schema compatibility policy and deprecation window;
+- partial regional behavior and tenant/residency boundaries;
+- maximum fan-out, subscriber lag, and control-plane scale.
 
-```
-User signs up
-  → UserCreated event published
+## State and invariants
 
-Subscribed services:
-  - Email service: Send welcome email
-  - Analytics: Track signup
-  - Billing: Create account
-  - Recommendations: Initialize profile
+The system maintains two different categories of durable state.
 
-Services evolve independently
-Add new subscriber without changing publisher
-```
+**Topic state** includes event records, partition/segment manifests, replication positions, schemas, retention watermarks, and producer authorization. **Subscription state** includes filter version, assigned partitions, delivered/in-flight positions, durable checkpoint, consumer generation, replay lease, and status.
 
-### Real-Time Updates
+Enforce these invariants:
 
-```
-Stock price changes
-  → PriceUpdated event
+**Topic bytes are independent of subscriber health.** One slow subscription does not corrupt or reorder another. It may affect retention only through an explicit bounded policy.
 
-Subscribers:
-  - Trading dashboards (WebSocket push)
-  - Alert service (check thresholds)
-  - Historical database (record)
-```
+**Each subscription has one monotonic durable position per ordered scope.** Replays create a named new generation or reset operation; they do not silently move production checkpoints backward.
 
-### Log Aggregation
+**Filtered records have defined position semantics.** A record excluded by a broker-side filter still advances the subscription scan position, or the filter change can unexpectedly resurrect historical data.
 
-```mermaid
-graph LR
-    Services["All services"] --> LogTopic["Log topic"]
-    LogTopic --> Aggregator --> Elasticsearch
-    LogTopic --> Metrics --> Prometheus
-    LogTopic --> Archive --> S3
-```
+**Schema identity is immutable.** A schema ID always denotes the same canonical definition. Compatibility modes can change only as versioned topic policy.
 
----
+**Publication authority is exclusive.** Only the service owning a fact may originate it. Relays may transport it without changing identity, source version, or schema.
 
-## Monitoring
+**Replay is bounded and auditable.** Operators know who sought which subscription, to what point, with what destination/effect safeguards.
 
-### Key Metrics
+## Data plane and control plane
 
-```
-Publication rate:
-  Messages published per second
+The **data plane** authenticates publishers, validates envelopes, selects partitions, appends/replicates records, evaluates bounded filters, serves subscriptions, and persists checkpoints. It uses cached versioned topic/subscription policy.
 
-Fan-out latency:
-  Time from publish to subscriber receive
+The **control plane** owns topics, schemas, publisher ACLs, subscription definitions, retention/quotas, partition maps, consumer-group membership, replay operations, and deprecation. A control-plane outage should not stop established data-plane flows immediately; serving continues under a pinned policy until its safety lease expires.
 
-Subscriber lag:
-  Messages pending per subscription
+Schema registration and topic creation are not on the publish hot path. A producer deploy references pre-registered schema IDs and fails closed on unknown or incompatible types. Allowing publishers to auto-create topics or schemas under production traffic turns typos into permanent contracts.
 
-Acknowledgment rate:
-  Acks per second (subscriber health)
+## Fan-out architectures
 
-Dead letter rate:
-  Failed messages per time
-```
+### Shared append log with subscription cursors
 
-### Health Checks
+The broker stores each event once per replica. Every subscription keeps positions into the same partitions. This is storage-efficient for many replaying subscribers and supports late consumers, but retention, read amplification, and subscription metadata become central concerns. Consumers with different filters still scan shared bytes unless the broker maintains filter indexes or routed topics.
 
-```python
-def check_pubsub_health():
-    # Check broker connectivity
-    assert can_connect_to_broker()
-    
-    # Check subscription lag
-    for sub in subscriptions:
-        lag = get_subscription_lag(sub)
-        if lag > threshold:
-            alert(f"Subscription {sub} lagging: {lag}")
-    
-    # Check dead letter queue
-    dlq_size = get_dlq_size()
-    if dlq_size > 0:
-        alert(f"Dead letter queue has {dlq_size} messages")
+### Write-time fan-out into per-subscription queues
+
+Publication materializes one delivery record per subscription. Reads are simple and subscription retention is independent, but publish work and storage scale with fan-out. Creating a new subscription cannot recover old events unless an archive exists. A transactional fan-out stage must avoid partially populating subscriptions after a crash.
+
+### Hierarchical fan-out
+
+Large systems often append once to a regional/topic log, then durable fan-out workers populate subscription shards or edge regions. This absorbs enormous subscription counts and isolates slow consumers, but introduces a second checkpoint and freshness lag. The fan-out projection must be rebuildable from the shared log and idempotent by `(subscription, event_id)`.
+
+Choose from event size, publish rate, subscription count, replay requirements, filter selectivity, retention independence, and cross-region topology. “Pub-sub” does not imply one physical architecture.
+
+## Subscription lifecycle and checkpoints
+
+A subscription state machine can be:
+
+```text
+CREATING -> BOOTSTRAPPING -> ACTIVE -> PAUSED -> DRAINING -> DELETED
+                         \-> FAILED
 ```
 
----
+Creation pins a start point and filter/schema policy. Bootstrapping may need a source snapshot plus stream suffix. Active consumers fetch under a membership generation. Pausing stops new delivery but preserves checkpoint and retention lease according to policy. Draining stops new work, waits for in-flight claims, then seals a final checkpoint. Deletion has a recovery grace period before metadata and retained data are reclaimed.
 
-## Pub/Sub at Scale
+Checkpoint granularity controls duplicate replay and write load. Per-message checkpoints minimize replay but can dominate storage I/O. Batching checkpoints reduces writes but replays the uncommitted suffix after failure. The delivery chapter explains the effect boundary; here the subscription records a durable scan position only after the consumer declares the batch complete.
 
-### The Fan-Out Problem
+Store both logical position and event/source time. Position is authoritative for progress; time supports lag and seek. Event `occurred_at` may be late or client-skewed, so use broker-recorded time for transport lag and source version/checkpoint for data completeness.
 
-```
-1 msg × 10K subscribers = 10K deliveries
-1K msg/sec × 10K subscribers = 10M deliveries/sec
+Membership changes carry a generation. Old members cannot checkpoint after partitions are assigned to a new generation. Cooperative handoff can reduce duplicate work by revoking and draining subsets, but the consumer must still tolerate overlap during crashes.
 
-Single broker cannot handle this. Fan-out cost grows linearly with subscribers.
-```
+## Filtering and routing
 
-### Hierarchical Pub/Sub
+Broker-side filters reduce egress and consumer CPU but add a query engine to the broker. Restrict them to typed, indexed envelope fields with bounded evaluation. Arbitrary payload scripts make broker latency and security dependent on untrusted code.
 
-```
-Publisher → [Root Broker] → [US] [EU] [APAC] → Local subscribers
+Filtering at publication by routing to many narrow topics makes reads efficient but couples producers to consumer taxonomy and can duplicate events. Filtering at consumption is flexible but pays network/scan cost. A stable compromise uses a small number of domain-owned topics plus subscription filters over approved envelope attributes.
 
-Cross-region traffic reduced to 1 copy per region.
-Regional brokers fan out locally. Failure isolation per region.
-```
+Filter changes are migrations. Decide whether the new predicate applies only after activation, triggers replay from a point, or creates a new subscription. Mutating a predicate in place while retaining the old checkpoint makes it unclear which historical events were considered.
 
-### Topic Sharding
+Do not use a filter as authorization unless the broker guarantees it is unbypassable for every fetch, replay, export, cache, and diagnostic path. Strong tenant isolation often requires separate topics/partitions/encryption domains.
 
-```
-Topic "user.events" partitioned: subscribers split across broker instances.
-  Shard 0 (subs 0-2499) → Broker A    Shard 2 (subs 5000-7499) → Broker C
-  Shard 1 (subs 2500-4999) → Broker B  Shard 3 (subs 7500-9999) → Broker D
+## Schema and semantic governance
 
-Coordinator distributes to shards. Each broker fans out to its subset only.
-```
+Syntax compatibility is necessary but insufficient. Adding an optional field can be wire-compatible while changing meaning. Maintain an event catalog with owner, purpose, field semantics, privacy classification, ordering key, source-version semantics, examples, and deprecation status.
 
-### Cloud Provider Approaches
+Common evolution rules:
 
-```
-Google Cloud Pub/Sub:
-  - Push (broker POSTs to HTTPS) or Pull (subscriber polls)
-  - Exactly-once via message dedup (window ~10 min)
-  - Seek: replay by rewinding subscription to a timestamp
+- add optional fields with explicit absence meaning;
+- never reuse field identifiers/names for different semantics;
+- preserve unknown fields where the serialization protocol requires round trips;
+- use new event types for semantic changes rather than a flag that inverts meaning;
+- allow consumers a documented upgrade window before removing production;
+- validate producers against both schema and semantic policy in CI and at broker ingress.
 
-AWS SNS fan-out:
-  - SNS → SQS queues, Lambda, HTTP/S endpoints, email, SMS
-  - SNS + SQS for durability (SNS alone is fire-and-forget)
-```
+Upcasting can present old payloads in a new in-memory shape, but the original bytes and schema ID remain available for audit. A chain of many runtime upcasters increases latency and makes replay depend on old code; compact into a new derived topic only with lineage and reconciliation, never by silently rewriting the authoritative event.
 
-### Throughput Reference
+Consumer-driven contract tests are useful signals, but publishers cannot promise to preserve every accidental consumer dependency forever. Topic ownership and compatibility policy arbitrate changes.
 
-```
-Kafka:    100 partitions → 1M+ msg/sec (scales linearly with partitions)
-RabbitMQ: Fanout exchange → 50K-100K msg/sec (degrades with subscriber count)
-Redis:    In-memory pub/sub → 500K+ msg/sec (no durability, fire and forget)
-```
+## Bootstrap, replay, and new subscribers
 
----
+A new subscriber to a large stream should not necessarily replay years of changes to reconstruct current state. Publish a versioned snapshot with:
 
-## Topic Design Patterns
+- topic/schema generation;
+- partition positions included in the snapshot;
+- source checkpoint and creation time;
+- object manifest, checksums, and encryption metadata.
 
-### Fine-Grained vs Coarse-Grained Topics
+The subscriber loads the snapshot idempotently, then consumes strictly after each recorded partition position. Events arriving during snapshot creation are covered by those positions. A snapshot without stream coordinates creates a gap or double-apply window.
 
-```
-Fine-grained (one topic per event type):
-  orders.created, orders.updated, orders.cancelled, orders.refunded
-  ✓ Subscribe to exactly what you need, simpler consumer logic
-  ✗ Topic proliferation, publisher must pick correct topic
+Replay is a separate workload class. It can multiply broker reads and downstream effects. Require a destination, rate budget, start/end positions, dry-run estimate, idempotency plan, and cancellation. Prefer a new replay subscription or isolated consumer group so production progress is not moved backward. Throttle by bytes and downstream service capacity, not only messages/s.
 
-Coarse-grained (one topic per domain):
-  orders → { "event_type": "created", ... }
-  ✓ Fewer topics, single subscription for all order events
-  ✗ Consumers receive unwanted events, filtering pushed to subscriber
-```
+## Cross-region topology
 
-### Event Envelope Pattern
+Replicate domain events according to residency and recovery policy. Active/passive replication gives a clear writer but requires subscription failover and position translation. Region-local topics with asynchronous inter-region relay reduce write latency but do not create one global order; duplicate identities and conflict ownership must be explicit.
 
-```json
-{
-  "event_id": "evt_a1b2c3d4",
-  "event_type": "order.created",
-  "timestamp": "2026-03-15T10:30:00Z",
-  "correlation_id": "req_x9y8z7",
-  "source": "order-service",
-  "schema_version": 2,
-  "payload": { "order_id": "ord_123", "customer_id": "cust_456", "total": 99.99 }
-}
-```
+The relay records source topic, partition, position, event ID, and source region. Destination publication is idempotent by source identity. A loop-prevention marker stops region A from re-exporting an event imported from B. Encryption and schema policy must be available before payloads cross regions.
 
-```
-Standard wrapper enables:
-  - Routing without deserializing payload
-  - Distributed tracing via correlation_id
-  - Deduplication via event_id
-```
+During failover, a subscriber can either accept an RPO gap, wait for replication to catch up, or read both sources and deduplicate. Document the choice per event class. “Multi-region broker” is not itself a recovery contract.
 
-### Wildcard Subscriptions
+## Capacity and cost model
 
-```
-RabbitMQ topic exchange:
-  order.*.created  → matches order.us.created, order.eu.created
-  order.#          → matches order.us.created, order.eu.shipped.delayed
-  (* = exactly one word, # = zero or more words)
+Illustrative workload:
 
-Kafka: No native wildcard on topics. Consumer subscribes by regex on
-  topic names only: consumer.subscribe(Pattern.compile("orders\\..*"))
-```
+- 80,000 events/s at 900 encoded bytes;
+- three broker replicas;
+- 60 shared-log subscriptions;
+- average subscription reads 70% of events after filters;
+- two regional copies of consumer egress;
+- seven-day topic retention.
 
----
+Logical ingress is about 68.7 MiB/s; three replicas write about 206 MiB/s before indexes and compaction. Seven days of replicated topic bytes are roughly 119 TiB. Compression must be measured on real payloads and envelope repetition.
 
-## Pub/Sub Failure Handling
+Consumer egress is `80,000 * 900 * 60 * 0.70`, about 2.8 GiB/s per regional copy before protocol overhead. Storage is independent of subscription count in a shared-log design, but egress is not. A per-subscription fan-out design would also materialize roughly 42 subscription copies per event, making write/storage amplification decisive.
 
-### Slow Subscriber Impact
+Subscription metadata can dominate control-plane operations. With 60 subscriptions, 256 partitions, and checkpoints every 2 seconds, naive per-partition checkpoint writes produce 7,680 writes/s. Batch compactly by subscription/generation and measure recovery replay before lengthening the interval.
 
-```
-Does a slow subscriber block others?
+If one replay reads the full seven-day logical corpus in 12 hours, it adds about 1.3 GiB/s before replication and downstream writes. Allocate replay capacity explicitly.
 
-Kafka:   No. Independent consumer offsets per group.
-         Slow consumer falls behind; fast consumers unaffected.
+## Concrete failure trace: abandoned subscription pins retention
 
-RabbitMQ: Each subscriber has its own queue (slow queue grows independently).
-         Classic queues: broker may backpressure publisher if queue is full.
-         Quorum queues: better isolation, but memory pressure when large.
-```
+A team creates a replayable subscription for an experiment, pauses it, and abandons the project. Retention policy says the oldest active subscription checkpoint protects data. The checkpoint remains six months behind, disk usage grows, and brokers approach full capacity. Deleting old segments would violate the subscription’s apparent replay contract; keeping them threatens the whole topic.
 
-### Poison Messages
+Containment stops low-priority publication or expands storage while identifying the owner. The control plane expires the subscription’s retention lease under audited policy, snapshots/archive if required, and advances the topic watermark. Prevention gives subscriptions owners, maximum retention leases, budget/quota, expiry, and alerts based on retained bytes attributable to each subscription—not merely consumer lag.
 
-```
-Message that crashes subscriber on every attempt → infinite redelivery loop.
+## Operations and observability
 
-Solution: Bounded retries with backoff, then route to DLQ.
+Track per topic, partition, subscription, schema, tenant, and region:
 
-  if retry_count >= max_retries:
-      publish_to_dlq(message)   # See 08-dead-letter-queues.md
-  else:
-      redelivery_with_backoff(message)
+- publish rate/bytes, validation rejection, replication and append latency;
+- subscription scan/delivery/checkpoint positions and lag in records, bytes, and time;
+- oldest checkpoint, retained bytes attributable to each subscription, and expiry;
+- filter selectivity/evaluation cost and filter-version distribution;
+- schema/type volume, unknown-schema attempts, and deprecated-version traffic;
+- fan-out backlog and source-to-subscription visibility lag;
+- replay rate, estimated completion, downstream throttling, and cancellations;
+- regional relay lag, duplicate imports, loops prevented, and RPO exposure.
 
-Detection: log message ID on each failure, alert on repeated ID, include error in DLQ metadata.
-```
+Runbooks cover publisher schema regression, slow/abandoned subscription, accidental replay, corrupt snapshot, filter rollout error, control-plane outage, regional relay loop, and retention pressure.
 
-### Subscriber Crash During Processing
+## Security and privacy
 
-```
-1. Broker delivers message → 2. Subscriber processes → 3. Crash before ack
-4. Broker redelivers → 5. Message processed twice
+Authorize publish and subscribe separately by topic, event type, tenant, region, and purpose. Schema registration, replay, seek, export, and subscription creation are privileged control-plane operations. Audit them immutably.
 
-At-least-once delivery makes this unavoidable.
-Subscriber MUST be idempotent. See 04-delivery-guarantees.md.
+Minimize envelopes; routing headers are widely visible to broker infrastructure and logs. Encrypt sensitive payloads with scoped keys, but remember encryption can prevent broker-side filters. Apply retention and deletion policy to topics, snapshots, replay outputs, caches, and quarantines.
 
-Idempotency: dedup table (skip seen IDs), upsert instead of insert,
-  or use event_id as idempotency key for external API calls.
-```
+Reject spoofed `source`, subject, trace, and tenant fields; the authenticated publisher identity determines allowed values. Validate sizes, nesting, decompression ratio, and schema before fan-out to prevent one event multiplying resource abuse across every subscriber.
 
----
+## Verification strategy
 
-## Pub/Sub vs Request-Response
+- model-test subscription create/pause/seek/checkpoint/delete and membership generations;
+- crash fan-out workers at every checkpoint boundary and compare with the source log;
+- verify schema compatibility and semantic golden events across producer/consumer versions;
+- load-test subscription count, skewed filters, slow readers, replay, and control-plane churn;
+- build snapshots while publishing and prove snapshot-plus-suffix has no gaps;
+- partition regions and validate relay identity, loop prevention, and chosen RPO behavior;
+- attempt unauthorized fetch, seek, export, filter change, and cross-tenant cache access;
+- expire an abandoned retention lease and verify evidence plus notifications.
 
-### When to Use Each
+## Decision framework
 
-```
-Use Pub/Sub when:
-  ✓ Event notification ("something happened") — N downstream consumers
-  ✓ Decoupled services — publisher doesn't know who listens
-  ✓ Temporal decoupling — consumer processes when ready
+Use pub-sub when independent consumers need the same fact, can own their checkpoints, and benefit from replay or isolation. Prefer direct synchronous calls when the caller needs an immediate response and both services share one availability budget. Prefer a work queue for one-owner tasks. Prefer a workflow when events are being used to hide an implicit multi-step state machine.
 
-Use Request-Response when:
-  ✓ Need immediate answer — "price of item X?" → $29.99
-  ✓ Synchronous workflow — each step needs prior result
-  ✓ Single consumer — only one handler for the request
-  ✓ Caller must know if operation failed
-```
+Before creating a topic, answer:
 
-### Hybrid: Command + Event
+1. Is this a fact, command, or state snapshot, and who owns it?
+2. Is replay required, and what snapshot/checkpoint bootstraps new consumers?
+3. Which fan-out architecture fits subscription count, filters, and retention?
+4. What schema and semantic compatibility contract governs evolution?
+5. How are abandoned subscriptions, replay cost, and retention leases bounded?
+6. What tenant/region/privacy boundaries apply to every copy?
+7. How will subscriber effects tolerate the selected delivery semantics?
 
-```mermaid
-graph TD
-    Client -->|req| OrderService["Order Service"]
-    OrderService -->|resp| Client
-    OrderService -.->|OrderCreated event| Inventory
-    OrderService -.->|OrderCreated event| Email
-    OrderService -.->|OrderCreated event| Analytics
-```
+## References
 
-Request-response for synchronous path. Pub/sub for async side effects.
-
-### Anti-Pattern: RPC Over Messaging
-
-```
-DON'T: Client → [request.topic] → Service → [reply.topic + correlation_id] → Client
-
-Problems:
-  - Correlation ID management complexity
-  - Reply topic per client or shared reply topic with filtering
-  - Timeout handling is awkward (when to stop waiting?)
-  - Debugging harder than direct call tracing
-
-If you need request-response, use gRPC or HTTP.
-Pub/sub is for fire-and-forget or fire-and-observe.
-```
-
----
-
-## Key Takeaways
-
-1. **Pub/Sub decouples producers from consumers** - Neither knows the other
-2. **Each subscriber gets every message** - Fan-out pattern
-3. **Durable subscriptions survive disconnection** - Messages queued
-4. **Ordering is expensive** - Use partition keys when needed
-5. **Backpressure is critical** - Slow subscribers can cause problems
-6. **Idempotency handles duplicates** - At-least-once is common
-7. **Schema evolution needs planning** - Use registry, add-only changes
-8. **Monitor subscriber lag** - Early warning of processing issues
+- [CloudEvents Specification](https://github.com/cloudevents/spec)
+- [AsyncAPI Specification](https://www.asyncapi.com/docs/reference/specification/latest)
+- [Apache Kafka: Design](https://kafka.apache.org/documentation/#design)
+- [Apache Avro Specification: Schema Resolution](https://avro.apache.org/docs/current/specification/#schema-resolution)
+- [Google Cloud Pub/Sub: Subscription Properties](https://cloud.google.com/pubsub/docs/subscription-properties)
+- [NATS JetStream: Consumers](https://docs.nats.io/nats-concepts/jetstream/consumers)

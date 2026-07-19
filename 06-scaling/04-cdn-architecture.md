@@ -1,774 +1,406 @@
 # CDN Architecture
 
-## TL;DR
+A content delivery network is a globally distributed consistency and overload-control system. It must route a client to a healthy edge, decide whether a stored representation is reusable for that exact request, coordinate fills and invalidations across thousands of failure domains, and prevent a cold or malicious workload from collapsing the origin.
 
-A Content Delivery Network (CDN) distributes content across geographically dispersed edge servers, caching static and dynamic content close to users. This reduces latency, offloads origin servers, and improves availability. Modern CDNs also provide edge computing, security features, and real-time optimization.
+This chapter owns the CDN boundary: edge data/control planes, client-to-edge routing, cache identity, surrogate invalidation, tiering, origin protection, and edge-specific failure recovery. General cache-aside/write-through patterns and application cache semantics belong to [cache strategies](../04-caching/01-cache-strategies.md); general invalidation trade-offs belong to [cache invalidation](../04-caching/02-cache-invalidation.md).
 
----
+Evidence labels distinguish standards and published systems from a reusable design:
 
-## Why CDN?
+- **Documented** cites a dated RFC, primary paper, official engineering article, or versioned documentation.
+- **Inference** derives a consequence without attributing an undisclosed design to a provider.
+- **Reference design** specifies an implementable CDN architecture rather than claiming one vendor uses the whole composite.
 
-Without CDN:
+Unless a paragraph is explicitly marked **Documented** or **Inference**, its normative architecture and operational guidance belongs to the **Reference design**.
 
-```mermaid
-sequenceDiagram
-    participant U as User in Tokyo
-    participant O as Origin in Virginia
+## Workload and delivery contract
 
-    Note over U,O: 200ms round trip
-    U->>O: GET /image.png
-    O-->>U: 2MB image
-    Note over U,O: Total: ~3 seconds for 2MB image
-```
+**Reference design.** Inventory content by behavior, not file extension:
 
-With CDN:
-
-```mermaid
-sequenceDiagram
-    participant U as User in Tokyo
-    participant E as Edge in Tokyo
-    participant O as Origin in Virginia
-
-    Note over U,E: 10ms round trip
-    U->>E: Request
-    E-->>U: Response (cached)
-    Note over U,E: Total: ~100ms for 2MB image
-```
-
----
-
-## CDN Architecture Overview
-
-```mermaid
-graph TD
-    Users[Internet Users] --> Tokyo & London & NYC
-
-    subgraph Tokyo ["PoP — Tokyo"]
-        T_Edge[Edge Server] --> T_Cache[Cache]
-    end
-    subgraph London ["PoP — London"]
-        L_Edge[Edge Server] --> L_Cache[Cache]
-    end
-    subgraph NYC ["PoP — NYC"]
-        N_Edge[Edge Server] --> N_Cache[Cache]
-    end
-
-    Tokyo --> Shield["Origin Shield<br/>(Mid-tier)"]
-    London --> Shield
-    NYC --> Shield
-    Shield --> Origin["Origin Server<br/>(Your Server)"]
-```
-
-PoP = Point of Presence
-
----
-
-## CDN Request Flow
-
-```nginx
-# Edge server configuration with caching and origin fetch
-# Defines a shared memory cache zone: 10MB key space, 10GB storage, inactive eviction at 60m
-proxy_cache_path /var/cache/nginx/cdn
-                 levels=1:2                # Two-level directory hash for cache files
-                 keys_zone=cdn_cache:10m   # 10MB shared memory for cache keys
-                 max_size=10g              # Maximum disk space for cached responses
-                 inactive=60m              # Evict entries not accessed in 60 minutes
-                 use_temp_path=off;        # Write directly to cache dir (avoid extra copy)
-
-server {
-    listen 443 ssl http2;
-    server_name cdn.example.com;
-
-    # Activate the cache zone defined above
-    proxy_cache cdn_cache;
-
-    # Cache key: scheme + host + URI covers most variations
-    proxy_cache_key "$scheme$host$request_uri";
-
-    # Forward requests to the origin server on cache MISS or STALE
-    location / {
-        proxy_pass https://origin.example.com;
-
-        # TTL rules by upstream status code
-        proxy_cache_valid 200 302  10m;   # Cache successful responses for 10 minutes
-        proxy_cache_valid 301      1h;    # Permanent redirects cached longer
-        proxy_cache_valid 404      1m;    # Cache 404s briefly to protect origin
-
-        # Bypass cache when client sends Cache-Control: no-cache
-        proxy_cache_bypass $http_cache_control;
-
-        # Serve stale content while revalidating in the background
-        proxy_cache_use_stale error timeout updating
-                              http_500 http_502 http_503 http_504;
-        proxy_cache_background_update on;
-
-        # Collapse concurrent requests for the same uncached resource into one origin fetch
-        proxy_cache_lock on;
-        proxy_cache_lock_timeout 5s;
-
-        # Expose cache status to the client via response header
-        add_header X-Cache-Status $upstream_cache_status always;
-        add_header X-Edge-Location "Tokyo" always;
-    }
-}
-```
-
-Cache status values returned by `$upstream_cache_status`:
-
-| Header value | Meaning |
-|---|---|
-| `HIT` | Served from cache |
-| `MISS` | Not in cache, fetched from origin |
-| `STALE` | Expired entry served while revalidating |
-| `BYPASS` | Cache skipped (e.g., `Cache-Control: no-cache`) |
-| `REVALIDATED` | Confirmed fresh with origin via conditional request |
-
-```bash
-# Cache HIT — asset served from the edge, 120 seconds old
-$ curl -I https://cdn.example.com/images/hero.jpg
-HTTP/2 200
-content-type: image/jpeg
-cache-control: public, max-age=600
-age: 120
-x-cache-status: HIT
-x-edge-location: Tokyo
-
-# Cache MISS — first request, fetched from origin
-$ curl -I https://cdn.example.com/images/new-banner.jpg
-HTTP/2 200
-content-type: image/jpeg
-cache-control: public, max-age=600
-age: 0
-x-cache-status: MISS
-x-edge-location: Tokyo
-
-# Cache BYPASS — client explicitly skipped cache
-$ curl -I -H "Cache-Control: no-cache" https://cdn.example.com/images/hero.jpg
-HTTP/2 200
-content-type: image/jpeg
-cache-control: public, max-age=600
-age: 0
-x-cache-status: BYPASS
-x-edge-location: Tokyo
-```
-
-```mermaid
-graph TD
-    Req["USER REQUEST<br/>GET /images/hero.jpg"]
-    Req --> DNS["DNS RESOLUTION<br/>1. Query: cdn.example.com<br/>2. GeoDNS → nearest PoP IP<br/>3. Result: 203.0.113.45 (Tokyo PoP)"]
-    DNS --> Edge[EDGE SERVER]
-    Edge --> Lookup{CACHE LOOKUP}
-    Lookup -->|HIT| Cached[Return cached]
-    Lookup -->|MISS / STALE| Fetch[Fetch from origin<br/>or shield]
-```
-
----
-
-## Caching Strategies
-
-### Cache-Control Headers
-
-```nginx
-server {
-    listen 443 ssl http2;
-    server_name cdn.example.com;
-
-    # ── Static assets: immutable, cache for 1 year ─────────────────────
-    # Versioned filenames (app.a1b2c3.js) make long TTLs safe.
-    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff2?)$ {
-        proxy_pass https://origin.example.com;
-        proxy_cache cdn_cache;
-        proxy_cache_valid 200 365d;
-
-        # public          → allow CDN and browser caching
-        # max-age=31536000 → 1 year in seconds
-        # immutable       → tell browsers: never revalidate
-        add_header Cache-Control "public, max-age=31536000, immutable" always;
-    }
-
-    # ── API responses: short CDN TTL + stale fallbacks ─────────────────
-    # s-maxage overrides max-age for shared caches (CDN) only.
-    # stale-while-revalidate lets the CDN serve stale while refreshing.
-    # stale-if-error serves stale if origin returns 5xx.
-    location /api/ {
-        proxy_pass https://origin.example.com;
-        proxy_cache cdn_cache;
-        proxy_cache_valid 200 60s;
-
-        add_header Cache-Control "public, s-maxage=60, stale-while-revalidate=300, stale-if-error=86400" always;
-
-        # nginx equivalent of stale-if-error: serve stale on upstream failures
-        proxy_cache_use_stale error timeout http_500 http_502 http_503 http_504;
-        proxy_cache_background_update on;   # revalidate in background (stale-while-revalidate)
-    }
-
-    # ── User-specific data: never cache on CDN ─────────────────────────
-    # private  → only the end-user's browser may cache
-    # no-store → CDN must not store a copy at all
-    location /api/me {
-        proxy_pass https://origin.example.com;
-        proxy_no_cache 1;        # do not write to cache
-        proxy_cache_bypass 1;    # do not read from cache
-
-        add_header Cache-Control "private, no-store, max-age=0" always;
-    }
-}
-```
-
-```bash
-# Verify Cache-Control headers for each content type
-
-# Static asset — long-lived, immutable
-$ curl -I https://cdn.example.com/static/app.a1b2c3.js
-HTTP/2 200
-content-type: application/javascript
-cache-control: public, max-age=31536000, immutable
-x-cache-status: HIT
-age: 8640
-
-# API response — short CDN TTL with stale fallbacks
-$ curl -I https://cdn.example.com/api/products
-HTTP/2 200
-content-type: application/json
-cache-control: public, s-maxage=60, stale-while-revalidate=300, stale-if-error=86400
-x-cache-status: HIT
-age: 45
-
-# User-specific data — private, never cached by CDN
-$ curl -I -H "Authorization: Bearer tok_xxx" https://cdn.example.com/api/me
-HTTP/2 200
-content-type: application/json
-cache-control: private, no-store, max-age=0
-x-cache-status: BYPASS
-```
-
-### Cache Key Design
-
-```nginx
-# Cache key design — include request variations so different
-# representations get their own cache entry.
-
-# Default cache key uses scheme + host + URI
-proxy_cache_key "$scheme$host$request_uri";
-
-location ~* \.(jpg|png|webp)$ {
-    proxy_pass https://origin.example.com;
-    proxy_cache cdn_cache;
-    proxy_cache_valid 200 1h;
-
-    # ── Vary by Accept header (WebP vs JPEG) ──────────────────────
-    # Origin sends `Vary: Accept` so the CDN stores one entry per
-    # Accept value. Extend the cache key to match.
-    proxy_cache_key "$scheme$host$request_uri$http_accept";
-
-    # ── Vary by device pixel ratio and width query param ──────────
-    # For responsive images, include DPR header and width param
-    # so each device resolution gets its own cached variant.
-    proxy_cache_key "$scheme$host$request_uri|Accept=$http_accept|DPR=$http_dpr|width=$arg_width";
-
-    # Pass variation headers upstream so origin can respond correctly
-    proxy_set_header Accept $http_accept;
-    proxy_set_header DPR $http_dpr;
-}
-```
-
-```bash
-# Two requests for the same image produce different cache entries:
-
-# WebP-capable browser at 2x resolution
-$ curl -I -H "Accept: image/webp" -H "DPR: 2" "https://cdn.example.com/images/hero.jpg?width=800"
-HTTP/2 200
-content-type: image/webp
-vary: Accept, DPR
-x-cache-status: MISS
-# Cache key: "https|cdn.example.com|/images/hero.jpg?width=800|Accept=image/webp|DPR=2|width=800"
-
-# JPEG-only browser at 1x resolution
-$ curl -I -H "Accept: image/jpeg" -H "DPR: 1" "https://cdn.example.com/images/hero.jpg?width=400"
-HTTP/2 200
-content-type: image/jpeg
-vary: Accept, DPR
-x-cache-status: MISS
-# Cache key: "https|cdn.example.com|/images/hero.jpg?width=400|Accept=image/jpeg|DPR=1|width=400"
-```
-
----
-
-## Origin Shield
-
-Without Shield (Origin receives N requests per cache miss):
-
-```mermaid
-graph TD
-    Tokyo --> Origin["Origin<br/>5 requests for same content!"]
-    London --> Origin
-    NYC --> Origin
-    Sydney --> Origin
-    Paris --> Origin
-```
-
-With Shield (Origin receives 1 request per cache miss):
-
-```mermaid
-graph TD
-    Tokyo --> Shield["Shield PoP<br/>Coalesces requests"]
-    London --> Shield
-    NYC --> Shield
-    Sydney --> Shield
-    Paris --> Shield
-    Shield --> Origin["Origin<br/>1 request only"]
-```
-
-```nginx
-# Origin Shield configuration
-# The shield is a mid-tier nginx proxy that sits between edge PoPs and the origin.
-# It coalesces concurrent requests for the same resource so the origin sees only one.
-
-proxy_cache_path /var/cache/nginx/shield
-                 levels=1:2
-                 keys_zone=shield_cache:20m    # Larger key zone — aggregates all edge traffic
-                 max_size=50g
-                 inactive=24h                  # Keep entries longer than edge caches
-                 use_temp_path=off;
-
-server {
-    listen 443 ssl http2;
-    server_name shield.internal.example.com;
-
-    proxy_cache shield_cache;
-    proxy_cache_key "$scheme$host$request_uri";
-
-    location / {
-        proxy_pass https://origin.example.com;
-
-        # Cache durations mirror edge, but shield holds entries longer
-        proxy_cache_valid 200 302  30m;
-        proxy_cache_valid 301      6h;
-        proxy_cache_valid 404      5m;
-
-        # ── Request coalescing ────────────────────────────────────
-        # proxy_cache_lock ensures only ONE request per cache key
-        # reaches the origin. All other concurrent requests wait for
-        # the first to complete, then share its cached response.
-        proxy_cache_lock on;
-        proxy_cache_lock_age 10s;      # Max time to wait before sending another request
-        proxy_cache_lock_timeout 15s;  # Max time a waiting request will block
-
-        # Serve stale on origin failure — shield is the last line of defense
-        proxy_cache_use_stale error timeout updating
-                              http_500 http_502 http_503 http_504;
-        proxy_cache_background_update on;
-
-        add_header X-Shield-Cache $upstream_cache_status always;
-    }
-}
-```
-
-```bash
-# Edge servers point to the shield instead of directly to origin:
-# (in edge server config)
-#   proxy_pass https://shield.internal.example.com;
-
-# First edge request — shield fetches from origin (MISS)
-$ curl -sI https://cdn.example.com/images/hero.jpg | grep -i x-
-x-cache-status: MISS
-x-shield-cache: MISS
-
-# Second edge request from a different PoP — shield serves cached (HIT)
-$ curl -sI https://cdn.example.com/images/hero.jpg | grep -i x-
-x-cache-status: MISS
-x-shield-cache: HIT
-# Origin received only 1 request even though 2 PoPs asked
-```
-
----
-
-## Cache Invalidation
-
-### Purge by URL
-
-```bash
-# ── Purge specific URLs ───────────────────────────────────────────────
-$ curl -X POST "https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/purge_cache" \
-  -H "Authorization: Bearer ${CF_API_TOKEN}" \
-  -H "Content-Type: application/json" \
-  -d '{"files": [
-    "https://cdn.example.com/images/hero.jpg",
-    "https://cdn.example.com/css/main.css"
-  ]}'
-# {"success": true, "result": {"id": "abc123..."}}
-
-# ── Purge by URL prefix ──────────────────────────────────────────────
-$ curl -X POST "https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/purge_cache" \
-  -H "Authorization: Bearer ${CF_API_TOKEN}" \
-  -H "Content-Type: application/json" \
-  -d '{"prefixes": ["https://cdn.example.com/images/"]}'
-
-# ── Purge by cache tag (most efficient — surgical invalidation) ──────
-# Origin sets: Cache-Tag: product-123, category-electronics
-$ curl -X POST "https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/purge_cache" \
-  -H "Authorization: Bearer ${CF_API_TOKEN}" \
-  -H "Content-Type: application/json" \
-  -d '{"tags": ["product-123"]}'
-# Invalidates all pages tagged with product-123, leaves everything else intact
-
-# ── Nuclear option — purge everything ────────────────────────────────
-$ curl -X POST "https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/purge_cache" \
-  -H "Authorization: Bearer ${CF_API_TOKEN}" \
-  -H "Content-Type: application/json" \
-  -d '{"purge_everything": true}'
-```
-
-```nginx
-# Origin server: attach cache tags to responses so purges can target them
-location /products/ {
-    proxy_pass http://backend;
-
-    # Tag every product page with its product ID and category.
-    # When product-123 changes, purge the "product-123" tag
-    # instead of listing every URL that includes it.
-    add_header Cache-Tag "product-$arg_id, category-$arg_cat" always;
-    add_header Cache-Control "public, s-maxage=3600" always;
-}
-```
-
-### Cache Versioning (URL-based invalidation)
-
-```nginx
-# Cache versioning via content-hashed filenames
-# Build tools (webpack, vite) produce filenames like app.a1b2c3d4.js.
-# When the file changes, the hash changes → new URL → automatic cache bust.
-
-# Match versioned static assets (contain a hash segment in the filename)
-location ~* \.(js|css)$ {
-    proxy_pass https://origin.example.com;
-    proxy_cache cdn_cache;
-
-    # Safe to cache for 1 year because the filename itself changes on update
-    proxy_cache_valid 200 365d;
-    add_header Cache-Control "public, max-age=31536000, immutable" always;
-}
-
-# Strip query-string version params so old ?v= patterns still get cached
-# consistently — the filename hash is the canonical version key.
-location ~* ^/static/ {
-    proxy_pass https://origin.example.com;
-    proxy_cache cdn_cache;
-    proxy_cache_valid 200 365d;
-
-    # Ignore ?v= query strings in cache key — filename hash is sufficient
-    proxy_cache_key "$scheme$host$uri";
-
-    add_header Cache-Control "public, max-age=31536000, immutable" always;
-}
-```
-
-```bash
-# In HTML templates:
-#   <script src="/static/app.a1b2c3d4.js"></script>
-#
-# When app.js changes, the build produces app.ef56gh78.js — a brand-new URL.
-# The old cached entry expires naturally; no purge needed.
-
-$ curl -I https://cdn.example.com/static/app.a1b2c3d4.js
-HTTP/2 200
-content-type: application/javascript
-cache-control: public, max-age=31536000, immutable
-x-cache-status: HIT
-age: 259200
-```
-
----
-
-## Edge Computing
-
-```nginx
-# ── A/B testing at the edge ───────────────────────────────────────────
-# Route users to variant a or b based on a cookie.
-# Sticky: once assigned, the cookie keeps the user on the same variant.
-
-map $cookie_variant $ab_variant {
-    "b"       "b";           # Existing cookie → honour it
-    default   "a";           # No cookie → default to variant a
-}
-
-server {
-    listen 443 ssl http2;
-    server_name cdn.example.com;
-
-    location / {
-        # Rewrite request path to /<variant>/original/path before forwarding
-        rewrite ^(.*)$ /$ab_variant$1 break;
-        proxy_pass https://origin.example.com;
-
-        # Tag the response so downstream can see which variant was served
-        add_header X-Variant $ab_variant always;
-
-        # Set the variant cookie if the client doesn't already have one
-        # (nginx evaluates $cookie_variant from the request)
-        if ($cookie_variant = "") {
-            add_header Set-Cookie "variant=$ab_variant; Max-Age=86400; Path=/" always;
-        }
-    }
-}
-
-# ── Geolocation-based origin routing ──────────────────────────────────
-# Use the GeoIP2 module to select the closest origin.
-
-map $geoip2_data_country_code $geo_origin {
-    CN    "apac-origin.example.com";
-    HK    "apac-origin.example.com";
-    TW    "apac-origin.example.com";
-    DE    "eu-origin.example.com";
-    FR    "eu-origin.example.com";
-    GB    "eu-origin.example.com";
-    default "us-origin.example.com";
-}
-
-server {
-    listen 443 ssl http2;
-    server_name cdn-geo.example.com;
-
-    # ── Bot detection — return lightweight response for crawlers ──────
-    location / {
-        if ($http_user_agent ~* "(Googlebot|Bingbot|curl|wget)") {
-            # Serve a pre-rendered or stripped-down page for bots
-            rewrite ^ /bot-render$request_uri break;
-        }
-
-        proxy_pass https://$geo_origin;
-        proxy_set_header Host $host;
-    }
-
-    # ── Image optimization — serve correct format & size at the edge ──
-    location ~* \.(jpg|png|webp)$ {
-        proxy_pass https://$geo_origin;
-        proxy_cache cdn_cache;
-        proxy_cache_valid 200 1h;
-
-        # Vary cache by Accept (WebP support) and DPR (pixel density)
-        proxy_cache_key "$scheme$host$request_uri|$http_accept|$http_dpr";
-
-        # Pass client hints to the image-resizing origin
-        proxy_set_header Accept $http_accept;
-        proxy_set_header DPR    $http_dpr;
-        proxy_set_header Width  $arg_width;
-    }
-}
-```
-
-```bash
-# Verify A/B variant assignment
-$ curl -I https://cdn.example.com/landing
-HTTP/2 200
-x-variant: a
-set-cookie: variant=a; Max-Age=86400; Path=/
-
-# Subsequent request with cookie — same variant, no new cookie
-$ curl -I -b "variant=a" https://cdn.example.com/landing
-HTTP/2 200
-x-variant: a
-
-# Geo-routed request — origin selected by country
-$ curl -I https://cdn-geo.example.com/products
-HTTP/2 200
-x-cache-status: MISS
-# Request forwarded to eu-origin.example.com (based on client IP in GB)
-```
-
----
-
-## Multi-CDN Architecture
-
-```mermaid
-graph TD
-    DNS["DNS / Traffic Manager<br/>(Route53 / NS1)"]
-    DNS -->|60%| CF[CloudFlare]
-    DNS -->|25%| Fastly[Fastly]
-    DNS -->|15%| Akamai[Akamai]
-    CF --> Origin[Origin]
-    Fastly --> Origin
-    Akamai --> Origin
-```
-
-```nginx
-# Multi-CDN routing via nginx as a traffic-splitting load balancer.
-# Weighted upstreams distribute traffic across CDN providers.
-# Health checks automatically remove unhealthy providers.
-
-upstream cdn_backends {
-    # ── Weighted traffic split ────────────────────────────────────
-    # CloudFlare: 60%, Fastly: 25%, Akamai: 15%
-    server cf.example.com      weight=60;
-    server fastly.example.com  weight=25;
-    server akamai.example.com  weight=15;
-
-    # ── Health checks (nginx Plus / OpenResty) ────────────────────
-    # Probe each backend every 10s; mark as down after 3 failures;
-    # re-enable after 2 consecutive successes.
-    # Traffic auto-redistributes among healthy backends.
-    health_check interval=10 fails=3 passes=2 uri=/health;
-
-    # ── Failover ──────────────────────────────────────────────────
-    # If the selected backend fails, retry on the next one
-    # (up to 2 retries before returning an error to the client).
-}
-
-server {
-    listen 443 ssl http2;
-    server_name www.example.com;
-
-    location / {
-        proxy_pass https://cdn_backends;
-        proxy_set_header Host $host;
-
-        # Retry on the next upstream if the chosen one fails
-        proxy_next_upstream error timeout http_502 http_503 http_504;
-        proxy_next_upstream_tries 2;        # Max 2 failover attempts
-        proxy_next_upstream_timeout 5s;     # Time budget for retries
-
-        # Pass the selected backend name for observability
-        add_header X-CDN-Backend $upstream_addr always;
-    }
-}
-```
-
-```bash
-# Verify weighted routing — repeated requests hit different backends
-$ for i in $(seq 1 5); do
-    curl -sI https://www.example.com/ | grep x-cdn-backend
-  done
-x-cdn-backend: 104.16.132.229:443     # CloudFlare
-x-cdn-backend: 104.16.132.229:443     # CloudFlare
-x-cdn-backend: 151.101.1.57:443       # Fastly
-x-cdn-backend: 104.16.132.229:443     # CloudFlare
-x-cdn-backend: 23.215.0.136:443       # Akamai
-
-# When a backend goes down, health checks remove it automatically.
-# All traffic redistributes among remaining healthy providers.
-```
-
----
-
-## HTTP/3 and QUIC at the Edge
-
-HTTP/3 runs over **QUIC** — a UDP-based transport with TLS 1.3 built in — and the CDN edge is exactly where it pays, because the edge terminates the messy last mile where loss and latency live. CDNs speak HTTP/3 to users and ordinary HTTP/2/1.1 to your origin, so enabling it is usually a checkbox plus an `Alt-Svc` advertisement — no origin changes.
-
-| Problem with TCP+TLS | QUIC's answer | Edge impact |
+| Class | Identity and freshness | Failure behavior |
 |---|---|---|
-| TCP handshake then TLS handshake (2-3 RTTs) | Combined transport+crypto handshake: 1 RTT, **0-RTT** on resumption | Faster first byte, biggest on high-RTT mobile |
-| Head-of-line blocking: one lost packet stalls every multiplexed H2 stream | Independent streams — loss in one stream doesn't stall others | Fewer tail-latency spikes on lossy networks |
-| Connection = 4-tuple; dies on network switch | **Connection IDs** — survives Wi-Fi↔cellular migration | Mobile sessions persist without re-handshake |
-| Ossified kernel TCP evolution | Userspace transport, encrypted headers | Faster protocol iteration (CDNs deploy improvements fleet-wide) |
+| fingerprinted immutable asset | URL names exact bytes; long-lived | serve cached indefinitely within retention |
+| mutable public object | URL stable; validators/TTL or purge define version | bounded stale policy |
+| personalized response | identity includes authorization/user dimensions | normally private or bypass shared cache |
+| generated expensive response | public but origin-costly | collapse fills; bounded stale fallback |
+| large/range object | representation plus byte range/encoding | validate partial-object compatibility |
+| live stream | manifest/segment sequence and short lifetime | skip expired work; do not build backlog |
 
-Operational notes worth knowing before flipping it on:
+The contract must state:
 
-- **Fallback must be graceful:** a minority of networks block/throttle UDP 443; clients race or fall back to H2 via Alt-Svc — monitor your H3 negotiation rate, not just availability.
-- **0-RTT data is replayable** — accept it only for idempotent requests ([Idempotency](../01-foundations/08-idempotency.md)); CDNs enforce this by default, but check before enabling 0-RTT to origin paths.
-- **CPU cost is higher** than kernel TCP (userspace stacks, per-packet crypto) — another reason it belongs at the edge, where it's amortized across tenants, rather than on your origin.
-- Measure the win where it exists: handshake time and TTFB on *lossy/mobile* segments improve markedly; on clean wired paths the delta is small. Slice your RUM data accordingly.
+1. which request dimensions identify one reusable representation;
+2. maximum fresh and stale age per content class;
+3. whether stale may be served during revalidation, origin error, or disconnection;
+4. invalidation scope and propagation objective;
+5. authenticated/personalized cache policy;
+6. regional or legal variants;
+7. origin load allowed during cold start, purge, and edge loss;
+8. integrity and confidentiality requirements;
+9. observability disclosed to clients versus operators.
 
----
+“The CDN caches GETs for five minutes” is not a contract. It omits representation identity, validators, purge ordering, stale exceptions, and who may observe the object.
 
-## Performance Metrics
+## Standards baseline
 
-```nginx
-# ── nginx logging for CDN metrics ─────────────────────────────────────
-# Custom log format capturing cache status, latency, and upstream timing.
-# Feed these logs into Prometheus/Grafana or any log aggregator.
+**Documented, RFC 9111, Internet Standard, June 2022.** An HTTP cache key contains at least request method and target URI. When a stored response carries `Vary`, nominated request headers participate in selection. The RFC defines freshness, validation, shared/private cache rules, authenticated-request constraints, and security considerations including poisoning and sensitive data. [RFC 9111](https://www.rfc-editor.org/rfc/rfc9111.html)
 
-log_format cdn_metrics
-    '$remote_addr - [$time_local] '
-    '"$request" $status $body_bytes_sent '
-    'cache=$upstream_cache_status '          # HIT, MISS, BYPASS, etc.
-    'edge_time=${request_time}s '            # Total time at edge
-    'origin_time=${upstream_response_time}s ' # Time waiting on origin
-    'bytes_sent=$bytes_sent';
+**Documented, RFC 5861, Informational, May 2010.** `stale-while-revalidate` permits bounded stale serving while validation occurs asynchronously; `stale-if-error` permits bounded stale serving on specified failures. These directives extend, rather than erase, the underlying freshness contract. [RFC 5861](https://www.rfc-editor.org/rfc/rfc5861.html)
 
-access_log /var/log/nginx/cdn_access.log cdn_metrics;
+**Documented, RFC 9211, Standards Track, June 2022.** `Cache-Status` standardizes how caches report hits, forwarding reasons, TTL, storage, and collapsed requests across a chain. It is useful for debugging, but its security section matters because exposing keys or topology can leak sensitive information. [RFC 9211](https://www.rfc-editor.org/rfc/rfc9211.html)
+
+Provider-specific behavior can be stricter, broader, or configurable. Verify the implementation and product contract instead of assuming every edge implements every optional RFC behavior identically.
+
+## State and invariants
+
+**Reference design.** Separate four authorities:
+
+- the **origin** authorizes representation content and cache policy;
+- the **edge cache** owns local stored objects and freshness calculations;
+- the **configuration control plane** owns routing, cache-key policy, origin pools, and security rules;
+- the **purge log** owns ordered invalidation intent and delivery evidence.
+
+### Representation identity
+
+Let canonical request identity be:
+
+$$
+K = H(tenant, scheme, host, method, canonical\_path, query\_policy, vary\_dimensions, representation\_policy)
+$$
+
+Two requests may reuse one object only if every dimension that can change bytes or authorization is equal under declared normalization. A missing dimension can leak one user's content; an unnecessary dimension fragments the cache and raises origin load.
+
+### Tenant isolation
+
+Identical host/path strings in different customer zones cannot share state unless the product explicitly defines a safe deduplication domain. Configuration, purge sequence, cache tags, keys, logs, and origin credentials are tenant-scoped.
+
+### Freshness and age
+
+For stored response time `t_s`, corrected resident age `A_0`, and current time `t`:
+
+$$
+current\_age = A_0 + (t - t_s)
+$$
+
+The object is fresh only while current age is within the selected freshness lifetime. A revalidated `304` updates metadata according to HTTP rules; it does not create arbitrary new bytes.
+
+### Purge monotonicity
+
+For tenant purge sequence `p`, an edge never applies `p-1` after `p`. A late cache fill begun before purge cannot resurrect invalidated content. The fill commits only if its observed resource/tag generation still matches the current purge generation.
+
+### Origin protection
+
+For origin pool safe concurrency `C_o`, all edge tiers combined maintain:
+
+$$
+inflight_{origin} \le C_o
+$$
+
+Queued, retrying, revalidating, prefetched, and shield requests all count. A cache miss is not permission to bypass the origin budget.
+
+## Data plane and control plane
+
+**Reference design.** The serving data plane continues through a control-plane outage using a last known-good, signed configuration:
+
+```mermaid
+flowchart LR
+    U[Client] --> R[DNS or anycast routing]
+    R --> E[Edge PoP]
+    E --> L[(Local cache)]
+    E --> S[Regional shield]
+    S --> O[Origin pool]
+    C[Configuration control plane] --> R
+    C --> E
+    C --> S
+    P[Ordered purge log] --> E
+    P --> S
+    H[Health and traffic telemetry] --> C
 ```
 
-```bash
-# ── Collect metrics via Cloudflare API ────────────────────────────────
+The **data plane** terminates transport, authenticates/filters, computes the key, reads/writes cache, collapses fills, and fetches through shields. The **control plane** publishes customer configuration, certificates, edge routing, origin health policy, cache rules, purge records, software releases, and emergency disables.
 
-# Cache hit ratio, bandwidth, error rates (last 1 hour)
-$ curl -s "https://api.cloudflare.com/client/v4/zones/${ZONE_ID}/analytics/dashboard?since=-60" \
-  -H "Authorization: Bearer ${CF_API_TOKEN}" | jq '.result.totals'
-{
-  "requests": {
-    "all": 1250000,
-    "cached": 1137500,       # 91% cache hit ratio  (target: >90%)
-    "uncached": 112500
-  },
-  "bandwidth": {
-    "all": 52428800000,      # ~52 GB total
-    "cached": 47185920000,   # ~47 GB served from cache
-    "uncached": 5242880000   # ~5 GB pulled from origin
-  },
-  "threats": { "all": 342 },
-  "pageViews": { "all": 890000 },
-  "uniques": { "all": 245000 }
-}
+Configuration has an epoch and activation time. An edge validates syntax, referenced secrets, origin pools, and feature compatibility before atomic activation. Partial application must not combine a new cache key with an old purge namespace or a new origin credential with an old origin address.
 
-# ── Latency percentiles via curl timing ───────────────────────────────
-# Measure real edge latency from the client's perspective.
-$ curl -o /dev/null -s -w "\
-  dns:       %{time_namelookup}s\n\
-  connect:   %{time_connect}s\n\
-  ttfb:      %{time_starttransfer}s\n\
-  total:     %{time_total}s\n\
-  http_code: %{http_code}\n" \
-  https://cdn.example.com/images/hero.jpg
-  dns:       0.012s
-  connect:   0.025s
-  ttfb:      0.038s          # Time to first byte — edge latency (target: <50ms)
-  total:     0.052s
-  http_code: 200
+**Documented, Akamai paper, 2010.** Nygren, Sitaraman, and Sun described a large CDN as an overlay with a distributed mapping system, edge servers, transport/route optimization, and origin-facing mechanisms. It is a historical primary-source architecture, useful for plane separation and mapping concepts but not a description of every current CDN. [The Akamai Network](https://www.akamai.com/site/en/documents/research-paper/the-akamai-network-a-platform-for-high-performance-internet-applications-technical-publication.pdf)
 
-# ── Cost savings calculation ──────────────────────────────────────────
-# With 91% cache hit ratio and $0.09/GB origin egress:
-#   Bandwidth saved:  47 GB × $0.09 = $4.23/hour saved
-#   Origin load:      reduced to 9% of total traffic
-#   Effective origin capacity: 1 / (1 - 0.91) ≈ 11× multiplier
-```
+## Client-to-edge routing
 
-Key metrics and targets:
+**Reference design.** Two common mechanisms are:
 
-| Metric | Target | How to measure |
+- **DNS steering:** authoritative DNS selects an edge address using resolver/client hints, topology, health, and capacity. TTL controls how quickly clients re-resolve, while recursive resolver caching limits precision.
+- **Anycast:** many PoPs announce the same address and Internet routing selects a path. Fast data-plane reachability comes with less application-level control over path changes.
+
+Many networks combine them: DNS selects service/region or address pool; anycast reaches a PoP. “Nearest” means best predicted service path under health/capacity/policy, not geographic distance.
+
+Routing inputs include transport reachability, regional capacity, origin/shield health, legal constraints, protocol support, attack state, and measured client performance. Apply hysteresis so small metric noise does not flap clients between PoPs. Keep emergency withdrawal separate from normal optimization.
+
+**Inference.** DNS caches and established transport sessions outlive a routing decision, so a control-plane withdrawal cannot guarantee immediate evacuation. PoP failure plans must tolerate a decaying tail of old routes and a correlated reconnect wave toward survivors.
+
+### Connection migration and drain
+
+DNS/route changes do not move existing TCP/QUIC sessions instantly. A draining PoP stops taking new connections, advertises a graceful close where protocol permits, retains state long enough for in-flight responses, and leaves capacity for reconnect bursts. See [DNS and connection management](13-dns-and-connection-management.md) and [transport internals](14-network-transport-internals.md).
+
+## Cache-key engineering
+
+The key is a security boundary and a capacity lever.
+
+### Host, path, and query
+
+**Reference design.** Normalize only semantics proven equivalent: case rules, percent encoding, dot segments, default ports, and query ordering differ by application. Maintain an allowlist of query fields that change representation or an allowlist of fields safe to drop. Blindly sorting/removing query parameters can collide signed URLs or distinct searches.
+
+### `Vary` and negotiation
+
+**Documented, RFC 9111.** A cache may use a stored response under `Vary` only when the nominated request headers match the original selecting request. `Vary: *` prevents reuse without origin validation. [RFC 9111 §4.1](https://www.rfc-editor.org/rfc/rfc9111.html#section-4.1)
+
+Unbounded `Vary: User-Agent` or arbitrary cookies create enormous cardinality. Prefer a small normalized device/format capability dimension generated by trusted edge policy. `Accept-Encoding` variants must not share bytes or metadata incorrectly.
+
+### Authorization, cookies, and privacy
+
+Shared caching of authenticated responses is opt-in under HTTP semantics. A CDN must not infer public cacheability from a `200`. Prefer bypass/private policy unless the origin explicitly marks a safe shared representation and the key excludes no authorization-dependent bytes.
+
+Do not key on raw bearer tokens: this stores secrets in cache metadata and destroys reuse. If a response is safely shareable within an authorization cohort, derive a bounded opaque policy class after authentication and include that class—not the credential—in the key.
+
+### Key-version migrations
+
+Changing normalization or key policy changes object identity. Publish key version `k+1`, read only from `k+1`, optionally fill from a verified `k` object when equivalence is proven, and let `k` expire. In-place reinterpretation can serve old bytes under new semantics.
+
+## Request flow and tiering
+
+**Reference design.** An edge request proceeds as follows:
+
+1. Select and atomically load tenant configuration epoch.
+2. Normalize and authenticate before computing a shared-cache key.
+3. Apply request/WAF/rate policy and reject invalid or disallowed methods.
+4. Look up the local cache and verify key, freshness, integrity, and purge generation.
+5. On a fresh hit, serve with correct `Age` and bounded diagnostic metadata.
+6. On stale content, choose synchronous validation, stale-while-revalidate, stale-if-error, or miss according to policy.
+7. Collapse equivalent fills into one upstream request with bounded waiters.
+8. Acquire origin/shield concurrency and retry-budget permits.
+9. Fetch through a shield, validate response cacheability and size, stream to client where safe, then atomically commit cache metadata and bytes.
+10. If the client disconnects, continue fill only when expected reuse justifies it and budgets allow.
+
+A **shield** or mid-tier aggregates misses from many edges, raising reuse and reducing direct origin fanout. It is also a correlated bottleneck. Partition shields, cap queues, and permit controlled bypass only when the origin has a separate budget for it.
+
+General eviction algorithms and cache-aside mechanics are in [distributed caching](../04-caching/03-distributed-caching.md). CDN-specific selection must additionally consider bytes, transfer cost, fill latency, regional popularity, object expiry, and purge frequency.
+
+## Freshness, revalidation, and stale policy
+
+**Reference design.** Choose policy per business consequence:
+
+| Content | Revalidation | Stale on error? |
 |---|---|---|
-| Cache hit ratio | > 90% | `$upstream_cache_status` in logs or CDN analytics API |
-| Edge latency p50 | < 50ms | `curl -w '%{time_starttransfer}'` or RUM |
-| Edge latency p99 | < 200ms | Log percentiles from `$request_time` |
-| Error rate (4xx) | < 1% | `$status` in nginx logs |
-| Error rate (5xx) | < 0.1% | `$status` in nginx logs + CDN dashboard |
+| fingerprinted asset | unnecessary until retention expiry | yes, bytes are identity-bound |
+| public article | validator or purge | bounded, usually acceptable |
+| price/availability | short freshness + validator | only with explicit product approval |
+| authorization/policy | bypass or strict validation | generally no |
+| safety/revocation data | strict validation/push invalidation | no |
 
----
+Serving stale is an availability decision that can become a correctness or security failure. Stale windows are requirements, not CDN defaults. Mark stale responses in telemetry and preserve `Age`; do not reset apparent age at each tier.
 
-## CDN Provider Comparison
+Conditional requests (`If-None-Match`/ETag or `If-Modified-Since`) reduce bytes but still consume origin request capacity. Collapse revalidation and protect it with permits. If an origin deploy changes bytes without changing a strong validator, no CDN can infer the mistake.
 
-| Feature | CloudFlare | Fastly | Akamai | AWS CloudFront |
-|---------|------------|--------|--------|----------------|
-| Global PoPs | 285+ | 80+ | 4000+ | 450+ |
-| Edge Compute | Workers | Compute@Edge | EdgeWorkers | Lambda@Edge |
-| Instant Purge | Yes | Yes (<150ms) | No (~5s) | Yes (~1min) |
-| Free Tier | Generous | Limited | No | Limited |
-| WebSocket | Yes | Yes | Yes | Yes |
-| Real-time logs | Yes | Yes | Yes | Yes |
+## Invalidation and versioning
 
----
+### Content-addressed publication
 
-## Key Takeaways
+**Reference design.** The safest invalidation is a new URL whose name includes a content digest or release version. HTML/manifests use a shorter policy and point to immutable objects. Old assets remain correct for old pages and expire naturally; a rollback switches the manifest rather than repopulating old bytes.
 
-1. **Cache everything possible**: Static assets, API responses, HTML pages—the more you cache, the better performance and lower costs
+### Exact purge
 
-2. **Use appropriate TTLs**: Long TTLs (1 year) for versioned static assets; short TTLs with stale-while-revalidate for dynamic content
+An exact purge identifies the fully normalized cache key dimensions. Purging only the visible URL can miss language, encoding, query, image-format, or device variants. The purge API either accepts all dimensions or maps a resource identifier to every variant through a maintained index.
 
-3. **Implement cache tags**: Enable surgical purging without purging unrelated content
+### Surrogate/tag purge
 
-4. **Deploy origin shield**: Reduces origin load dramatically, especially for cache misses across multiple PoPs
+A response can declare bounded surrogate tags such as `article:42` or `release:900`. Edges maintain tag-to-object indexes and an ordered generation/tombstone per tag. Purging a tag advances its generation; any object or in-flight fill created under the older generation is unusable.
 
-5. **Consider multi-CDN**: Critical for high-availability; use active-active or failover configurations
+Tags must be tenant-scoped, length/count bounded, authorized, and normalized. One attacker-controlled tag attached to millions of objects can make purge and storage pathological.
 
-6. **Leverage edge computing**: Move logic closer to users for authentication, A/B testing, personalization
+### Purge log
 
-7. **Monitor cache hit ratio**: Aim for >90%; investigate patterns causing cache misses
+**Reference design.** A purge command receives a tenant-scoped idempotency ID and monotonic sequence, is authorized and durably appended, then fans out to PoPs/shields. Each receiver checkpoints applied sequence. Gaps trigger replay; too-old consumers install a compacted snapshot of active tombstones/generations before serving.
+
+“Purge accepted” means durable intent, not global completion. The API reports propagation evidence or an SLO, and clients distinguish queued, partially applied, and complete. Browser/private caches may retain content outside CDN control; versioned URLs are the only deterministic way to bypass them.
+
+**Documented, Cloudflare 2024 snapshot.** Cloudflare described exact, prefix, hostname, tag, and purge-everything scopes and a redesigned purge plane that actively deletes local objects. Its article reported under-150 ms invalidation performance for measured production traffic in August 2024. This is a dated provider result, not a universal purge guarantee. [Cloudflare, Instant Purge](https://blog.cloudflare.com/instant-purge/)
+
+## Origin protection and overload
+
+Cache effectiveness and origin stability are one system. A 99% hit ratio at 10 million requests/s still sends 100,000 requests/s upstream, before fills, revalidation, retries, and failover.
+
+**Reference design.** Use coordinated layers:
+
+- tenant/route cost-based admission at edge;
+- local and shield request collapse keyed identically;
+- per-origin concurrency and request-rate budgets;
+- separate budgets for demand, revalidation, prefetch, and repair;
+- circuit breakers that distinguish timeout, overload, and semantic errors;
+- bounded queues with age deadlines;
+- retry budgets and full jitter under one end-to-end deadline;
+- bounded stale serving for approved classes;
+- negative caching for safe, authoritative misses;
+- prewarming only for measured high-value objects.
+
+The details live in [rate limiting](05-rate-limiting.md), [circuit breakers](06-circuit-breakers.md), [backpressure](07-backpressure.md), and [retries/timeouts](10-retries-timeouts-hedging.md). CDN policy must use their shared budgets rather than adding an independent retry loop.
+
+### Cache stampede
+
+Collapse only requests with identical authorization and representation keys. Give waiters individual deadlines; if the leader stalls, electing many replacements recreates the stampede. One controlled replacement may proceed after the old leader is fenced/canceled. See [cache stampede](../04-caching/04-cache-stampede.md).
+
+### Purge and cold-start control
+
+Rate-limit purge breadth, then pace refills. “Purge everything” followed by unrestricted misses converts the CDN into a load amplifier. Keep a shield copy only if purge semantics allow it; otherwise gate origin refills and serve a controlled error/stale response by content class.
+
+## Capacity and cost model
+
+### Origin offload—illustrative assumptions
+
+**Reference design.** Let client rate be `R`, local hit ratio `h_e`, and shield hit ratio on edge misses `h_s`:
+
+$$
+R_{origin} = R(1-h_e)(1-h_s)
+$$
+
+At 8 million requests/s, `h_e=0.94`, and `h_s=0.70`:
+
+$$
+R_{origin}=8M \times 0.06 \times 0.30=144{,}000\ requests/s
+$$
+
+If a purge temporarily lowers local and shield hits to 20% and 10%, raw miss demand becomes 5.76 million requests/s—40× normal origin traffic. Admission and collapsed refill are correctness for origin availability, not an optimization.
+
+### Bandwidth—illustrative assumptions
+
+At 900,000 responses/s with mean body 180 KiB in one region:
+
+$$
+egress \approx 900{,}000 \times 180\ KiB \times 8 \approx 1.33\ Tbit/s
+$$
+
+Plan NIC, transit, packet rate, TLS CPU, and regional evacuation. Mean body size hides video and software-download tails; size-class traffic and reserve large-object concurrency separately.
+
+### Cache storage and churn
+
+For object `i` with size `b_i`, request rate `\lambda_i`, miss transfer cost `c_i`, and residence time `r_i`, admission should estimate saved cost per byte rather than count hits alone. A small hot object and a multi-gigabyte one-hit object should not receive equal treatment.
+
+If a 400 TiB PoP cache turns over 12%/hour, write rate is about 13.7 GiB/s before replication and metadata. Flash endurance, compaction, tag-index writes, and purge deletion become first-class capacity constraints. Values are illustrative.
+
+### Purge state
+
+One million tenants issuing 20 tag purges/day yields 231 purge records/s on average, but deployment bursts dominate. Tombstone retention must cover maximum edge outage plus log replay lag; otherwise an offline edge can return with pre-purge objects after the central tombstone vanished.
+
+## Specialized failure traces
+
+### Missing cache-key dimension leaks private content
+
+**Reference-design trace.** `/account` varies by session cookie, but a new rule removes cookies from the key and marks the response shared:
+
+1. User A's authenticated response fills the edge under host+path only.
+2. User B requests the same path and receives A's body as a cache hit.
+3. Purging stops future hits but cannot retract the disclosed response.
+4. The safe rollout would shadow key decisions, block shared storage for authenticated requests without explicit origin policy, and canary with synthetic cross-user probes.
+
+This is not a low hit-rate bug; it is a confidentiality incident. Cache-policy changes require security review and typed policy, not free-form regex alone.
+
+### Global purge melts the origin
+
+**Reference-design trace.** A release pipeline purges a popular 2 MiB bundle at every edge:
+
+1. Hundreds of PoPs miss simultaneously.
+2. Local collapse produces one request per PoP, still hundreds of shield requests.
+3. Shield collapse reduces this to one fill per shield, but three shields independently retry a slow origin.
+4. The shared origin concurrency budget admits one attempt and queues/rejects the rest within deadlines.
+5. Edges serve the previous bundle only if its stale policy allows; otherwise they return a bounded error.
+6. A content-addressed release would have prewarmed the new URL and switched a small manifest without invalidating old bytes.
+
+The control-plane action created data-plane load. Capacity testing must include purge-induced cold starts.
+
+### PoP isolation and stale policy
+
+An edge loses both shields and configuration streaming. It has a signed configuration epoch and cached objects. It may serve fresh objects normally, approved stale objects within their bounded windows, and must fail closed for expired authorization/safety content. It stops accepting new purge/config mutations locally, exposes stale configuration age, and drains when its policy horizon ends. “Edge disconnected” is not one universal serve-stale decision.
+
+### Late fill resurrects purged bytes
+
+A fill for tag `product:7` starts at generation 81. Purge 82 applies while origin is streaming. Before committing, the fill compares its captured generation with the current generation, detects 82, serves the current client only if policy permits but does not store, and releases waiters to refetch. Without the commit check, invalidated content immediately reappears.
+
+## Security and abuse boundaries
+
+Threats include cache poisoning, cache deception, request smuggling across inconsistent parsers, cross-tenant key collision, personalized-data leakage, purge abuse, origin bypass, signed-URL normalization bugs, and diagnostic-header leakage.
+
+**Reference design.** Use one canonical parser/normalizer across WAF, key computation, purge, and origin signing. Reject ambiguous encodings and conflicting length/transfer semantics before caching. Authenticate control-plane and purge APIs with least privilege, strong tenant binding, idempotency, approval for broad purges, and immutable audit logs.
+
+Origin servers accept traffic only from authenticated CDN egress or verify signed origin requests, while retaining a break-glass path. TLS private keys and customer secrets are distributed through a versioned secret plane, held in hardware/isolated processes where required, and rotated without mixed configuration.
+
+Do not expose raw cache keys containing cookies, authorization classes, or signed URLs in `Cache-Status`. RFC 9211 permits deployment-specific disclosure choices; production diagnostics should be sampled, access-controlled, and redacted.
+
+## Observability and operations
+
+Measure by tenant, content class, PoP, shield, and origin pool with cardinality controls:
+
+- fresh hit, stale hit, revalidated, miss, bypass, and uncacheable rates;
+- byte hit ratio and saved origin bandwidth, not request hit ratio alone;
+- cache-key cardinality, `Vary` explosion, and object-size distribution;
+- fill latency, collapsed waiters, leader timeout, and duplicate fills;
+- origin permits, queue age, retries, circuit state, and goodput;
+- purge accepted/applied sequence, propagation quantiles, gaps, and late-fill rejection;
+- configuration epoch and activation failure;
+- DNS/anycast route changes, connection drain, and regional saturation;
+- eviction/churn, storage write rate, tag-index size, and tombstone age;
+- stale served by reason/age and policy violations;
+- cross-user synthetic confidentiality probes.
+
+Use standardized `Cache-Status` where appropriate, but do not treat it as the only source of truth. Edge logs sample decisions with an opaque key digest, config epoch, purge generation, and upstream attempt ID. Correlate one client request through edge and shield without logging secrets.
+
+## Testing and verification
+
+Property and conformance tests cover RFC freshness/validation, `Vary`, range requests, authorization rules, `Age`, conditional responses, and malformed headers. Differential tests feed the same corpus to edge, purge normalizer, and origin to find parser/key disagreement.
+
+Fault tests inject:
+
+- control-plane loss with continuing data traffic;
+- reordered/duplicated/missing purge records;
+- fill racing purge and configuration activation;
+- origin timeout after response bytes begin;
+- shield loss and controlled bypass;
+- stale-policy boundary expiry;
+- PoP drain and reconnect burst;
+- poisoned object/checksum mismatch;
+- purge-everything plus cold origin;
+- authenticated variants attempting cross-user reuse.
+
+Canary new cache-key/config logic by request shadowing: compute old and new keys and decisions without storing under the new policy, then compare cardinality, cacheability, authorization class, and expected origin load. Synthetic objects with known variants verify global purge and edge integrity continuously.
+
+## Onboarding and migration
+
+**Reference design.** Put an origin behind a CDN progressively:
+
+1. inventory response classes, validators, cookies, authorization, range use, and legal variants;
+2. establish origin authentication and a bypass/rollback path;
+3. route a canary hostname or traffic cohort through edge in pass-through mode;
+4. enable caching only for fingerprinted immutable assets;
+5. shadow cache decisions and validate keys for mutable public content;
+6. introduce shield and origin budgets before increasing cacheable scope;
+7. test exact/tag purge, late-fill fencing, and browser-cache behavior;
+8. canary stale policies per content class;
+9. move DNS/anycast traffic gradually with route and origin observability;
+10. restrict direct origin access only after edge rollback and emergency procedures are proven.
+
+Changing CDN provider repeats this discipline. Dual-CDN routing can improve failure isolation, but purge, key semantics, TLS configuration, log definitions, and stale rules must be reconciled; otherwise the two providers serve different security policies.
+
+## Design review questions
+
+1. What exact inputs can change response bytes or authorization, and are all in the key?
+2. Which content may be shared, revalidated, served stale, or never stored?
+3. Can an in-flight fill commit after a purge or key-policy change?
+4. What does purge acknowledgement guarantee, and how are offline edges caught up?
+5. How much origin demand appears at normal miss ratio, regional loss, and purge cold start?
+6. Where are collapse and retry budgets enforced across edge and shield?
+7. What happens when configuration, purge, shield, or origin is independently unavailable?
+8. Can diagnostic headers/logs leak credentials, tenant identity, or topology?
+9. How is a cache-key migration canaried without cross-user risk?
+10. Can immutable publication replace broad invalidation?
+
+## Primary sources
+
+- [RFC 9111, “HTTP Caching,” Internet Standard, June 2022](https://www.rfc-editor.org/rfc/rfc9111.html)
+- [RFC 5861, “HTTP Cache-Control Extensions for Stale Content,” May 2010](https://www.rfc-editor.org/rfc/rfc5861.html)
+- [RFC 9211, “The Cache-Status HTTP Response Header Field,” June 2022](https://www.rfc-editor.org/rfc/rfc9211.html)
+- [Nygren, Sitaraman, and Sun, “The Akamai Network: A Platform for High-Performance Internet Applications,” 2010](https://www.akamai.com/site/en/documents/research-paper/the-akamai-network-a-platform-for-high-performance-internet-applications-technical-publication.pdf)
+- [Cloudflare Engineering, “Instant Purge: invalidating cached content in under 150ms,” 2024](https://blog.cloudflare.com/instant-purge/)

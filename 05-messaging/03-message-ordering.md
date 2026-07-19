@@ -1,690 +1,253 @@
 # Message Ordering
 
-## TL;DR
+Ordering is a scoped relation between events, not a property that a broker can provide “globally” without cost or qualification. A useful design names which events must be comparable, who assigns their sequence, what happens at gaps, and how epochs prevent an old writer from extending a sequence after failover.
 
-Message ordering determines whether messages are delivered in the order they were sent. Options range from no ordering (best performance) to total ordering (worst performance). Most systems use partition-based ordering: messages with the same key are ordered, different keys may interleave. Choose based on business requirements—true total ordering is rarely needed and expensive.
+This chapter owns order scope, partition sequencing, causal metadata, gaps, reorder buffers, epochs, rebalancing, and resharding. Queue claims are in [Message Queue Architecture](01-message-queues.md); duplicate/loss and acknowledgement ambiguity are in [Delivery Guarantees](04-delivery-guarantees.md).
 
----
+## Workload and order contract
 
-## Why Ordering Matters
+Start from the invariant, not “FIFO.” Examples:
 
-### The Problem
+- every state transition for one account applies in source commit order;
+- all records in one database transaction become visible as one ordered batch;
+- a reply is never processed before the request it references;
+- configuration generation 42 supersedes 41 everywhere;
+- no ordering is required across unrelated telemetry events.
 
-```
-User actions (sent in this order):
-  1. Create account
-  2. Update profile
-  3. Delete account
-
-If delivered out of order:
-  Delete arrives first → "Account not found" error
-  Update arrives → Creates orphaned data
-  Create arrives → Account exists again
-
-Result: Corrupted state
-```
-
-### When Ordering Matters
-
-```
-Critical:
-  - Financial transactions (credit before debit)
-  - State machine transitions
-  - Log aggregation
-  - Replication
-
-Less Critical:
-  - Analytics events (can be reordered later)
-  - Notifications (slight reorder OK)
-  - Independent operations
-```
-
----
-
-## Ordering Levels
-
-### No Ordering Guarantee
-
-```
-Messages may arrive in any order
-
-Producer sends: A, B, C
-Consumer sees:  C, A, B (any permutation)
-
-Advantages:
-  - Maximum throughput
-  - Easy scaling
-  - No coordination
-
-Use when:
-  - Operations are independent
-  - Consumer can handle any order
-```
-
-### FIFO Within Producer
-
-```
-Each producer's messages arrive in order
-Different producers may interleave
-
-Producer 1: A1, B1, C1 → arrive in order
-Producer 2: A2, B2, C2 → arrive in order
-
-But overall: A1, A2, B1, C2, B2, C1 (interleaved)
-
-Use when:
-  - Events from same source must be ordered
-  - Different sources are independent
-```
-
-### FIFO Within Partition/Key
-
-```
-Messages with same key are ordered
-Different keys may interleave
-
-Key=user1: login, update, logout → ordered
-Key=user2: login, purchase → ordered
-
-But: user1.login, user2.login, user1.update... (interleaved)
-
-Most common approach
-Kafka, SQS FIFO use this
-```
-
-### Total Ordering
-
-```
-ALL messages in strict global order
-
-Send: A, B, C, D, E
-Receive: A, B, C, D, E (exactly)
-
-Requires:
-  - Single partition/queue
-  - Or distributed consensus
-
-Expensive, limits throughput
-Rarely truly needed
-```
-
----
-
-## Kafka Ordering
-
-### Partition-Based
-
-```
-Topic with 3 partitions:
-  Partition 0: [A, D, G]
-  Partition 1: [B, E, H]
-  Partition 2: [C, F, I]
-
-Within partition: Strictly ordered
-Across partitions: No ordering
-
-Producer:
-  - Key = null: Round-robin to partitions
-  - Key = "user123": Hash to consistent partition
-```
-
-### Consumer Groups
-
-```
-Consumer Group A:
-  Consumer 1 ← Partition 0
-  Consumer 2 ← Partition 1
-  Consumer 3 ← Partition 2
-
-Each partition processed by one consumer
-Ordering preserved within partition
-
-If consumer fails:
-  Partition reassigned
-  Continues from last committed offset
-```
-
-### Ordering Guarantees
-
-```python
-# Producer: Same key = same partition = ordered
-producer.send(topic='events', key='user123', value=event1)
-producer.send(topic='events', key='user123', value=event2)
-# event1 always before event2 for user123
-
-# Consumer: Process in order
-for message in consumer:
-    process(message)
-    consumer.commit()  # Commit offset
-```
-
----
-
-## SQS FIFO Ordering
-
-### Message Group ID
-
-```python
-# Messages with same group ID are ordered
-sqs.send_message(
-    QueueUrl=queue_url,
-    MessageBody='{"action": "create"}',
-    MessageGroupId='user-123',
-    MessageDeduplicationId='msg-001'
-)
-
-sqs.send_message(
-    QueueUrl=queue_url,
-    MessageBody='{"action": "update"}',
-    MessageGroupId='user-123',
-    MessageDeduplicationId='msg-002'
-)
-
-# Consumer receives in order for user-123
-```
-
-### Deduplication
-
-```
-FIFO queues deduplicate by:
-  - MessageDeduplicationId (explicit)
-  - Content hash (if content-based dedup enabled)
-
-Window: 5 minutes
-Same ID in window → message dropped
-```
-
-### Throughput Limits
-
-```
-Standard SQS: Unlimited throughput
-FIFO SQS: 300 msg/sec (3000 with batching)
-
-Per message group: 300 msg/sec max
-Use multiple groups to scale
-```
+Represent ordering metadata explicitly:
 
----
-
-## Implementing Ordering
-
-### Sequence Numbers
-
-```python
-class OrderedProducer:
-    def __init__(self):
-        self.sequence = {}  # key → last sequence
-    
-    def send(self, key, message):
-        seq = self.sequence.get(key, 0) + 1
-        self.sequence[key] = seq
-        
-        message['_seq'] = seq
-        queue.send(key=key, message=message)
-
-class OrderedConsumer:
-    def __init__(self):
-        self.expected_seq = {}  # key → expected next
-        self.buffer = {}  # key → out-of-order messages
-    
-    def process(self, key, message):
-        seq = message['_seq']
-        expected = self.expected_seq.get(key, 1)
-        
-        if seq == expected:
-            # In order - process
-            handle(message)
-            self.expected_seq[key] = seq + 1
-            
-            # Check buffer for next messages
-            self.process_buffered(key)
-        elif seq > expected:
-            # Out of order - buffer
-            self.buffer.setdefault(key, {})[seq] = message
-        # seq < expected: Duplicate, ignore
+```text
+OrderedEnvelope {
+  stream_id
+  writer_epoch
+  sequence
+  event_id
+  source_version
+  predecessor_ids[]?
+  transaction_id?
+  transaction_index?
+}
 ```
 
-### Resequencing Buffer
+Define:
 
-```
-Incoming (out of order): 3, 1, 4, 2, 5
-
-Buffer state:
-  Receive 3: buffer=[3], wait for 1
-  Receive 1: process 1, buffer=[3], wait for 2
-  Receive 4: buffer=[3,4], wait for 2
-  Receive 2: process 2,3,4, buffer=[], wait for 5
-  Receive 5: process 5
-
-Considerations:
-  - Buffer size limit
-  - Timeout for missing sequences
-  - Gap detection
-```
-
-### Handling Gaps
-
-```python
-def handle_potential_gap(key, expected, received):
-    gap_start = expected
-    gap_end = received - 1
-    
-    # Wait for gap to fill
-    wait_until = time.time() + GAP_TIMEOUT
-    
-    while time.time() < wait_until:
-        if gap_filled(key, gap_start, gap_end):
-            return True
-        sleep(0.1)
-    
-    # Gap timeout - decide action
-    if GAP_POLICY == 'skip':
-        log.warn(f"Skipping gap {gap_start}-{gap_end}")
-        return True
-    elif GAP_POLICY == 'fail':
-        raise GapError(f"Gap detected: {gap_start}-{gap_end}")
-```
+- **scope**: entity, tenant, topic partition, transaction, or entire system;
+- **relation**: total, per-key, FIFO-per-producer, or causal partial order;
+- **sequencer**: authoritative database commit, partition leader, or dedicated service;
+- **gap policy**: wait, retrieve missing data, skip with evidence, or rebuild;
+- **consumer policy**: apply in order, buffer, version-gate, or treat operations as commutative;
+- **reshard/cutover protocol** and how cursors translate;
+- **deadline** after which liveness can override waiting, if the domain permits it.
 
----
+“Ordered delivery” is incomplete unless these fields are known.
 
-## Scaling with Ordering
+## State and invariants
 
-### Partition Strategies
+Sequencing state usually includes current writer epoch, next sequence per ordered stream, partition assignment generation, committed log end, transaction/batch boundaries, and each consumer’s last applied sequence plus reorder buffer.
 
-```
-By entity ID:
-  user-123 → partition 0
-  user-456 → partition 1
-  All events for user-123 ordered ✓
-
-By time bucket:
-  Events 00:00-00:05 → partition 0
-  Events 00:05-00:10 → partition 1
-  Time-ordered within bucket
-
-By hash:
-  hash(key) % num_partitions
-  Uniform distribution
-```
+Enforce:
 
-### Increasing Partitions
+**Uniqueness within an epoch.** For `(stream_id, writer_epoch)`, a sequence identifies at most one logical event.
 
-```
-Initial: 4 partitions
-  Key A → partition 1
-  Key B → partition 3
-
-After adding partitions: 8 partitions
-  Key A → partition 5 (different!)
-  Key B → partition 3 (might change)
-
-Problem: Key-partition mapping changes
-
-Solutions:
-  - Over-partition initially (100+ partitions)
-  - Use consistent hashing
-  - Coordinate partition increase with consumers
-```
+**Epoch monotonicity.** Once epoch `e+1` is authoritative, no record or checkpoint from epoch `e` can advance the stream.
 
-### Parallel Processing Limits
+**Applied prefix.** A strict consumer’s durable state corresponds to a contiguous prefix through `last_applied`, plus explicitly stored future records. It never claims sequence 20 applied while silently missing 19.
 
-```
-Strictly ordered queue:
-  Max parallelism = number of keys
-  
-  1000 unique keys = 1000 parallel operations
-  
-If single key has high volume:
-  That key becomes bottleneck
-  Consider time-windowing or sub-keys
-```
+**Ordering key matches invariant scope.** If two events must be ordered together, their routing cannot place them under independent sequencers.
 
----
+**Sequence assignment follows source commitment.** A sequence attached before a transaction that later aborts creates a gap whose meaning must be explicit. A source commit position or transactional outbox sequence avoids guessing.
 
-## Common Patterns
+**Cutover has one pivot.** During repartitioning, every key has a declared last position in the old assignment and first epoch/position in the new one.
 
-### Ordered by Entity
+## Ordering models
 
-```python
-# All events for an entity go to same partition
-def get_partition_key(event):
-    return event.entity_id
+### Per-producer FIFO
 
-# Examples:
-# Order events → key = order_id
-# User events → key = user_id
-# Session events → key = session_id
-```
+One producer emits records in its local send order. This is weak: two producers updating the same entity have no shared order, and producer restart can reset local counters. Use it only when the producer is the sole authority for the scope and its epoch is durably fenced.
 
-### Ordered by Causality
+### Per-key or per-partition total order
 
-```
-If event B depends on event A:
-  Use same partition key
-
-User creates order → Order events
-  Key for both: order_id
-  Creation before updates guaranteed
-
-But: User profile update doesn't need order ordering
-  Different partition key OK
-```
+All events for a key route to one partition leader, which appends a total sequence. This is the common scalable contract. Unrelated keys share a physical partition order, but applications normally depend only on each key’s subsequence. Throughput for one hot key is limited by its sequencer and consumer lane.
 
-### Hybrid Ordering
+### Causal order
 
-```
-Critical path: FIFO queue (ordered, slower)
-Best-effort: Standard queue (fast, unordered)
-
-Create/Update/Delete → FIFO (order matters)
-Analytics events → Standard (order doesn't matter)
-```
+If event B was produced after observing A, A causally precedes B. Lamport clocks preserve a logical order consistent with causality but cannot distinguish concurrency. Vector clocks/version vectors can identify concurrent histories, at metadata cost proportional to participating writers unless compressed or scoped.
 
----
+Many applications need only explicit dependencies: carry predecessor event IDs, source versions, or workflow step tokens. This is easier to audit than pretending wall-clock timestamps encode causality.
 
-## Trade-offs
+### Global total order
 
-| Ordering Level | Throughput | Latency | Complexity |
-|----------------|------------|---------|------------|
-| None | Highest | Lowest | Lowest |
-| Per-producer | High | Low | Low |
-| Per-key | Medium | Medium | Medium |
-| Total | Lowest | Highest | Highest |
+A global log assigns every event a comparable sequence. It simplifies deterministic replication and audit but centralizes sequencing/consensus, increases cross-region latency, and imposes order between unrelated events. Use it only when the invariant truly spans the entire scope. The consensus mechanics are covered in [Consensus Algorithms](../02-distributed-databases/08-consensus-algorithms.md).
 
-### Decision Framework
+## Sequence assignment and writer epochs
 
-```
-Question 1: Do messages affect shared state?
-  No → No ordering needed
-  Yes → Continue
-
-Question 2: Is state partitioned by key?
-  Yes → Per-key ordering sufficient
-  No → Continue
-
-Question 3: Is total ordering truly required?
-  Usually no → Reconsider design
-  Yes → Accept performance penalty
-```
+A safe partition leader is elected under an epoch/term. Append requests contain producer identity, producer epoch where applicable, and a sequence. The leader accepts only the current authoritative epoch and persists the record before exposing its position according to the durability contract.
 
----
-
-## Debugging Ordering Issues
-
-### Out-of-Order Detection
-
-```python
-def detect_out_of_order(messages):
-    issues = []
-    last_seq = {}
-    
-    for msg in messages:
-        key = msg.partition_key
-        seq = msg.sequence
-        
-        if key in last_seq:
-            if seq <= last_seq[key]:
-                issues.append({
-                    'key': key,
-                    'expected': last_seq[key] + 1,
-                    'got': seq
-                })
-        
-        last_seq[key] = seq
-    
-    return issues
-```
+For domain aggregates, the authoritative database can assign `aggregate_version` with optimistic concurrency:
 
-### Logging for Ordering
-
-```python
-logger.info(f"Received message",
-    extra={
-        'message_id': msg.id,
-        'partition': msg.partition,
-        'offset': msg.offset,
-        'key': msg.key,
-        'sequence': msg.sequence,
-        'timestamp': msg.timestamp
-    }
-)
-
-# Enables post-hoc ordering analysis
+```text
+append events for aggregate A
+only if current_version = expected_version
+publish versions expected_version+1 ... expected_version+n
 ```
-
----
-
-## Kafka Partition Ordering Deep Dive
 
-### Ordering Guarantee Scope
+Two concurrent commands cannot both claim the same next version. The event store chapter owns that transaction; downstream ordering uses its version rather than manufacturing a second unrelated counter.
 
-```
-Within a single partition:
-  Total order by offset. Consumer reads 0, 1, 2, 3... sequentially.
-
-Across partitions:
-  NO ordering guarantee. Partition 0 offset 5 may be newer or older
-  than Partition 1 offset 5. poll() returns batches in arbitrary order.
-```
+On producer retry, an idempotent append protocol can map `(producer_id, epoch, producer_sequence)` to the prior result. This prevents retry reordering inside that producer session. It does not order independent producers or guarantee an external effect; those are separate contracts.
 
-### Partition Key Selection
+Writer epochs require fencing at every acceptance point. If leader A loses authority but stays alive in a partition, leader B begins epoch 18. Consumers and replicas reject A’s epoch 17 records even if their numeric sequence is higher. Comparing sequence without epoch re-admits a stale writer.
 
-```
-Key groups causally related messages:
-  Order lifecycle  → order_id  (create, pay, ship → ordered)
-  User activity    → user_id   (login, click, logout → ordered)
-  Device telemetry → device_id (readings in chronological order)
-
-Anti-pattern:
-  random_uuid → spreads load but destroys ordering
-  event_type  → groups unrelated entities together
-```
+## Partition routing and hot keys
 
-### Hot Partition Problem
+The routing function is versioned and deterministic. Hash `(tenant, entity_id)` to a virtual bucket, then map the bucket to a physical partition under an assignment generation. Avoid process-randomized hashes. Producers either receive the current map or send through a router that does.
 
-```
-Celebrity user_id → one partition gets 100x traffic, others idle.
-
-Mitigations:
-  1. Compound key (user_id + session_id) — trades per-user for per-session ordering
-  2. Accept imbalance — scale hot consumer vertically, monitor partition lag
-  3. App-level sharding — split into virtual sub-users, merge downstream
-```
+Per-key order requires every producer to choose the same key. Missing, differently normalized, or semantically inconsistent keys are common ordering bugs. Validate key presence and canonical representation at ingress; emit sampled provenance that shows why a record chose its partition.
 
-### Rebalancing and Ordering
+A hot key cannot be scaled by ordinary partition splitting while retaining one total order. Options are:
 
-```
-Consumer group rebalance (consumer joins/leaves/crashes):
-
-  Eager protocol (default before 2.4):
-    All consumers stop fetching during rebalance
-    Brief processing gap, but no out-of-order delivery
-    After rebalance, resumes from last committed offset
-
-  Cooperative rebalancing (Kafka 2.4+):
-    Only revoked partitions stop, others continue processing
-    Reduces blast radius — preferred for large consumer groups
-```
+- keep one sequencer and parallelize downstream work that commutes;
+- split the domain invariant into independent subkeys;
+- batch/coalesce state updates;
+- represent operations with commutative data types;
+- admit less work for that key.
 
-### In-Flight Requests and Retries
+If none applies, the single-lane throughput is a real domain limit.
 
-```
-Producer config: max.in.flight.requests.per.connection
+## Consumer reorder algorithm
 
-  Set to 5 (default):
-    Batch 1 fails, Batch 2 succeeds, Batch 1 retries
-    → Broker receives: Batch 2, Batch 1 → OUT OF ORDER
+A strict consumer stores `last_applied` and a bounded map keyed by `(epoch, sequence)`:
 
-  Set to 1:
-    One request at a time → correct order, lower throughput
+1. reject an older epoch; pause and reconcile on an unexpected newer epoch;
+2. if `sequence <= last_applied`, treat it as an already-observed delivery under the delivery/effect policy;
+3. if `sequence = last_applied + 1`, apply atomically with advancing `last_applied`;
+4. repeatedly drain consecutive buffered records;
+5. if `sequence > last_applied + 1`, persist it in the reorder buffer and record the missing range;
+6. trigger gap repair when age/bytes exceed policy.
 
-  Idempotent producer (enable.idempotence=true):
-    Broker tracks producer sequences, rejects out-of-order writes
-    Safe with max.in.flight=5. Recommended for ordering-sensitive workloads.
-```
+Persist future records before acknowledging them if the broker can otherwise discard the only copy available to this subscription. Buffer limits are in bytes and sequence span, not only item count. An attacker or corrupt producer can send a sequence far in the future and exhaust memory.
 
----
+Applying state-setting events by source version can make out-of-order arrival naturally safe: `set profile to version 19` is ignored after version 20. Delta events such as `increment by 3` still need their sequence or a commutative operation identity. Choose event semantics that reduce ordering dependence where possible.
 
-## Ordering Across Services
+## Gap detection and repair
 
-### The Fundamental Problem
+A gap may mean delayed delivery, filtered event, publisher abort, retention loss, corrupt segment, wrong routing key, or sequence allocation that permits holes. The sequence contract must say which gaps are valid.
 
-```
-Single-service: B crashes on E2 → restarts → replays from offset → works fine
+Repair sources include broker replay, authoritative event store, source snapshot plus suffix, or producer reconciliation API. A safe response is:
 
-Cross-service: B processes E1→F1, E2→F2, publishes to C
-  F2 arrives at C before F1 (different topic/partition) → OUT OF ORDER
+1. stop applying later events for the affected strict scope;
+2. classify whether the missing sequence should exist;
+3. fetch/replay the missing range from an authoritative source;
+4. verify event identity and epoch;
+5. apply the repaired prefix and drain the buffer;
+6. if the range is irrecoverable, rebuild state from a snapshot or escalate a domain-specific skip decision.
 
-No broker guarantees ordering across independent topics and services.
-```
+“Wait 30 seconds then continue” trades correctness for liveness and must be a named product policy. It is acceptable for best-effort telemetry, not silently for ledger transitions.
 
-### Sequence Numbers for Cross-Service Ordering
-
-```python
-# Publisher embeds monotonic sequence per aggregate
-def publish(self, aggregate_id, event):
-    version = self.store.increment_version(aggregate_id)
-    event['aggregate_version'] = version
-    broker.send(key=aggregate_id, value=event)
-
-# Consumer enforces version ordering
-def on_event(self, event):
-    version = event['aggregate_version']
-    last = self.store.get_last_version(event['aggregate_id'])
-
-    if version == last + 1:      # Expected → apply
-        self.apply(event)
-        self.store.set_last_version(event['aggregate_id'], version)
-    elif version <= last:         # Duplicate → skip
-        pass
-    else:                         # Future → buffer
-        self.buffer(event['aggregate_id'], event)
-```
+Gap age uses broker/source recorded time, not arbitrary client event time. Alert on the oldest blocked strict stream and total buffered bytes; aggregate out-of-order counts can hide one permanently wedged high-value entity.
 
-### Causal Ordering with Vector Clocks
+## Atomic batches and transactions
 
-```
-When events have causal dependencies across entities:
+Some domains require several records to appear together. Add `transaction_id`, ordered indices, count or end marker, and source commit position. Consumers buffer until the complete batch is durable, validate all members, then apply it atomically where their state store permits.
 
-  Event A (user created)  → clock {user_svc: 1}
-  Event B (order created) → clock {order_svc: 1, user_svc: 1}
+If a broker transaction spans partitions, consumers need a read-committed view and transaction markers replicated consistently. This only controls visibility inside the broker ecosystem. A database write or external API call still needs an end-to-end effect protocol.
 
-  Consumer receives B before A:
-    Missing user_svc:1 → buffer B → receive A → process A, then B
+Large transactions delay the stable/visible watermark and increase recovery buffers. Bound record count and bytes; prefer one domain event describing the committed fact over thousands of mechanically coupled messages when semantics permit.
 
-  Simpler alternative — causal tokens:
-    Event A produces token T1. Event B declares dependency: [T1].
-    Consumer checks: seen T1? No → buffer B.
+## Rebalancing and resharding
 
-Use only when partition-key ordering is insufficient (cross-entity chains).
-```
+Consumer rebalance is a handoff of an ordered prefix. The old owner stops fetching, completes or persists in-flight records, commits a checkpoint under membership generation `g`, and revokes. The new owner starts from that checkpoint under `g+1`. If the old owner crashes, overlap/replay can occur; generation-fenced checkpoints prevent it from later moving progress.
 
----
+Producer repartitioning is harder because moving a key between sequencers can interleave records. Use a cutover barrier:
 
-## Ordering vs Performance Tradeoffs
+1. publish assignment generation `m+1` with the key marked migrating;
+2. stop/redirect new writes through a coordinator;
+3. append a sealed `last_old_sequence` marker to the old partition;
+4. wait until it is durably replicated and consumers can observe it;
+5. initialize a new key epoch on the destination with a pointer to the barrier;
+6. route new writes only to the destination;
+7. retain translation metadata through all consumer replay windows.
 
-### Guarantee Spectrum
+Dual-producing without a barrier creates two incomparable total orders. Migration testing must include delayed producers holding the old map.
 
-| Guarantee | Throughput | Parallelism | When to Use |
-|-----------|-----------|-------------|-------------|
-| No ordering (fanout) | Maximum | Unlimited | Notifications, analytics, log shipping |
-| Partition ordering (per-key) | High | # partitions | Order lifecycle, user activity, device telemetry |
-| Total ordering (single partition) | Lowest | 1 consumer | Financial ledger, distributed log, changelog |
+## Capacity and cost model
 
-### Throughput (Approximate)
+Illustrative ordered stream:
 
-```
-Kafka (3 brokers, 100-byte msgs):
-  No ordering: ~2M msg/sec | Partition: ~1M | Total: ~50K
+- 120,000 events/s across 96 partitions;
+- average 700 bytes;
+- one hot entity emits 4,000 events/s;
+- consumer apply time averages 0.4 ms for ordinary keys and 1.1 ms for the hot entity;
+- 0.02% of arrivals are temporarily out of order and buffer for a measured mean 3 seconds;
+- three replicas.
 
-SQS:
-  Standard: ~120K msg/sec | FIFO per group: 300 (3000 batched)
+Average partition load is 1,250 events/s, but the hot key alone is 4,000/s. Its serial apply demand is `4,000 * 1.1 ms = 4.4 CPU-seconds/s`; a single sequential worker cannot sustain it regardless of fleet size. The domain must coalesce, make operations commutative/parallel, split the key, or reject load.
 
-The gap between partition and total ordering is 20x+.
-```
+Logical bandwidth is about 80 MiB/s and replicated append about 240 MiB/s before overhead. Reorder-buffer population by Little’s Law is approximately `120,000 * 0.0002 * 3 = 72` events on average, only about 50 KiB at 700 bytes. But a partition outage can buffer millions; size the hard bound from maximum gap-repair time and affected rate, not the normal average.
 
-### The 90% Rule
+If an 8-minute partition gap affects 1,250/s, its suffix is 600,000 events or about 401 MiB before indexing/overhead. Decide whether to buffer, pause upstream, or rebuild rather than discovering the memory limit during failure.
 
-```
-Most systems only need partition-level ordering.
+## Concrete failure trace: reshard without a barrier
 
-Ask: "Do events for DIFFERENT entities need relative ordering?"
+Key `customer-9` maps to partition 3. A new assignment moves it to partition 11. Producer A refreshes immediately and emits update B to partition 11; producer C retains the old map and emits earlier update A to partition 3. Consumers read partitions independently and apply B then A, reverting state. Both partitions are internally ordered and healthy.
 
-  Almost always no:
-    User A vs User B → independent
-    Order #100 vs #101 → independent
+Containment pauses the key and reconstructs source commit order. Repair replays from the authoritative source version. Prevention uses the migration barrier/new key epoch, rejects old assignment generations after cutover, and makes consumers version-gate state. Monitoring compares routing generation and detects the same key active under two partitions/epochs.
 
-  If truly yes:
-    Can you merge entities under a common aggregate key?
-    Can you use a single-writer pattern instead?
-    Only after exhausting alternatives: accept single-partition penalty.
-```
+## Operations and observability
 
----
+Track by ordered scope, partition, writer epoch, assignment, and consumer:
 
-## Reordering Recovery Patterns
+- append rate and sequence/epoch rejection;
+- missing ranges, oldest gap age, buffered events/bytes, and repair outcome;
+- last appended, replicated, delivered, and applied positions;
+- hot-key share and serial service demand;
+- producer routing-generation age and wrong-key/missing-key rejection;
+- consumer rebalance duration, overlapping ownership, and stale checkpoint attempts;
+- reshard barrier progress and keys active in multiple epochs;
+- batch completion latency and open transaction bytes.
 
-### Out-of-Order Detection
+Runbooks cover stale producer epoch, permanent gap, hot key, consumer checkpoint regression, incomplete batch, and reshard rollback. Logs retain event ID, scope, epoch, sequence, partition, assignment generation, source version, and trace correlation without exposing payloads.
 
-```
-Detection signals:
-  - Sequence jump: received 5, expected 3 (gap = [3, 4])
-  - Timestamp regression: event.ts < last_processed.ts
-  - Version skip: aggregate_version jumps from 2 to 5
-
-Monitoring:
-  Metric: ordering_gap_detected{topic, partition, consumer_group}
-  Alert when gap rate exceeds baseline
-```
+## Security and integrity
 
-### Buffering Strategy
+Only the authoritative sequencer may set epoch/sequence fields. Brokers reject publisher-supplied values outside its assigned producer session or domain stream. Sign or authenticate cross-region/source replication so an attacker cannot inject a higher epoch or enormous sequence to block a consumer.
 
-```
-Hold future events until gaps are filled:
+Limit key length, buffer span, batch size, dependency count, and causal metadata. Tenant boundaries apply to routing, diagnostic gap APIs, replay, and logs. Sequence numbers can reveal activity volume; treat them as metadata subject to disclosure policy.
 
-  last_processed=2, buffer={5: event5}
-  Receive 3 → process, Receive 4 → process, buffer has 5 → process
+## Verification strategy
 
-  Risk: buffer grows unbounded if events are truly lost
-  Mitigation: cap buffer size per key (e.g., 1000 events max)
-```
+- model-test sequence/epoch/reorder transitions against a simple ordered map;
+- differential-test optimized buffers and batch application with exhaustive sorted replay;
+- partition old/new leaders and prove stale epochs cannot append or checkpoint;
+- delay, duplicate, omit, and reorder events while checking each declared gap policy;
+- rebalance consumers at every checkpoint boundary;
+- reshard keys with delayed producers holding every old routing generation;
+- load-test real key skew and prove serial hot-key capacity assumptions;
+- fuzz huge sequence jumps, dependency lists, and incomplete batches.
 
-### Timeout and Proceed
+## Decision framework
 
-```
-After N seconds waiting for missing events, accept the gap:
-
-  Gap [3,4] detected → start 30s timer
-  Timeout expires → log gap, skip to 5, process buffered events
-
-  Late arrivals (3 or 4 after timeout):
-    Option A: Ignore (moved past them)
-    Option B: Apply retroactively if idempotent
-    Option C: Dead-letter queue for manual review
-```
+Choose the weakest relation that preserves the domain invariant:
 
-### Reprocessing from Source
+- no order for independent commutative facts;
+- version gating for state replacements;
+- per-key total order for aggregate transitions;
+- explicit predecessor/causal metadata for cross-stream dependencies;
+- global order only for truly global invariants.
 
-```
-When the source supports replay, request missing events:
+Then answer:
 
-  Kafka:  consumer.seek(partition, offset) — re-consume forward
-  SQS:    message returns after visibility timeout — automatic retry
-  Custom: GET /events?aggregate_id=X&after_version=2 — direct fetch
+1. Which events must be comparable and why?
+2. Who assigns sequence and epoch after source commit?
+3. What makes stale writers and checkpoints powerless?
+4. What is a valid gap, and which source repairs it?
+5. Can event semantics commute or version-gate instead of buffering?
+6. What is the hot-scope serial throughput ceiling?
+7. How does rebalancing/resharding establish one cutover pivot?
 
-Key principle: replay is only safe if consumers are idempotent.
-See 04-delivery-guarantees.md for idempotency patterns.
-```
+## References
 
----
-
-## Key Takeaways
-
-1. **Total ordering is expensive** - Avoid unless truly needed
-2. **Per-key ordering is usually enough** - Partition by entity ID
-3. **Same key → same partition → same consumer** - Ordering chain
-4. **Sequence numbers enable verification** - Detect gaps and duplicates
-5. **Buffer out-of-order messages** - With timeout for gaps
-6. **More partitions = more parallelism** - But per-partition ordering
-7. **Scaling affects key mapping** - Over-partition initially
-8. **Design for independent keys** - Maximize parallelism
+- [Leslie Lamport: Time, Clocks, and the Ordering of Events in a Distributed System](https://lamport.azurewebsites.net/pubs/time-clocks.pdf)
+- [Colin J. Fidge: Timestamps in Message-Passing Systems That Preserve the Partial Ordering](https://doi.org/10.5555/647342.724880)
+- [Apache Kafka: Message Delivery and Ordering](https://kafka.apache.org/documentation/#semantics)
+- [Apache Kafka Protocol: Control Plane and Leader Epochs](https://kafka.apache.org/protocol.html)
+- [CloudEvents Specification](https://github.com/cloudevents/spec)
