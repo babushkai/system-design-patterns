@@ -1,6 +1,6 @@
 # CockroachDB (SIGMOD 2020): Evidence-First Paper Analysis
 
-CockroachDB's 2020 paper shows how to assemble a distributed SQL database from range-level Raft, MVCC timestamps, transaction records, leases, and a distribution-aware optimizer. The difficult part is not any single mechanism. It is preserving serializable SQL semantics while every table and index is encoded into independently replicated key ranges that can move and fail.
+CockroachDB's 2020 design assembles range-level Raft, MVCC timestamps, transaction records, leases, and a distribution-aware optimizer. The challenge is preserving serializable SQL semantics while every table and index is encoded across independently replicated key ranges that can move and fail.
 
 ## Publication identity and frozen version
 
@@ -9,7 +9,7 @@ CockroachDB's 2020 paper shows how to assemble a distributed SQL database from r
 - **Venue and version:** ACM SIGMOD International Conference on Management of Data, 2020, pages 1493–1509
 - **Implementation evaluated:** CockroachDB v19.2.2 unless noted; the large TPC-C comparison explicitly used v19.2.0
 
-This is not current CockroachDB documentation. Transaction locking, storage engines, multi-region SQL, changefeeds, serverless operation, and many optimizer features evolved later. The chapter therefore uses the 2020 paper's names and guarantees only.
+Scope: the paper's 2020 names and guarantees. Transaction locking, storage engines, multi-region SQL, changefeeds, serverless operation, and optimizer features evolved later.
 
 See [Distributed Transactions](../02-distributed-databases/07-distributed-transactions.md), [Consensus](../02-distributed-databases/08-consensus-algorithms.md), and [Partitioning](../02-distributed-databases/05-partitioning-strategies.md) for the isolated concepts.
 

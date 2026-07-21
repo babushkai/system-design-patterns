@@ -919,9 +919,9 @@ Key details in this example:
 
 ---
 
-## ACID in Practice
+## Verify the Deployed Contract
 
-Version numbers and defaults age quickly. This table records durable distinctions to verify, not a substitute for the documentation of the deployed release.
+Verify the deployed release and settings. This table lists contract dimensions, not universal defaults.
 
 | Database | Common Default Isolation | Durability Mechanism | Verify Before Claiming a Guarantee |
 |----------|--------------------------|----------------------|------------------------------------|

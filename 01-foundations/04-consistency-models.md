@@ -2,7 +2,7 @@
 
 A consistency model is a contract over histories: given concurrent invocations, responses, failures, and replication, which results may a client observe? “Strong,” “eventual,” and a database consistency-level name are not adequate specifications. The contract must name its scope, ordering relation, failure outcome, and whether it covers one object, a session, or a transaction.
 
-This chapter owns client-observable models—linearizable, sequential, causal, PRAM/session, bounded-staleness, and eventual/convergent behavior—their composition, mechanisms, and verification. [CAP Theorem](./03-cap-theorem.md) applies linearizability to one partitioned read/write object. [ACID Transactions](./01-acid-transactions.md) owns database isolation and invariant enforcement; [Conflict Resolution](../02-distributed-databases/04-conflict-resolution.md) owns merge algebra and CRDT mechanics.
+Scope: client-observable models—linearizable, sequential, causal, PRAM/session, bounded-staleness, and eventual/convergent behavior—their composition, mechanisms, and verification. [CAP Theorem](./03-cap-theorem.md) applies linearizability to one partitioned read/write object. [ACID Transactions](./01-acid-transactions.md) owns database isolation and invariant enforcement; [Conflict Resolution](../02-distributed-databases/04-conflict-resolution.md) owns merge algebra and CRDT mechanics.
 
 ## Start with histories, not product labels
 

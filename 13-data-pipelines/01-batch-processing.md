@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-A batch pipeline transforms a **bounded, versioned input** into a **new output generation**. Its correctness does not come from waiting until midnight; it comes from pinning the input boundary, making task attempts repeatable, isolating their files, and publishing output once through a commit protocol. Performance is usually governed by wide dependencies: shuffle volume, hot partitions, spill I/O, and the slowest task—not by the average worker.
+A batch pipeline transforms a **bounded, versioned input** into a **new output generation**. Correctness requires a pinned input boundary, repeatable task attempts, attempt-isolated files, and one commit protocol for output publication. Performance is governed by wide dependencies—shuffle volume, hot partitions, spill I/O, and the slowest task—not the average worker.
 
 Use batch execution when the input can be bounded and recomputation fits the freshness objective. Use continuous execution when waiting for the bound is too slow. Some platforms use both, but that should mean one declared result contract with two operational paths, not two implementations whose business logic quietly diverges.
 
@@ -31,7 +31,7 @@ The first four fields identify the logical computation. The attempt identifies p
 
 ### Invariants
 
-A production batch design should be able to defend these statements:
+Required invariants:
 
 1. Every committed result was computed from one recorded input boundary.
 2. A failed or speculative attempt cannot become visible independently.
@@ -40,7 +40,7 @@ A production batch design should be able to defend these statements:
 5. Reprocessing does not destroy the currently served generation.
 6. Data quality failure prevents publication, while cleanup failure does not revoke an already committed result.
 
-These are stronger and more portable than “the engine is exactly once.”
+These invariants are more precise than “the engine is exactly once.”
 
 ---
 

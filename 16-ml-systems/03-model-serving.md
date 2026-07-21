@@ -2,19 +2,19 @@
 
 ## TL;DR
 
-Model serving is the discipline of running a trained model as a production service whose request handler is unusually expensive: a single prediction may consume orders of magnitude more compute than an ordinary web request, often on hardware that costs dollars per hour, and the model must be *loaded* into accelerator memory before it can serve anything at all. This reframes serving away from data science and toward systems design. The defining tension is **latency versus throughput**: the techniques that keep expensive accelerators busy — batching, queueing — are the same techniques that inflate the tail of the latency distribution. A good serving system is one that navigates that tension deliberately: it chooses a serving topology, batches on a controlled wait, autoscales on the signal that actually predicts saturation, keeps replicas warm because cold starts are slow, and degrades gracefully instead of timing out. Everything below is a consequence of treating inference as a latency-bounded, throughput-constrained, hardware-bound service rather than a function call.
+Model serving runs a trained model as a latency-bounded, throughput-constrained service over expensive compute with the artifact loaded in memory. Batching and queueing can raise accelerator efficiency but consume tail-latency budget; topology, admission, autoscaling, warm capacity, and degradation policy choose the operating point.
 
 Serving is a production service first, so the general patterns apply directly: [capacity planning](../01-foundations/10-capacity-planning.md) for the latency budget, [retries, timeouts, and hedging](../06-scaling/10-retries-timeouts-hedging.md) for tail control, [deployment strategies](../15-deployment/01-deployment-strategies.md) for canary and blue-green rollouts, and [autoscaling](../06-scaling/08-auto-scaling.md) for capacity. The LLM regime — continuous batching, KV caches, the prefill/decode split — is its own world, covered in depth in [LLM Infrastructure](../17-llm-systems/05-llm-infrastructure.md).
 
 ---
 
-## The Central Tension: Latency Versus Throughput
+## The Latency–Throughput Frontier
 
-Almost every interesting decision in model serving is a point on a single trade-off curve between latency and throughput, and understanding why this trade-off is *fundamental* — not an implementation detail — is the key to the whole topic.
+Accelerators are optimized for parallel work. Batching amortizes weight traffic and launch overhead, but the gain depends on model and shape, eventually saturates memory or compute, and may require queue wait. A batch of thirty-two does not promise thirty-two times the work at unchanged latency.
 
-The reason it is fundamental is that modern accelerators are built for parallel work. A single small request may leave arithmetic units or memory bandwidth underused; batching can amortize weight traffic and launch overhead while exposing larger matrix operations. The gain is model- and shape-dependent and eventually saturates memory or compute, so a batch of thirty-two is not promised to deliver thirty-two times the work at the same latency. There are still two distinct objectives. **Latency** is how long one request waits. **Throughput** is how many valid requests the system finishes per second. They are in tension whenever raising achieved batch size requires queueing or larger batches increase service time.
+**Latency** measures end-to-end request completion time; **throughput** measures valid completions per second. Raising achieved batch size trades one for the other whenever queueing or larger batches increase service time.
 
-The engineering implication is that you cannot tune a serving system without first deciding which number the product actually cares about. A fraud-authorization call that blocks a checkout cares about p99 latency and will pay for idle hardware to get it. An overnight batch that scores every user's churn risk cares only about total cost and will happily run enormous batches at terrible per-request latency. Most real systems sit between these poles, and the entire job of serving infrastructure is to give an operator a *knob* on that curve rather than an accident.
+A checkout fraud call may buy idle capacity to protect p99 latency; an overnight scoring job may maximize cost-efficient throughput. Benchmark the complete arrival and shape distribution, then select the operating point from the product SLO.
 
 ---
 

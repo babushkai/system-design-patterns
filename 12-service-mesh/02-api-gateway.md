@@ -8,13 +8,13 @@ The hard design questions are dependency behavior and blast radius. What happens
 
 Keep gateway configuration immutable and revisioned, make stage ordering explicit, enforce request normalization before security decisions, and attach every upstream effect to the authenticated identity, route revision, deadline, and retry budget that governed it.
 
-This chapter owns edge mediation, route compilation, dependency failure behavior, and bounded request composition. It cross-links rather than duplicates [Authentication Systems](../10-security/01-authentication-fundamentals.md), [OAuth 2.0 and OpenID Connect](../10-security/02-oauth2-openid-connect.md), [Authorization Patterns](../10-security/07-authorization-patterns.md), [API Security](../10-security/04-api-security.md), [Rate Limiting](../06-scaling/05-rate-limiting.md), and [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md).
+Scope: edge mediation, route compilation, dependency failure, and bounded request composition. [Authentication Systems](../10-security/01-authentication-fundamentals.md), [OAuth 2.0 and OpenID Connect](../10-security/02-oauth2-openid-connect.md), [Authorization Patterns](../10-security/07-authorization-patterns.md), [API Security](../10-security/04-api-security.md), [Rate Limiting](../06-scaling/05-rate-limiting.md), and [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md) cover the linked mechanisms.
 
 ---
 
 ## System Boundary and Invariants
 
-The gateway owns the public transport contract and maps it to internal destinations. A service still owns its domain authorization and invariants. Passing the gateway does not mean “trusted forever.”
+The gateway maps the public transport contract to internal destinations; each service retains its domain authorization and invariants. Gateway admission does not confer downstream trust.
 
 ~~~mermaid
 flowchart LR

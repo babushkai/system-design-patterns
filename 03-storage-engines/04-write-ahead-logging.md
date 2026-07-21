@@ -2,13 +2,13 @@
 
 ## TL;DR
 
-Write-ahead logging is the trick that lets a database promise durability without paying random I/O for every commit: describe the change in an append-only log, fsync that, and acknowledge the client — the actual data pages can be updated in memory now and written to disk whenever convenient. One sequential append replaces scattered page writes on the commit path, and after a crash the log replays to reconstruct everything that was acknowledged. That one idea carries a lot of machinery: log sequence numbers make replay idempotent, ARIES structures recovery into analysis/redo/undo, checkpoints bound how much log must replay, and group commit amortizes the fsync so throughput isn't capped at one commit per disk flush. It also carries sharp edges the textbook omits: page writes aren't atomic (torn pages need full-page images or a doublewrite buffer), fsync itself can lie (volatile caches, the fsyncgate error-semantics bug), and the same log doubles as the replication feed — which is how an abandoned replication slot fills your disk and takes the database down. This chapter builds the protocol from the commit path up, then covers recovery, the performance engineering, and the failure modes.
+Write-ahead logging makes durability sequential: append a change record, persist the log, acknowledge, and write scattered data pages later. LSNs make replay idempotent; ARIES separates analysis, redo, and undo; checkpoints bound recovery; group commit amortizes flushes. Correctness still depends on torn-page defenses, honest flush semantics, and bounded log retention for replication and recovery. An abandoned replication slot can pin WAL until disk exhaustion; retention needs explicit ownership, lag budgets, alerts, and a tested emergency policy.
 
 ---
 
 ## The Problem: Durability Without Random I/O
 
-A committed transaction must survive a crash. The naive way to guarantee that is to write every modified data page to disk before acknowledging the commit — but a single transaction can dirty pages scattered all over a multi-gigabyte file, and each one is a random write. Committing would cost milliseconds on an HDD and would hammer even NVMe with tiny scattered writes. The other naive option — update pages in memory and flush later — is fast and loses acknowledged data whenever the machine dies at the wrong moment.
+A committed transaction must survive a crash. Persisting every modified page before acknowledgement turns each commit into scattered I/O; flushing memory later loses acknowledged data. WAL separates durable description from deferred page application.
 
 The WAL resolves the dilemma by separating *describing* a change from *applying* it:
 
@@ -28,9 +28,9 @@ written to disk before the log records describing its changes are.
 Log first, data second — always.
 ```
 
-What makes this profitable is the shape of the I/O. The log is a single append-only stream: every commit writes to the same place, sequentially, which is the pattern every storage device handles best. All the randomness — which pages changed, where they live — is deferred to background writes that can be batched, sorted, and scheduled off the critical path. The same insight drives the [LSM tree](./02-lsm-trees.md); indeed an LSM is roughly "what if the log were the database," while a WAL-protected [B-tree](./01-b-trees.md) keeps the update-in-place structure and uses the log only as insurance.
+One sequential append replaces scattered commit-path writes; background work can batch and schedule page I/O. [LSM trees](./02-lsm-trees.md) extend this append-and-merge approach to primary storage, while WAL-protected [B-trees](./01-b-trees.md) retain update-in-place pages.
 
-The price is that every change is written twice — once as a log record, once eventually as a page — which is why the WAL is a major contributor to the write amplification discussed in the B-tree chapter, and why databases fight to keep log records small.
+The tradeoff is double writing: once to the log and later to the data page. WAL therefore contributes directly to the write amplification described in [B-Trees](./01-b-trees.md).
 
 ---
 
@@ -48,7 +48,7 @@ Log:                                 Page 5 on disk:
                                         LSN 102 vs page 8's LSN → apply if newer
 ```
 
-The comparison `record_lsn > page_lsn` turns replay into an idempotent operation: run recovery once, twice, or crash halfway through recovery and run it again — the pages converge to the same state. LSNs also serve as the coordinate system for everything else in this chapter: checkpoints record "recovery may start at LSN X," replication replicas report "I have applied through LSN Y," and log truncation asks "what is the smallest LSN anyone still needs?"
+The comparison `record_lsn > page_lsn` makes replay idempotent, including recovery restarted after another crash. LSNs also coordinate checkpoints, replica apply progress, and the oldest log position still needed for truncation.
 
 ---
 
@@ -60,7 +60,7 @@ There is a spectrum of what a log record can say, and the choice trades log volu
 
 **Logical logging** records operations: "execute `UPDATE accounts SET balance = balance - 100 WHERE id = 5`." Records are tiny, but replay must re-execute the operation deterministically — same results, same order — which is fragile in the presence of concurrency, non-determinism (`now()`, random), and code changes between versions.
 
-**Physiological logging** — physical *to* a page, logical *within* it: "on page 5, insert key `abc` at slot 3." This is what real engines use. The record names the page (so replay needs no query planning and can be parallelized by page), but describes the change compactly as an operation on that page's internal structure. Its one assumption — that the page's prior state is intact when the record replays — is exactly the assumption torn pages violate, which is why the torn-page defenses later in this chapter exist.
+**Physiological logging** is physical *to* a page and logical *within* it: "on page 5, insert key `abc` at slot 3." Page-oriented transactional engines commonly use it because replay needs no query planning and can be parallelized by page, while records remain compact. It assumes the prior page state is intact; torn-page defenses protect that assumption.
 
 ---
 

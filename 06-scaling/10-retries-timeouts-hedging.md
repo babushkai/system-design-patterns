@@ -477,7 +477,3 @@ Retries buy another sample from the failure distribution. Hedge only when a seco
 - gRPC, [A6: Client Retries](https://github.com/grpc/proposal/blob/master/A6-client-retries.md), including hedging, retry throttling, and server pushback.
 - Google SRE, [Addressing Cascading Failures](https://sre.google/sre-book/addressing-cascading-failures/).
 - Nathan Bronson et al., [Metastable Failures in Distributed Systems](https://sigops.org/s/conferences/hotos/2021/papers/hotos21-s11-bronson.pdf).
-
----
-
-**Previous:** [Multi-Region Architecture](./09-multi-region-architecture.md) supplies the regional routing, authority, and failure-capacity context in which attempt policies run.

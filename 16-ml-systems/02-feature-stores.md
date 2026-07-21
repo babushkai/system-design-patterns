@@ -2,19 +2,19 @@
 
 ## TL;DR
 
-A feature store is not merely a database for machine-learning columns; it is a *temporal consistency system* that maintains two physical projections of one logical feature contract. An offline store optimizes throughput and history so training can reconstruct past decisions; an online store optimizes bounded tail latency so serving can read current values. The feature store cannot magically guarantee byte-identical values across engines. Its job is to define what equivalence means — semantics, event-time cutoff, servable-time cutoff, defaults, correction policy, and tolerated numeric error — then make divergence measurable and recoverable. Point-in-time joins, materialization, freshness SLOs, versioning, and the registry all protect that contract.
+A feature store maintains offline and online projections of one versioned temporal feature contract. The projections may differ physically but must agree on event-time and servable-time cutoffs, defaults, corrections, and numeric tolerance. Point-in-time joins, materialization, freshness SLOs, versioning, and reconciliation enforce that agreement.
 
 ---
 
 ## The Problem a Feature Store Solves: Training/Serving Skew
 
-[ML System Fundamentals](./01-ml-system-fundamentals.md) defines training/serving skew and why it silently degrades a model. This chapter owns the feature-platform mechanism that constrains it: one logical feature contract is materialized into an offline historical projection and an online low-latency projection. Those projections need not be byte-identical, but they must agree on event-time semantics, servability, defaults, correction history, and numeric tolerance. The feature store makes that agreement explicit, versioned, and measurable; [Model Monitoring](./04-model-monitoring.md) owns the sampled parity audit after serving.
+[ML System Fundamentals](./01-ml-system-fundamentals.md) defines training/serving skew. A feature platform constrains it by materializing one logical contract into an offline historical projection and an online low-latency projection. [Model Monitoring](./04-model-monitoring.md) covers sampled parity audits after serving.
 
 ---
 
 ## Two Materialized Projections, One Logical Contract
 
-The defining structural fact about a feature store is that it is a *dual-store* system, and the two stores cannot be the same engine because they are optimized for contradictory access patterns.
+Feature platforms commonly use different engines for their two projections because training and serving optimize for different access patterns.
 
 The **offline store** lives in a warehouse or lake — BigQuery, Snowflake, Redshift, or Parquet/Delta on object storage queried by Spark. It is optimized for *throughput and completeness*: it must hold the full history of every feature value so that a training job can reconstruct what any feature looked like at any past moment, and it must support large columnar scans and joins over billions of rows. Latency is irrelevant here; a training read that takes ten minutes is fine. Cost-per-byte and scan throughput dominate.
 
@@ -345,7 +345,7 @@ The buying decision is therefore an ownership decision. An open implementation c
 
 The characteristic failures of a feature store are direct consequences of its dual-store structure, and naming them is most of preventing them.
 
-**Projection divergence** means the online and historical projections no longer satisfy the same feature contract, even when both stores are healthy. Compare immutable update generations and sampled as-served values, then repair the lagging projection from the update log. The general skew hazard is foundational in [ML System Fundamentals](./01-ml-system-fundamentals.md); this chapter's responsibility is to make feature-version, valid-time, servable-time, and correction semantics reconcilable.
+**Projection divergence** means the online and historical projections no longer satisfy the same feature contract, even when both stores are healthy. Compare immutable update generations and sampled as-served values, then repair the lagging projection from the update log. The contract must make feature version, valid time, servable time, and correction semantics reconcilable.
 
 **Stale online features** occur when the online store is healthy and fast but the materialization that feeds it has silently stopped. Reads succeed; the values are old. The defense is a freshness SLO with per-feature-group age monitoring that fails closed or falls back when the budget is exceeded.
 

@@ -6,9 +6,9 @@ FinOps is a measurement and decision system for technology value, not a monthly 
 
 Unit economics divides an allocated cost population by a useful output from the same scope and interval. A falling total bill can hide worse unit cost; a rising bill can be healthy growth. Forecasts combine workload drivers, unit costs, fixed/committed capacity, seasonality, and planned architectural steps with uncertainty—not a straight line through invoice totals.
 
-Optimization decisions compare net present savings with engineering effort, migration cost, reliability/performance risk, reversibility, and opportunity cost. This chapter uses explicit methodology and no vendor price assumptions.
+Optimization decisions compare net present savings with engineering effort, migration cost, reliability/performance risk, reversibility, and opportunity cost. Examples use no vendor-price assumptions.
 
-The shared telemetry control/data plane is introduced in [Distributed Tracing and Telemetry Pipelines](./01-distributed-tracing.md). [Capacity Planning](../01-foundations/10-capacity-planning.md) owns technical demand sizing, [SLOs](./05-slos-error-budgets.md) owns reliability policy, and this chapter owns cost normalization, allocation, forecasting, and unit economics.
+Shared plane: [Distributed Tracing and Telemetry Pipelines](./01-distributed-tracing.md). Scope here: cost normalization, allocation, forecasting, and unit economics; [Capacity Planning](../01-foundations/10-capacity-planning.md) covers demand sizing and [SLOs](./05-slos-error-budgets.md) reliability policy.
 
 ---
 

@@ -2,19 +2,19 @@
 
 ## TL;DR
 
-A DAG orchestrator turns a versioned dependency graph into durable task instances whose outputs can be published, retried, backfilled, and audited. The graph is only the static plan. Correctness lives in the run identity, logical data interval, task-attempt state machine, artifact commit protocol, and rules for partial replay. A scheduler may execute independent vertices concurrently, but it must not confuse “upstream process exited successfully” with “the expected partition is complete and valid.” Backfills are new production workloads pinned to code, input, and policy versions; they must not silently overwrite newer outputs or consume unbounded shared capacity. Dynamic mapping can expand one graph node into millions of task instances, making scheduler metadata the bottleneck. Use DAG orchestration for bounded computations with explicit dependencies and materialized outputs. Use durable execution for long-lived entity state and general stream processors for unbounded event-time computation.
+A DAG orchestrator materializes a versioned dependency graph as durable task instances. Correctness depends on run and data-interval identity, dependency readiness, task-attempt state, and atomic artifact publication—not process exit alone. Backfills are version-pinned production workloads that must not overwrite newer outputs; dynamic mapping must stay within scheduler-metadata and capacity budgets. Use DAGs for bounded dependency graphs, durable execution for long-lived entity state, and stream processors for unbounded event time.
 
 ---
 
 ## Scope: Bounded Graph Runs and Published Artifacts
 
-This chapter owns graph compilation, run/task identity, dependency readiness, retries and partial reruns, data intervals, backfills, and artifact publication.
+Graph orchestration covers compilation, run/task identity, dependency readiness, retries and partial reruns, data intervals, backfills, and artifact publication.
 
-- [Batch Processing](../13-data-pipelines/01-batch-processing.md) owns execution-engine internals such as shuffle, stages, and worker-side data processing.
-- [Stream Processing](../13-data-pipelines/02-stream-processing.md) owns unbounded event time, watermarks, state, and checkpointing.
-- [Durable Execution](04-durable-execution-workflow-engines.md) owns replayed per-entity histories, durable timers, and code determinism.
-- [Distributed Scheduling and Timers](03-distributed-cron-scheduling.md) owns trigger uniqueness and durable time-based firing.
-- [Priority, Fairness, and Backpressure](07-priority-fairness-backpressure.md) owns multi-tenant allocation and admission.
+- [Batch Processing](../13-data-pipelines/01-batch-processing.md) covers shuffle, stages, and worker-side data processing.
+- [Stream Processing](../13-data-pipelines/02-stream-processing.md) covers unbounded event time, watermarks, state, and checkpointing.
+- [Durable Execution](04-durable-execution-workflow-engines.md) covers replayed per-entity histories, durable timers, and code determinism.
+- [Distributed Scheduling and Timers](03-distributed-cron-scheduling.md) covers trigger uniqueness and durable time-based firing.
+- [Priority, Fairness, and Backpressure](07-priority-fairness-backpressure.md) covers multi-tenant allocation and admission.
 
 A DAG can invoke a stream job or durable workflow, but it does not inherit those systems' semantics. The task boundary must state what “submitted,” “running,” and “complete” mean for the external system.
 

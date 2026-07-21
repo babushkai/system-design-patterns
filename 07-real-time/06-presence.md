@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-Presence is not a boolean stored on a user row. It is a viewer-specific projection derived from leased device sessions, recent activity, explicit availability, room membership, privacy policy, and regional evidence. A user may have a phone, browser, and call session alive at once; one disconnect must remove only its own session. Heartbeats renew session evidence, expiration bounds stale-online time, and a versioned aggregator emits changes only when the derived view changes. Production systems need reconnect-safe session epochs, snapshot-plus-delta subscriptions, high-degree fan-out control, privacy enforcement before delivery, and explicit behavior when regions or clocks disagree. "Offline" means the service has no sufficiently recent live evidence, not that it proved the person is absent.
+Presence is a viewer-specific projection, not a boolean on a user row. It derives from leased device sessions, recent activity, explicit availability, room membership, privacy policy, and regional evidence. A phone, browser, and call session may all be live; one disconnect removes only its session. Heartbeats renew evidence, expiration bounds stale-online time, and a versioned aggregator emits only derived-view changes. The system also needs reconnect-safe session epochs, snapshot-plus-delta subscriptions, high-degree fan-out control, pre-delivery privacy enforcement, and defined behavior when regions or clocks disagree. "Offline" means no sufficiently recent live evidence, not proof that the person is absent.
 
 ---
 

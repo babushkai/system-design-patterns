@@ -1,8 +1,8 @@
 # Database Schema Migrations
 
-A database schema migration changes the contract shared by stored data, application binaries, database engines, replicas, change streams, and offline consumers. The production risk is not merely whether the DDL statement succeeds. It is whether old and new readers/writers remain compatible during rolling deployment, whether metadata locks and rewrite work stay inside the serving envelope, whether historical rows converge without stale overwrite, and whether rollback still has a lossless representation.
+A database schema migration changes the contract shared by stored data, application binaries, database engines, replicas, change streams, and offline consumers. Safety requires mixed-version compatibility, bounded metadata locks and rewrite work, backfills that cannot overwrite newer rows, and a lossless rollback representation.
 
-This chapter owns **schema compatibility, engine DDL/lock mechanics, constraints and indexes, in-database representation changes, backfills, and contract cleanup**. [Service and Platform Migration](./06-migration-strategies.md) owns authority transfer between systems, strangler seams, cross-system shadowing, and general migration ledgers. [Change Data Capture](../13-data-pipelines/04-change-data-capture.md) owns log extraction and downstream delivery semantics.
+Schema evolution covers compatibility, engine DDL/lock mechanics, constraints and indexes, in-database representation changes, backfills, and contract cleanup. [Service and Platform Migration](./06-migration-strategies.md) covers authority transfer, strangler seams, cross-system shadowing, and migration ledgers; [Change Data Capture](../13-data-pipelines/04-change-data-capture.md) covers log extraction and downstream delivery.
 
 ## Primary Evidence and Scope
 
@@ -143,7 +143,7 @@ An additive statement can still block or rewrite. Engine/version/table layout de
 
 When old and new fields live in one database transaction, update both atomically and define one as authoritative. Database triggers can centralize coverage but add hidden write cost, recursion/order concerns, and deployment coupling. Application dual-write is explicit but every writer—including admin tools and jobs—must participate.
 
-For cross-system writes, prefer one authoritative commit plus outbox/CDC and use the general [migration protocol](./06-migration-strategies.md). This chapter stays within schema evolution of one logical database contract.
+For cross-system writes, prefer one authoritative commit plus outbox/CDC and use the general [migration protocol](./06-migration-strategies.md). The schema protocol here assumes one logical database contract.
 
 ### Backfill historical rows
 

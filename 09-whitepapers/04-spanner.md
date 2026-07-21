@@ -11,7 +11,7 @@ Spanner's distinguishing contribution is not merely “a database synchronized b
 
 The analysis below targets the OSDI 2012 design. Where the expanded paper provides clearer organization, it is identified as the 2013 version. Neither paper is current Cloud Spanner product documentation.
 
-The component concepts are covered in [Distributed Transactions](../02-distributed-databases/07-distributed-transactions.md), [Consensus](../02-distributed-databases/08-consensus-algorithms.md), and [Distributed Time](../01-foundations/05-distributed-time.md). This chapter focuses on their joint proof obligation.
+[Distributed Transactions](../02-distributed-databases/07-distributed-transactions.md), [Consensus](../02-distributed-databases/08-consensus-algorithms.md), and [Distributed Time](../01-foundations/05-distributed-time.md) cover the component concepts. Scope here: their joint proof obligation.
 
 ## Problem and service contract
 

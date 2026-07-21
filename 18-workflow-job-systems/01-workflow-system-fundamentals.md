@@ -2,7 +2,7 @@
 
 A workflow system turns a request to perform work into durable, inspectable execution state that can outlive every process involved. Its first promise is not “the function ran.” It is that accepted work has an identity, an authority, a recoverable next action, and a declared outcome when workers, networks, control planes, or dependencies fail.
 
-This chapter owns **workflow-system taxonomy, workload and durability contracts, execution identity, common control/execution-plane boundaries, durable acceptance, mechanism selection, and system-level invariants**. [Background Jobs and Worker Pools](./02-background-jobs-worker-pools.md) owns queue/worker claims and job execution. [Distributed Scheduling](./03-distributed-cron-scheduling.md) owns clock-driven occurrence materialization. [Durable Execution](./04-durable-execution-workflow-engines.md) owns event-history replay and deterministic orchestration. [DAG Orchestration](./05-dag-orchestration.md) owns graph dependency scheduling. [Effect Commit Protocols](./06-retry-idempotency-compensation.md) owns retries, idempotent effects, and compensation. [Leases and Recovery](./08-leases-heartbeats-recovery.md) owns lease timing, heartbeats, and stale-worker fencing. [Workflow Observability](./09-workflow-observability-replay.md) owns operator views and forensic replay.
+Workflow fundamentals define workload and durability contracts, execution identity, common control/execution-plane boundaries, durable acceptance, mechanism selection, and system invariants. [Background Jobs and Worker Pools](./02-background-jobs-worker-pools.md) covers queue claims and execution; [Distributed Scheduling](./03-distributed-cron-scheduling.md) covers occurrence materialization; [Durable Execution](./04-durable-execution-workflow-engines.md) covers history replay; [DAG Orchestration](./05-dag-orchestration.md) covers graph scheduling; [Effect Commit Protocols](./06-retry-idempotency-compensation.md) covers external effects; [Leases and Recovery](./08-leases-heartbeats-recovery.md) covers attempt authority; [Workflow Observability](./09-workflow-observability-replay.md) covers operator views and forensic replay.
 
 ## Primary Evidence and Scope
 
@@ -172,7 +172,7 @@ external effect committed
         -> another attempt may run
 ```
 
-This chapter records that boundary in the workload contract. Stable effect identity, dedup retention, reconciliation, reservation, and compensation are owned by [Effect Commit Protocols](./06-retry-idempotency-compensation.md).
+The workload contract records that boundary. [Effect Commit Protocols](./06-retry-idempotency-compensation.md) covers stable effect identity, dedup retention, reconciliation, reservation, and compensation.
 
 Likewise, a lease decides when another worker may try; it cannot prove the first worker stopped. Detailed renewal/fencing belongs to [Leases and Recovery](./08-leases-heartbeats-recovery.md).
 

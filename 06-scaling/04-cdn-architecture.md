@@ -2,15 +2,9 @@
 
 A content delivery network is a globally distributed consistency and overload-control system. It must route a client to a healthy edge, decide whether a stored representation is reusable for that exact request, coordinate fills and invalidations across thousands of failure domains, and prevent a cold or malicious workload from collapsing the origin.
 
-This chapter owns the CDN boundary: edge data/control planes, client-to-edge routing, cache identity, surrogate invalidation, tiering, origin protection, and edge-specific failure recovery. General cache-aside/write-through patterns and application cache semantics belong to [cache strategies](../04-caching/01-cache-strategies.md); general invalidation trade-offs belong to [cache invalidation](../04-caching/02-cache-invalidation.md).
+CDN design spans edge data/control planes, client-to-edge routing, cache identity, surrogate invalidation, tiering, origin protection, and edge recovery. [Cache Strategies](../04-caching/01-cache-strategies.md) covers application policy; [Cache Invalidation](../04-caching/02-cache-invalidation.md) covers general coherence trade-offs.
 
-Evidence labels distinguish standards and published systems from a reusable design:
-
-- **Documented** cites a dated RFC, primary paper, official engineering article, or versioned documentation.
-- **Inference** derives a consequence without attributing an undisclosed design to a provider.
-- **Reference design** specifies an implementable CDN architecture rather than claiming one vendor uses the whole composite.
-
-Unless a paragraph is explicitly marked **Documented** or **Inference**, its normative architecture and operational guidance belongs to the **Reference design**.
+Evidence labels distinguish **Documented** claims backed by dated primary or official sources, **Inference** derived without asserting a private implementation, and unmarked **Reference design** guidance that is reusable rather than provider-attributed.
 
 ## Workload and delivery contract
 

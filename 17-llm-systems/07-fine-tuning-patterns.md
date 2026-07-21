@@ -47,7 +47,7 @@ A tuned checkpoint cannot be qualified independently of its template and serving
 
 ### Supervised Fine-Tuning (SFT)
 
-The workhorse: continue training the model on `(input → desired output)` pairs with the standard language-modeling loss (masking the loss on the prompt tokens so only the completion is learned). Everything else in this chapter is a variation on where the pairs come from and which parameters move.
+Supervised fine-tuning continues training on `(input → desired output)` pairs with prompt-token loss masked so only the completion is learned. Subsequent methods differ in pair construction and which parameters move.
 
 ### LoRA and QLoRA: Parameter-Efficient Mechanics
 

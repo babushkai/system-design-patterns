@@ -2,17 +2,15 @@
 
 ## TL;DR
 
-A machine learning system is unlike ordinary rule-driven software in one decisive way: a material part of its behavior is learned from *data*, not specified only by code and configuration. The model itself is a small box; most operational risk lives in the system around it — data collection, feature extraction, policy, serving infrastructure, monitoring, and the feedback loops that reshape future training data. This is the central thesis of Sculley et al.'s *Hidden Technical Debt in Machine Learning Systems* (2015), and it reframes the discipline: you are building a decision system whose empirical behavior is statistical, whose training objective is only a proxy for product intent, and whose dependencies change underneath it. Everything in this section — feature stores, dataset versioning, evaluation, serving, monitoring, training pipelines, label systems, registries, capacity planning, experimentation, and governance — exists to make that decision system controllable.
+An ML system learns material behavior from data rather than code and configuration alone. Operational risk therefore concentrates around the model: data collection, feature extraction, policy, serving, monitoring, and feedback loops. The deployable unit is a statistical decision system whose training objective proxies product intent and whose dependencies evolve.
 
 ---
 
 ## An ML System Is Defined by Data, Not Just Code
 
-In rule-driven software, behavior is determined by code, configuration, inputs, and state, but the decision rule itself is explicit. A function that returns `a + b` exposes its rule for inspection; engineers can test it against a written specification and reason locally about a change. The production system may still be nondeterministic or stateful, but its intended mapping is authored rather than inferred.
+In rule-driven software, the intended decision rule is authored in code and configuration. The system may still be stateful or nondeterministic, but engineers can inspect the mapping and test it against a written contract.
 
-An ML system breaks every part of that contract. The behavior of a fraud classifier is not written in its code — the code is a generic training procedure that could just as easily produce a recommender or an image classifier. The behavior is *learned* from data, which means the dataset is the real specification, and that specification is implicit, enormous, and constantly shifting. Two teams can run identical code on different data and ship systems that behave nothing alike. The same team can run identical code on *the same source* a month later and ship a meaningfully different system, because the world the data describes has moved.
-
-This is why Sculley's diagram is the foundational mental model for the entire field: the box labeled "ML code" is tiny, surrounded by far larger boxes for data collection, feature extraction, data verification, configuration, process management, analysis tooling, serving infrastructure, and monitoring. The engineering implication is blunt — if you budget your attention proportional to the code, you will spend ninety percent of your effort on the box that holds five percent of the risk.
+ML training code defines a procedure; data determines the learned behavior. The dataset therefore becomes part of the specification, and identical code can produce materially different systems as data or the represented world changes. Sculley et al.'s *Hidden Technical Debt in Machine Learning Systems* captures this asymmetry: ML code is one small component surrounded by data collection, feature extraction, verification, configuration, process management, analysis, serving, and monitoring.
 
 ```mermaid
 flowchart LR
@@ -252,7 +250,7 @@ action          a = P_policy(s, eligibility, limits, experiment assignment)
 observed label  y~ = L(outcome, observation process, maturity window)
 ```
 
-Changing `F`, `M`, or `P` changes the decision even if the other two remain byte-identical. Changing `L` changes the apparent quality without changing a single production decision. The deployable release unit must therefore identify the model artifact, preprocessing and feature contracts, score calibration, threshold or ranking policy, runtime, fallback, and observation schema together. This chapter establishes that behavioral boundary; [Model Registry and ML Metadata](./13-model-registry-metadata.md) owns its manifest and lifecycle state, while [Model Deployment and Rollouts](./06-model-deployment-rollouts.md) owns atomic activation, retained rollback bundles, and traffic exposure.
+Changing `F`, `M`, or `P` changes the decision even if the other two remain byte-identical. Changing `L` changes apparent quality without changing a production decision. The deployable release unit must identify the model artifact, preprocessing and feature contracts, calibration, threshold or ranking policy, runtime, fallback, and observation schema together. [Model Registry and ML Metadata](./13-model-registry-metadata.md) defines its manifest and lifecycle state; [Model Deployment and Rollouts](./06-model-deployment-rollouts.md) defines atomic activation, retained rollback bundles, and traffic exposure.
 
 This boundary also prevents a common category error: optimizing a predictive metric when the system is accountable for an action. Suppose action `a` has consequence-dependent loss `C(a, y)`. The relevant objective is expected decision loss,
 
@@ -328,7 +326,7 @@ Incident response follows the lifecycle in reverse:
 6. repair source/labels, rebuild downstream artifacts, and requalify them through ordinary gates;
 7. add the incident slice/attack to monitoring and regression evaluation.
 
-[Dataset Management and Versioning](./11-dataset-management-versioning.md) owns publication and poisoning provenance, [Training Pipelines](./05-training-pipelines.md) owns worker/artifact supply-chain boundaries, [Model Serving](./03-model-serving.md) owns extraction/privacy/abuse controls on the request path, and [ML Risk and Governance](./09-ml-risk-governance.md) owns authority, notification, contestability, and incident evidence. This chapter owns the cross-lifecycle threat map so those controls compose.
+[Dataset Management and Versioning](./11-dataset-management-versioning.md) covers publication and poisoning provenance; [Training Pipelines](./05-training-pipelines.md) covers worker and artifact supply-chain boundaries; [Model Serving](./03-model-serving.md) covers request-path extraction, privacy, and abuse controls; [ML Risk and Governance](./09-ml-risk-governance.md) covers authority, notification, contestability, and incident evidence. The cross-lifecycle threat map defined here shows how these controls compose.
 
 ---
 

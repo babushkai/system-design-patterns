@@ -1,6 +1,6 @@
 # Raft (USENIX ATC 2014): Evidence-First Paper Analysis
 
-Raft is a consensus algorithm designed around a human-factors claim: safety is easier to implement when the algorithm reduces the number of legal states and makes leadership strong. Its contribution is not “use a leader and a majority.” It is the set of election and log restrictions that makes a new leader necessarily contain every committed entry.
+Raft reduces legal states and strengthens leadership so consensus safety is easier to implement. Its contribution is the election and log restrictions that force a new leader to contain every committed entry.
 
 ## Publication identity and scope
 
@@ -11,7 +11,7 @@ Raft is a consensus algorithm designed around a human-factors claim: safety is e
 
 The paper specifies non-Byzantine replicated-state-machine consensus. Servers may crash, restart, lose messages, delay them, duplicate them, or experience partitions; they do not forge protocol messages or arbitrarily corrupt persisted state. Raft orders deterministic commands. It does not itself provide a SQL transaction layer, a scheduler, or application-level exactly-once effects.
 
-See [Consensus Algorithms](../02-distributed-databases/08-consensus-algorithms.md) and [Leader Election](../02-distributed-databases/09-leader-election.md) for broader comparisons. This chapter stays with the 2014 protocol.
+Scope here: the 2014 protocol; [Consensus Algorithms](../02-distributed-databases/08-consensus-algorithms.md) and [Leader Election](../02-distributed-databases/09-leader-election.md) provide broader comparisons.
 
 ## Problem and system contract
 

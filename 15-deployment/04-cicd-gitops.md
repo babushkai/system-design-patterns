@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-A delivery platform is a control plane that converts reviewed source state into verified, immutable artifacts and then converges each environment on an approved artifact/configuration tuple. Its correctness is not “the pipeline was green.” It must preserve provenance, promotion order, environment ownership, policy decisions, and observable runtime outcomes across retry, partial failure, rollback, and compromise.
+A delivery platform converts reviewed source state into verified, immutable artifacts, then converges each environment on an approved artifact/configuration tuple. Correctness requires preserving provenance, promotion order, environment ownership, and policy decisions across retries, partial failure, rollback, and compromise while keeping runtime outcomes observable.
 
 The production contract is:
 
@@ -233,7 +233,7 @@ Gates can establish:
 
 A human approval proves a person with a role accepted the change; it does not prove runtime correctness. Automated evidence proves only what it measured. High-risk releases often require both, with the approval bound to an immutable candidate.
 
-Progressive exposure algorithms—rolling, canary, blue-green, shadow, rollback thresholds—belong to [Progressive Delivery and Deployment Strategies](./01-deployment-strategies.md). Runtime behavior decoupling belongs to [Feature-Flag Control Planes](./02-feature-flags.md). This chapter owns how immutable candidates and evidence move into those systems.
+[Progressive Delivery and Deployment Strategies](./01-deployment-strategies.md) covers rolling, canary, blue-green, shadow, and rollback thresholds. [Feature-Flag Control Planes](./02-feature-flags.md) covers runtime behavior decoupling. The delivery control plane moves immutable candidates and evidence into both systems.
 
 ### 5.2 Stateful ordering
 

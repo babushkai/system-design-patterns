@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-A dataset is not a file; it is a reproducible claim about a slice of the world. In production ML, the dataset is the model's specification, so dataset management plays the same role that source control plays for code: it makes behavior traceable, reviewable, and rebuildable. The hard parts are not storing terabytes cheaply. The hard parts are immutability, point-in-time reconstruction, split reproducibility, lineage, privacy deletion, and detecting when a dataset changed meaning without changing schema. A training run that says "trained on June data" is not reproducible; a training run that pins source versions, extraction time, feature versions, label definition, observation windows, split assignment, and content hashes is. The core invariant is simple: **every model must be traceable to an immutable dataset snapshot, and every dataset snapshot must be reconstructable or explicitly retained.**
+A dataset is a versioned, reproducible claim about a population, not a file. Each training release must pin source versions, extraction time, feature and label definitions, observation windows, split assignment, privacy state, and content identity. Immutability, point-in-time reconstruction, lineage, deletion, and semantic-change detection determine whether the model can be explained or rebuilt.
 
 ---
 
@@ -12,7 +12,7 @@ Traditional software can usually be rebuilt from source code, dependencies, and 
 
 The failure mode is familiar. A team trains a model in March and deploys it. In June, quality regresses. Someone tries to reproduce the March model to compare behavior, but the warehouse tables have been backfilled, late events have arrived, deleted rows are gone, a label policy changed, and a feature definition was updated in place. The query still runs, but it no longer returns the dataset the March model saw. The team can rebuild *a* model, but not *the* model. Rollback, audit, and debugging are now guesswork.
 
-The engineering lesson is that a dataset used for training is a release artifact. It needs identity, ownership, lineage, retention, and compatibility rules. A model artifact without a dataset contract is like a binary without source control: it may run, but it cannot be explained.
+Treat every training dataset as a release artifact with identity, ownership, lineage, retention, and compatibility rules. A model without a dataset contract may run, but it cannot be explained.
 
 ---
 

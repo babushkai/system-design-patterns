@@ -8,7 +8,7 @@ Model stable resources and explicit state transitions. Make errors machine-actio
 
 Evolve additively where semantics permit, but do not assume every added field or enum value is harmless. Measure real consumers, compare contracts and behavior, stage adapters, publish deprecation and sunset metadata, and preserve a reversible expand/migrate/contract sequence.
 
-This chapter owns the public service contract. [Edge Gateway](./02-api-gateway.md) owns edge enforcement and routing, [Idempotency](../01-foundations/08-idempotency.md) owns the general deduplication pattern, and [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md) owns client attempt policy.
+Scope: the public service contract. [Edge Gateway](./02-api-gateway.md) covers edge enforcement and routing; [Idempotency](../01-foundations/08-idempotency.md) covers the general deduplication pattern; [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md) covers client attempt policy.
 
 ---
 

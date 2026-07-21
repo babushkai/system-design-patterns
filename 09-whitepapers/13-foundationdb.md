@@ -6,7 +6,7 @@
 - **Venue and version:** ACM SIGMOD 2021, DOI 10.1145/3448016.3457559, 14-page proceedings paper
 - **Evaluated system:** production deployments and controlled experiments described in the paper, including a 58-machine production cluster and a separate 27-machine test cluster
 
-This chapter describes the paper's architecture and measurements. Storage engines, role placement, and product limits can evolve; current FoundationDB documentation is not evidence for what the 2021 paper evaluated.
+Scope: the 2021 paper's architecture and measurements. Current documentation is not evidence for the evaluated storage engines, role placement, or product limits.
 
 ## Contract and Workload Envelope
 

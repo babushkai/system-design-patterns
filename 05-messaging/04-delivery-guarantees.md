@@ -2,7 +2,7 @@
 
 Delivery guarantees describe uncertainty between producer, broker, consumer, and effect store. A broker can prove that a record was durably appended, fetched, or transactionally written to another broker partition. It cannot, by itself, prove that a payment, email, filesystem write, or unrelated database transaction happened exactly once. Correct design names each atomicity boundary and closes the gaps end to end.
 
-This chapter owns broker delivery semantics, acknowledgement ambiguity, producer retry deduplication, consumer effect commit, and the limits of “exactly once.” [Outbox and Inbox](07-outbox-pattern.md) owns atomic database-to-broker publication and transactional consumer deduplication. [Ordering](03-message-ordering.md) owns sequences. Workflow-specific retries and compensation belong to [Effect Commit Protocols](../18-workflow-job-systems/06-retry-idempotency-compensation.md).
+Scope: broker delivery semantics, acknowledgement ambiguity, producer retry deduplication, consumer effect commit, and the limits of “exactly once.” [Outbox and Inbox](07-outbox-pattern.md) owns atomic database-to-broker publication and transactional consumer deduplication. [Ordering](03-message-ordering.md) owns sequences. Workflow-specific retries and compensation belong to [Effect Commit Protocols](../18-workflow-job-systems/06-retry-idempotency-compensation.md).
 
 ## Workload and guarantee contract
 
@@ -87,7 +87,7 @@ The broker tracks `(producer_id, epoch, sequence)` per partition. A retry of the
 
 Producer identity state must be durable enough for failover. If the broker forgets it during restore while the producer assumes it remains valid, the guarantee changes. Include snapshot/backup compatibility and dedup watermark in recovery tests.
 
-The strongest database-to-broker producer design is not “retry after commit”; it is a transactional outbox or authoritative event log whose relay can retry forever with stable identity. That pattern is canonical in chapter 07.
+The strongest database-to-broker producer design is not “retry after commit”; it is a [transactional outbox](07-outbox-pattern.md) or authoritative event log whose relay retries with stable identity.
 
 ## Broker durability and replication
 

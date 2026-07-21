@@ -1,14 +1,14 @@
 # Stripe: Designing a Correct Payment State Machine
 
-Stripe is useful as a system-design case study because a payment is not one atomic database call. It is a long-lived protocol spanning a merchant, Stripe, card or bank rails, asynchronous webhooks, refunds, disputes, and settlement. The hardest problem is preserving an explainable financial result when any participant can time out after performing its side effect.
+A payment is a long-lived protocol, not one atomic database call. It spans a merchant, Stripe, card or bank rails, asynchronous webhooks, refunds, disputes, and settlement. The core problem is preserving an explainable financial result when any participant can time out after a side effect.
 
-This chapter separates public facts from design reconstruction:
+Evidence labels separate public facts from design reconstruction:
 
 - **Documented** means a linked Stripe source states the claim. A date accompanies scale figures and implementation snapshots.
 - **Inference** means the conclusion follows from documented behavior or payment-system constraints, but is not presented as Stripe's undisclosed implementation.
 - **Reference design** means a concrete architecture suitable for a Stripe-like platform. It is a design exercise, not a claim about Stripe production.
 
-That distinction matters. Stripe publishes important pieces—API semantics, Ledger, DocDB, and migration techniques—but not a complete topology for every payment path.
+Stripe publishes API semantics, Ledger, DocDB, and migration techniques, but not a complete topology for every payment path.
 
 ## Workload and correctness contract
 

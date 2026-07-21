@@ -1,6 +1,6 @@
 # Netflix: Evidence, Inference, and a Streaming Reference Design
 
-Netflix is not one “video service.” It couples a control plane for identity, catalog, personalization, playback authorization, and steering with a content plane that prepares and delivers immutable media. Public Netflix sources document important parts of this system at different dates. They do not disclose one complete current diagram.
+Netflix separates a control plane for identity, catalog, personalization, playback authorization, and steering from a content plane that prepares and delivers immutable media. Public sources document dated components, not one complete current architecture.
 
 Claims use three labels:
 
@@ -18,7 +18,7 @@ Claims use three labels:
 | Open Connect overview, accessed July 2026 | Thousands of appliances at IXPs and ISP networks stored encoded files and served them over HTTP/HTTPS under a supporting control system | Does not reveal steering algorithms or fleet-by-region |
 | Recommendation foundation-model post, March 2025 | The post reported more than 300 million users at the end of 2024 and hundreds of billions of interaction events for recommendation work | Not streaming concurrency or request QPS |
 
-Scale values keep their date and methodology. This chapter does not estimate Netflix traffic from subscriber counts.
+Scale values retain their date and methodology; subscriber counts are not used to estimate traffic.
 
 ## Workload and Requirements
 

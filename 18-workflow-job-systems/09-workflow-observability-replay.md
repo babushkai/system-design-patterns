@@ -1,6 +1,6 @@
 # Workflow Observability and Replay
 
-## What This Chapter Owns
+## Operational Questions and Scope
 
 Workflow operations must answer questions that request telemetry cannot:
 
@@ -11,7 +11,7 @@ Workflow operations must answer questions that request telemetry cannot:
 - What is the workflow waiting for, and is that wait expected?
 - Which operator changed it, under what authorization, and with what effect?
 
-This chapter owns history-derived observability, visibility projections, replay/debug/snapshot/reset/fork semantics, stuck-state diagnosis, lineage, history evolution, privacy, and repair commands. It does not redesign telemetry plumbing. Use [Distributed Tracing](../11-observability/01-distributed-tracing.md), [Metrics and Monitoring](../11-observability/02-metrics-monitoring.md), [Production Logging](../11-observability/03-logging.md), and [Alerting](../11-observability/04-alerting.md) for generic collection and delivery.
+History-derived observability covers visibility projections, replay/debug/snapshot/reset/fork semantics, stuck-state diagnosis, lineage, history evolution, privacy, and repair commands. [Distributed Tracing](../11-observability/01-distributed-tracing.md), [Metrics and Monitoring](../11-observability/02-metrics-monitoring.md), [Production Logging](../11-observability/03-logging.md), and [Alerting](../11-observability/04-alerting.md) cover generic telemetry collection and delivery.
 
 The central rule is:
 

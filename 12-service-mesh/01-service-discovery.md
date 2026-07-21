@@ -8,7 +8,7 @@ A production design separates authoritative registration from client-local obser
 
 DNS, a registry client, and a discovery-aware proxy are delivery mechanisms with different caching and rollout semantics. Choose one only after defining the endpoint record, consistency target, stale-state policy, failure domains, and capacity model.
 
-This chapter owns endpoint lifecycle and discovery-state distribution. [Load Balancing](../06-scaling/01-load-balancing.md) owns request-selection algorithms, [DNS and Connection Management](../06-scaling/13-dns-and-connection-management.md) owns resolver and connection-cache mechanics, and [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md) owns retry budgets.
+Scope: endpoint lifecycle and discovery-state distribution. [Load Balancing](../06-scaling/01-load-balancing.md) covers request-selection algorithms, [DNS and Connection Management](../06-scaling/13-dns-and-connection-management.md) resolver and connection-cache mechanics, and [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md) retry budgets.
 
 ---
 

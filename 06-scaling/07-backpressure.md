@@ -6,7 +6,7 @@ Backpressure is the propagation of downstream capacity information toward produc
 
 Every boundary needs a finite buffer, a full-buffer action, cancellation/deadline handling, and a signal the producer can obey. Options include blocking or asynchronous demand, explicit credits, cheap rejection, coalescing, sampling, degradation, or intentional loss. Durable queues absorb a bounded mismatch in time; they do not create service capacity.
 
-This chapter owns the flow of already admitted work and the overload policy at buffers. [Rate Limiting](./05-rate-limiting.md) owns entitlement/admission budgets, [Circuit Breakers](./06-circuit-breakers.md) own dependency health and in-flight calls, [Auto-Scaling](./08-auto-scaling.md) owns delayed capacity changes, and [Retries, Timeouts, and Hedging](./10-retries-timeouts-hedging.md) owns repeated attempts.
+Scope: the flow of already admitted work and the overload policy at buffers. [Rate Limiting](./05-rate-limiting.md) owns entitlement/admission budgets, [Circuit Breakers](./06-circuit-breakers.md) own dependency health and in-flight calls, [Auto-Scaling](./08-auto-scaling.md) owns delayed capacity changes, and [Retries, Timeouts, and Hedging](./10-retries-timeouts-hedging.md) owns repeated attempts.
 
 ---
 
@@ -434,7 +434,3 @@ If the producer cannot slow, work cannot be rejected, loss is forbidden, and sto
 - Google SRE, [Addressing Cascading Failures](https://sre.google/sre-book/addressing-cascading-failures/).
 - Apache Kafka, [Consumer Configuration](https://kafka.apache.org/documentation/#consumerconfigs) and [Design](https://kafka.apache.org/documentation/#design).
 - Apache Flink, [Monitoring Back Pressure](https://nightlies.apache.org/flink/flink-docs-stable/docs/ops/monitoring/back_pressure/).
-
----
-
-**Next:** [Auto-Scaling](./08-auto-scaling.md) changes capacity through a delayed feedback loop after the data plane is already bounded.

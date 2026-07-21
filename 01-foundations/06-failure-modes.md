@@ -29,7 +29,7 @@ For each operation, define externally meaningful outcomes:
 | Superseded/fenced | caller no longer has authority for this epoch | reacquire authority; never retry blindly |
 | Indeterminate integrity | stored or replicated state may be corrupt | isolate, verify, repair from trusted evidence |
 
-An API that returns only `200` or `500` hides the most important state: whether a timed-out mutation committed. See [Idempotency and Operation Identity](./08-idempotency.md) for the retry protocol; this chapter owns the failure semantics that make it necessary.
+An API that returns only `200` or `500` hides whether a timed-out mutation committed. [Idempotency and Operation Identity](./08-idempotency.md) defines the corresponding retry protocol.
 
 ### 1.1 Safety, liveness, and durability
 
@@ -325,7 +325,7 @@ Run reconciliation continuously, partition it for scale, and make repairs idempo
 
 A partition is a communication failure that separates some participants from others; it may be partial, asymmetric, protocol-specific, or indistinguishable from process delay. The CAP theorem constrains consistency and availability when messages needed for coordination cannot arrive; its precise scope is in [CAP Theorem: Scope, Proof, and Design Consequences](./03-cap-theorem.md).
 
-This chapter owns operational partition handling:
+Operational partition handling requires:
 
 1. **Authority:** only a quorum-backed/fenced side continues non-mergeable writes.
 2. **Degradation:** define which reads, buffered writes, or local functions remain safe.

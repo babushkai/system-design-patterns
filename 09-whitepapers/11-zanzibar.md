@@ -7,7 +7,7 @@
 - **Authors:** Ruoming Pang, Ramón Cáceres, Mike Burrows, Zhifeng Chen, Pratik Dave, Nathan Germer, Alexander Golynski, Kevin Graney, Nina Kang, Lea Kissner, Jeffrey L. Korn, Abhishek Parmar, Christopher D. Richards, and Mengzhi Wang
 - **Evaluated system:** Google's internal production deployment, with measurements primarily from December 2018 and longer availability observations where stated
 
-This chapter explains the system in that paper. Open-source relationship-based authorization systems and subsequent Google changes are **later evolution**, not evaluation evidence for Zanzibar as published.
+Scope: Zanzibar as published; open-source relationship-based authorization systems and subsequent Google changes are **later evolution**, not evaluation evidence.
 
 ## Problem and Workload
 

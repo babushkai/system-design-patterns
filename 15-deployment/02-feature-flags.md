@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-A feature flag is a versioned decision program that is published by a control plane and evaluated on a request path. The difficult parts are not the `if` statement. They are distributing a coherent revision, assigning subjects deterministically, containing stale or corrupt configuration, protecting targeting data, proving what a caller evaluated, and retiring both branches safely.
+A feature flag is a versioned decision program published by a control plane and evaluated on a request path. Safety requires coherent revisions, deterministic subject assignment, bounded behavior under stale or corrupt configuration, protected targeting data, evaluation evidence, and eventual removal of both the flag and dead branch.
 
 Use flags to separate deployment from release, to limit blast radius, or to provide a rehearsed operational kill switch. Do not use them as an authorization system, a general configuration database, or a substitute for backward-compatible deployment. A production design needs explicit invariants, immutable revisions, local evaluation for critical paths, secure defaults, auditability, and a lifecycle that ends with code deletion.
 
@@ -22,7 +22,7 @@ decision = evaluate(
 )
 ```
 
-The result is more than a Boolean. A useful result envelope contains:
+Return a typed result envelope, not only a Boolean:
 
 ```text
 value

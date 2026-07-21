@@ -2,7 +2,7 @@
 
 Scaling is the deliberate change of a system's useful-capacity envelope. “Scale up” and “scale out” describe actuators, not outcomes: a larger machine can remain blocked on a serial lock, and ten more application replicas can overload a database, connection limit, or shared cache. Start with the workload, identify the limiting resource and coordination path, then design a reversible transition that preserves authority while capacity changes.
 
-This chapter owns **scaling dimensions, bottleneck models, and safe manual or planned scale transitions**. [Auto-Scaling](./08-auto-scaling.md) owns metric selection, delayed feedback, hysteresis, stabilization, and controller mechanics. [Database Sharding](./03-database-sharding.md) owns the operational lifecycle for distributing application data, while [Partitioning Strategies](../02-distributed-databases/05-partitioning-strategies.md) owns the underlying key-to-partition primitives.
+Scope: **scaling dimensions, bottleneck models, and safe manual or planned scale transitions**. [Auto-Scaling](./08-auto-scaling.md) owns metric selection, delayed feedback, hysteresis, stabilization, and controller mechanics. [Database Sharding](./03-database-sharding.md) owns the operational lifecycle for distributing application data, while [Partitioning Strategies](../02-distributed-databases/05-partitioning-strategies.md) owns the underlying key-to-partition primitives.
 
 ## Primary Evidence and Scope
 
@@ -163,7 +163,7 @@ Define global budgets and allocate shares; do not let instance-local defaults be
 
 ### Partitioned authority
 
-Write and storage scale usually require more independent authority domains, not merely more copies. That introduces routing, skew, cross-partition operations, and online movement. This chapter treats partition addition as a scaling dimension; [Database Sharding](./03-database-sharding.md) owns tenant moves, dual-routing, backfill, cutover, and rollback, while [Partitioning Strategies](../02-distributed-databases/05-partitioning-strategies.md) owns hash/range/directory primitives.
+Write and storage scale usually require more independent authority domains, not merely more copies. That introduces routing, skew, cross-partition operations, and online movement. Partition addition is one scaling dimension; [Database Sharding](./03-database-sharding.md) covers tenant moves, dual-routing, backfill, cutover, and rollback, while [Partitioning Strategies](../02-distributed-databases/05-partitioning-strategies.md) covers hash, range, and directory primitives.
 
 ### Cells and failure containment
 
@@ -205,7 +205,7 @@ stateDiagram-v2
 5. verify no directory, queue, replica set, or client still references the target;
 6. retire resources and reclaim credentials, storage, addresses, and reservations.
 
-For automatic decisions, delayed metrics, stabilization, and multiple-controller conflicts are substantial enough to require their own treatment in [Auto-Scaling](./08-auto-scaling.md). This chapter's transition invariants remain the actuator's safety contract.
+The transition invariants remain the actuator's safety contract; [Auto-Scaling](./08-auto-scaling.md) adds delayed metrics, stabilization, and controller-conflict handling.
 
 ## Capacity and cost example
 

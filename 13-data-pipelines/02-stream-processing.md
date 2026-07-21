@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-A streaming system repeatedly updates state while input remains open. Its central design problem is not “real time versus accuracy.” It is the contract among **event time, progress estimation, allowed lateness, emitted revisions, durable state, replayable input, and sink effects**.
+A streaming system repeatedly updates state while input remains open. Correctness is the contract among **event time, progress estimation, allowed lateness, emitted revisions, durable state, replayable input, and sink effects**—not a choice between “real time” and accuracy.
 
 An event may be processed more than once after failure even when operator state is exactly-once. A watermark may trigger an on-time result even though a later event can still arrive. A checkpoint can recover the dataflow while an external API has already performed an irreversible action. State these boundaries explicitly; framework labels cannot state them for you.
 
@@ -26,7 +26,7 @@ Before selecting Kafka, Flink, Beam, or another runtime, write down:
 
 ### Invariants
 
-A defensible pipeline should be able to state:
+Required invariants:
 
 1. Each event is assigned to a deterministic key and time domain.
 2. Operator state and source positions restore to one consistent recovery cut.
@@ -40,7 +40,7 @@ A defensible pipeline should be able to state:
 
 ## 2. Continuous Execution versus Replay
 
-The decision developed in [Batch Execution](01-batch-processing.md) continues here:
+Batch and stream execution compose in three ways:
 
 - **Continuous execution** minimizes observation-to-result latency but carries live state and checkpoint operations.
 - **Bounded replay** reads a closed offset range into a new result generation.

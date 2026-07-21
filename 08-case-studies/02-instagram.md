@@ -1,6 +1,6 @@
 # Instagram: Evidence, Inference, and a Media-System Reference Design
 
-Instagram combines durable social state, a large media pipeline, personalized retrieval, and privacy-sensitive delivery. Public engineering material describes important slices of that system at particular dates, but it does not disclose one timeless architecture. This chapter therefore uses three labels:
+Instagram combines durable social state, a large media pipeline, personalized retrieval, and privacy-sensitive delivery. Public sources describe dated slices, not one timeless architecture. Claims use three labels:
 
 - **Documented** — stated in a dated Instagram or Meta primary source.
 - **Inference** — a consequence of documented behavior whose implementation is not public.

@@ -156,7 +156,7 @@ Thousands of database-per-tenant connections can exhaust server/pooler memory be
 
 ### 3.3 Cell
 
-A cell contains a bounded cohort and most data-plane dependencies. It limits failure and overload to cell tenants and permits incremental rollout. Shared global identity, placement, DNS, billing, or deployment can still defeat the boundary. [Cell-Based Architecture](./11-cell-based-architecture.md) owns cell construction; this chapter owns tenant placement and movement among cells.
+A cell contains a bounded cohort and most data-plane dependencies, limiting failure and overload while permitting incremental rollout. Shared identity, placement, DNS, billing, or deployment planes can still defeat containment. [Cell-Based Architecture](./11-cell-based-architecture.md) covers cell construction; tenant placement and movement remain part of the isolation contract.
 
 ### 3.4 Silo
 
@@ -309,7 +309,7 @@ Estimate before admission and reconcile with actual usage for future enforcement
 
 One global FIFO lets a whale's import place every other tenant behind millions of jobs. Use per-tenant/subqueue state with weighted fair/deficit scheduling and per-tenant concurrency. Preserve priority without starvation: high tiers may have reservations and larger weights, but background work needs an aging/minimum-share policy.
 
-[Priority, Fairness, and Backpressure](../18-workflow-job-systems/07-priority-fairness-backpressure.md) owns scheduler algorithms; this chapter owns tenant hierarchy and isolation objectives.
+[Priority, Fairness, and Backpressure](../18-workflow-job-systems/07-priority-fairness-backpressure.md) covers scheduler algorithms; tenant hierarchy and isolation objectives define their policy.
 
 ### 6.3 Shared downstreams
 

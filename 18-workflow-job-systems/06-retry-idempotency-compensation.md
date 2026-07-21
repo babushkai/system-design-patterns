@@ -15,7 +15,7 @@ There is no universal protocol. Choose one based on the effect boundary:
 - publish through a transactional outbox and consume through an inbox;
 - compensate completed business effects when forward completion is no longer valid.
 
-This chapter owns workflow-specific effect commit and recovery. Generic retry policy belongs to [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md), generic idempotency to [Idempotency](../01-foundations/08-idempotency.md), broker delivery to [Delivery Guarantees](../05-messaging/04-delivery-guarantees.md), and workflow replay to [Durable Execution](./04-durable-execution-workflow-engines.md).
+Workflow effect commit and recovery are scoped here. [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md) covers generic retry policy; [Idempotency](../01-foundations/08-idempotency.md) covers generic idempotency; [Delivery Guarantees](../05-messaging/04-delivery-guarantees.md) covers broker delivery; [Durable Execution](./04-durable-execution-workflow-engines.md) covers workflow replay.
 
 ---
 

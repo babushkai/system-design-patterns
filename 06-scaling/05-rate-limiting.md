@@ -6,7 +6,7 @@ Rate limiting decides whether new work may enter a protected scope. A complete d
 
 Token buckets are the common admission primitive because they express both rate and burst. The distributed challenge is accounting: a linearizable global decision is accurate but adds a dependency to every request; local decisions are available and fast but overshoot unless they spend bounded leases allocated by a global authority. Put cheap local protection in front of shared policy, expose honest retry guidance, and treat policy rollout and counter recovery as production migrations.
 
-This chapter owns admission and quota accounting. [Circuit Breakers](./06-circuit-breakers.md) own dependency health and in-flight concurrency, [Backpressure](./07-backpressure.md) owns bounded queues and producer signaling, and [Retries, Timeouts, and Hedging](./10-retries-timeouts-hedging.md) owns later attempts.
+Scope: admission and quota accounting. [Circuit Breakers](./06-circuit-breakers.md) own dependency health and in-flight concurrency, [Backpressure](./07-backpressure.md) owns bounded queues and producer signaling, and [Retries, Timeouts, and Hedging](./10-retries-timeouts-hedging.md) owns later attempts.
 
 ---
 
@@ -81,8 +81,8 @@ The data plane must continue with a deliberate degraded policy when the control 
 - **Rate** bounds admitted work per unit time.
 - **Burst** permits temporary accumulation of unused rate credit.
 - **Quota** bounds total entitlement over a longer business interval.
-- **Concurrency** bounds simultaneous in-flight work and adapts to service time; it belongs to the circuit-breaker chapter.
-- **Backpressure** slows producers or bounds queued work; it belongs to the next chapter.
+- **Concurrency** bounds simultaneous in-flight work and adapts to service time; [Circuit Breakers](./06-circuit-breakers.md) governs it.
+- **Backpressure** slows producers or bounds queued work; [Backpressure](./07-backpressure.md) covers its end-to-end propagation.
 
 A service may need all four. A rate limiter alone can overload a slow dependency: under Little’s Law, admitted concurrency is approximately arrival rate × service time. If service time grows tenfold while rate stays fixed, in-flight work grows tenfold. Pair an entitlement limiter with a concurrency guard at the dependency boundary.
 
@@ -365,7 +365,3 @@ Select the weakest coordination that still satisfies the entitlement and error c
 - Envoy, [Local Rate Limiting](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/other_features/local_rate_limiting).
 - Google SRE, [Handling Overload](https://sre.google/sre-book/handling-overload/).
 - Google SRE, [Addressing Cascading Failures](https://sre.google/sre-book/addressing-cascading-failures/).
-
----
-
-**Next:** [Circuit Breakers](./06-circuit-breakers.md) protect a dependency using rolling health state and bounded concurrency after admission.

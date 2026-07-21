@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-WebRTC is a secure, congestion-controlled real-time media stack, not merely a browser-to-browser socket. Signaling exchanges session descriptions and authorization, ICE searches for a viable network path, STUN discovers translated addresses, TURN relays traffic when direct connectivity fails, DTLS-SRTP protects media, and SCTP data channels carry application data. Two-party calls can be peer to peer; multiparty products normally use a Selective Forwarding Unit (SFU). Production design is dominated by NAT diversity, relay coverage, SFU egress and packets per second, codec and layer selection, recovery from network changes, and measurable quality of experience. TURN is required reliability capacity, not an optional edge-case fallback.
+WebRTC is a secure, congestion-controlled media stack, not a browser-to-browser socket. Signaling exchanges session descriptions and authorization; ICE searches for a viable path; STUN discovers translated addresses; TURN relays traffic when direct connectivity fails; DTLS-SRTP protects media; and SCTP data channels carry application data. Two-party calls can be peer to peer, while multiparty products normally use a Selective Forwarding Unit (SFU). Design is dominated by NAT diversity, relay coverage, SFU egress and packet rate, codec and layer selection, network-change recovery, and measurable quality of experience. TURN is required reliability capacity, not an optional fallback.
 
 ---
 

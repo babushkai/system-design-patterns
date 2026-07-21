@@ -2,13 +2,13 @@
 
 ## TL;DR
 
-Retrieval-augmented generation (RAG) is not “put embeddings in a vector database and prepend nearest chunks.” It is a versioned search and evidence-publication system coupled to a probabilistic generator. Its correctness depends on document identity, parsing, update and deletion semantics, authorization before retrieval, query understanding, hybrid candidate generation, reranking, evidence-budget allocation, citation provenance, abstention, and separate evaluation of retrieval and generation.
+Retrieval-augmented generation (RAG) is a versioned search and evidence-publication system coupled to a probabilistic generator. Correctness depends on document identity, parsing, update and deletion semantics, authorization before retrieval, query understanding, hybrid candidate generation, reranking, evidence-budget allocation, citation provenance, abstention, and separate evaluation of retrieval and generation.
 
 A production design has two planes. The **indexing control plane** discovers sources, creates immutable document revisions, parses and enriches content, builds versioned sparse/dense indexes, validates them, and atomically publishes a corpus snapshot. The **query data plane** authenticates the caller, plans a retrieval request, applies mandatory filters, retrieves and reranks candidates, assembles an evidence packet, generates an answer under a grounded-output contract, and records claim-to-source provenance.
 
 Use long context when the authoritative corpus is small and request-scoped; use pipeline RAG when retrieval steps are stable; use agentic retrieval when query decomposition must adapt at runtime and each extra search has an evidence-based stopping rule. Fine-tuning changes model behavior, not current factual memory, and is not a substitute for retrieval.
 
-The Search section owns reusable retrieval-engine mechanics: [index architecture](../14-search-systems/01-inverted-indexes.md), [lexical execution](../14-search-systems/02-full-text-search.md), [vector retrieval](../14-search-systems/03-vector-search.md), and [ranking/evaluation](../14-search-systems/04-ranking-algorithms.md). This chapter owns the RAG-specific publication contract around those engines: corpus revisions and ACLs, evidence-packet assembly, grounded generation, claim-to-source provenance, abstention, and joint retrieval/generation evaluation. A vector database is therefore an implementation inside the query plane, not the RAG system boundary.
+The Search section covers [index architecture](../14-search-systems/01-inverted-indexes.md), [lexical execution](../14-search-systems/02-full-text-search.md), [vector retrieval](../14-search-systems/03-vector-search.md), and [ranking/evaluation](../14-search-systems/04-ranking-algorithms.md). RAG adds corpus and ACL publication, evidence-packet assembly, grounded generation, claim provenance, abstention, and joint retrieval/generation evaluation. A vector database is one query-plane component, not the RAG system boundary.
 
 ---
 

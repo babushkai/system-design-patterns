@@ -4,19 +4,19 @@
 
 Transport is not a transparent pipe. It is a set of state machines that spend round trips, limit bytes in flight, recover loss, authenticate peers, and compete for CPU and queue capacity. A useful design review therefore separates five questions:
 
-1. **How many network flights precede useful work?** On an already established encrypted connection, a small request and its first response byte usually cost about one path RTT plus server time. Under the assumptions in this chapter, a new TCP plus TLS 1.3 connection costs about three RTTs, a new QUIC connection about two, and accepted QUIC 0-RTT about one. QUIC 0-RTT is **resumption with prior state**, not a cold first contact.
+1. **How many network flights precede useful work?** On an established encrypted connection, a small request and its first response byte usually cost about one path RTT plus server time. Under the assumptions below, new TCP plus TLS 1.3 costs about three RTTs, new QUIC about two, and accepted QUIC 0-RTT about one. QUIC 0-RTT is **resumption with prior state**, not cold first contact.
 2. **How many bytes may be in flight?** Congestion control protects the path; transport flow control protects receiver buffers; HTTP and application limits protect different resources. The smallest limit wins.
 3. **What does loss block?** HTTP/2 removes HTTP/1.1 response ordering across requests, but TCP still delivers one ordered byte stream. HTTP/3 uses independent QUIC streams, while congestion control and connection-level flow control remain shared.
 4. **Which guarantees survive retries and path changes?** A transport acknowledgment does not prove an application commit. TLS early data can be replayed. QUIC migration requires path validation and routing continuity; it is optional and can be disabled.
 5. **Where is the bottleneck?** On Linux, packet rate, softirq work, socket queues, encryption, copies, and application scheduling can each dominate. Kernel bypass is a measured response to a localized packet-path bottleneck, not a default architecture.
 
-This chapter owns transport mechanics and their measurable consequences. DNS freshness, connection-pool lifetime, draining, and endpoint rotation are owned by [DNS and Connection Management](./13-dns-and-connection-management.md). Request admission and resource backpressure are owned by [Backpressure](./07-backpressure.md). Retry safety and ambiguous outcomes are owned by [Retries, Timeouts, and Hedging](./10-retries-timeouts-hedging.md) and [Idempotency](../01-foundations/08-idempotency.md).
+Transport analysis covers handshake flights, congestion and flow control, loss recovery, PMTU, protocol behavior, and host packet capacity. [DNS and Connection Management](./13-dns-and-connection-management.md) covers freshness, pools, and draining; [Backpressure](./07-backpressure.md) covers resource bounds; [Retries, Timeouts, and Hedging](./10-retries-timeouts-hedging.md) and [Idempotency](../01-foundations/08-idempotency.md) cover ambiguous outcomes.
 
 ---
 
 ## Scope, Terms, and Assumptions
 
-The models below are deliberately small. They are useful only when their boundaries are visible.
+Use the following models only within their stated boundaries.
 
 | Symbol | Meaning | Unit and boundary |
 |---|---|---|
@@ -71,7 +71,7 @@ TCP                             UDP
 | Admission, bounded queues, consumer capacity, and overload shedding | [Backpressure](./07-backpressure.md) | Prevents application work from accumulating even when the transport remains writable |
 | Deadlines, retries, hedges, and ambiguous outcomes | [Retries, Timeouts, and Hedging](./10-retries-timeouts-hedging.md) | Interprets transport errors without inventing an application result |
 | Encryption policy, certificate lifecycle, and secret rotation | [Encryption](../10-security/06-encryption.md) | Provides identities, certificates, ticket keys, ECH keys, and rotation boundaries |
-| This chapter | Handshake flights, congestion and flow control, loss recovery, PMTU, protocol behavior, and host packet capacity | Exposes measured state and failure signals to the layers above |
+| Transport layer | Handshake flights, congestion and flow control, loss recovery, PMTU, protocol behavior, and host packet capacity | Exposes measured state and failure signals to the layers above |
 
 Congestion control is not application admission control. It estimates a safe sending rate for a network path; it does not know whether a database is saturated, whether one tenant is unfair, or whether a request should have been rejected.
 
@@ -259,7 +259,7 @@ server: LISTEN → SYN-RECEIVED → ESTABLISHED
 
 SYN backlog pressure is a consequence of the server's half-open state. SYN cookies are one overload and attack mitigation: they encode enough state in the SYN-ACK sequence number to postpone allocation. They are not the reason the handshake exists, and their feature tradeoffs depend on implementation.
 
-TCP Fast Open can carry application data during connection establishment, but it changes replay and middlebox assumptions and is not part of this chapter's baseline ledger. Validate it on the real client, server, and network population before counting a saved flight.
+TCP Fast Open can carry application data during connection establishment, but it changes replay and middlebox assumptions and is outside this baseline. Validate it on the real client, server, and network population before counting a saved flight.
 
 Close is also stateful:
 
@@ -571,7 +571,7 @@ N_{\mathrm{connections}} \leq
      {m_{\mathrm{state\ per\ connection}}}
 $$
 
-Measure $m_{\mathrm{state\ per\ connection}}$ for idle, active, TLS, H2/H3 stream, retransmission, and application metadata states. The practical ceiling is the minimum of memory, file descriptors, ephemeral ports/NAT mappings, conntrack entries, accept queues, stream limits, crypto CPU, and downstream concurrency. The chapter on [DNS and Connection Management](./13-dns-and-connection-management.md) turns those host facts into pool and fleet budgets.
+Measure $m_{\mathrm{state\ per\ connection}}$ for idle, active, TLS, H2/H3 stream, retransmission, and application metadata states. The practical ceiling is the minimum of memory, file descriptors, ephemeral ports/NAT mappings, conntrack entries, accept queues, stream limits, crypto CPU, and downstream concurrency. [DNS and Connection Management](./13-dns-and-connection-management.md) turns those host facts into pool and fleet budgets.
 
 ## Observability That Can Falsify a Transport Hypothesis
 
@@ -762,12 +762,12 @@ The test passes only when the chosen hypothesis is visible in transport state an
 | TCP state and core semantics | [RFC 9293, *Transmission Control Protocol*](https://www.rfc-editor.org/rfc/rfc9293.html) | Normative handshake, sequence, close, and byte-stream behavior |
 | TCP congestion, delayed ACK, initial window, RTO, and RACK-TLP | [RFC 5681](https://www.rfc-editor.org/rfc/rfc5681.html), [RFC 6928](https://www.rfc-editor.org/rfc/rfc6928.html), [RFC 6298](https://www.rfc-editor.org/rfc/rfc6298.html), [RFC 8985](https://www.rfc-editor.org/rfc/rfc8985.html) | Normative algorithms and bounds; a kernel can choose supported extensions and implementation parameters |
 | CUBIC | [RFC 9438, *CUBIC for Fast and Long-Distance Networks*](https://www.rfc-editor.org/rfc/rfc9438.html) | Standard algorithm, not evidence that a given host selected it |
-| Reno loss sensitivity | [Mathis et al., *The Macroscopic Behavior of the TCP Congestion Avoidance Algorithm*](https://doi.org/10.1145/263932.264023) | Analytic approximation under the assumptions stated in this chapter |
+| Reno loss sensitivity | [Mathis et al., *The Macroscopic Behavior of the TCP Congestion Avoidance Algorithm*](https://doi.org/10.1145/263932.264023) | Analytic approximation under the stated assumptions |
 | BBRv3 | [IETF CCWG BBR Internet-Draft](https://datatracker.ietf.org/doc/draft-ietf-ccwg-bbr/); [upstream Linux `tcp_bbr.c`](https://github.com/torvalds/linux/blob/master/net/ipv4/tcp_bbr.c) | Draft algorithm versus public upstream implementation; neither proves a vendor kernel's generation or result |
 | QUIC transport, TLS mapping, and recovery | [RFC 9000, *QUIC: A UDP-Based Multiplexed and Secure Transport*](https://www.rfc-editor.org/rfc/rfc9000.html), [RFC 9001](https://www.rfc-editor.org/rfc/rfc9001.html), [RFC 9002](https://www.rfc-editor.org/rfc/rfc9002.html) | Normative QUIC v1 state, flow control, migration, security, loss, PTO, and congestion baseline |
 | HTTP versions and QPACK | [RFC 9112, *HTTP/1.1*](https://www.rfc-editor.org/rfc/rfc9112.html), [RFC 9113, *HTTP/2*](https://www.rfc-editor.org/rfc/rfc9113.html), [RFC 9114, *HTTP/3*](https://www.rfc-editor.org/rfc/rfc9114.html), [RFC 9204, *QPACK*](https://www.rfc-editor.org/rfc/rfc9204.html) | Normative ordering, stream, settings, fallback, and header-compression behavior |
 | IPv4/IPv6 PMTU and datagram probing | [RFC 1191](https://www.rfc-editor.org/rfc/rfc1191.html), [RFC 8200](https://www.rfc-editor.org/rfc/rfc8200.html), [RFC 8201](https://www.rfc-editor.org/rfc/rfc8201.html), [RFC 8899](https://www.rfc-editor.org/rfc/rfc8899.html) | Normative signaling, fragmentation responsibilities, and DPLPMTUD |
-| Linux scaling and offloads | [Linux kernel networking scaling documentation](https://docs.kernel.org/networking/scaling.html), [segmentation offloads](https://docs.kernel.org/networking/segmentation-offloads.html), [kTLS](https://docs.kernel.org/networking/tls.html), and [AF_XDP](https://docs.kernel.org/networking/af_xdp.html) | Linux mechanisms; capacity figures in this chapter are labeled models and require local measurement |
+| Linux scaling and offloads | [Linux kernel networking scaling documentation](https://docs.kernel.org/networking/scaling.html), [segmentation offloads](https://docs.kernel.org/networking/segmentation-offloads.html), [kTLS](https://docs.kernel.org/networking/tls.html), and [AF_XDP](https://docs.kernel.org/networking/af_xdp.html) | Linux mechanisms; the labeled capacity models require local measurement |
 | qlog-shaped diagnostics | [IETF QUIC qlog main-schema draft](https://datatracker.ietf.org/doc/draft-ietf-quic-qlog-main-schema/) | Useful implementation telemetry with draft/version caveat, not a stable RFC guarantee |
 
 ## Related Patterns

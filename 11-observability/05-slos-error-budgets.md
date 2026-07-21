@@ -8,7 +8,7 @@ For target $S$, the allowed error fraction is $b=1-S$. Burn rate is observed err
 
 Error-budget policy coordinates release and reliability work; it does not excuse known safety, security, durability, or contractual failures. Keep measurement independent enough to survive the service incident, expose data coverage, aggregate counts rather than percentages, and test the SLI against real failure scenarios.
 
-Metrics semantics live in [Metrics Systems and Monitoring](./02-metrics-monitoring.md), notification state in [Alert Evaluation and Notification](./04-alerting.md), and incident response in [Incident Command and Learning](./07-incident-management.md). This chapter owns SLI semantics, objective windows, burn math, and budget policy.
+[Metrics Systems and Monitoring](./02-metrics-monitoring.md) covers signal semantics, [Alert Evaluation and Notification](./04-alerting.md) notification state, and [Incident Command and Learning](./07-incident-management.md) response. Scope here: SLI semantics, objective windows, burn math, and budget policy.
 
 ---
 

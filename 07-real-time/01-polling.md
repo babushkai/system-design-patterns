@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-Polling, long polling, Server-Sent Events (SSE), and WebSockets are four ways to wake a client when server-side state changes. They are not four different reliability models. A production design first defines a durable, authorization-aware event stream with stable IDs, replay retention, ordering scope, deduplication, snapshot recovery, and a slow-consumer policy. It then selects the least powerful transport that meets the latency and directionality requirement. Polling is excellent for infrequent or cacheable reads; long polling lowers latency while retaining request/response semantics; SSE is a browser-native server-to-client stream; WebSocket adds full duplex and binary messages. None provides exactly-once delivery, durable replay, cross-region continuity, or backpressure by itself.
+Polling, long polling, Server-Sent Events (SSE), and WebSockets wake clients when server-side state changes; they do not define the end-to-end reliability model. First define a durable, authorization-aware event stream with stable IDs, replay retention, ordering scope, deduplication, snapshot recovery, and a slow-consumer policy. Then choose the least powerful transport that meets latency and directionality requirements. Polling suits infrequent or cacheable reads; long polling lowers latency while retaining request/response semantics; SSE provides a browser-native server-to-client stream; WebSocket adds full duplex and binary messages. None provides exactly-once delivery, durable replay, cross-region continuity, or backpressure by itself.
 
 ---
 

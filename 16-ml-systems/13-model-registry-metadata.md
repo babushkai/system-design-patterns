@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-A model registry is not a folder of model files. It is the control plane for ML releases: the system of record that says which artifacts exist, what produced them, what they depend on, which eligibility state they are in, which gates they passed, who approved them, where they are deployed, and how to roll them back. The model binary is only one object in a graph of metadata — dataset snapshot, feature schema, label definition, training code, runtime image, evaluation report, threshold policy, approvals, deployments, and prediction logs. If that graph is incomplete, the platform cannot answer the questions that matter during incidents: what is serving, why was it promoted, what changed, who approved it, what can we roll back to, and which decisions did it affect? The core invariant is **no model reaches production unless the registry can reconstruct its provenance, validate its serving contract, and name a loadable rollback target.**
+A model registry is the control plane and system of record for ML releases. It links the artifact, dataset, feature schema, label definition, training code, runtime image, evaluation, threshold policy, approvals, deployments, prediction lineage, and rollback target. Production admission requires reconstructible provenance, a validated serving contract, and a loadable rollback bundle.
 
 ---
 

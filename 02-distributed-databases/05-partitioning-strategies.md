@@ -2,7 +2,7 @@
 
 Partitioning maps one logical key space onto independently placeable units. The choice determines which requests are single-partition, which become distributed operations, where hot spots form, and how much state must move when capacity changes. A good partition function is therefore part of the data model and query contract—not a storage detail added after launch.
 
-This chapter owns **logical partition boundaries, key-to-partition routing, and replica-placement primitives**. [Database Sharding](../06-scaling/03-database-sharding.md) owns the application and operational workflow for introducing shards, moving live data, cutover, rollback, and organizational ownership. [Secondary Indexes](./06-secondary-indexes.md) owns index placement, while [Distributed Transactions](./07-distributed-transactions.md) owns atomic work that crosses the resulting boundaries.
+Scope: **logical partition boundaries, key-to-partition routing, and replica-placement primitives**. [Database Sharding](../06-scaling/03-database-sharding.md) owns the application and operational workflow for introducing shards, moving live data, cutover, rollback, and organizational ownership. [Secondary Indexes](./06-secondary-indexes.md) owns index placement, while [Distributed Transactions](./07-distributed-transactions.md) owns atomic work that crosses the resulting boundaries.
 
 ## Workload contract
 

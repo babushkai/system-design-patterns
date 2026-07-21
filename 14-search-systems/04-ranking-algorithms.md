@@ -1,8 +1,8 @@
 # Ranking and Evaluation Systems
 
-Retrieval decides which documents are eligible to compete; ranking decides their order. A production ranking system is not just a model endpoint. It is a versioned decision pipeline joining candidates, features, policy constraints, and experiment assignment under a deadline, with enough evidence to explain whether a change improved the product or merely exploited logging bias.
+Retrieval selects eligible documents; ranking orders them. A production ranking system is a versioned, deadline-bound decision pipeline over candidates, features, policy constraints, and experiment assignment. Its evidence must distinguish product improvement from logging bias.
 
-This chapter owns multi-stage ranking, feature consistency, labels, learning-to-rank objectives, offline judgments, online experiments, personalization, diversification, rollout, and relevance operations. Candidate generation remains with [Lexical Query Execution](02-full-text-search.md) and [Vector Retrieval Systems](03-vector-search.md). Physical index lifecycle remains with [Search Index Architecture and Internals](01-inverted-indexes.md).
+Ranking covers multiple stages, feature consistency, labels, learning-to-rank objectives, offline judgments, online experiments, personalization, diversification, rollout, and relevance operations. [Lexical Query Execution](02-full-text-search.md) and [Vector Retrieval Systems](03-vector-search.md) cover candidate generation; [Search Index Architecture and Internals](01-inverted-indexes.md) covers the physical index lifecycle.
 
 ## Decision contract and objective
 

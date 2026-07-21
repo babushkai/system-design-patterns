@@ -8,13 +8,9 @@ Model monitoring is observability for a decision system whose empirical quality 
 
 ---
 
-## The Defining Problem: Models Fail Silently
+## Silent Quality Failure
 
-Ordinary software observability rests on a comforting assumption: when the system is wrong, it tends to *say so*. It throws an exception, returns a 500, breaches a latency budget, or fills a log with stack traces. The signal of failure is correlated with the failure itself, which is why a service can be monitored by watching its error rate.
-
-A machine-learning system breaks this assumption at the root. A model that has silently degraded does not throw. It receives a well-formed request, runs the same matrix multiplications it always has, and returns a syntactically perfect prediction within its latency budget. Every operational metric is green. The only thing wrong is that the prediction is *worse than it used to be* — the fraud model now misses a class of attack, the recommender now ranks low-quality items higher, the credit model now systematically misprices a segment. The failure is invisible to any monitor that only watches whether the service is up.
-
-This is the engineering implication that organizes everything else: **monitoring exists to make statistical degradation observable, because the system will not announce it.** A model's correctness lives in the *distribution* of its inputs and outputs and in the *relationship* between them, not in any single response. So the monitors must watch distributions and relationships over time, which is a fundamentally different discipline from counting errors. The hardest part is not computing a statistic; it is that the statistic you most want — "is the model still right?" — is the one you usually cannot compute yet.
+A model can miss new fraud patterns, degrade recommendations, or misprice a segment while returning syntactically valid, low-latency HTTP 200 responses. Operational health therefore cannot establish predictive quality. Monitor operational and data contracts immediately, distributions as leading evidence, and delayed outcomes as quality evidence; every alert needs a containment path.
 
 ---
 
@@ -102,7 +98,7 @@ Privacy constrains observability design. Feature payloads can contain personal o
 
 These are hypotheses about a joint distribution, not labels a dashboard can infer from one marginal. A change in `P(X)` can induce a change in `P(Y)` even when `P(Y|X)` is stable, and a score shift can arise from inputs, model release, calibration, or policy. Without representative labels and release context, the monitoring system can localize evidence but cannot identify concept drift. Alerts should therefore say "input distribution changed" or "mature cohort calibration changed," not claim a causal class the data does not establish.
 
-The practical lesson is that drift detection is not one monitor but a *triage vocabulary*. When an alert fires, the first useful question is "which distribution moved, under which observation policy?" Covariate evidence points toward data and population changes; concept drift requires representative labels and may justify retraining; prior correction is available only after stable `P(X|Y)` has been established.
+Drift signals form a *triage vocabulary*, not one monitor. Ask which distribution moved under which observation policy. Covariate evidence points to data or population changes; concept drift requires representative labels; prior correction requires established stability of `P(X|Y)`.
 
 A production triage table should distinguish drift from ordinary pipeline breakage:
 

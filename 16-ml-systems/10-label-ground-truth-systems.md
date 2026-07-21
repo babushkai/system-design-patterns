@@ -2,13 +2,13 @@
 
 ## TL;DR
 
-A label system is the part of an ML platform that turns messy real-world outcomes into the ground truth used for training, evaluation, monitoring, experimentation, and governance. It is not a CSV of labels and it is not a human annotation UI. It is a production data system with a harder correctness problem than most databases: the value it stores is a delayed, probabilistic, policy-shaped claim about what actually happened. The central design challenge is **preserving the decision context until truth arrives**. A prediction made today may receive its label seconds later, weeks later, or never; when the label finally appears, the system must join it back to the exact prediction, model version, feature values, exposure, policy, and action that produced the outcome. If that join is wrong, every downstream metric is wrong. A model trained on bad labels is not learning the world; it is learning the label pipeline's bugs.
+A label system publishes versioned claims about outcomes for training, evaluation, monitoring, experiments, and governance. Correctness depends on preserving decision context so delayed truth can be joined to the exact prediction, release, feature snapshot, exposure, policy, and action, while missing truth remains explicit. A bad join corrupts every downstream metric and model.
 
 ---
 
-## Why Labels Are a System, Not a Column
+## Label Contract and Delayed Truth
 
-It is tempting to treat labels as ordinary data: a table with `entity_id`, `timestamp`, and `label`. That view is too small. A label is an interpretation of an outcome under a definition, collected through a process, attached to a prior prediction, and used to decide whether a model is good. Every piece of that sentence hides systems work.
+A label is an interpretation of an outcome under a versioned definition, collected through a specific process, attached to a prior decision, and reused to judge future models. Each field carries identity, timing, policy, and provenance requirements.
 
 A fraud transaction is not labeled fraudulent the moment the transaction occurs. It may be labeled after a chargeback, after a manual investigation, after a merchant dispute, or after a risk team's rule says the evidence is strong enough. A recommendation is not labeled positive merely because the user clicked; the click might be accidental, position-biased, or followed by immediate abandonment. A medical model may receive a diagnosis code months later, and the code itself may be incomplete because billing workflows shape what gets recorded. In each case the label is not an objective fact emitted by the universe. It is the output of a collection process with latency, bias, missingness, and policy embedded inside it.
 

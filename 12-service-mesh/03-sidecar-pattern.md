@@ -8,7 +8,7 @@ The data plane must keep serving safely when the control plane is unavailable, y
 
 Sidecars give per-workload isolation and attribution but multiply fixed cost. Node or shared “ambient” proxies amortize resources but enlarge failure and noisy-neighbor domains. Kernel/eBPF interception can reduce hops and improve visibility, but it does not eliminate user-space L7 processing, identity, policy distribution, or correctness risks. Choose the topology per policy layer and workload class rather than treating one deployment model as universally superior.
 
-This chapter owns east-west connectivity planes and their failure behavior. [Service Discovery](./01-service-discovery.md) owns endpoint truth, [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md) owns retry mathematics, and [Zero Trust Architecture](../10-security/05-zero-trust-architecture.md) owns the broader security model.
+Scope: east-west connectivity planes and failure behavior. [Service Discovery](./01-service-discovery.md) covers endpoint truth, [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md) retry mathematics, and [Zero Trust Architecture](../10-security/05-zero-trust-architecture.md) the broader security model.
 
 ---
 

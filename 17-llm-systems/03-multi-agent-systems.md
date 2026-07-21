@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-A multi-agent system is a distributed system whose workers happen to make probabilistic, context-dependent decisions. The hard problems are therefore not agent personas or conversational prompts. They are work decomposition, state ownership, message semantics, concurrency control, failure isolation, admission control, provenance, and determining whether the extra calls buy independent information.
+Treat a multi-agent system as a distributed system with probabilistic, context-dependent workers. Its design hinges on work decomposition, state ownership, message semantics, concurrency control, failure isolation, admission control, provenance, and whether extra calls add independent information.
 
 A robust starting topology inside one trust domain is an orchestrator with read-only workers. The orchestrator owns the goal, dependency graph, budgets, authoritative state, and final commit; workers explore bounded subproblems and return typed evidence. Multiple writers require enforced disjoint write sets or explicit concurrency control. Debate or aggregation buys evidence only when branches add meaningfully different information or failure modes—five correlated samples do not constitute five independent experts.
 

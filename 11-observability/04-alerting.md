@@ -6,7 +6,7 @@ Alerting is a stateful policy system that converts telemetry into human work. A 
 
 Correctness depends on evaluation time, data freshness, missing-data semantics, rule revision, stable alert identity, and high-availability coordination. Two evaluators can legitimately compute the same firing state, but receivers should not page twice. Conversely, aggressive deduplication or inhibition must not hide independent incidents.
 
-The paging threshold should represent required human urgency and user/business impact. SLO burn-rate math belongs to [SLOs and Error-Budget Control](./05-slos-error-budgets.md); metrics semantics belong to [Metrics Systems](./02-metrics-monitoring.md). This chapter owns alert state, grouping, inhibition, silence, routing, delivery, and human load.
+Page only for required human urgency and user/business impact. [SLOs and Error-Budget Control](./05-slos-error-budgets.md) covers burn-rate math; [Metrics Systems](./02-metrics-monitoring.md) covers signal semantics. Scope here: alert state, grouping, inhibition, silence, routing, delivery, and human load.
 
 ---
 

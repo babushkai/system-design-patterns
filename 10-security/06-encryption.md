@@ -4,7 +4,7 @@
 
 Encryption is not a box labeled “AES” between an application and a database. It is a distributed protocol whose correctness depends on data classification, authenticated metadata, nonce allocation, key hierarchy, authorization to use keys, recoverability, rotation, and the lifetime of every plaintext copy.
 
-A production design normally separates:
+Separate:
 
 - **bulk data encryption** with an authenticated-encryption algorithm such as AES-GCM or ChaCha20-Poly1305;
 - **key wrapping** through a key-encryption key (KEK) held by a KMS or HSM;

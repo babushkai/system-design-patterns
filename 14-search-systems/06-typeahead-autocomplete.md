@@ -1,8 +1,8 @@
 # Typeahead and Autocomplete
 
-Typeahead predicts useful completions while a person is still typing. It looks like a small search box feature, but its workload is unusually demanding: requests arrive on nearly every keystroke, prefixes are extremely skewed, useful rankings change quickly, and the output can amplify private, abusive, or manipulated queries. The safe architecture is usually a purpose-built suggestion service, not a full search query with a prefix operator.
+Typeahead predicts useful completions while a person is still typing. Nearly every keystroke creates a request, prefix popularity is highly skewed, rankings change quickly, and results can amplify private, abusive, or manipulated queries. A purpose-built suggestion service is usually safer than a full search query with a prefix operator.
 
-This chapter owns suggestion generation, prefix data structures, popularity and freshness pipelines, abuse controls, low-latency serving, personalization boundaries, and client interaction. General lexical retrieval belongs to [Lexical Query Execution](02-full-text-search.md); model training and experiment methodology belong to [Ranking and Evaluation](04-ranking-algorithms.md).
+Suggestion serving covers generation, prefix data structures, popularity and freshness pipelines, abuse controls, low-latency serving, personalization boundaries, and client interaction. [Lexical Query Execution](02-full-text-search.md) covers general lexical retrieval; [Ranking and Evaluation](04-ranking-algorithms.md) covers model training and experiment methodology.
 
 ## Workload and product contract
 

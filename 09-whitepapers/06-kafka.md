@@ -1,6 +1,6 @@
 # Kafka (NetDB 2011): Evidence-First Paper Analysis
 
-The original Kafka paper is valuable precisely because it describes a much smaller system than “Kafka” means today. Its thesis is that log aggregation becomes cheap when the broker stores **partitioned append-only files**, consumers pull by byte offset, and retention is independent of acknowledgements. Replication, durable producer acknowledgements, idempotent production, transactions, and KRaft were not in the published design.
+The 2011 Kafka paper describes a much smaller system than modern Kafka: brokers store **partitioned append-only files**, consumers pull by byte offset, and retention is independent of acknowledgements. Replication, durable producer acknowledgements, idempotent production, transactions, and KRaft were outside the published design.
 
 ## Publication identity and historical boundary
 
@@ -9,7 +9,7 @@ The original Kafka paper is valuable precisely because it describes a much small
 - **Venue and version:** NetDB workshop, 2011
 - **System described:** LinkedIn's first production Kafka architecture, benchmarked against ActiveMQ 5.4 and RabbitMQ 2.4
 
-This chapter never uses a modern Kafka guarantee as evidence for the 2011 paper. Apache's later replication design is discussed separately below.
+Modern Kafka guarantees are not used as evidence for the 2011 paper; later replication appears separately below.
 
 For present-day pattern language, see [Message Queues](../05-messaging/01-message-queues.md), [Message Ordering](../05-messaging/03-message-ordering.md), and [Delivery Guarantees](../05-messaging/04-delivery-guarantees.md).
 

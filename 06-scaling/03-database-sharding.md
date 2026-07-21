@@ -2,15 +2,9 @@
 
 Sharding is an application and operational contract, not the expression `hash(key) % N`. Once data lives on multiple independently operated database groups, every request needs authoritative placement, every cross-shard operation needs explicit semantics, and every capacity change becomes an online data migration.
 
-This chapter owns the sharding lifecycle: directory and request routing, shard isolation, resharding, tenant moves, and cutover safety. The mechanics and trade-offs of range, hash, and consistent-hash partitioning belong to [partitioning strategies](../02-distributed-databases/05-partitioning-strategies.md). Replication inside one shard belongs to the [replication](../02-distributed-databases/01-single-leader-replication.md) chapters.
+Sharding operations span directory and request routing, isolation, resharding, tenant moves, and safe cutover. [Partitioning Strategies](../02-distributed-databases/05-partitioning-strategies.md) covers range, hash, and consistent-hash mechanics; [Single-Leader Replication](../02-distributed-databases/01-single-leader-replication.md) covers replication within a shard.
 
-Evidence labels are deliberate:
-
-- **Documented** identifies a dated primary paper, engineering publication, or versioned official documentation.
-- **Inference** states a consequence of the workload or published mechanism without claiming a private implementation.
-- **Reference design** gives a reusable architecture rather than attributing a composite system to one company.
-
-Unless a paragraph is explicitly marked **Documented** or **Inference**, its normative architecture and operational guidance belongs to the **Reference design**.
+Evidence labels distinguish **Documented** claims backed by dated primary or official sources, **Inference** derived without asserting a private implementation, and unmarked **Reference design** guidance that is reusable rather than provider-attributed.
 
 ## When sharding is justified
 

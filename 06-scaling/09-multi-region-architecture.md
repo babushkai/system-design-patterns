@@ -461,7 +461,3 @@ Choose posture per data class. Start from authority and failure semantics, then 
 - AWS Builders’ Library, [Minimizing Correlated Failures in Distributed Systems](https://aws.amazon.com/builders-library/minimizing-correlated-failures-in-distributed-systems/).
 - Google Cloud Architecture Center, [Architecting Disaster Recovery for Cloud Infrastructure Outages](https://cloud.google.com/architecture/disaster-recovery).
 - Martin Kleppmann, [Designing Data-Intensive Applications](https://dataintensive.net/), chapters on replication, partitioning, and consistency.
-
----
-
-**Next:** [Retries, Timeouts, and Hedging](./10-retries-timeouts-hedging.md) composes end-to-end deadlines and bounded attempts across regional and service call paths.

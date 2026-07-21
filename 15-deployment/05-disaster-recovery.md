@@ -164,7 +164,7 @@ Derive objectives from maximum tolerable loss, regulatory duty, customer promise
 | Warm standby | reduced-capacity full stack | faster cutover; must prove capacity expansion and freshness |
 | Multi-site serving | multiple sites serve continuously | lowest infrastructure-start time; highest write-conflict/fencing complexity |
 
-Active-active multi-region is not automatically a backup. A bad mutation, compromised credential, or application bug may reach every active copy. Pair serving topology with time/control-isolated recovery data. Steady-state multi-region placement and routing are covered in [Multi-Region Systems](../06-scaling/09-multi-region-architecture.md); this chapter owns loss, reconstruction, declaration, and return.
+Active-active multi-region is not automatically a backup: bad mutations, compromised credentials, and application bugs can reach every active copy. Pair serving topology with time- and control-isolated recovery data. [Multi-Region Systems](../06-scaling/09-multi-region-architecture.md) covers steady-state placement and routing; disaster recovery covers loss, declaration, reconstruction, and return.
 
 ---
 

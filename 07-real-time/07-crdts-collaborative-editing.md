@@ -6,13 +6,13 @@ A collaborative editor is a replicated database whose write latency must feel lo
 
 Operational Transformation (OT), sequence CRDTs, server-ordered property updates, and application-specific hybrids solve different contracts. The algorithm is only one component. A production sync engine also needs stable document/element/operation identity, authorization on reconnect, durable snapshots and logs, causal or server frontiers, acknowledgement and duplicate suppression, schema migration, undo semantics, compaction, hot-document fan-out, offline-device policy, and proof that garbage collection cannot resurrect deleted content.
 
-[Conflict Resolution](../02-distributed-databases/04-conflict-resolution.md) owns general causal metadata and CRDT merge algebra. This chapter owns collaborative document state and the end-to-end sync protocol: optimistic local editing, sequence/tree operations, snapshot-plus-delta publication, long-offline replicas, compaction, presence separation, and user-visible recovery.
+[Conflict Resolution](../02-distributed-databases/04-conflict-resolution.md) covers general causal metadata and CRDT merge algebra. Scope here: collaborative document state and end-to-end sync—optimistic local editing, sequence/tree operations, snapshot-plus-delta publication, long-offline replicas, compaction, presence separation, and user-visible recovery.
 
 ---
 
 ## 1. Workload and Correctness Contract
 
-Start with document shape and user behavior:
+Define document shape and user behavior first:
 
 - plain text, rich text, block tree, canvas/object graph, spreadsheet, or structured JSON;
 - edits per active user per second and burst behavior during paste/drag;

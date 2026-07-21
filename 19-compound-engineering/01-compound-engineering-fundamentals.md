@@ -2,9 +2,9 @@
 
 ## TL;DR
 
-A coding-agent platform is a multi-tenant workflow system that lets an untrusted, probabilistic planner inspect a repository, invoke powerful tools, propose changes, and collect evidence without silently gaining release authority. Its core abstractions are not “prompts” and “productivity multipliers”; they are **tasks, immutable input revisions, capabilities, effect receipts, isolated workspaces, budgets, verification evidence, and approval decisions**. The system is correct when every effect is attributable, replay does not duplicate irreversible actions, repository state cannot cross tenant or task boundaries, cancellation eventually stops new effects, and only policy—not model confidence—can promote a patch.
+A coding-agent platform confines an untrusted probabilistic planner within deterministic task, capability, effect, isolation, budget, evidence, and approval contracts. Every effect must be attributable; replay must not duplicate irreversible actions; state must not cross task or tenant boundaries; cancellation must eventually stop new effects; and policy alone may promote a patch.
 
-This chapter defines the platform-wide contract. [Tool and runtime contracts](./02-coding-agent-tool-design.md), the [repository context and policy plane](./03-agent-context-engineering.md), [repository architecture for safe change](./04-ai-native-software-architecture.md), [verification and governance](./05-quality-engineering-with-ai-agents.md), and [parallel development and integration](./06-compound-development-workflows.md) own their respective details.
+Scope: the platform-wide task, authority, isolation, scheduling, and evidence contract. Detailed protocols live in [tool and runtime contracts](./02-coding-agent-tool-design.md), the [repository context and policy plane](./03-agent-context-engineering.md), [repository architecture](./04-ai-native-software-architecture.md), [verification and governance](./05-quality-engineering-with-ai-agents.md), and [parallel development](./06-compound-development-workflows.md).
 
 ---
 

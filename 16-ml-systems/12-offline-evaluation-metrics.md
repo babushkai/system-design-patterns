@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-Offline evaluation is the cheapest place to reject a bad model and the most dangerous place to believe a good-looking one. It measures behavior on a frozen approximation of the world, using labels and splits that may be biased, delayed, leaked, stale, or misaligned with the product objective. The central discipline is to treat evaluation as a measurement system, not a notebook cell: define the decision the metric supports, pin the dataset and split, separate primary metrics from guardrails, evaluate slices, quantify uncertainty, check calibration and thresholds, and never confuse offline improvement with production impact. Offline evaluation answers **"is this candidate worth exposing to live traffic?"** It does not answer **"will this improve the business?"** That final causal question belongs to online experiments.
+Offline evaluation rejects candidates against a pinned dataset; it cannot establish causal product impact. Define the supported decision, population, labels, splits, primary metric, guardrails, slices, uncertainty, calibration, and thresholds before scoring. [Online Experiments](./08-online-experiments.md) covers causal product claims.
 
 ---
 

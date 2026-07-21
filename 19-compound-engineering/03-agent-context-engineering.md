@@ -2,11 +2,11 @@
 
 ## TL;DR
 
-A repository context system is a control plane, not a collection of prompt files. It acquires facts and policies from multiple authorities, authenticates their origin, resolves scope and precedence, compiles an immutable effective snapshot, distributes that snapshot to runtimes, and records which revision governed each decision. The model may receive a human-readable projection of the result, but natural-language awareness is not enforcement. Actions are authorized again at a deterministic policy-enforcement point.
+A repository context system acquires facts and policies from multiple authorities, authenticates origin, resolves scope and precedence, compiles an immutable effective snapshot, distributes it to runtimes, and records the revision governing each decision. The model receives a human-readable projection; deterministic policy enforcement authorizes actions.
 
 The hard problems are the same ones found in configuration, authorization, and software-supply-chain systems: ambiguous ownership, conflicting inheritance, stale replicas, rollback attacks, partial activation, tenant leakage, schema evolution, and untrusted content that impersonates instructions. Treat source authority, semantic trust, repository revision, tenant, scope, expiry, and provenance as typed fields. Never infer them from a filename or from where text happened to appear in a prompt.
 
-This chapter owns repository context artifacts and the policy control plane. [Context Management](../17-llm-systems/08-context-management.md) owns request-time selection, compaction, and token allocation. [Tool and Runtime Contracts](./02-coding-agent-tool-design.md) owns capabilities and action enforcement. [Quality Engineering with AI Agents](./05-quality-engineering-with-ai-agents.md) owns review and code-quality gates.
+Scope: repository context artifacts and the policy control plane. [Context Management](../17-llm-systems/08-context-management.md) covers request-time selection, compaction, and token allocation; [Tool and Runtime Contracts](./02-coding-agent-tool-design.md) covers capabilities and enforcement; [Verification and Governance](./05-quality-engineering-with-ai-agents.md) covers review and quality gates.
 
 ---
 

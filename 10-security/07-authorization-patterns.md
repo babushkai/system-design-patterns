@@ -12,7 +12,7 @@ RBAC, ABAC, and ReBAC are not maturity levels:
 
 Large systems often compose them: a relationship grants candidate access, attributes constrain it, and roles remain convenient organization-level relations. The harder design questions are consistency, list filtering, graph fan-out, policy rollout, revocation latency, tenant isolation, and synchronization with application state.
 
-A production design separates the policy control plane from the decision data plane, makes policy/tuple revisions explicit, binds cache entries to every decision input, and verifies both `check` (“may Alice read document 7?”) and `list` (“which documents may Alice read?”) at realistic scale.
+Separate the policy control plane from the decision data plane, make policy and tuple revisions explicit, bind cache entries to every decision input, and verify both `check` (“may Alice read document 7?”) and `list` (“which documents may Alice read?”) at realistic scale.
 
 ---
 

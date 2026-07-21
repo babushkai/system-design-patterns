@@ -2,7 +2,7 @@
 
 Conflict resolution is the policy that turns **independently accepted, causally concurrent updates** into one convergent state. It cannot recover an intention the system never recorded. A merge can preserve both shopping-cart additions, for example, but it cannot decide whether two users who independently claimed the same username should share it. The data type and business invariant must define that answer.
 
-This chapter owns detection, representation, merge semantics, deletion knowledge, and repair of conflicting versions. [Multi-Leader Replication](./02-multi-leader-replication.md) and [Leaderless Replication](./03-leaderless-replication.md) own the replica protocols that create and exchange those versions. [Distributed Transactions](./07-distributed-transactions.md) owns coordination when an invariant cannot be merged safely.
+Scope: detection, representation, merge semantics, deletion knowledge, and repair of conflicting versions. [Multi-Leader Replication](./02-multi-leader-replication.md) and [Leaderless Replication](./03-leaderless-replication.md) own the replica protocols that create and exchange those versions. [Distributed Transactions](./07-distributed-transactions.md) owns coordination when an invariant cannot be merged safely.
 
 ## Start with the contract, not the merge function
 

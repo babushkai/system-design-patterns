@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-A migration changes the authority for live behavior or durable state while both old and new systems continue to serve. The hard problem is not copying code or bytes; it is preserving invariants across mixed versions, delayed replication, retries, backfills, and rollback.
+A migration changes authority for live behavior or durable state while old and new systems overlap. Safety depends on preserving invariants across mixed versions, delayed replication, retries, backfills, and rollback.
 
 Treat a migration as a durable protocol:
 

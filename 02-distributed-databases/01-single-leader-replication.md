@@ -8,7 +8,7 @@ Single-leader replication makes one node the serialization point for writes and 
 
 ## Scope: One Write Authority and Its Replicated Log
 
-This chapter owns a topology in which one node accepts writes for a replicated dataset at a time.
+One node at a time accepts writes for a replicated dataset.
 
 - [Multi-Leader Replication](02-multi-leader-replication.md) owns concurrent write authorities and cross-leader conflicts.
 - [Leaderless Replication](03-leaderless-replication.md) owns quorum reads/writes without a distinguished writer.

@@ -2,13 +2,13 @@
 
 An encrypted messenger has two simultaneous correctness problems. The delivery system must route, buffer, retry, and deduplicate messages for intermittently connected devices. The cryptographic system must ensure that only intended devices can read content—even though servers coordinate device discovery and delivery. Multi-device support couples the two: one user is no longer one socket or one encryption identity.
 
-This chapter distinguishes:
+Evidence labels:
 
 - **Documented**: stated in a linked WhatsApp/Meta engineering source; scale and architecture snapshots are dated.
 - **Inference**: a conclusion from documented behavior or messaging constraints, not a claim about private production internals.
 - **Reference design**: a concrete WhatsApp-like architecture where the production delivery topology is not publicly specified.
 
-Older folklore about exact servers, languages, connection counts, or databases is excluded unless a primary source supports it.
+Exact servers, languages, connection counts, and databases appear only when supported by a primary source.
 
 ## Workload and security contract
 

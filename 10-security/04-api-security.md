@@ -17,7 +17,7 @@ A production API needs:
 - stable error semantics without sensitive leakage;
 - abuse telemetry and deterministic adversarial tests.
 
-This chapter owns the API threat boundary. Identity protocols, authorization models, encryption, and generic rate algorithms remain in their canonical chapters.
+Scope: the API threat boundary. Identity protocols, authorization models, encryption, and generic rate algorithms remain in their canonical chapters.
 
 ---
 

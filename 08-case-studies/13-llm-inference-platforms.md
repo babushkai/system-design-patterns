@@ -2,7 +2,7 @@
 
 ## Scope and Evidence Contract
 
-There is no single public “frontier provider architecture.” This chapter triangulates peer-reviewed systems—Orca (OSDI 2022), vLLM (SOSP 2023), DistServe (OSDI 2024), SGLang (NeurIPS 2024), and Mooncake (FAST 2025). It separates:
+No single public “frontier provider architecture” exists. This analysis triangulates Orca (OSDI 2022), vLLM (SOSP 2023), DistServe (OSDI 2024), SGLang (NeurIPS 2024), and Mooncake (FAST 2025). Evidence labels:
 
 - **Documented fact:** a mechanism or result in one named paper and evaluation.
 - **Inference:** a consequence derived from the workload or documented mechanism.

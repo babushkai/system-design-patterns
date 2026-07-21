@@ -11,7 +11,7 @@ Aurora's key idea is to treat network I/O—not disks—as the scarce database r
 
 The paper does not describe every present Aurora engine, feature, or topology. It presents one writer with shared storage and up to 15 read replicas. Later multi-writer, serverless, PostgreSQL-compatible, cross-region, or disaggregated-service features must be evaluated from their own sources.
 
-For conventional mechanisms, read [Write-Ahead Logging](../03-storage-engines/04-write-ahead-logging.md), [Single-Leader Replication](../02-distributed-databases/01-single-leader-replication.md), and [Failure Modes](../01-foundations/06-failure-modes.md). This chapter focuses on Aurora's changed storage contract.
+[Write-Ahead Logging](../03-storage-engines/04-write-ahead-logging.md), [Single-Leader Replication](../02-distributed-databases/01-single-leader-replication.md), and [Failure Modes](../01-foundations/06-failure-modes.md) cover conventional mechanisms. Scope here: Aurora's changed storage contract.
 
 ## Problem and workload assumptions
 

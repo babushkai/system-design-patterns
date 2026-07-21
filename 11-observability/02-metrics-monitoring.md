@@ -8,7 +8,7 @@ Counters represent additive change, gauges represent a sampled state, and histog
 
 Scrape, push/OTLP, and remote write solve different transport boundaries. All require bounded queues, explicit timestamps, authentication, tenant isolation, and loss telemetry. Capacity is driven by active series, churn, samples, histogram buckets, retention, replication, and query scan—not the number of metric names.
 
-The shared instrumentation/collector/control-plane architecture is defined in [Distributed Tracing and Telemetry Pipelines](./01-distributed-tracing.md). This chapter owns metric instruments, aggregation, transport, storage, and query capacity. [Alerting](./04-alerting.md) owns notification state and [SLOs](./05-slos-error-budgets.md) owns reliability interpretation.
+Shared plane: [Distributed Tracing and Telemetry Pipelines](./01-distributed-tracing.md). Scope here: metric instruments, aggregation, transport, storage, and query capacity; [Alerting](./04-alerting.md) covers notification state and [SLOs](./05-slos-error-budgets.md) reliability interpretation.
 
 ---
 

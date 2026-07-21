@@ -11,7 +11,7 @@ Chubby is a paper about packaging consensus into an operable coordination servic
 
 The paper does not fully publish Google's Paxos implementation, and Chubby is not a high-throughput database or a data-plane mutex around every request. It is a low-volume coordination substrate for leader election, small configuration records, naming, and coarse ownership.
 
-See [Distributed Locks](../01-foundations/09-distributed-locks.md) and [Leader Election](../02-distributed-databases/09-leader-election.md) for general patterns. Here the concern is the paper's concrete lease, cache, and fencing behavior.
+Scope here: the paper's lease, cache, and fencing behavior; [Distributed Locks](../01-foundations/09-distributed-locks.md) and [Leader Election](../02-distributed-databases/09-leader-election.md) cover the general patterns.
 
 ## Why a lock service instead of a consensus library
 

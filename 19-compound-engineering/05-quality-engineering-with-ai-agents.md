@@ -4,7 +4,7 @@
 
 An agent-generated patch is a proposal, not proof. A trustworthy engineering system converts the task into explicit acceptance claims, records the provenance of the candidate, gathers independent evidence against the actual target revision, and lets policy plus accountable reviewers decide whether the evidence authorizes integration. The hardest failure is **correlated evidence**: the same run misunderstands the requirement, writes the implementation, generates tests for its interpretation, and then declares those tests sufficient. Separate specification, mutation, verification, and release authority where risk justifies it.
 
-This chapter owns evidence, review, and promotion decisions. Runtime and tool isolation belong to [Platform Fundamentals](./01-compound-engineering-fundamentals.md) and [Tool Contracts](./02-coding-agent-tool-design.md); repository structure belongs to [Repository Architecture](./04-ai-native-software-architecture.md); application-security mechanisms belong to [Security](../10-security/04-api-security.md).
+Scope: evidence, review, and promotion decisions. [Platform Fundamentals](./01-compound-engineering-fundamentals.md) and [Tool Contracts](./02-coding-agent-tool-design.md) cover runtime isolation; [Repository Architecture](./04-ai-native-software-architecture.md) covers structure; [Security](../10-security/04-api-security.md) covers application-security mechanisms.
 
 ---
 

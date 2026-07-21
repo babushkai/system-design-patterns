@@ -2,7 +2,7 @@
 
 The transactional outbox closes one specific dual-write gap: domain state and an intent to publish are committed in the same local transaction. A relay then delivers that durable intent to a broker at least once. The transactional inbox closes the corresponding consumer gap by committing message identity, local effect, and progress in one local transaction. Together they provide recoverable publication and effectively-once local effects without pretending two independent systems share one atomic commit.
 
-This chapter is the canonical treatment of outbox/inbox mechanics and CDC-based relay. [Delivery Guarantees](04-delivery-guarantees.md) defines the end-to-end semantics; [Change Data Capture](../13-data-pipelines/04-change-data-capture.md) owns general database-log architecture, snapshots, and schema capture.
+Outbox/inbox design includes transactional rows, polling or CDC relay, and consumer effect commit. [Delivery Guarantees](04-delivery-guarantees.md) defines end-to-end semantics; [Change Data Capture](../13-data-pipelines/04-change-data-capture.md) covers general log architecture, snapshots, and schema capture.
 
 ## Workload and contract
 
@@ -183,7 +183,7 @@ Relay changes use generations:
 6. keep rollback checkpoint and artifacts;
 7. monitor duplicates/gaps through the retention window.
 
-Changing partition keys is an ordering migration requiring a barrier as described in the ordering chapter.
+Changing partition keys requires the barrier protocol in [Message Ordering](03-message-ordering.md).
 
 ## Capacity and cost model
 

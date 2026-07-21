@@ -1,6 +1,6 @@
 # MapReduce (OSDI 2004): Evidence-First Paper Analysis
 
-MapReduce is best read as a paper about **where to place the distributed-systems boundary**. The programmer supplies two data transformations; the runtime owns task placement, shuffle, retry, straggler mitigation, and output publication. Its lasting contribution is not the word-count example. It is the contract that makes a large class of batch computations safely replayable.
+MapReduce places the distributed-systems boundary around two programmer-supplied transformations; the runtime owns task placement, shuffle, retry, straggler mitigation, and output publication. Its lasting contribution is the contract that makes a large class of batch computations safely replayable.
 
 ## Publication identity and scope
 
@@ -11,7 +11,7 @@ MapReduce is best read as a paper about **where to place the distributed-systems
 
 Every number below belongs to that implementation and the paper's test cluster. It is not a benchmark for Hadoop, Spark, a cloud data warehouse, or a current Google service. The paper also describes a **bounded batch** computation. Event time, unbounded streams, iterative in-memory execution, SQL optimization, and exactly-once interaction with arbitrary external systems are outside its design.
 
-For the general design space, first read [Batch Processing](../13-data-pipelines/01-batch-processing.md). This chapter concentrates on what the 2004 paper actually establishes.
+Scope here: what the 2004 paper establishes; [Batch Processing](../13-data-pipelines/01-batch-processing.md) covers the general design space.
 
 ## Workload and problem boundary
 

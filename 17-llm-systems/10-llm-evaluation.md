@@ -8,14 +8,14 @@ Evaluate components and end-to-end outcomes separately. For agents, measure envi
 
 ---
 
-## Why This Is Its Own Discipline
+## Measurement Complications
 
-Conventional unit tests often assert one deterministic relation. LLM systems add several measurement complications:
+LLM systems add four measurement complications beyond deterministic assertions:
 
-- **Non-determinism** — the same input yields different outputs across runs (and across provider-side model updates you didn't opt into).
-- **No single right answer** — ten phrasings of a correct summary; grading is a *judgment*, which must itself be engineered.
-- **Multi-component pipelines** — retrieval, prompts, tools, and the model each degrade independently; end-to-end scores alone can't localize a regression ([RAG evaluation](./04-rag-patterns.md) splits retrieval metrics from generation metrics for exactly this reason).
-- **Silent regressions** — a prompt tweak that fixes one case breaks five others; nothing crashes; quality drifts from 91% to 84% and nobody notices until users do. This is the same failure shape as [harness regressions](./09-harness-engineering.md) — invisible without a suite.
+- **Non-determinism** — repeated executions and provider-side model revisions can produce different outputs for the same input.
+- **Non-unique valid outputs** — grading becomes a measurement component with its own error profile.
+- **Component attribution** — retrieval, prompts, tools, and models can regress independently; end-to-end scores alone cannot localize the cause. [RAG evaluation](./04-rag-patterns.md) therefore separates retrieval and generation metrics.
+- **Silent regression** — behavior can degrade without crashes or protocol errors; [harness regression suites](./09-harness-engineering.md) make that change observable.
 
 The result is statistical and conditional: “system revision A has estimated loss $L$ on population $P$ under evaluator revision $E$.” Change the population, judge, prompt, tool environment, or model resolution and it is a different experiment.
 

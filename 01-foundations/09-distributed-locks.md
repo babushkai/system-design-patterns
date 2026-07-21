@@ -2,7 +2,7 @@
 
 A distributed lock is a protocol for serializing a named critical section across processes that can pause, disconnect, restart, and disagree about time. Mutual exclusion at the lock service is only half the safety argument. A former holder may continue after its grant expires, so correctness-critical effects need a monotonically ordered fencing token that the protected resource validates atomically with the effect.
 
-This chapter owns **lock API semantics, critical-section scope, wait queues, fencing at protected resources, multi-lock deadlocks, and lock-service operation**. [Leader Election](../02-distributed-databases/09-leader-election.md) owns long-lived leadership terms, activation barriers, and failover. [Leases, Heartbeats, and Recovery](../18-workflow-job-systems/08-leases-heartbeats-recovery.md) owns task-claim renewal and abandoned-work recovery. [Consensus Algorithms](../02-distributed-databases/08-consensus-algorithms.md) owns how a replicated service agrees on lock state.
+Scope: **lock API semantics, critical-section scope, wait queues, fencing at protected resources, multi-lock deadlocks, and lock-service operation**. [Leader Election](../02-distributed-databases/09-leader-election.md) owns long-lived leadership terms, activation barriers, and failover. [Leases, Heartbeats, and Recovery](../18-workflow-job-systems/08-leases-heartbeats-recovery.md) owns task-claim renewal and abandoned-work recovery. [Consensus Algorithms](../02-distributed-databases/08-consensus-algorithms.md) owns how a replicated service agrees on lock state.
 
 ## Primary Evidence and Scope
 

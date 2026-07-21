@@ -4,7 +4,7 @@
 
 Distributed tracing reconstructs the causal path of one operation across process, protocol, queue, and region boundaries. Its correctness depends on context propagation, stable span semantics, explicit retry and asynchronous links, and a sampling policy that preserves the incidents and populations you intend to analyze.
 
-Tracing is also the natural place to introduce the shared telemetry architecture used by this section: instrumentation emits typed signals into local or regional collectors; collectors validate, enrich, redact, sample/aggregate, buffer, and export; storage/query systems index each signal under different cost and consistency models; a versioned control plane distributes schemas, sampling, routing, and retention policy. Metrics, logs, alerts, SLOs, cost, and incidents cross-link this architecture instead of redefining it.
+Shared telemetry architecture: instrumentation emits typed signals; local or regional collectors validate, enrich, redact, sample or aggregate, buffer, and export; stores index each signal under distinct cost and consistency models; a versioned control plane distributes schema, sampling, routing, and retention policy. Later chapters reuse this plane.
 
 Head sampling decides cheaply before the trace is known. Tail sampling can retain errors and high latency but must buffer incomplete traces and make decisions under timeout, memory, and multi-region constraints. A hybrid usually combines a deterministic baseline with bounded tail rules. Trace context and baggage are untrusted at external boundaries: they are correlation hints, not authentication, and baggage needs an allowlist, size budget, and privacy policy.
 
@@ -72,7 +72,7 @@ The control plane publishes immutable, versioned policy. Collectors report desir
 7. Control-plane failure does not silently disable privacy, residency, or tenant policy.
 8. Observability infrastructure has independent health signals and failure domains from the services it observes.
 
-The later chapters own signal-specific collection and storage details. This chapter now focuses on traces.
+Scope below: trace-specific collection and storage; later chapters cover the other signals.
 
 ## Trace Workload and Contract
 

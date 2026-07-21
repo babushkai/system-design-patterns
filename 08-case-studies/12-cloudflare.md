@@ -2,13 +2,13 @@
 
 ## Scope and Evidence Contract
 
-Cloudflare publishes unusually detailed engineering accounts, but each article describes a component, date, and measurement boundary. This chapter uses three labels:
+Cloudflare publishes detailed engineering accounts, each bounded by component, date, and measurement. Evidence labels:
 
 - **Documented fact:** a statement in a dated Cloudflare source.
 - **Inference:** a design consequence derived from those facts.
 - **Reference design:** a composite assembled for review. It must not be read as Cloudflare's documented end-to-end request path.
 
-That distinction is essential here. Anycast ingress, Unimog, Pingora, Workers, Quicksilver, and Durable Objects are all documented systems. Public sources do **not** establish that every request traverses all of them, in that order, on one machine.
+Anycast ingress, Unimog, Pingora, Workers, Quicksilver, and Durable Objects are documented systems. Public sources do **not** establish that every request traverses all of them, in that order, on one machine.
 
 ## The Workload Is Several Systems, Not One Pipeline
 

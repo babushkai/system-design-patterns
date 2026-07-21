@@ -2,7 +2,7 @@
 
 Publish-subscribe turns one committed fact into independent consumption streams. Its central abstraction is not “send to many services”; it is a durable event plus subscription state that allows each consumer to progress, pause, replay, filter, and fail without changing another consumer’s position.
 
-This chapter owns topic contracts, fan-out architecture, subscription state, replay/bootstrap, filtering, and schema governance. It deliberately does not re-teach [Ordering](03-message-ordering.md) or [Delivery Guarantees](04-delivery-guarantees.md). Atomic domain publication belongs to [Outbox and Inbox](07-outbox-pattern.md). Multi-step business execution belongs to [Durable Workflows](../18-workflow-job-systems/04-durable-execution-workflow-engines.md) and [Retry, Idempotency, and Compensation](../18-workflow-job-systems/06-retry-idempotency-compensation.md).
+Scope: topic contracts, fan-out architecture, subscription state, replay/bootstrap, filtering, and schema governance. It deliberately does not re-teach [Ordering](03-message-ordering.md) or [Delivery Guarantees](04-delivery-guarantees.md). Atomic domain publication belongs to [Outbox and Inbox](07-outbox-pattern.md). Multi-step business execution belongs to [Durable Workflows](../18-workflow-job-systems/04-durable-execution-workflow-engines.md) and [Retry, Idempotency, and Compensation](../18-workflow-job-systems/06-retry-idempotency-compensation.md).
 
 ## Workload and contract
 
@@ -102,7 +102,7 @@ CREATING -> BOOTSTRAPPING -> ACTIVE -> PAUSED -> DRAINING -> DELETED
 
 Creation pins a start point and filter/schema policy. Bootstrapping may need a source snapshot plus stream suffix. Active consumers fetch under a membership generation. Pausing stops new delivery but preserves checkpoint and retention lease according to policy. Draining stops new work, waits for in-flight claims, then seals a final checkpoint. Deletion has a recovery grace period before metadata and retained data are reclaimed.
 
-Checkpoint granularity controls duplicate replay and write load. Per-message checkpoints minimize replay but can dominate storage I/O. Batching checkpoints reduces writes but replays the uncommitted suffix after failure. The delivery chapter explains the effect boundary; here the subscription records a durable scan position only after the consumer declares the batch complete.
+Checkpoint granularity controls duplicate replay and write load. Per-message checkpoints minimize replay but can dominate storage I/O. Batching reduces writes but replays the uncommitted suffix after failure. [Delivery Guarantees](04-delivery-guarantees.md) defines the effect boundary; the subscription records a durable scan position only after the consumer declares the batch complete.
 
 Store both logical position and event/source time. Position is authoritative for progress; time supports lag and seek. Event `occurred_at` may be late or client-skewed, so use broker-recorded time for transport lag and source version/checkpoint for data completeness.
 

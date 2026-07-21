@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-A Bloom filter answers set-membership queries with one-sided error: "definitely not present" or "probably present," never a false negative. It does this in roughly 10 bits per element at a 1% false-positive rate — against an information-theoretic minimum of ~6.6 bits — which is why it sits in front of nearly every disk read in an LSM-tree storage engine. But the textbook picture ("bit array plus k hashes") hides the parts that matter in production: the false-positive rate is a *budget* that degrades quadratically-ish as the filter overfills (a filter sized for 1M keys holding 5M is ~83% false positives, not 5%); the k probes are k random DRAM cache misses unless you use a blocked layout; uniform bits-per-key across LSM levels is provably the wrong allocation (Monkey); and for immutable data, Bloom is no longer the best filter — Ribbon and binary fuse filters get 20–30% closer to the entropy bound. This chapter derives the math honestly, walks the LSM read path where filters earn their keep, and covers the modern filter zoo and the ways filters fail silently.
+A Bloom filter answers membership with one-sided error: "definitely absent" or "probably present," never a false negative. Roughly 10 bits per element yields a 1% target false-positive rate, versus an information-theoretic minimum near 6.6 bits. Production design must account for overfill, random-memory probes, nonuniform LSM-level budgets, and more compact immutable-set alternatives such as Ribbon and binary fuse filters.
 
 ---
 
@@ -27,9 +27,9 @@ Same lookup with a 1% FPR filter per run:
   → 100–200× reduction in read amplification for negative lookups
 ```
 
-And negative lookups dominate more workloads than intuition suggests: deduplication ("have I seen this event ID?"), insert-if-absent and uniqueness checks, cache-fill probes, write paths that must verify a key does *not* exist before creating it. In these workloads the common case is the miss, and the filter converts the common case from "read every level" to "read nothing."
+Negative lookups are common in deduplication, insert-if-absent and uniqueness checks, cache-fill probes, and conditional creation. A filter converts that common miss from "read every level" to "read nothing."
 
-This is the framing to keep: **a Bloom filter is a prepaid answer for the question "is it worth going to disk?"** Everything else — sizing, hashing, layout — is about how much that prepaid answer costs and how often it lies.
+**A Bloom filter prepays the decision "is disk access warranted?"** Sizing, hashing, and layout determine that decision's cost and false-positive rate.
 
 ---
 

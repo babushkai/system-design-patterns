@@ -1,8 +1,8 @@
 # Lexical Query Execution
 
-Lexical search turns a request into bounded work over dictionaries, postings, stored values, and aggregation structures. The difficult system-design problem is not implementing an `AND` over two lists. It is preserving the meaning of text across indexing and querying, selecting an execution plan that avoids unnecessary postings, producing a defensible top-k under deadlines, and preventing one adversarial query from monopolizing the cluster.
+Lexical search turns a request into bounded work over dictionaries, postings, stored values, and aggregation structures. Correctness requires consistent text semantics across indexing and querying; efficiency requires selective postings traversal, deadline-aware top-k execution, and admission control for adversarial queries.
 
-This chapter owns **analysis and shard-local lexical execution**: query parsing, tokenization, Boolean and positional retrieval, BM25, filters, top-k pruning, facets, distributed scoring, pagination, and query admission. [Search Index Architecture and Internals](01-inverted-indexes.md) owns segment durability, merge lifecycle, sharding, and recovery. [Ranking and Evaluation](04-ranking-algorithms.md) owns learned reranking and relevance experiments. Autocomplete has a separate serving path in [Typeahead and Autocomplete](06-typeahead-autocomplete.md).
+Analysis and shard-local execution cover query parsing, tokenization, Boolean and positional retrieval, BM25, filters, top-k pruning, facets, distributed scoring, pagination, and query admission. [Search Index Architecture and Internals](01-inverted-indexes.md) covers segment durability, merge lifecycle, sharding, and recovery; [Ranking and Evaluation](04-ranking-algorithms.md) covers learned reranking and relevance experiments; [Typeahead and Autocomplete](06-typeahead-autocomplete.md) covers autocomplete serving.
 
 ## Workload and contract
 

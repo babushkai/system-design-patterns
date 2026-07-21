@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-ML capacity planning converts measured workload envelopes into supply, placement, and cost commitments. Accelerators are expensive indivisible resources; models transform ingress into compute, memory, I/O, and dependency demand; supply can take longer to become ready than a burst lasts. [Model Serving](./03-model-serving.md) owns per-replica batching, queueing, latency, memory, and warm-up mechanics. This chapter consumes those versioned benchmark surfaces, propagates demand through routing and dependencies, and solves for ready capacity across normal peaks, rollouts, failure domains, quota lead times, and workload uncertainty. Batch inference is governed by deadline throughput; training by resource-hours, I/O, scheduler delay, and time-to-quality. The central rule is **size the complete system against measured safe goodput in named scenarios, not an average metric or advertised hardware peak.**
+ML capacity planning turns measured workload envelopes and versioned per-replica benchmarks into ready-capacity, placement, and cost commitments. Size the complete system against safe goodput for named peak, rollout, failure, and quota scenarios—not averages or hardware peaks. Batch inference is bounded by deadline throughput; training by resource-hours, I/O, scheduler delay, and time-to-quality. [Model Serving](./03-model-serving.md) covers per-replica mechanics; [Distributed Training Internals](./15-distributed-training-internals.md) covers parallelism and collective behavior.
 
 ---
 
@@ -76,7 +76,7 @@ Pipeline capacity is also bounded by serial fractions. For a batch path with ide
 speedup(N) ≤ 1 / (serial_fraction + parallel_fraction / N)
 ```
 
-This does not predict a real heterogeneous pipeline, but it exposes why adding workers stops helping when a single writer, coordinator, metadata call, or shuffle boundary remains serial. [Distributed Training Internals](./15-distributed-training-internals.md) owns the collective and parallelism mechanics; this chapter uses their measured throughput as one input to fleet and cost decisions.
+This does not predict a real heterogeneous pipeline, but it exposes why adding workers stops helping when a single writer, coordinator, metadata call, or shuffle boundary remains serial. Feed measured distributed-training throughput into fleet and cost decisions.
 
 ---
 

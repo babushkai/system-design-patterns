@@ -8,12 +8,12 @@ An isolation level is a contract over **which transaction histories may commit**
 
 ## Scope: Transaction Histories, Not Replica Freshness
 
-This chapter owns concurrency among transactions that access one transactional authority. It explains snapshots, locks, serialization conflicts, and retry behavior.
+Transaction isolation governs concurrent access to one transactional authority through snapshots, locks, serialization conflicts, and retry behavior.
 
-- [ACID Transactions](01-acid-transactions.md) owns atomic commit, durability, WAL, and recovery.
-- [Consistency Models](04-consistency-models.md) owns client-visible guarantees across replicas and services.
-- [Distributed Transactions](../02-distributed-databases/07-distributed-transactions.md) owns commit across multiple resource managers.
-- [Idempotency](08-idempotency.md) owns duplicate requests and durable effect deduplication.
+- [ACID Transactions](01-acid-transactions.md) covers atomic commit, durability, WAL, and recovery.
+- [Consistency Models](04-consistency-models.md) covers client-visible guarantees across replicas and services.
+- [Distributed Transactions](../02-distributed-databases/07-distributed-transactions.md) covers commit across multiple resource managers.
+- [Idempotency](08-idempotency.md) covers duplicate requests and durable effect deduplication.
 
 Those boundaries matter. A serializable transaction on a lagging read replica can be internally serializable yet stale. A linearizable key-value operation can be individually current yet fail a multi-row invariant. “The database is ACID” does not specify either behavior.
 

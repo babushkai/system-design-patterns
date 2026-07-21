@@ -2,7 +2,7 @@
 
 Ordering is a scoped relation between events, not a property that a broker can provide “globally” without cost or qualification. A useful design names which events must be comparable, who assigns their sequence, what happens at gaps, and how epochs prevent an old writer from extending a sequence after failover.
 
-This chapter owns order scope, partition sequencing, causal metadata, gaps, reorder buffers, epochs, rebalancing, and resharding. Queue claims are in [Message Queue Architecture](01-message-queues.md); duplicate/loss and acknowledgement ambiguity are in [Delivery Guarantees](04-delivery-guarantees.md).
+Scope: order scope, partition sequencing, causal metadata, gaps, reorder buffers, epochs, rebalancing, and resharding. Queue claims are in [Message Queue Architecture](01-message-queues.md); duplicate/loss and acknowledgement ambiguity are in [Delivery Guarantees](04-delivery-guarantees.md).
 
 ## Workload and order contract
 
@@ -91,7 +91,7 @@ only if current_version = expected_version
 publish versions expected_version+1 ... expected_version+n
 ```
 
-Two concurrent commands cannot both claim the same next version. The event store chapter owns that transaction; downstream ordering uses its version rather than manufacturing a second unrelated counter.
+The [event-store transaction](05-event-sourcing.md) prevents concurrent commands from claiming the same next version; downstream ordering should reuse that version rather than create another counter.
 
 On producer retry, an idempotent append protocol can map `(producer_id, epoch, producer_sequence)` to the prior result. This prevents retry reordering inside that producer session. It does not order independent producers or guarantee an external effect; those are separate contracts.
 

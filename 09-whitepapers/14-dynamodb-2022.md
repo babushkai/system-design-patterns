@@ -6,7 +6,7 @@
 - **Venue and version:** USENIX Annual Technical Conference 2022 proceedings paper
 - **Evaluated system:** DynamoDB as described through 2021, with selected production observations and one YCSB microbenchmark
 
-This is not the 2007 Dynamo architecture. It is also not current product documentation. Capacity-unit definitions, on-demand behavior, backup retention, and features can evolve; the values below are pinned to the paper.
+Scope: the 2022 DynamoDB paper—not 2007 Dynamo or current product documentation. Capacity units, on-demand behavior, backup retention, and features are pinned to the paper.
 
 ## Workload and Published Context
 

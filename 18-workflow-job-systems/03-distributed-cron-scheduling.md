@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-A distributed scheduler turns time-based intent into durable, claimable work. The difficult parts are not parsing cron expressions. They are materializing each logical occurrence exactly once in scheduler state, surviving missed ticks and failover, preventing stale owners from committing, distributing millions of timers without hot partitions, admitting only work the fleet can finish, and preserving schedule semantics across time zones and version changes.
+A distributed scheduler materializes time-based intent as durable, claimable occurrences. It must preserve occurrence uniqueness across missed ticks and failover, fence stale owners, distribute timers without hot partitions, admit only work the fleet can finish within its deadline, and preserve timezone and version semantics.
 
 Separate two responsibilities:
 

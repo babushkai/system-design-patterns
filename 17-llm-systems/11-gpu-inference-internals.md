@@ -82,7 +82,7 @@ Llama-3-70B (80 layers, 8 KV heads, head_dim 128, BF16):
 
 The logical amount is sharded according to the serving parallelism; the BF16 weights themselves already require multiple 80 GB devices. Capacity planning therefore applies the same placement contract to both weight and KV shards rather than treating 40 GB as a stand-alone single-device deployment.
 
-(The platform-level admission, paging, and fragmentation consequences are developed in [Model Serving](../16-ml-systems/03-model-serving.md); this chapter owns the byte equation.)
+This equation gives aggregate logical KV memory across the replica; [Model Serving](../16-ml-systems/03-model-serving.md) covers platform admission, paging, and fragmentation.
 
 The capacity story is well known; the *bandwidth* story is the one that surprises. During decode, attention reads prior KV state in addition to weights. Across a sharded replica, an illustrative logical batch of 32 sequences at 16K tokens with the sizing above contains `32 × 16,384 × 320 KB ≈ 168 GB` of aggregate KV, compared with about 70 GB of aggregate FP8 weights. The physical traffic per device depends on tensor/sequence parallelism, KV layout, kernels, and cache hierarchy, but the context-dependent term does not amortize like dense weights. GQA, latent KV representations, and lower-precision KV can therefore change throughput as well as capacity. Prefix reuse avoids recomputing the shared prefill; it does not eliminate decode-time reads of resident KV.
 
@@ -205,7 +205,7 @@ admit tenant/security domain
   -> reassign only after verification
 ```
 
-If the platform cannot state what reset or isolation guarantee applies to a device generation and sharing mode, do not reuse it across a stronger trust boundary. Encrypting off-device KV protects storage/transport only when keys, tenant-bound authenticated metadata, deletion, and cache generations are correct. [Agent Inference](./12-agent-inference.md) owns distributed KV identity/residency; [LLM Infrastructure](./05-llm-infrastructure.md) owns tenant admission and fleet placement. This chapter owns how device/runtime sharing changes the hardware ledger and isolation assumptions.
+If the platform cannot state what reset or isolation guarantee applies to a device generation and sharing mode, do not reuse it across a stronger trust boundary. Encrypting off-device KV protects storage and transport only when keys, tenant-bound authenticated metadata, deletion, and cache generations are correct. [Agent Inference](./12-agent-inference.md) covers distributed KV identity and residency; [LLM Infrastructure](./05-llm-infrastructure.md) covers tenant admission and fleet placement. Device/runtime sharing defines the hardware ledger and isolation assumptions.
 
 ---
 

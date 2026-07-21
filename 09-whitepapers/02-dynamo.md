@@ -11,7 +11,7 @@ Dynamo is a study in making **write acceptance during failure** the primary inva
 
 The 2007 system is **not Amazon DynamoDB**. The names share lineage, but the 2022 DynamoDB paper describes leader-based Multi-Paxos replication, a managed control plane, and no application-visible vector-clock reconciliation. See [Amazon DynamoDB (2022)](./14-dynamodb-2022.md) for that later design.
 
-The canonical concepts—[Leaderless Replication](../02-distributed-databases/03-leaderless-replication.md), [Partitioning](../02-distributed-databases/05-partitioning-strategies.md), and [Conflict Resolution](../02-distributed-databases/04-conflict-resolution.md)—are developed elsewhere. Here the goal is to connect those mechanisms to the paper's workload and evidence.
+Scope here: how the paper composes [Leaderless Replication](../02-distributed-databases/03-leaderless-replication.md), [Partitioning](../02-distributed-databases/05-partitioning-strategies.md), and [Conflict Resolution](../02-distributed-databases/04-conflict-resolution.md) for Dynamo's workload and evidence.
 
 ## The service problem Dynamo chose
 

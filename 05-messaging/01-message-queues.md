@@ -2,7 +2,7 @@
 
 A message queue is a durable ownership-transfer mechanism for asynchronous work. Producers append an intent; one worker at a time receives a temporary claim; completion becomes final only when the queue records an acknowledgement. The core design problem is managing that state under crashes, overload, rebalancing, and retention—not choosing an SDK call.
 
-This chapter owns queue mechanics: enqueue, claim/visibility, acknowledgement, partitioning, worker flow control, backlog, retention, and capacity. [Message Ordering](03-message-ordering.md) owns sequence guarantees, [Delivery Guarantees](04-delivery-guarantees.md) owns duplicate/loss boundaries, and [Poison-Message Quarantine](08-dead-letter-queues.md) owns failed-message repair.
+Scope: queue mechanics: enqueue, claim/visibility, acknowledgement, partitioning, worker flow control, backlog, retention, and capacity. [Message Ordering](03-message-ordering.md) owns sequence guarantees, [Delivery Guarantees](04-delivery-guarantees.md) owns duplicate/loss boundaries, and [Poison-Message Quarantine](08-dead-letter-queues.md) owns failed-message repair.
 
 ## Workload and contract
 
@@ -29,7 +29,7 @@ Specify separately:
 - behavior when the queue is full or its control plane is unavailable;
 - whether approximate depth and age metrics are sufficient.
 
-The queue contract should not promise that a handler’s external effect happens once. Acknowledgement and side-effect ambiguity are end-to-end concerns covered in the delivery chapter.
+The queue contract should not promise that a handler’s external effect happens once. [Delivery Guarantees](04-delivery-guarantees.md) covers acknowledgement and side-effect ambiguity end to end.
 
 ## State and invariants
 
@@ -99,7 +99,7 @@ Strict priority can starve normal work. Use weighted service, reserved capacity,
 
 ## Partitioning and consumer assignment
 
-Partitions are the unit of storage placement and parallelism. Hash routing balances arbitrary keys; entity routing keeps related work together; tenant routing supports isolation but creates skew. Ordering consequences belong to the ordering chapter.
+Partitions are the unit of storage placement and parallelism. Hash routing balances arbitrary keys; entity routing keeps related work together; tenant routing supports isolation but creates skew. [Message Ordering](03-message-ordering.md) covers the ordering consequences.
 
 Partition count limits maximum useful parallelism and affects metadata, file handles, recovery, and fan-out. More partitions are not free. Use many logical/virtual buckets mapped to physical partitions when rebalancing is expected, but pin the mapping version into each routing decision so producers and consumers agree.
 

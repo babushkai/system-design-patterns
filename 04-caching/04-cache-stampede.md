@@ -15,7 +15,7 @@ The safety objective is not “restore hit rate quickly.” It is:
 
 Use local request coalescing, a distributed lease or server-supported recache token where needed, stale-while-revalidate, probabilistic early recomputation, TTL jitter, and admission control as complementary layers. Warming without rate limits is a denial-of-service job pointed at your own origin.
 
-This chapter owns refill amplification, stampede control, cold-start recovery, and warming rollouts. Cache policy and capacity are in [Cache Semantics and Economics](01-cache-strategies.md), invalidation races in [Cache Invalidation and Coherence](02-cache-invalidation.md), and node topology in [Distributed Cache Internals](03-distributed-caching.md).
+Scope: refill amplification, stampede control, cold-start recovery, and warming rollouts. Cache policy and capacity are in [Cache Semantics and Economics](01-cache-strategies.md), invalidation races in [Cache Invalidation and Coherence](02-cache-invalidation.md), and node topology in [Distributed Cache Internals](03-distributed-caching.md).
 
 ---
 

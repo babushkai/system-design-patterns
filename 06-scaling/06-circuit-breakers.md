@@ -435,7 +435,3 @@ Start with deadline propagation and concurrency bounds. Add an error-state break
 - Netflix, [Concurrency Limits](https://github.com/Netflix/concurrency-limits), including gradient-based adaptive limits.
 - Google SRE, [Addressing Cascading Failures](https://sre.google/sre-book/addressing-cascading-failures/).
 - Nathan Bronson et al., [Metastable Failures in Distributed Systems](https://sigops.org/s/conferences/hotos/2021/papers/hotos21-s11-bronson.pdf).
-
----
-
-**Next:** [Backpressure](./07-backpressure.md) follows admitted work through bounded buffers and propagates saturation to producers.

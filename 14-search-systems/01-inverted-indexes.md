@@ -1,8 +1,8 @@
 # Search Index Architecture and Internals
 
-A search index is a derived, query-optimized projection of an authoritative data source. Its central promise is not merely that terms can be found quickly. It must publish a coherent index generation, survive process and machine failures, bound freshness, and return results from a known logical snapshot while indexing and segment maintenance continue in the background.
+A search index is a derived, query-optimized projection of an authoritative data source. It must publish coherent generations, survive process and machine failures, bound freshness, and serve a known logical snapshot while indexing and segment maintenance continue.
 
-This chapter owns the **physical lifecycle of a lexical search index**: document ingestion, immutable segments, commit points, deletion state, merges, shard placement, replication, recovery, and distributed fan-out. [Lexical Query Execution](02-full-text-search.md) owns analyzers, postings traversal, BM25, filters, aggregations, and top-k execution. [Ranking and Evaluation](04-ranking-algorithms.md) owns learned ranking and relevance measurement.
+The physical index lifecycle covers document ingestion, immutable segments, commit points, deletion state, merges, shard placement, replication, recovery, and distributed fan-out. See [Lexical Query Execution](02-full-text-search.md) for analyzers, postings traversal, BM25, filters, aggregations, and top-k execution; see [Ranking and Evaluation](04-ranking-algorithms.md) for learned ranking and relevance measurement.
 
 ## Workload and service contract
 

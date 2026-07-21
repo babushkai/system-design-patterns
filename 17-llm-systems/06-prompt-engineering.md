@@ -123,7 +123,7 @@ The request compiler preserves trust labels and structural boundaries. For examp
 </documents>
 ```
 
-Demarcation reduces structural ambiguity but remains a model-level signal. Instruction-hierarchy training, content transformations, and classifiers may reduce attack success on a qualified test set; they do not create authority. The surrounding architecture must remain safe when the model follows hostile content: attenuated capabilities, separate secret and execution domains, authorization at the effect boundary, output/data-loss controls, and human authority for high-impact actions. System prompts contain no secrets because confidentiality of model-visible text is not a security control. [Harness Engineering](./09-harness-engineering.md) owns those controls; this chapter owns preserving provenance through compilation and testing the hostile-content path with the exact request tuple.
+Demarcation reduces structural ambiguity but remains a model-level signal. Instruction-hierarchy training, content transformations, and classifiers may reduce attack success on qualified tests; they do not grant authority. The architecture must remain safe when the model follows hostile content by using attenuated capabilities, separated secret and execution domains, effect-boundary authorization, data-loss controls, and human approval for high-impact actions. Never place secrets in system prompts. [Harness Engineering](./09-harness-engineering.md) covers these controls; prompt compilation must preserve provenance and test hostile content against the exact request tuple.
 
 ---
 

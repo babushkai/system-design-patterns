@@ -1,12 +1,12 @@
 # Twitter/X Timelines: Evidence, Inference, and Reference Design
 
-Twitter is a useful system-design case because a small durable write can trigger graph expansion, indexing, ranking, notification, and analytics work. It is also easy to turn that lesson into folklore. This chapter keeps three kinds of statements separate:
+A small durable Tweet can trigger graph expansion, indexing, ranking, notification, and analytics work. To keep that lesson from becoming folklore, claims use three labels:
 
 - **Documented** means a dated Twitter/X engineering source or paper states the behavior.
 - **Inference** means the conclusion follows from documented constraints, but the private implementation is not published.
 - **Reference design** means a defensible design for a Twitter-like service, not a claim about Twitter/X production.
 
-Product names and architectures change. “Current” below always means current in the cited source, not necessarily current today.
+“Current” means current in the cited source, not necessarily today.
 
 ## Evidence Boundary
 
@@ -18,7 +18,7 @@ Product names and architectures change. “Current” below always means current
 | The 2012 Earlybird paper | A segment-oriented real-time search engine designed for rapidly arriving Tweets | The present search stack |
 | Twitter's October 2021 event-processing post | A dated snapshot of approximately 400 billion real-time events and petabyte-scale daily data, with real-time and batch processing in three datacenters | Tweet request rate or user count |
 
-The scale figures in this chapter retain those source dates. They are historical observations, not sizing constants.
+Scale figures retain their source dates; they are historical observations, not sizing constants.
 
 ## Workload and Requirements
 

@@ -2,7 +2,7 @@
 
 Capacity planning turns a workload contract into a resource, failure-headroom, and lead-time plan. The useful result is not one server count. It is a versioned model that explains which resource binds, which assumptions dominate, what happens during a named failure or rollout, when a hard limit will be reached, and which measurements will recalibrate the plan.
 
-This chapter owns **technical demand estimation, resource service-demand models, queueing/headroom reasoning, workload forecasts, failure capacity, benchmark calibration, and exhaustion lead time**. [Auto-Scaling](../06-scaling/08-auto-scaling.md) owns delayed feedback, metrics, controller stability, and safe scale-down. [FinOps and Cost Engineering](../11-observability/06-finops-cost-engineering.md) owns prices, allocation, commitments, showback, and unit economics. [Horizontal vs Vertical Scaling](../06-scaling/02-horizontal-vertical.md) owns capacity-change actuators and transition protocols.
+Scope: **technical demand estimation, resource service-demand models, queueing/headroom reasoning, workload forecasts, failure capacity, benchmark calibration, and exhaustion lead time**. [Auto-Scaling](../06-scaling/08-auto-scaling.md) owns delayed feedback, metrics, controller stability, and safe scale-down. [FinOps and Cost Engineering](../11-observability/06-finops-cost-engineering.md) owns prices, allocation, commitments, showback, and unit economics. [Horizontal vs Vertical Scaling](../06-scaling/02-horizontal-vertical.md) owns capacity-change actuators and transition protocols.
 
 ## Primary Evidence and Scope
 

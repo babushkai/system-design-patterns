@@ -10,7 +10,7 @@ OAuth is a framework for delegated API access. OpenID Connect (OIDC) adds an ide
 
 For browser and native-app user flows, use authorization code with PKCE, exact redirect-URI matching, issuer validation, `state` or equivalent request correlation, and OIDC `nonce` where required. Bind tokens to the intended resource/audience, keep access tokens short-lived, rotate refresh tokens for public clients, and never send an ID token to an API as an access token.
 
-The system-design work is in authorization transaction state, client registration, redirect and consent policy, token/key lifecycle, multi-region replay protection, revocation, sender constraint, and failure behavior when the authorization service is unavailable.
+Design authorization transaction state, client registration, redirect and consent policy, token/key lifecycle, multi-region replay protection, revocation, sender constraint, and explicit behavior when the authorization service is unavailable.
 
 ---
 

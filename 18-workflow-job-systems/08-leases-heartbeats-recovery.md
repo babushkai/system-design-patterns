@@ -1,10 +1,10 @@
 # Leases, Heartbeats, and Recovery
 
-## What This Chapter Owns
+## Job-Attempt Authority Protocol
 
-A job system needs a protocol for one concrete question: **which attempt is currently authorized to advance this job, and how can the system safely replace that attempt?** A lease makes the authorization temporary, an attempt epoch names each grant, and recovery moves authority after the grant expires or is revoked. The hard part is not putting a timeout on a row. It is preventing an old attempt from committing state or effects after a replacement exists.
+A lease grants one attempt temporary authority; an epoch names that grant; recovery advances authority after expiry or revocation. Stale-attempt fencing—not the timeout itself—prevents a replaced attempt from committing state or effects.
 
-This chapter specifies the job-attempt protocol: claim epochs, renewal, separate liveness and progress signals, deadlines, reclaim, checkpoint resume, stale-attempt fencing, shutdown, and reconciliation. [Distributed Locks](../01-foundations/09-distributed-locks.md) owns generic lock acquisition and linearizability. [Failure Modes](../01-foundations/06-failure-modes.md) owns the general limits of failure detection. [Retry, Idempotency, and Compensation](./06-retry-idempotency-compensation.md) owns end-to-end effect protocols. Here those ideas are applied to one durable job and its successive attempts.
+The job-attempt protocol covers claim epochs, renewal, separate liveness and progress signals, deadlines, reclaim, checkpoint resume, fencing, shutdown, and reconciliation. [Distributed Locks](../01-foundations/09-distributed-locks.md) covers generic lock acquisition; [Failure Modes](../01-foundations/06-failure-modes.md) covers failure detection; [Retry, Idempotency, and Compensation](./06-retry-idempotency-compensation.md) covers end-to-end effect protocols.
 
 Do not assume every ownership mechanism has these semantics. A database lease, an SQS visibility timeout, a RabbitMQ delivery acknowledgement, an etcd lease, and a ZooKeeper session/version are different contracts. A visibility timeout makes a message eligible for redelivery; it does not fence the first consumer. A RabbitMQ acknowledgement is scoped to its delivery and channel. An etcd lease TTL and an MVCC revision are distinct values. A ZooKeeper version or sequence number is useful only within the comparison protocol built around it. Translate the invariant, not the product name.
 

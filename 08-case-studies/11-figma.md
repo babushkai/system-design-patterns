@@ -2,13 +2,13 @@
 
 ## Scope and Evidence Contract
 
-This chapter separates three kinds of statements:
+Evidence labels:
 
 - **Documented fact** means a claim made in a dated Figma engineering article. The date matters because the architecture changed.
 - **Inference** means a consequence that follows from those facts but is not itself claimed by Figma.
 - **Reference design** means a reviewable architecture assembled from the public mechanisms. It is useful for design work, but it is **not** a claim that every Figma request traverses that exact topology today.
 
-The public record covers different eras: the 2017 browser engine, the 2018 Rust multiplayer process model, the 2019 synchronization model, the 2022 durability redesign, and the 2023–2024 database program. Treating all of them as one timeless diagram would erase the most instructive part: how the system evolved as its bottleneck moved.
+The public record spans the 2017 browser engine, 2018 Rust multiplayer process model, 2019 synchronization model, 2022 durability redesign, and 2023–2024 database program. Combining them into one timeless diagram would erase how the system evolved as its bottleneck moved.
 
 ## Workload and Invariants
 

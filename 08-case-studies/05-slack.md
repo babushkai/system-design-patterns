@@ -1,8 +1,8 @@
 # Slack: Evidence, Inference, and a Durable Real-Time Messaging Reference Design
 
-Slack's central systems problem is not opening a WebSocket. It is preserving durable, permissioned conversation state while millions of long-lived connections receive transient updates, reconnect, and cross organizational boundaries. Slack Engineering has published unusually useful slices of this evolution, but each source is dated and partial.
+Slack's central systems problem is preserving durable, permissioned conversation state while millions of long-lived connections receive transient updates, reconnect, and cross organizational boundaries—not opening a WebSocket. Slack Engineering documents useful slices of this evolution, but each source is dated and partial.
 
-Claims are labeled as:
+Claims are labeled:
 
 - **Documented** — stated by a dated Slack primary source or incident review.
 - **Inference** — follows from published constraints, without asserting a private implementation.

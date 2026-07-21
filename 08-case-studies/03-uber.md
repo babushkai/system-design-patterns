@@ -1,8 +1,8 @@
 # Uber: Evidence, Inference, and a Real-Time Marketplace Reference Design
 
-Ride fulfillment joins distributed-systems correctness to an external world that keeps moving while packets are delayed. Driver location is an estimate, an offer is not an assignment, and payment must follow an authoritative trip lifecycle. Public Uber sources describe several generations of this stack; they do not expose every current service.
+Ride fulfillment applies distributed-systems correctness to a physical world that keeps moving while packets are delayed. Driver location is an estimate, an offer is not an assignment, and payment must follow an authoritative trip lifecycle. Public sources describe several generations, not every current service.
 
-This chapter marks claims as:
+Claims are labeled:
 
 - **Documented** — stated in a dated Uber engineering post, paper, repository, or company report.
 - **Inference** — follows from documented constraints but is not a published implementation detail.
@@ -19,7 +19,7 @@ This chapter marks claims as:
 | Fulfillment on Spanner, September 2021 | Uber described Cloud Spanner as storage for the rebuilt Fulfillment Platform to obtain transactional consistency and horizontal scale | Not every Uber workload uses Spanner |
 | Reinforcement-learning matching post, July 2025 | Uber reported deployment of a value-function signal in matching in more than 400 cities | Does not expose the full matching objective or allocation system |
 
-Never mix these snapshots into a single diagram labeled “Uber today.” The reference architecture below uses their lessons while declaring its own assumptions.
+Do not combine these snapshots into an “Uber today” diagram; the reference architecture declares its own assumptions.
 
 ## Workload and Requirements
 

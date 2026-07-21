@@ -2,7 +2,7 @@
 
 A database B-tree is an ordered map engineered around fixed-size pages, a buffer pool, concurrent structural changes, and crash recovery. Its value is not the textbook `O(log n)` claim; many structures have that asymptotic cost. The value is high fanout: a handful of page accesses locates a key among billions, upper levels remain cached, and linked leaves turn an ordered range into mostly sequential work.
 
-This chapter owns the B+-tree page structure, search and mutation algorithms, latching, split recovery, and physical cost model. [Secondary Indexes](../02-distributed-databases/06-secondary-indexes.md) owns distributed placement and consistency of alternate access paths. [Write-Ahead Logging](./04-write-ahead-logging.md) owns transaction recovery theory, while [LSM Trees](./02-lsm-trees.md) covers the write-buffered alternative.
+Scope: the B+-tree page structure, search and mutation algorithms, latching, split recovery, and physical cost model. [Secondary Indexes](../02-distributed-databases/06-secondary-indexes.md) owns distributed placement and consistency of alternate access paths. [Write-Ahead Logging](./04-write-ahead-logging.md) owns transaction recovery theory, while [LSM Trees](./02-lsm-trees.md) covers the write-buffered alternative.
 
 ## Workload and storage contract
 

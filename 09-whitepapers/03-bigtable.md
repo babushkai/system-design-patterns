@@ -11,7 +11,7 @@ Bigtable's central move is to expose **physical locality as part of the data mod
 
 The paper is a 2006 system snapshot. It is not documentation for the later Google Cloud Bigtable product, Apache HBase, or Cassandra. Those systems share ideas but differ in replication, consensus, APIs, compaction, and operations.
 
-Read [Data Modeling](../02-distributed-databases/10-data-modeling.md), [LSM Trees](../03-storage-engines/02-lsm-trees.md), and [SSTables and Compaction](../03-storage-engines/03-sstables-compaction.md) for the reusable concepts. This chapter asks how the paper composes them.
+Scope here: how the paper composes [Data Modeling](../02-distributed-databases/10-data-modeling.md), [LSM Trees](../03-storage-engines/02-lsm-trees.md), and [SSTables and Compaction](../03-storage-engines/03-sstables-compaction.md).
 
 ## Problem and workload shape
 

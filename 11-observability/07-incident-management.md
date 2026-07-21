@@ -8,7 +8,7 @@ Mitigation and diagnosis run in parallel, but restoration usually has priority. 
 
 Postmortems reconstruct conditions and decisions without blaming individuals. Corrective actions target detection, prevention, containment, mitigation, recovery, and organizational control; each has an owner, due/review state, verification evidence, and closure decision. A postmortem without action tracking is a narrative archive.
 
-Alert state and routing belong to [Alert Evaluation and Notification](./04-alerting.md), SLO/budget impact to [SLOs and Error-Budget Control](./05-slos-error-budgets.md), and evidence collection to [Production Logging Architecture](./03-logging.md). This chapter owns declaration through command, mitigation, communications, recovery, postmortem, and action governance.
+[Alert Evaluation and Notification](./04-alerting.md) covers alert state and routing, [SLOs and Error-Budget Control](./05-slos-error-budgets.md) budget impact, and [Production Logging Architecture](./03-logging.md) evidence collection. Scope here: declaration, command, mitigation, communications, recovery, postmortems, and action governance.
 
 ---
 

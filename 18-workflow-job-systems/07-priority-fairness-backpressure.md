@@ -2,19 +2,19 @@
 
 ## TL;DR
 
-A shared job scheduler is a resource-allocation control plane, not a FIFO with priority labels. Separate four decisions: **admission** decides whether the system can promise useful execution; **ordering** selects the next eligible work; **placement** matches work to compatible capacity; **execution control** leases, preempts, or cancels the running attempt. Strict priority protects urgent work but can starve everything else. Round robin is fair by item count but unfair when jobs have different cost. Weighted fair queueing and deficit round robin account for consumed service; dominant-resource fairness extends the idea to CPU, memory, GPU, and constrained downstream slots. Backpressure belongs at admission, before durable backlog becomes expired work. Retries consume the same tenant and class budget as original work. Every policy needs explicit invariants, a cost model resistant to gaming, scheduler failover semantics, and evidence that queue age—not only depth—stays within the service contract.
+A shared job scheduler separates admission, ordering, placement, and execution control. Strict priority can starve; round robin ignores cost; weighted fair queueing and deficit round robin allocate consumed service; dominant-resource fairness extends allocation across resource types. Apply backpressure at admission, charge retries to the original tenant and class budget, and operate against queue-age SLOs with a gaming-resistant cost model and failover-safe accounting.
 
 ---
 
 ## Scope: Scheduling Policy for Durable Work
 
-This chapter owns allocation among already-defined job classes and tenants: priority, fair share, quotas, admission, placement, and preemption.
+Scheduling policy covers priority, fair share, quotas, admission, placement, and preemption among defined job classes and tenants.
 
-- [Background Jobs and Worker Pools](02-background-jobs-worker-pools.md) owns job lifecycle, dispatch, and worker execution.
-- [General Backpressure](../06-scaling/07-backpressure.md) owns end-to-end overload propagation in request/data paths.
-- [Rate Limiting](../06-scaling/05-rate-limiting.md) owns generic token/leaky-bucket algorithms at service boundaries.
-- [Multi-Tenant Isolation](../06-scaling/12-multi-tenancy.md) and [Cell-Based Architecture](../06-scaling/11-cell-based-architecture.md) own broader placement and blast-radius boundaries.
-- [ML Training Pipelines](../16-ml-systems/05-training-pipelines.md) owns GPU-specific gang scheduling and checkpoint economics.
+- [Background Jobs and Worker Pools](02-background-jobs-worker-pools.md) covers job lifecycle, dispatch, and worker execution.
+- [General Backpressure](../06-scaling/07-backpressure.md) covers end-to-end overload propagation in request and data paths.
+- [Rate Limiting](../06-scaling/05-rate-limiting.md) covers generic token/leaky-bucket algorithms at service boundaries.
+- [Multi-Tenant Isolation](../06-scaling/12-multi-tenancy.md) and [Cell-Based Architecture](../06-scaling/11-cell-based-architecture.md) cover broader placement and blast-radius boundaries.
+- [ML Training Pipelines](../16-ml-systems/05-training-pipelines.md) covers GPU-specific gang scheduling and checkpoint economics.
 
 Here, backpressure is narrower: should a durable-work system accept another job, defer it to a known future window, or reject it because the promised completion time is already impossible?
 

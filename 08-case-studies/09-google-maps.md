@@ -2,7 +2,7 @@
 
 A global map is not one database with a spatial index. It is a family of products built from a changing world model: viewport rendering, place lookup, geocoding, road snapping, route search, traffic-aware ETA, incident updates, and turn-by-turn navigation. Each path has different freshness, latency, correctness, and privacy constraints.
 
-Public sources describe Google Maps interfaces and selected algorithms, but not a complete current production topology. This chapter therefore labels evidence explicitly:
+Public sources describe Google Maps interfaces and selected algorithms, but not a complete current production topology. Evidence labels:
 
 - **Documented**: stated in a linked Google/Google DeepMind source or primary paper; figures and capabilities are dated.
 - **Inference**: follows from documented behavior or geospatial constraints but is not a Google production claim.

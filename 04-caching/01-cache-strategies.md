@@ -14,7 +14,7 @@ A cache is a disposable, incomplete, and potentially stale projection of an auth
 
 Cache-aside and read-through describe who performs a load. Write-through, write-around, and write-behind describe where writes flow. None of them creates atomicity between an independent cache and database. Treat a cache hit as an optimization that must preserve the application's correctness contract.
 
-This chapter owns cache policy, tier placement, sizing, and economics. Freshness and invalidation are covered in [Cache Invalidation and Coherence](02-cache-invalidation.md), cluster mechanics in [Distributed Cache Internals](03-distributed-caching.md), and refill protection in [Stampede, Cold Start, and Warming](04-cache-stampede.md).
+Scope: cache policy, tier placement, sizing, and economics. Freshness and invalidation are covered in [Cache Invalidation and Coherence](02-cache-invalidation.md), cluster mechanics in [Distributed Cache Internals](03-distributed-caching.md), and refill protection in [Stampede, Cold Start, and Warming](04-cache-stampede.md).
 
 ---
 
@@ -60,7 +60,7 @@ Record a contract per cacheable object or query class:
 | Load ownership | Application, cache library, proxy, or CDN? | One named owner for miss and refresh logic |
 | Admission | Which objects deserve memory? | Reuse-distance or request-trace measurement |
 | Eviction | What may be discarded first? | Miss cost, size, frequency, and recency |
-| Invalidation | TTL, delete, event, generation, or revalidation? | Race analysis from chapter 02 |
+| Invalidation | TTL, delete, event, generation, or revalidation? | [Invalidation race analysis](02-cache-invalidation.md) |
 | Cold start | How much origin traffic appears at zero hit rate? | Load test and rollout budget |
 | Privacy | Can two principals observe the same entry? | Cache-key and response-header review |
 
@@ -103,7 +103,7 @@ read(key, deadline):
     return value, MISS
 ~~~
 
-The phrase **protected origin load** is deliberate. A raw fallback during a cache outage can turn a cache incident into a database incident. Chapter 04 covers coalescing, concurrency budgets, stale serving, and warming.
+The phrase **protected origin load** is deliberate. A raw fallback during a cache outage can turn a cache incident into a database incident. [Stampede, Cold Start, and Warming](04-cache-stampede.md) covers coalescing, concurrency budgets, stale serving, and warming.
 
 ### 2.2 Write policy semantics
 
@@ -222,7 +222,7 @@ Carry **generated_at**, **source_version**, HTTP **Age**, or an equivalent origi
 remaining_freshness = freshness_budget - (now - generated_at)
 ~~~
 
-Do not grant a fresh TTL to a value merely because it moved between caches. Chapter 02 derives the full coherence budget.
+Do not grant a fresh TTL to a value merely because it moved between caches. [Cache Invalidation and Coherence](02-cache-invalidation.md) derives the full coherence budget.
 
 ---
 

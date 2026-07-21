@@ -4,7 +4,7 @@
 
 Parallel coding agents turn software delivery into a scheduling and merge problem. Safe parallelism requires a dependency graph, explicit ownership of files and semantic invariants, isolated workspaces pinned to known revisions, bounded child budgets, durable handoffs, and an integration queue that revalidates every candidate against the actual target. The speedup is limited by the serial fraction—specification, shared interfaces, verification, conflict resolution, and approval—and by downstream capacity. More workers can increase wall-clock time when they duplicate context, contend on the same state, overload tests, or create semantic conflicts that textual merge tools cannot see.
 
-Platform state, capabilities, and effect receipts are defined in [Coding Agent Platform Fundamentals](./01-compound-engineering-fundamentals.md). This chapter owns decomposition, workspace isolation, coordination, handoff, integration, and recovery of concurrent software changes.
+Scope: decomposition, workspace isolation, coordination, handoff, integration, and recovery for concurrent changes. [Platform Fundamentals](./01-compound-engineering-fundamentals.md) defines shared state, capabilities, and effect receipts.
 
 ---
 
@@ -336,7 +336,7 @@ Parallelize when work items have stable boundaries, independent verification, an
 
 Use optimistic integration for low-conflict modules and reserved ownership for central contracts and migrations. Use stacked changes when each step is independently safe and reviewable; use one coherent candidate when splitting would create invalid intermediate states.
 
-The objective is not maximum concurrency. It is minimum safe time from accepted requirement to verified integrated behavior.
+Optimize for the shortest safe path from an accepted requirement to verified, integrated behavior—not for worker count.
 
 ---
 

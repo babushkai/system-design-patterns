@@ -8,7 +8,7 @@ Distributed logs do not have one trustworthy total order. Preserve source sequen
 
 Collection must survive file rotation, container death, duplicate delivery, partial records, backpressure, and backend outage without blocking the application indefinitely. Index only fields needed for interactive search; tier the full immutable event body into cheaper retention. Redaction and tenant routing happen before data crosses an unauthorized boundary.
 
-The shared telemetry data/control plane is defined in [Distributed Tracing and Telemetry Pipelines](./01-distributed-tracing.md). This chapter owns event schema, collection state, ordering, indexing, retention, privacy, and correlation. [Metrics](./02-metrics-monitoring.md) owns aggregates and [Incident Management](./07-incident-management.md) owns evidence handling during response.
+Shared plane: [Distributed Tracing and Telemetry Pipelines](./01-distributed-tracing.md). Scope here: event schema, collection state, ordering, indexing, retention, privacy, and correlation; [Metrics](./02-metrics-monitoring.md) covers aggregates and [Incident Management](./07-incident-management.md) evidence handling.
 
 ---
 

@@ -2,7 +2,7 @@
 
 Encoding is the durable contract between software versions. Bytes written today may be read by a rolling-deploy peer, a delayed queue consumer, a restored backup, or code written years later in another language. Choosing JSON, Protocol Buffers, or Avro therefore decides more than payload size: it decides how a reader identifies fields, skips what it does not know, applies defaults, frames messages, and proves compatibility.
 
-This chapter owns record and message representation, framing, schema authority, compatibility, parser safety, and format migration. [Column-Oriented Storage](./06-column-storage.md) owns analytical page encodings such as dictionary, run-length, and bit packing. [API Design Patterns](../12-service-mesh/04-api-design-patterns.md) owns public resource and protocol semantics, while [Change Data Capture](../13-data-pipelines/04-change-data-capture.md) owns database-log envelopes and sink application.
+Scope: record and message representation, framing, schema authority, compatibility, parser safety, and format migration. [Column-Oriented Storage](./06-column-storage.md) owns analytical page encodings such as dictionary, run-length, and bit packing. [API Design Patterns](../12-service-mesh/04-api-design-patterns.md) owns public resource and protocol semantics, while [Change Data Capture](../13-data-pipelines/04-change-data-capture.md) owns database-log envelopes and sink application.
 
 ## Boundary and workload contract
 

@@ -2,9 +2,9 @@
 
 ## TL;DR
 
-Tools are the deterministic boundary between a probabilistic planner and the systems it can affect. A production tool is not a convenient wrapper around a shell command: it is a **versioned protocol** with typed arguments, normalized resource identity, an authorization decision, bounded execution, cancellation semantics, structured results, provenance, redaction, and a durable receipt. Design the smallest primitives that preserve intent—read, search, patch, execute, inspect, and invoke a scoped connector—and make dangerous composition visible to policy.
+A production tool is the versioned protocol between a probabilistic planner and the systems it can affect. It requires typed arguments, normalized resource identity, authorization, bounded execution, cancellation semantics, structured results, provenance, redaction, and a durable receipt. Use the smallest primitives that preserve intent—read, search, patch, execute, inspect, and invoke a scoped connector—and expose dangerous composition to policy.
 
-The platform-wide task, isolation, scheduling, and approval contract is defined in [Coding Agent Platform Fundamentals](./01-compound-engineering-fundamentals.md). This chapter owns the tool registry, request/effect protocol, runtime boundary, and tool-specific failure semantics. Runtime context selection belongs to [Context Management](../17-llm-systems/08-context-management.md), while repository policy artifacts belong to [Repository Context and Policy](./03-agent-context-engineering.md).
+Scope: the tool registry, request/effect protocol, runtime boundary, and tool-specific failures. [Platform Fundamentals](./01-compound-engineering-fundamentals.md) defines task, isolation, scheduling, and approval; [Context Management](../17-llm-systems/08-context-management.md) covers runtime selection; [Repository Context and Policy](./03-agent-context-engineering.md) covers repository policy artifacts.
 
 ---
 

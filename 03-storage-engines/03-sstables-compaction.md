@@ -2,7 +2,7 @@
 
 An SSTable is an immutable sorted run plus the metadata needed to search and validate it. Immutability makes publication, caching, replication, and recovery tractable; it also means updates and deletes accumulate as newer records. Compaction is the background protocol that rewrites overlapping runs into a new authoritative set without losing snapshots, resurrecting deleted values, or exposing half-built files.
 
-This chapter owns the **immutable sorted-run lifecycle**: file format state, publication, lookup across runs, compaction selection and commit, version/tombstone collection, and compaction capacity. [LSM Trees](./02-lsm-trees.md) owns the complete write path from WAL and memtable through the LSM architecture. [Bloom Filters](./05-bloom-filters.md) owns filter design. [Column-Oriented Storage](./06-column-storage.md) owns analytical column layout, pruning, and vectorized execution; a Parquet row group is not an SSTable level merely because both may be immutable.
+Scope: the **immutable sorted-run lifecycle**: file format state, publication, lookup across runs, compaction selection and commit, version/tombstone collection, and compaction capacity. [LSM Trees](./02-lsm-trees.md) owns the complete write path from WAL and memtable through the LSM architecture. [Bloom Filters](./05-bloom-filters.md) owns filter design. [Column-Oriented Storage](./06-column-storage.md) owns analytical column layout, pruning, and vectorized execution; a Parquet row group is not an SSTable level merely because both may be immutable.
 
 ## Workload and storage contract
 

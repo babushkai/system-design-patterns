@@ -2,7 +2,7 @@
 
 A distributed transaction makes one outcome authoritative across multiple independently durable participants. The central problem is not sending `COMMIT` twice. It is preserving atomicity when processes crash at every instruction boundary, messages are lost or duplicated, and some participants have made promises they can no longer revoke.
 
-This chapter owns **atomic commit across storage participants**, its interaction with isolation, and alternatives whose contracts are explicitly weaker. [ACID Transactions](../01-foundations/01-acid-transactions.md) and [Isolation Levels](../01-foundations/02-isolation-levels.md) define local transaction semantics. [Consensus Algorithms](./08-consensus-algorithms.md) owns replication of a participant or decision record. [Outbox Pattern](../05-messaging/07-outbox-pattern.md) owns reliable database-to-message publication, and [Database Sharding](../06-scaling/03-database-sharding.md) owns operational shard migration.
+Scope: **atomic commit across storage participants**, its interaction with isolation, and alternatives whose contracts are explicitly weaker. [ACID Transactions](../01-foundations/01-acid-transactions.md) and [Isolation Levels](../01-foundations/02-isolation-levels.md) define local transaction semantics. [Consensus Algorithms](./08-consensus-algorithms.md) owns replication of a participant or decision record. [Outbox Pattern](../05-messaging/07-outbox-pattern.md) owns reliable database-to-message publication, and [Database Sharding](../06-scaling/03-database-sharding.md) owns operational shard migration.
 
 ## Define the outcome contract
 

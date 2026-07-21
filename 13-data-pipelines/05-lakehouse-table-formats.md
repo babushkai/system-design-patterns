@@ -4,7 +4,7 @@
 
 An open table format turns immutable data files in object storage into a table by defining authoritative metadata, snapshots or timeline entries, conflict rules, row-level changes, and garbage collection. Readers plan from a committed metadata state instead of listing a directory while writers are changing it.
 
-Apache Iceberg, Delta Lake, and Apache Hudi share this goal but do **not** use one universal “catalog compare-and-swap” algorithm. Iceberg publishes new table metadata through a catalog or atomic metadata operation; Delta commits ordered actions to its transaction log using storage or a commit coordinator that satisfies the protocol; Hudi publishes actions on a timeline and coordinates file groups and table services. Correctness depends on the exact format version, catalog/storage integration, engine, connector, and enabled features.
+Apache Iceberg, Delta Lake, and Apache Hudi share this goal but use different commit boundaries. Iceberg publishes table metadata through a catalog or atomic metadata operation; Delta commits ordered transaction-log actions through a compliant storage primitive or commit coordinator; Hudi publishes timeline actions and coordinates file groups and table services. Correctness depends on the format version, catalog/storage integration, engine, connector, and enabled features.
 
 Maintenance is part of the write path’s deferred cost. Small files, delete metadata, old snapshots, manifests/log checkpoints, and abandoned objects must be compacted or collected without deleting data still visible to readers or in-flight commits.
 

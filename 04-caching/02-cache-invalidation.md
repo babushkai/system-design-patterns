@@ -6,7 +6,7 @@ Invalidation is a distributed consistency protocol between an authoritative writ
 
 Use a product-defined freshness contract, a durable change signal when propagation matters, monotonic source versions to reject stale work, and a TTL as a failure bound. Prefer idempotent deletion over blind value updates. For races where a reader can refill an old value after deletion, deletion alone is insufficient: use a version fence, generation, lease, or accept a measured TTL-bounded window.
 
-This chapter owns freshness guarantees, invalidation races, dependency propagation, and coherence across L1, L2, CDN, and browser caches. Cache placement and economics live in [Cache Semantics and Economics](01-cache-strategies.md); cluster failover lives in [Distributed Cache Internals](03-distributed-caching.md); refill amplification lives in [Stampede, Cold Start, and Warming](04-cache-stampede.md).
+Scope: freshness guarantees, invalidation races, dependency propagation, and coherence across L1, L2, CDN, and browser caches. Cache placement and economics live in [Cache Semantics and Economics](01-cache-strategies.md); cluster failover lives in [Distributed Cache Internals](03-distributed-caching.md); refill amplification lives in [Stampede, Cold Start, and Warming](04-cache-stampede.md).
 
 ---
 
@@ -372,7 +372,7 @@ Prefer, in order:
 
 One change that invalidates one million keys is a workload, not a metadata operation. Rate-limit it, deduplicate keys, batch network calls, and protect the cache event loop. Consider a generation bump when physical deletion is unnecessary.
 
-Deleting many hot keys simultaneously also creates a refill surge. Coordinate with chapter 04's soft invalidation and warming strategy.
+Deleting many hot keys simultaneously also creates a refill surge. Coordinate with the soft-invalidation and warming controls in [Stampede, Cold Start, and Warming](04-cache-stampede.md).
 
 ### 6.3 Schema deployment
 

@@ -2,7 +2,7 @@
 
 Discord combines workloads with incompatible physics. Text history is durable and read-heavy around recent channel partitions. Gateway sessions are long-lived, stateful connections with bursty fanout. Presence is ephemeral and high-churn. Voice and video are latency-sensitive UDP media flows. A useful design does not force all four through one scaling primitive.
 
-This analysis distinguishes:
+Evidence labels:
 
 - **Documented**: a linked Discord engineering post or public protocol states the claim; figures and topologies are dated.
 - **Inference**: a conclusion drawn from those facts or product constraints, not a statement about undisclosed production internals.

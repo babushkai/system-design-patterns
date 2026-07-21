@@ -4,7 +4,7 @@
 
 Change data capture (CDC) converts committed database changes into a downstream change stream. It is often safer than application dual writes because capture follows the database commit log, but it is not automatically complete, globally ordered, low overhead, or exactly once. Those properties depend on the source database, capture mode, log retention, connector, broker partitioning, event envelope, and sink protocol.
 
-The hard part is joining two histories without a gap: **existing rows from a snapshot** and **new transactions from the log**. The production design must also preserve enough source order and schema context to apply retries idempotently, survive primary failover, repair drift, and prevent a slow consumer from exhausting the source’s retained log.
+Bootstrap must join two histories without a gap: **existing rows from a snapshot** and **new transactions from the log**. Preserve enough source order and schema context for idempotent retries, primary failover, and drift repair; bound consumer lag so slow consumers cannot exhaust source log retention.
 
 ---
 

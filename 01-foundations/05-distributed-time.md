@@ -8,7 +8,7 @@
 
 ## Scope: Time Coordinates, Not Coordination by Timeout
 
-This chapter owns clock semantics, event ordering, causal metadata, and time-synchronization failure. It does not make timeout-based ownership safe.
+Clock semantics cover event ordering, causal metadata, and time-synchronization failure; they do not make timeout-based ownership safe.
 
 - [Consistency Models](04-consistency-models.md) owns the client-visible ordering guarantee.
 - [Leader Election](../02-distributed-databases/09-leader-election.md) and [Distributed Locks](09-distributed-locks.md) own epochs and fencing.

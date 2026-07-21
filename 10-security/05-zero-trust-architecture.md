@@ -4,7 +4,7 @@
 
 Zero trust is an authorization architecture, not a product and not “put mTLS everywhere.” Network location is treated as a weak signal. Every access decision binds an authenticated principal, workload, device or runtime posture, requested action, resource, tenant, and policy revision; enforcement occurs at a boundary that the caller cannot bypass.
 
-A production design needs:
+Required controls:
 
 - cryptographic human and workload identity with short-lived credentials;
 - explicit trust domains and federation;
@@ -14,7 +14,7 @@ A production design needs:
 - control-plane distribution that tolerates stale state without silently widening access;
 - continuous observability, credential rotation, break-glass governance, and recovery.
 
-The goal is not to make every request suspicious forever. It is to replace ambient, transitive trust with a verifiable request contract and a bounded failure mode.
+Zero trust replaces ambient, transitive trust with a verifiable request contract and bounded failure modes.
 
 ---
 

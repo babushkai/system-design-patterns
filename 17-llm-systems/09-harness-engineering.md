@@ -167,7 +167,7 @@ The harness needs deterministic contract tests independent of model quality: req
 
 State-machine tests kill the process between every durable transition. Tool simulators produce timeout-before-commit, timeout-after-commit, duplicate receipt, stale revision, partial stream, and compensation failure. Load tests inject provider throttling, queue saturation, cache loss, fan-out bursts, and slow clients. Security tests place hostile instructions in every data channel while observing whether capability policy—not model obedience—contains the effect.
 
-End-to-end statistical evaluation then measures the model–harness pair on representative tasks. [LLM Evaluation](./10-llm-evaluation.md) owns dataset and judge methodology; this chapter's distinctive requirement is that harness faults and unsafe trajectories remain visible even when the final artifact happens to pass.
+End-to-end statistical evaluation measures the model–harness pair on representative tasks. [LLM Evaluation](./10-llm-evaluation.md) covers dataset and judge methodology. Harness evaluation must expose runtime faults and unsafe trajectories even when the final artifact passes.
 
 ---
 

@@ -2,9 +2,9 @@
 
 ## TL;DR
 
-A repository is safe to change when a bounded requirement maps to a bounded, discoverable change surface; contracts make invalid combinations difficult to represent; tests and analysis observe the important behavior; and a failed change can be isolated, reverted, or migrated without guessing. Those properties help humans, automation, and coding agents for the same reason: they reduce hidden coupling. There is no universal “agent-ready” file size, token count, coverage percentage, or five-file rule. Measure the repository’s dependency graph, change history, verification selectivity, rollback behavior, and escaped defects, then improve the boundaries that create costly cross-cutting changes.
+A repository is safe to change when a bounded requirement maps to a bounded, discoverable change surface, contracts exclude invalid combinations, verification observes important behavior, and failures can be isolated, reverted, or migrated. Measure dependency structure, change history, verification selectivity, rollback behavior, and escaped defects; universal file-size, token, coverage, or file-count thresholds do not establish safety.
 
-This chapter owns repository structure and evolvability. The platform runtime is defined in [Coding Agent Platform Fundamentals](./01-compound-engineering-fundamentals.md), repository instructions and policy in [Repository Context and Policy](./03-agent-context-engineering.md), and independent evidence in [Verification and Governance](./05-quality-engineering-with-ai-agents.md).
+Scope: repository structure and evolvability. [Platform Fundamentals](./01-compound-engineering-fundamentals.md) defines the runtime, [Repository Context and Policy](./03-agent-context-engineering.md) defines instructions and policy, and [Verification and Governance](./05-quality-engineering-with-ai-agents.md) defines independent evidence.
 
 ---
 
@@ -300,7 +300,7 @@ Split a module when it contains independently changing responsibilities with a s
 
 Adopt schema generation when multiple consumers need a stable machine-readable contract; keep hand-written types for local details that do not cross a trust or version boundary. Add repository maps when the graph cannot be discovered cheaply from normal tooling; generate them from authoritative metadata rather than maintaining a second architecture by hand.
 
-The goal is not architecture “for agents.” It is a repository in which intent, authority, dependency, evidence, and migration are explicit enough that a reviewer can verify a change without relying on tribal memory.
+Design repositories so intent, authority, dependency, evidence, and migration are explicit enough for reviewers to verify changes without tribal memory.
 
 ---
 

@@ -2,7 +2,7 @@
 
 A primary-key lookup begins with a routing answer: the key identifies a logical partition and therefore a replica set. A query on email, status, location, or event time has no such route unless the system maintains another access path. A distributed secondary index is that path—and another materialized copy whose consistency, placement, recovery, and cost must be designed.
 
-This chapter owns distributed index maintenance and query semantics: local versus global placement, synchronous and asynchronous updates, online backfill, global uniqueness, scatter-gather, and freshness. [B-Trees](../03-storage-engines/01-b-trees.md) owns ordered page structures, [LSM Trees](../03-storage-engines/02-lsm-trees.md) owns the write-buffered storage pipeline, and [Search Index Architecture](../14-search-systems/01-inverted-indexes.md) owns analyzers, postings, relevance, and search-segment internals. [Partitioning Strategies](./05-partitioning-strategies.md) owns the routing map on which all three depend.
+Scope: distributed index maintenance and query semantics: local versus global placement, synchronous and asynchronous updates, online backfill, global uniqueness, scatter-gather, and freshness. [B-Trees](../03-storage-engines/01-b-trees.md) owns ordered page structures, [LSM Trees](../03-storage-engines/02-lsm-trees.md) owns the write-buffered storage pipeline, and [Search Index Architecture](../14-search-systems/01-inverted-indexes.md) owns analyzers, postings, relevance, and search-segment internals. [Partitioning Strategies](./05-partitioning-strategies.md) owns the routing map on which all three depend.
 
 ## Query and consistency contract
 

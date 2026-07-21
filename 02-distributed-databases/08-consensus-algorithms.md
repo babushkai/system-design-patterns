@@ -2,7 +2,7 @@
 
 Consensus is the safety core of a replicated state machine: replicas choose one ordered history even when processes crash, messages are delayed or duplicated, and the network partitions. Its value is not that every server is always current. Its value is that no two successful majorities can make incompatible decisions under the stated failure model.
 
-This chapter owns **replicated-state-machine safety, quorum intersection, log choice, recovery, membership, and liveness assumptions**. [Leader Election](./09-leader-election.md) owns operational leadership: candidacy, terms/epochs as authority, leases, fencing external resources, failover timing, and handoff. The [Raft paper analysis](../09-whitepapers/07-raft.md) follows one protocol line by line; this chapter compares the common proof obligations.
+Consensus design must preserve **replicated-state-machine safety, quorum intersection, log choice, recovery, membership, and explicit liveness assumptions**. [Leader Election](./09-leader-election.md) covers candidacy, authority epochs, leases, external-resource fencing, failover timing, and handoff. The [Raft paper analysis](../09-whitepapers/07-raft.md) follows one protocol; the sections below compare common proof obligations.
 
 ## The contract and failure model
 

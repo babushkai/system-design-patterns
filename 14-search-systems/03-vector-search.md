@@ -1,8 +1,8 @@
 # Vector Retrieval Systems
 
-Vector retrieval searches a learned geometric representation rather than a term vocabulary. Its production contract is therefore larger than “nearest neighbors”: the embedding model, preprocessing, distance function, index build, metadata snapshot, deletion state, and query path together define what neighborhood means. Changing any one of them can change results without changing the API.
+Vector retrieval searches a learned geometric representation rather than a term vocabulary. The embedding model, preprocessing, distance function, index build, metadata snapshot, deletion state, and query path jointly define the neighborhood; changing any one can change results without changing the API.
 
-This chapter owns dense-vector generation, approximate-nearest-neighbor (ANN) structures, filtered ANN, sharding, recall/latency/cost trade-offs, and embedding/index migration. Lexical retrieval belongs to [Lexical Query Execution](02-full-text-search.md); combining candidate sources, learned reranking, and product-quality evaluation belongs to [Ranking and Evaluation](04-ranking-algorithms.md).
+Dense retrieval covers vector generation, approximate-nearest-neighbor (ANN) structures, filtered ANN, sharding, recall/latency/cost trade-offs, and embedding/index migration. [Lexical Query Execution](02-full-text-search.md) covers lexical retrieval; [Ranking and Evaluation](04-ranking-algorithms.md) covers candidate fusion, learned reranking, and product-quality evaluation.
 
 ## Workload and service contract
 

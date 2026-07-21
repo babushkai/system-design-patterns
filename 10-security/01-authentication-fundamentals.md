@@ -10,7 +10,7 @@ Authentication is a distributed state machine, not a password check. A productio
 
 Authentication establishes that a claimant currently controls an authenticator bound to an account. It does **not** decide what that account may do; that belongs to [authorization](./07-authorization-patterns.md). It also does not prove a real-world identity unless an identity-proofing process established that binding.
 
-A useful design begins with invariants rather than protocols:
+Begin with invariants, not protocols:
 
 1. **Credential isolation.** Raw passwords, private keys, recovery codes, and refresh tokens reach only the component that must verify them. Downstream services receive a bounded assertion, never the original credential.
 2. **Unambiguous binding.** A successful ceremony binds one account, one authenticator, one client context, and one challenge. Challenges are unpredictable, single-use, short-lived, and scoped to the intended operation.
@@ -20,7 +20,7 @@ A useful design begins with invariants rather than protocols:
 6. **Security transitions are atomic.** Password changes, authenticator removal, global logout, and recovery completion advance a security version so concurrently issued sessions cannot survive on stale state.
 7. **Failures do not silently weaken policy.** A risk engine outage, stale replica, or unavailable audit sink has a named fail-open, fail-closed, or degraded behavior for each operation class.
 
-These invariants define the system. Passwords, passkeys, sessions, OAuth, and federation are mechanisms used to satisfy them.
+Passwords, passkeys, sessions, OAuth, and federation are mechanisms for satisfying them.
 
 ---
 

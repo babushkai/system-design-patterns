@@ -8,7 +8,7 @@ Start from an access-and-mutation catalog: key/range predicates, cardinality, or
 
 Partition keys co-design locality and load distribution. Aggregate boundaries co-design transaction scope and contention. Secondary indexes, caches, search documents, and analytical tables are derived models for different workloads; they should not silently become competing sources of truth.
 
-[Partitioning and Placement](./05-partitioning-strategies.md) owns partition algorithms and routing. [Database Sharding](../06-scaling/03-database-sharding.md) owns live application shard operations and resharding. This chapter owns the logical entity/aggregate/key/projection model that those mechanisms place.
+[Partitioning and Placement](./05-partitioning-strategies.md) covers partition algorithms and routing; [Database Sharding](../06-scaling/03-database-sharding.md) covers live shard operations. The logical entity, aggregate, key, and projection model determines what those mechanisms place.
 
 ---
 

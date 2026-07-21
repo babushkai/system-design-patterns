@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-Autoscaling is a delayed feedback-control loop. It observes a noisy, delayed signal, computes desired capacity, asks another control plane to create or remove resources, waits for them to become useful, and then observes the effect. A burst can fill queues and exhaust concurrency long before new capacity is ready, so [admission](./05-rate-limiting.md) and [backpressure](./07-backpressure.md) must keep the data plane safe during actuation.
+Autoscaling is a delayed feedback loop: observe a noisy signal, choose desired capacity, wait for provisioning, warm-up, and routing, then measure the effect. A burst can fill queues and exhaust concurrency long before new capacity is ready, so [admission](./05-rate-limiting.md) and [backpressure](./07-backpressure.md) must keep the data plane safe during actuation.
 
 Choose a signal causally related to missing capacity, derive replica demand from per-replica service rate or target utilization, and include metric delay, decision period, provisioning, warm-up, and routing in the response budget. Use hysteresis, stabilization, and bounded step/rate changes to prevent oscillation. Scale down only after removing an instance from admission, draining or transferring work, and proving the remaining fleet can absorb load plus failure headroom.
 
@@ -414,7 +414,3 @@ Choose the simplest stable controller whose signal leads the objective and whose
 - KEDA, [Scaling Deployments and StatefulSets](https://keda.sh/docs/latest/concepts/scaling-deployments/).
 - AWS Builders’ Library, [Static Stability Using Availability Zones](https://aws.amazon.com/builders-library/static-stability-using-availability-zones/).
 - Google SRE Workbook, [Managing Load](https://sre.google/workbook/managing-load/).
-
----
-
-**Next:** [Multi-Region Architecture](./09-multi-region-architecture.md) defines authority, routing, replication, and the capacity floor when an entire region leaves service.

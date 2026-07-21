@@ -11,7 +11,7 @@ TAO shows what happens when a company turns a dominant access pattern into a sto
 
 The paper is not a specification for Meta's current graph infrastructure. It also does not describe arbitrary graph traversal, graph analytics, Cypher-like queries, or a globally serializable database. Its API is intentionally restrictive.
 
-The reusable cache mechanics live in [Distributed Caching](../04-caching/03-distributed-caching.md) and [Cache Invalidation](../04-caching/02-cache-invalidation.md). This analysis focuses on why TAO could apply them safely to one graph workload.
+[Distributed Caching](../04-caching/03-distributed-caching.md) and [Cache Invalidation](../04-caching/02-cache-invalidation.md) cover the reusable mechanics. Scope here: why TAO could apply them safely to one graph workload.
 
 ## Workload that shaped the design
 

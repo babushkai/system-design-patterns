@@ -7,7 +7,7 @@
 - **Venue and version:** NIPS 2017 proceedings paper
 - **Evaluated workload:** supervised encoder-decoder machine translation on WMT 2014 English–German and English–French
 
-This version boundary matters. The proceedings paper reports **41.0 BLEU** for the large English–French model; a later arXiv abstract reports 41.8. This chapter uses the proceedings value. Decoder-only language models, KV-cache serving, FlashAttention, scaling laws, long-context methods, instruction tuning, and modern mixture-of-experts deployments are later work.
+The proceedings value used here is **41.0 BLEU** for the large English–French model; the later arXiv abstract reports 41.8. Decoder-only language models, KV-cache serving, FlashAttention, scaling laws, long-context methods, instruction tuning, and modern mixture-of-experts deployments are later work.
 
 ## What the Paper Claimed
 

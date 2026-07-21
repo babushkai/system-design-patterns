@@ -14,7 +14,7 @@ Secure use begins with a token-type-specific validation contract:
 - authorization semantics and maximum lifetime;
 - key-rotation and revocation behavior.
 
-Parse only after applying size/format limits, verify cryptography before trusting claims, then validate the full semantic contract. Never choose algorithms, issuer metadata, or key URLs from untrusted token content. ID tokens, access tokens, session tokens, email links, and DPoP proofs are different token kinds even if all are JWTs.
+Apply size and format limits before parsing; verify cryptography before trusting claims; then validate the full semantic contract. Never select algorithms, issuer metadata, or key URLs from token content. ID tokens, access tokens, session tokens, email links, and DPoP proofs remain distinct token types even when all are JWTs.
 
 ---
 

@@ -2,7 +2,7 @@
 
 A file-sync system must reconcile two very different kinds of state. File bytes are large, mostly immutable, and cheap to identify by content; namespace metadata is small, highly mutable, shared, and ordered by user actions. Treating both as generic “files in object storage” hides the central design problem: how devices converge after offline edits, renames, deletes, partial transfers, and conflicting writes without losing user data.
 
-This chapter uses three evidence labels:
+Evidence labels:
 
 - **Documented**: stated in a linked Dropbox engineering source; scale and topology snapshots are dated.
 - **Inference**: derived from public behavior or distributed-sync constraints, not asserted as private Dropbox implementation.

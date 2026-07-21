@@ -2,7 +2,7 @@
 
 Column-oriented storage makes one physical bet: analytical queries usually touch many rows but only a subset of their attributes. Storing values from the same column together reduces projected I/O, exposes homogeneous data to encoding, and lets execution operate on vectors rather than repeatedly interpreting row objects.
 
-This chapter owns the **analytical physical layout and scan path**: row groups, column chunks and pages, encodings, metadata pruning, late materialization, vectorized execution, update overlays, and scan capacity. [Data Encoding](./07-data-encoding.md) owns general serialization rules. [SSTables and Compaction](./03-sstables-compaction.md) owns immutable sorted-run lifecycle, and [Lakehouse Table Formats](../13-data-pipelines/05-lakehouse-table-formats.md) owns multi-file table snapshots and metadata protocols.
+Scope: the **analytical physical layout and scan path**: row groups, column chunks and pages, encodings, metadata pruning, late materialization, vectorized execution, update overlays, and scan capacity. [Data Encoding](./07-data-encoding.md) owns general serialization rules. [SSTables and Compaction](./03-sstables-compaction.md) owns immutable sorted-run lifecycle, and [Lakehouse Table Formats](../13-data-pipelines/05-lakehouse-table-formats.md) owns multi-file table snapshots and metadata protocols.
 
 ## Workload and correctness contract
 

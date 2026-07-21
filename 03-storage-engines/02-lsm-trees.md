@@ -2,7 +2,7 @@
 
 A log-structured merge tree turns foreground random writes into an append plus an in-memory ordered update. Immutable sorted files are produced later, and background work reconciles them. This shifts—not removes—cost: write latency becomes smooth while read amplification, space amplification, and deferred rewrite debt become operating concerns.
 
-This chapter owns the end-to-end LSM pipeline: WAL and memtable admission, internal versions, point and range reads across components, recovery, snapshots, and overload control. [SSTables and Compaction](./03-sstables-compaction.md) owns immutable-file publication, compaction transactions, strategy mechanics, and safe version/tombstone collection. [Bloom Filters](./05-bloom-filters.md) owns filter mathematics, and [Write-Ahead Logging](./04-write-ahead-logging.md) owns general WAL recovery theory.
+Scope: the end-to-end LSM pipeline: WAL and memtable admission, internal versions, point and range reads across components, recovery, snapshots, and overload control. [SSTables and Compaction](./03-sstables-compaction.md) owns immutable-file publication, compaction transactions, strategy mechanics, and safe version/tombstone collection. [Bloom Filters](./05-bloom-filters.md) owns filter mathematics, and [Write-Ahead Logging](./04-write-ahead-logging.md) owns general WAL recovery theory.
 
 ## Workload and service contract
 
@@ -105,7 +105,7 @@ device write bytes/s ~= F * WAL_factor + F * WA_file
 
 For memtable target `M` bytes and incoming rate `F`, a memtable fills in roughly `M/F` seconds. With `n_imm` permitted immutable memtables, the burst cushion before a hard stall is at most `n_imm * M / F`, less time already consumed by flush. This is why immutable count is a pressure gauge, not free buffering.
 
-For a point miss across `S` candidate runs with per-run filter false-positive probabilities `p_i`, expected unnecessary data-block reads are approximately `sum(p_i)`, assuming independent filter outcomes. The filter chapter explains why that independence and bit allocation are approximations. A range over `S` iterators performs `O(K log S)` merge-heap work for `K` internal entries before version suppression; obsolete versions can make `K` far exceed returned rows.
+For a point miss across `S` candidate runs with per-run filter false-positive probabilities `p_i`, expected unnecessary data-block reads are approximately `sum(p_i)`, assuming independent filter outcomes. [Bloom Filters](./05-bloom-filters.md) explains the limits of that independence and bit allocation. A range over `S` iterators performs `O(K log S)` merge-heap work for `K` internal entries before version suppression; obsolete versions can make `K` far exceed returned rows.
 
 Stored bytes include live values, overwritten versions, tombstones, file-level space amplification, pinned snapshots, and temporary outputs. Size the volume for peak simultaneous input and output during background jobs. Running an LSM near full disk can deadlock reclamation because compaction needs free space to create the file that would let it delete inputs.
 

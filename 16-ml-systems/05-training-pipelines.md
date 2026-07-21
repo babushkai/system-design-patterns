@@ -6,13 +6,13 @@ A training pipeline is the durable transaction that turns versioned inputs into 
 
 ---
 
-## The Training Pipeline Is a System, Not a Script
+## Training Pipeline Contract
 
-A script describes computation; a training pipeline also owns durable state, input identity, attempt isolation, artifact visibility, lineage, validation, and recovery. Its public result is not “a file was written.” It is one committed manifest whose declared inputs, execution environment, outputs, and evaluation form a coherent candidate. Replaying the same request either reuses an eligible committed artifact or creates another traceable attempt; it must not race two mutable output paths.
+A training pipeline adds durable state, input identity, attempt isolation, artifact visibility, lineage, validation, and recovery to the computation. Its result is one committed manifest whose inputs, environment, outputs, and evaluation form a coherent candidate. Replaying a request either reuses an eligible artifact or creates another traceable attempt; it cannot race mutable output paths.
 
 Three guarantees are intentionally separate. **Reconstruction** retrieves the pinned inputs and execution contract needed to reproduce a declared-equivalent artifact. **Promotion** proves that one evaluated candidate is allowed to enter a release lifecycle. **Rollback** restores a retained, previously qualified deployable bundle. A reproducible model can still be unsafe to promote, and rebuilding it during an incident is not rollback.
 
-The chapter therefore owns the transaction from immutable input manifests to one evaluated output manifest. [ML System Fundamentals](./01-ml-system-fundamentals.md) owns the broader data-dependency and lifecycle motivation; [Dataset Management and Versioning](./11-dataset-management-versioning.md) owns snapshot identity; [Offline Evaluation and Metric Design](./12-offline-evaluation-metrics.md) owns measurement; [Model Registry and ML Metadata](./13-model-registry-metadata.md) owns cross-run release metadata; and [Model Deployment and Rollouts](./06-model-deployment-rollouts.md) owns activation and rollback. The interfaces among them remain visible here because the pipeline must commit evidence each downstream owner can verify.
+The pipeline consumes inputs pinned by immutable manifests and commits one evaluated output manifest. [ML System Fundamentals](./01-ml-system-fundamentals.md) covers lifecycle motivation; [Dataset Management and Versioning](./11-dataset-management-versioning.md) covers snapshot identity; [Offline Evaluation and Metric Design](./12-offline-evaluation-metrics.md) covers measurement; [Model Registry and ML Metadata](./13-model-registry-metadata.md) covers cross-run metadata; [Model Deployment and Rollouts](./06-model-deployment-rollouts.md) covers activation and rollback. The pipeline must commit evidence each downstream system can verify.
 
 ---
 
