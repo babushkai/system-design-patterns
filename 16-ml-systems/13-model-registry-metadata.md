@@ -132,7 +132,7 @@ TRAINING_COMPLETE
   → EVIDENCE_ATTACHED
 ```
 
-Retries use the training-run ID plus artifact-set hash as an idempotency key. If the client loses the response after registration, it queries that key; it does not invent `v43` for the same bytes. A candidate whose upload is incomplete remains an expiring staging attempt, never a model version. Conversely, deleting an artifact behind an existing version is corruption, not retirement—the lifecycle controller must first remove every deployment and retention root.
+Retries use the training-run ID plus artifact-set hash as an idempotency key. If the client loses the response after registration, it queries that key; it does not invent `v43` for the same bytes. A candidate whose upload is incomplete remains an expiring staging attempt, never a model version. Conversely, deleting an artifact behind an existing version is corruption, not retirement: the lifecycle controller must first remove every deployment and retention root.
 
 For higher-assurance systems, attach a signed provenance statement: builder workload identity, source and data references, build parameters, runtime digest, artifact hashes, and policy under which the build ran. The signature does not prove the model is good; it proves which trusted process produced the bytes and lets deployment reject an artifact substituted after evaluation.
 
@@ -229,13 +229,13 @@ policies:
       - owner.oncall_rotation_present == true
 ```
 
-The threshold is declared before reading candidate results. A point estimate above zero is not a promotion rule: sampling noise can make an unchanged or worse model look positive. A noninferiority promotion requires the lower uncertainty bound to exceed the predeclared noninferiority margin and a separate predeclared benefit—for example latency, cost, or robustness—to justify the change. A claimed quality improvement requires the bound to exceed the **minimum practical effect** (MPE), not merely zero. The report also binds the estimand, population weighting, slice definitions, uncertainty method, sample-size or stopping rule, and multiplicity treatment. Otherwise a pipeline can obtain a passing result by changing what was measured or repeatedly peeking at the same experiment.
+The threshold is declared before reading candidate results. A point estimate above zero is not a promotion rule: sampling noise can make an unchanged or worse model look positive. A noninferiority promotion requires the lower uncertainty bound to exceed the predeclared noninferiority margin and a separate predeclared benefit (for example latency, cost, or robustness) to justify the change. A claimed quality improvement requires the bound to exceed the **minimum practical effect** (MPE), not merely zero. The report also binds the estimand, population weighting, slice definitions, uncertainty method, sample-size or stopping rule, and multiplicity treatment. Otherwise a pipeline can obtain a passing result by changing what was measured or repeatedly peeking at the same experiment.
 
 The gate can be stricter by risk tier. A playlist recommender may require lineage, evaluation, and rollback. A credit model may additionally require independent validation, fairness slice metrics, explainability artifacts, legal approval, and contestability paths. Guardrails need uncertainty-aware thresholds of their own; `all_required_passed` is a derived summary bound to a hashed, versioned set of per-slice decisions, not a Boolean asserted by the training job.
 
 The important property is that the gate reads registry state. If approval happened in Slack but not in the registry, it did not happen for deployment purposes.
 
-Gate evaluation and transition must not have a time-of-check/time-of-use gap. The gate produces an immutable **evidence bundle hash** over the candidate artifact, serving contract, evaluation report, approvals, policy version, and rollback validation. The state transition performs a compare-and-swap from the expected lifecycle revision and records that bundle hash atomically. If any dependency changes—threshold policy, evaluation attachment, approval status—the revision changes and the old decision cannot promote the new bundle.
+Gate evaluation and transition must not have a time-of-check/time-of-use gap. The gate produces an immutable **evidence bundle hash** over the candidate artifact, serving contract, evaluation report, approvals, policy version, and rollback validation. The state transition performs a compare-and-swap from the expected lifecycle revision and records that bundle hash atomically. If any dependency changes (threshold policy, evaluation attachment, approval status), the revision changes and the old decision cannot promote the new bundle.
 
 Approvals should bind to evidence, not only to a model name. “Alice approved v42” is ambiguous if v42's threshold or runtime can change afterward. An approval records subject hash, role, scope, expiry or revocation state, and justification. Revocation is append-only: it prevents later transitions and may trigger a deployment-policy response, while preserving the historical fact that the earlier promotion was authorized at that time.
 
@@ -359,7 +359,7 @@ Each desired-state mutation increments a monotonic generation. Controllers inclu
 
 Rollback is another desired-state transition, not an imperative RPC sent to every node. It creates a newer generation pointing to the retained bundle. The recovery-time objective decomposes into registry commit, watch propagation, artifact/load readiness, and traffic convergence. Measuring only the pointer transaction hides the dominant term and creates fictitious rollback claims.
 
-During a control-plane partition, existing workers keep serving their verified generation. New eligibility and desired-deployment changes fail closed. Bootstrap may use a signed, non-expired last-known-good snapshot if policy permits, but a snapshot cannot authorize either transition. This asymmetric availability—continue known-good data plane, freeze control-plane change—is the safe default for most online inference.
+During a control-plane partition, existing workers keep serving their verified generation. New eligibility and desired-deployment changes fail closed. Bootstrap may use a signed, non-expired last-known-good snapshot if policy permits, but a snapshot cannot authorize either transition. This asymmetric availability (continue known-good data plane, freeze control-plane change) is the safe default for most online inference.
 
 ---
 
@@ -485,7 +485,7 @@ This capability decomposition also preserves portability. If artifact identity, 
 
 ## Availability, Security, and Disaster Recovery
 
-The registry should be outside the hot prediction path. Serving workers resolve a deployment, fetch immutable artifacts, verify hashes, and continue from local state; a transient control-plane outage must not terminate healthy predictions. That separation does not make registry availability unimportant. An unavailable registry can block deploys, rollback, scale-out, node replacement, investigation, and policy changes—the exact operations needed during an incident.
+The registry should be outside the hot prediction path. Serving workers resolve a deployment, fetch immutable artifacts, verify hashes, and continue from local state; a transient control-plane outage must not terminate healthy predictions. That separation does not make registry availability unimportant. An unavailable registry can block deploys, rollback, scale-out, node replacement, investigation, and policy changes: the exact operations needed during an incident.
 
 There are two materially different read paths. **Deployment reads** require current, strongly consistent eligibility and desired-generation state. If either control-plane authority is partitioned, new changes fail closed rather than guessing which candidate is approved or active. **Serving bootstrap reads** can use a signed last-known-good deployment snapshot containing artifact hashes, serving contract, and active policy. This lets a replacement worker start during a control-plane outage without permitting a new deployment. The snapshot carries a monotonic generation or fencing token, and workers reject generations older than the one already applied; otherwise a delayed control-plane update can revert a fleet after a newer rollout.
 
@@ -589,11 +589,11 @@ If these are manual investigations, the registry is incomplete. If they are quer
 
 ## References
 
-1. [TFX: A TensorFlow-Based Production-Scale Machine Learning Platform](https://dl.acm.org/doi/10.1145/3097983.3098021) — Baylor et al., 2017
-2. [Hidden Technical Debt in Machine Learning Systems](https://proceedings.neurips.cc/paper_files/paper/2015/file/86df7dcfd896fcaf2674f757a2463eba-Paper.pdf) — Sculley et al., 2015
-3. [Uber Michelangelo: Machine Learning Platform](https://www.uber.com/blog/michelangelo-machine-learning-platform/) — an early end-to-end platform case study
-4. [Model Cards for Model Reporting](https://arxiv.org/abs/1810.03993) — Mitchell et al., 2019
-5. [ML Metadata](https://www.tensorflow.org/tfx/guide/mlmd) — metadata and lineage concepts
+1. [TFX: A TensorFlow-Based Production-Scale Machine Learning Platform](https://dl.acm.org/doi/10.1145/3097983.3098021): Baylor et al., 2017
+2. [Hidden Technical Debt in Machine Learning Systems](https://proceedings.neurips.cc/paper_files/paper/2015/file/86df7dcfd896fcaf2674f757a2463eba-Paper.pdf): Sculley et al., 2015
+3. [Uber Michelangelo: Machine Learning Platform](https://www.uber.com/blog/michelangelo-machine-learning-platform/): an early end-to-end platform case study
+4. [Model Cards for Model Reporting](https://arxiv.org/abs/1810.03993): Mitchell et al., 2019
+5. [ML Metadata](https://www.tensorflow.org/tfx/guide/mlmd): metadata and lineage concepts
 6. [Deployment Strategies](../15-deployment/01-deployment-strategies.md)
-7. [SLSA Provenance](https://slsa.dev/spec/v1.0/provenance) — attested artifact build provenance
+7. [SLSA Provenance](https://slsa.dev/spec/v1.0/provenance): attested artifact build provenance
 8. [Model Deployment and Rollouts](./06-model-deployment-rollouts.md)

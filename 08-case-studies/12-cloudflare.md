@@ -2,7 +2,7 @@
 
 ## Scope and Evidence Contract
 
-Cloudflare publishes detailed engineering accounts, each bounded by component, date, and measurement. Evidence labels:
+Cloudflare publishes detailed engineering accounts, each bounded by component, date, and measurement. The following labels preserve that evidence boundary:
 
 - **Documented fact:** a statement in a dated Cloudflare source.
 - **Inference:** a design consequence derived from those facts.
@@ -33,7 +33,7 @@ The mechanisms differ because their invariants differ:
 
 ### Anycast and “every service everywhere”
 
-Cloudflare announces service addresses from many locations using BGP anycast. Routing policy sends a client toward a reachable announcement according to Internet topology and policy—not necessarily the geographically closest building.
+Cloudflare announces service addresses from many locations using BGP anycast. Routing policy sends a client toward a reachable announcement according to Internet topology and policy, not necessarily the geographically closest building.
 
 **Documented fact (2021).** Cloudflare described its network as designed to run every service in every server and every location. This homogeneous-fleet goal lets capacity be shared across products and lets newly deployed services inherit the existing footprint.
 
@@ -161,7 +161,7 @@ The optional edges matter. A cached static request need not execute a Worker or 
 
 ### Configuration fan-out
 
-Assume—not as Cloudflare data—$N=250{,}000$ edge replicas, an update stream of $u=2{,}000$ changes/s, and $s=600$ encoded bytes/change. Naive origin fan-out would emit:
+Assume the following illustrative values, not Cloudflare data: $N=250{,}000$ edge replicas, an update stream of $u=2{,}000$ changes/s, and $s=600$ encoded bytes/change. Naive origin fan-out would emit:
 
 $$
 B = N \times u \times s = 300\ \text{GB/s}

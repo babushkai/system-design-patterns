@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-A batch pipeline transforms a **bounded, versioned input** into a **new output generation**. Correctness requires a pinned input boundary, repeatable task attempts, attempt-isolated files, and one commit protocol for output publication. Performance is governed by wide dependencies—shuffle volume, hot partitions, spill I/O, and the slowest task—not the average worker.
+A batch pipeline transforms a **bounded, versioned input** into a **new output generation**. Correctness requires a pinned input boundary, repeatable task attempts, attempt-isolated files, and one commit protocol for output publication. Performance is governed by wide dependencies (shuffle volume, hot partitions, spill I/O, and the slowest task), not the average worker.
 
 Use batch execution when the input can be bounded and recomputation fits the freshness objective. Use continuous execution when waiting for the bound is too slow. Some platforms use both, but that should mean one declared result contract with two operational paths, not two implementations whose business logic quietly diverges.
 
@@ -110,7 +110,7 @@ The **control plane** decides what should run, records state, retries attempts, 
 
 ### Stage DAG
 
-A logical query becomes a directed acyclic graph of operators. The engine pipelines **narrow dependencies** when each output partition depends on a small, known set of input partitions. A **wide dependency** requires redistribution—join, group, distinct, sort, or repartition—and usually creates a stage boundary.
+A logical query becomes a directed acyclic graph of operators. The engine pipelines **narrow dependencies** when each output partition depends on a small, known set of input partitions. A **wide dependency** requires redistribution (join, group, distinct, sort, or repartition) and usually creates a stage boundary.
 
 For each stage, record:
 

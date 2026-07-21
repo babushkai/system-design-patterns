@@ -2,9 +2,9 @@
 
 ## TL;DR
 
-A coding-agent platform confines an untrusted probabilistic planner within deterministic task, capability, effect, isolation, budget, evidence, and approval contracts. Every effect must be attributable; replay must not duplicate irreversible actions; state must not cross task or tenant boundaries; cancellation must eventually stop new effects; and policy alone may promote a patch.
+A coding-agent platform is a multi-tenant workflow system, not a prompt wrapper around a code-generating model. It confines an untrusted probabilistic planner within deterministic contracts for tasks, capabilities, effects, isolation, budgets, evidence, and approval. Every effect must be attributable; replay must not duplicate irreversible actions; state must not cross task or tenant boundaries; cancellation must eventually stop new effects; and policy alone may promote a patch.
 
-Scope: the platform-wide task, authority, isolation, scheduling, and evidence contract. Detailed protocols live in [tool and runtime contracts](./02-coding-agent-tool-design.md), the [repository context and policy plane](./03-agent-context-engineering.md), [repository architecture](./04-ai-native-software-architecture.md), [verification and governance](./05-quality-engineering-with-ai-agents.md), and [parallel development](./06-compound-development-workflows.md).
+This chapter defines the platform-wide contract for tasks, authority, isolation, scheduling, and evidence. Detailed protocols live in [tool and runtime contracts](./02-coding-agent-tool-design.md), the [repository context and policy plane](./03-agent-context-engineering.md), [repository architecture](./04-ai-native-software-architecture.md), [verification and governance](./05-quality-engineering-with-ai-agents.md), and [parallel development](./06-compound-development-workflows.md).
 
 ---
 
@@ -343,7 +343,7 @@ Test the state machine with deterministic simulation where possible and fault in
 
 Use a simple synchronous assistant when the task needs no tools or durable state. Use a single-agent harness when one isolated workspace and a small capability set are enough. Introduce durable orchestration when tasks pause, survive process failure, await approval, or perform effects that need reconciliation. Add parallel workers only when work can be partitioned with explicit ownership and the verification/integration stages have capacity.
 
-Build a platform service when multiple repositories or teams need consistent policy, isolation, provenance, and scheduling. A collection of local scripts may be preferable for a trusted team with low task volume and no centralized credentials. The break-even point is operational: once every repository reinvents sandboxing, approval, audit, and effect recovery, those controls are already a platform—just an inconsistent one.
+Build a platform service when multiple repositories or teams need consistent policy, isolation, provenance, and scheduling. A collection of local scripts may be preferable for a trusted team with low task volume and no centralized credentials. The break-even point is operational: once every repository reinvents sandboxing, approval, audit, and effect recovery, those controls are already a platform, just an inconsistent one.
 
 Keep proposal authority separate from release authority regardless of scale. The smaller the system, the easier this is to preserve.
 

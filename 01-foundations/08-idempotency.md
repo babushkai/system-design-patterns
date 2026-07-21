@@ -90,7 +90,7 @@ HTTP method semantics are a protocol contract, not a database guarantee. A nomin
 
 ### 2.3 Keyed effects
 
-Non-idempotent effects—charge, shipment, notification, increment, external call—need a logical operation key. Examples:
+Non-idempotent effects (charge, shipment, notification, increment, external call) need a logical operation key. Examples:
 
 ```text
 tenant-4/order-82/payment-intent-1

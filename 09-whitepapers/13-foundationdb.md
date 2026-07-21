@@ -6,7 +6,7 @@
 - **Venue and version:** ACM SIGMOD 2021, DOI 10.1145/3448016.3457559, 14-page proceedings paper
 - **Evaluated system:** production deployments and controlled experiments described in the paper, including a 58-machine production cluster and a separate 27-machine test cluster
 
-Scope: the 2021 paper's architecture and measurements. Current documentation is not evidence for the evaluated storage engines, role placement, or product limits.
+This analysis covers the 2021 paper's architecture and measurements. Current documentation is not evidence for the evaluated storage engines, role placement, or product limits.
 
 ## Contract and Workload Envelope
 
@@ -215,11 +215,11 @@ The authors reported more than 0.5 million CloudKit disk-years without detected 
 3. A durable ordered log lets storage recovery leave the synchronous commit path.
 4. Fast recovery comes from fencing epochs and copying only the required log tail, not rebuilding every replica before service resumes.
 5. Deterministic simulation transforms rare failures into replayable tests, provided the environment and oracles are faithful.
-6. Product limits—transaction size and lifetime—are load-bearing correctness and memory bounds.
+6. Product limits such as transaction size and lifetime are load-bearing correctness and memory bounds.
 
 ## Primary Reference
 
-- [FoundationDB: A Distributed Unbundled Transactional Key Value Store — SIGMOD 2021](https://www.foundationdb.org/files/fdb-paper.pdf)
+- [FoundationDB: A Distributed Unbundled Transactional Key Value Store (SIGMOD 2021)](https://www.foundationdb.org/files/fdb-paper.pdf)
 
 ## Related Chapters
 

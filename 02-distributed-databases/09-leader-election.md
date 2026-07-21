@@ -1,8 +1,8 @@
 # Leader Election
 
-Leader election assigns temporary authority over a resource. The safety problem is not preventing two processes from ever *believing* they are leader—pauses and partitions make that impossible to guarantee from local state. The safety problem is ensuring that only the current generation can make accepted changes to the protected system.
+Leader election assigns temporary authority over a resource. The safety problem is not preventing two processes from ever *believing* they are leader: pauses and partitions make that impossible to guarantee from local state. The safety problem is ensuring that only the current generation can make accepted changes to the protected system.
 
-Scope: **terms and leadership epochs, failure detection, leases, activation barriers, fencing tokens, failover, and operational handoff**. [Consensus Algorithms](./08-consensus-algorithms.md) owns replicated-log agreement and quorum safety. [Distributed Locks](../01-foundations/09-distributed-locks.md) owns the broader lock API and critical-section semantics. A consensus protocol may contain an election, but external work still needs the authority and fencing reasoning developed here.
+Safe leader election requires explicit **terms and leadership epochs, failure detection, leases, activation barriers, fencing tokens, failover, and operational handoff**. [Consensus Algorithms](./08-consensus-algorithms.md) owns replicated-log agreement and quorum safety. [Distributed Locks](../01-foundations/09-distributed-locks.md) owns the broader lock API and critical-section semantics. A consensus protocol may contain an election, but external work still needs the authority and fencing reasoning developed here.
 
 ## Define the leadership contract
 

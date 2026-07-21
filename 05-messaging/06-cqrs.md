@@ -2,7 +2,7 @@
 
 Command Query Responsibility Segregation separates the model that validates writes from models built for specific reads. The write side owns invariants and produces committed changes; projection pipelines maintain replaceable read models with explicit freshness, publication, and rebuild state. CQRS is useful only when that separation buys measurable query, scale, or ownership advantages.
 
-Scope: projection/read-model lifecycle, query ownership, rebuild, atomic application, publication, freshness, and read-after-write behavior. [Event Sourcing](05-event-sourcing.md) owns authoritative domain logs; CQRS does not require event sourcing. [Outbox and Inbox](07-outbox-pattern.md) owns the publication and dedup atomicity patterns used here.
+A CQRS projection needs an explicit read-model lifecycle covering query ownership, rebuild, atomic application, publication, freshness, and read-after-write behavior. [Event Sourcing](05-event-sourcing.md) owns authoritative domain logs; CQRS does not require event sourcing. [Outbox and Inbox](07-outbox-pattern.md) owns the publication and dedup atomicity patterns used here.
 
 ## Workload and contract
 
@@ -62,7 +62,7 @@ Enforce:
 
 **Projection is disposable.** It can be rebuilt from the authoritative source plus retained suffix without manual reconstruction from itself.
 
-**Authorization is query-complete.** Access restrictions shape rows, filters, counts, aggregations, caches, and exports—not only final objects.
+**Authorization is query-complete.** Access restrictions shape rows, filters, counts, aggregations, caches, and exports, not only final objects.
 
 ## Data plane and control plane
 
@@ -87,7 +87,7 @@ Store fields needed to answer the owned query without synchronous calls back to 
 
 Denormalization duplicates data and creates maintenance obligations. Record source owner/version for copied fields. A customer-name change may update millions of order rows; alternatives include late binding from a local customer projection, grouping updates, or accepting a named freshness bound. Avoid copying sensitive fields unless the query requires them.
 
-Indexes and partition keys follow measured filters/sorts. Include stable tie-breakers for pagination. Bound unbounded collections—“all followers in one document” creates hot rewrites and size limits. Use child/bucket rows with explicit query pagination.
+Indexes and partition keys follow measured filters/sorts. Include stable tie-breakers for pagination. Bound unbounded collections: “all followers in one document” creates hot rewrites and size limits. Use child/bucket rows with explicit query pagination.
 
 One generic projection serving every consumer tends to recreate a coupled operational database. Prefer a small number of models aligned to coherent query workloads and ownership, while avoiding one model per trivial UI widget.
 
@@ -107,7 +107,7 @@ For a transactional read store, consume one source record as:
 
 A separate “has processed?” lookup then mutation then marker has two races: concurrent consumers can both pass, and a crash between steps can duplicate or lose the effect. Atomicity must include the actual projection mutation.
 
-Some stores cannot transact inbox and all derived structures together—for example a database row plus a remote search index. Options are:
+Some stores cannot transact the inbox and all derived structures together. For example, one transaction may not span a database row and a remote search index. Options are:
 
 - make one durable projection table authoritative and derive the remote index via its own outbox/checkpoint;
 - use versioned idempotent writes in the remote store and reconcile;
@@ -174,7 +174,7 @@ Additive read columns can be populated lazily only if queries define absence. Br
 
 Projection consumers accept old/new source event forms through tested adapters. Deploy readers/consumers in a compatible order, then stop old event production after the documented window. Keep golden events from every retained schema.
 
-When a projection changes ownership, transfer source contract, checkpoint history, rebuild artifacts, runbooks, privacy classification, and query SLO—not just database credentials.
+When a projection changes ownership, transfer source contract, checkpoint history, rebuild artifacts, runbooks, privacy classification, and query SLO, not just database credentials.
 
 ## Capacity and cost model
 
@@ -197,7 +197,7 @@ At 90,000 queries/s and a measured 3.2 ms mean query CPU, demand is 288 CPU-seco
 
 A consumer updates a search document, then writes its broker checkpoint to a separate metadata database. The search update times out but may have succeeded; the checkpoint commits. After restart, the event is skipped. Later a rebuild from the search index itself preserves the missing/ambiguous state.
 
-Containment compares source versions and rebuilds the affected partition from the authoritative source. Repair introduces versioned idempotent search writes plus a durable local projection outbox/checkpoint, and makes rebuild read the source—not the derived index. Prevention fault-injects every cross-store boundary and requires reconciliation before checkpoint promotion.
+Containment compares source versions and rebuilds the affected partition from the authoritative source. Repair introduces versioned idempotent search writes plus a durable local projection outbox/checkpoint, and makes rebuild read the source, not the derived index. Prevention fault-injects every cross-store boundary and requires reconciliation before checkpoint promotion.
 
 ## Operations and observability
 

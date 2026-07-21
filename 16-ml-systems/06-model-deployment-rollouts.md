@@ -20,9 +20,9 @@ The engineering response is layered evidence. Unit and integration tests establi
 
 The second reason model deployment is hard is that the model file is the smallest part of what you are shipping. A serving model is the end of a dependency chain: it runs inside a [model serving](./03-model-serving.md) layer, consumes features computed by a [feature store](./02-feature-stores.md), expects a specific input schema and preprocessing, emits a score, and that score is turned into an action by a threshold or policy layer.
 
-The most dangerous form of this coupling is **train/serve skew at deploy time**. The model learned a feature's distribution during training; if the online serving path computes that feature even slightly differently — a different default for a missing value, a different time window, a unit mismatch — the model sees inputs it was never trained on and degrades silently. This is the same point-in-time-correctness discipline that governs [training pipelines](./05-training-pipelines.md), now enforced at the deployment boundary: the features must be computed the same way in production as they were in training, and the deploy must guarantee it.
+The most dangerous form of this coupling is **train/serve skew at deploy time**. The model learned a feature's distribution during training; if the online serving path computes that feature even slightly differently (a different default for a missing value, a different time window, a unit mismatch), the model sees inputs it was never trained on and degrades silently. This is the same point-in-time-correctness discipline that governs [training pipelines](./05-training-pipelines.md), now enforced at the deployment boundary: the features must be computed the same way in production as they were in training, and the deploy must guarantee it.
 
-Because the model and its dependencies are one system, they must deploy **atomically**. Shipping a new model that expects feature `device_velocity:v7` while the serving path still provides `v6` is not a degraded deploy — it is a broken one. The release unit is the tuple of model artifact, feature schema version, preprocessing code, threshold policy, and runtime environment. The flowchart below shows why: every one of these inputs feeds the production decision, and a mismatch anywhere corrupts the output.
+Because the model and its dependencies are one system, they must deploy **atomically**. Shipping a new model that expects feature `device_velocity:v7` while the serving path still provides `v6` is not a degraded deploy: it is a broken one. The release unit is the tuple of model artifact, feature schema version, preprocessing code, threshold policy, and runtime environment. The flowchart below shows why: every one of these inputs feeds the production decision, and a mismatch anywhere corrupts the output.
 
 ```mermaid
 flowchart LR
@@ -35,7 +35,7 @@ flowchart LR
     LABEL --> MON["Quality monitoring"]
 ```
 
-A useful test mirrors the one for training pipelines: if you promote this artifact, can the platform *validate* — not assume — that the feature schema it requires is the schema being served, that the threshold policy matches its score distribution, and that the runtime image can load it? If any of these is a hope rather than a check, you are deploying a decision system you do not understand.
+A useful test mirrors the one for training pipelines: if you promote this artifact, can the platform *validate* (not assume) that the feature schema it requires is the schema being served, that the threshold policy matches its score distribution, and that the runtime image can load it? If any of these is a hope rather than a check, you are deploying a decision system you do not understand.
 
 The pre-deploy compatibility matrix should be mechanical:
 
@@ -78,7 +78,7 @@ The failure behavior is domain-specific. A ranking service may fail open to a ca
 
 Progressive delivery for models is a ladder of rungs, each trading a different amount of risk for a different quality of feedback. The skill is knowing which rung answers which question, and never confusing them.
 
-**Shadow (dark launch)** runs the new model on production requests but withholds its outputs from the decision path. It removes direct decision risk, not all risk: feature reads, inference load, sensitive-data access, and accidental side effects remain. It catches runtime incompatibility, missing online features, latency regressions, and gross score divergence. Its blind spot is fundamental — because the candidate's actions do not occur, shadow cannot observe their outcomes. Shadow traffic must be sampled, authorized for the same data purpose, and isolated from champion resource pools.
+**Shadow (dark launch)** runs the new model on production requests but withholds its outputs from the decision path. It removes direct decision risk, not all risk: feature reads, inference load, sensitive-data access, and accidental side effects remain. It catches runtime incompatibility, missing online features, latency regressions, and gross score divergence. Its blind spot is fundamental: because the candidate's actions do not occur, shadow cannot observe their outcomes. Shadow traffic must be sampled, authorized for the same data purpose, and isolated from champion resource pools.
 
 Shadow produces paired observations under one logical request and release epoch. The comparison pipeline performs a one-to-one join in the distributed store, reports unmatched champion and candidate rows separately, and never collects an unbounded traffic window into one process. It computes score and decision deltas, latency/error distributions, feature/fallback divergence, and coverage by workload slice. A deterministic, access-controlled sample of material decision flips retains both release manifests and input-feature references for review.
 
@@ -97,13 +97,13 @@ Paired deltas are often more sensitive than unrelated aggregate distributions, b
 | Canary | Is the live decision path safe? | Bounded live decision exposure | Delayed labels hide quality regressions |
 | A/B experiment | Is it actually better? | Controlled | Slow; statistically heavy |
 
-The progression is deliberately ordered by risk: each rung admits a little more reality and a little more user exposure, in exchange for feedback the previous rung could not give. Skipping rungs — going straight to a full deploy because offline metrics looked good — is the big-bang anti-pattern, and it discards exactly the live signal that offline testing structurally cannot provide.
+The progression is deliberately ordered by risk: each rung admits a little more reality and a little more user exposure, in exchange for feedback the previous rung could not give. Skipping rungs (going straight to a full deploy because offline metrics looked good) is the big-bang anti-pattern, and it discards exactly the live signal that offline testing structurally cannot provide.
 
 Provisioning choices such as blue-green, warm standby, or cold standby sit underneath this ladder. They determine rollback latency, standing cost, and failure-domain exposure, not whether the candidate has earned more authority.
 
 ---
 
-## Rollback Is the Foundational Capability — and It Is Harder for Models
+## Rollback Is the Foundational Capability, and It Is Harder for Models
 
 Every progressive rollout needs a bounded containment path. For reversible serving changes this is usually traffic return to a known-safe release; for unsafe actions it may be a fail-safe policy or suspension. Without one, increasing candidate authority increases exposure without a tested recovery mechanism.
 
@@ -118,7 +118,7 @@ Rollback by registry (preferred):  registry.set_active("fraud_model", "v41")   #
 Rollback by kill switch:            config.set("kill_switch.fraud_model", true)  # bounded by propagation lease
 ```
 
-Some decisions, though, cannot be rolled back at all. A model that blocked a legitimate payment, banned a user, deleted content, or repriced inventory has produced an *irreversible action*, and reverting the model does not revert the harm. The architectural answer is to keep irreversible actions behind reversible first steps: let a new model *recommend* before it is allowed to *decide*, route its most consequential outputs through a human review queue, and design compensating actions — the same [idempotency and compensation](../01-foundations/08-idempotency.md) discipline that protects any system from un-undoable side effects — for the cases where review is impractical. This is the staged-authority principle — earn the right to act irreversibly by first proving safe on reversible actions.
+Some decisions, though, cannot be rolled back at all. A model that blocked a legitimate payment, banned a user, deleted content, or repriced inventory has produced an *irreversible action*, and reverting the model does not revert the harm. The architectural answer is to keep irreversible actions behind reversible first steps: let a new model *recommend* before it is allowed to *decide*, route its most consequential outputs through a human review queue, and design compensating actions (the same [idempotency and compensation](../01-foundations/08-idempotency.md) discipline that protects any system from un-undoable side effects) for the cases where review is impractical. This is the staged-authority principle: earn the right to act irreversibly by first proving safe on reversible actions.
 
 ---
 
@@ -140,7 +140,7 @@ as one candidate threshold. This preserves aggregate action rate on the paired s
 
 Manual containment authority remains necessary, but the harm-velocity budget may be shorter than human response time. In those classes, a pre-authorized controller consumes qualified signals from [model monitoring](./04-model-monitoring.md) and freezes or reverts allocation according to an explicit policy.
 
-The auto-action decision depends on signal delay, uncertainty, and the safety of the fallback. **Operational guardrails** — model-load failures, elevated timeouts, feature-contract violations, or a collapsed score stream — arrive quickly and often have an unambiguous safe response. **Outcome guardrails** — loss, false-positive rate, or retention — may be delayed, correlated, and repeatedly inspected. They need a declared estimator and evidence window before they can drive automation. A high-confidence harm signal may still justify an automatic stop; a noisy proxy may only freeze the ramp and page an owner.
+The auto-action decision depends on signal delay, uncertainty, and the safety of the fallback. **Operational guardrails** (model-load failures, elevated timeouts, feature-contract violations, or a collapsed score stream) arrive quickly and often have an unambiguous safe response. **Outcome guardrails** (loss, false-positive rate, or retention) may be delayed, correlated, and repeatedly inspected. They need a declared estimator and evidence window before they can drive automation. A high-confidence harm signal may still justify an automatic stop; a noisy proxy may only freeze the ramp and page an owner.
 
 The controller needs hysteresis. A practical rule requires both a minimum event count and a sustained breach, evaluates the candidate relative to the concurrent champion, and enters a latched `ABORTED` state that cannot automatically ramp again. Multi-window burn-rate alerts work well for service SLOs: a severe short-window breach stops immediately, while a smaller regression must persist across a longer window. This avoids both one-sample rollback flapping and slow accumulation of harm. The control plane below owns traffic, evidence, and transition state so model teams do not reimplement rollout mechanics in request code:
 
@@ -173,7 +173,7 @@ Serving more than one qualified release at once is the substrate for shadow, can
 
 An allocation record pins incumbent and candidate binding digests, eligibility predicate, randomization unit and hash revision, weights, start/end or evidence boundary, capacity reservation, fallback, and expected prior control-plane revision. Publication uses compare-and-swap, and every prediction records the epoch actually served. Rollback publishes a new epoch assigning eligible traffic to the retained incumbent or fail-safe; it does not mutate historical allocation. Recovery time includes configuration reconciliation, proxy propagation, connection draining, and in-flight effects.
 
-The mechanics that matter are assignment consistency and resource isolation. The experiment design chooses a randomization unit that contains carryover and plausible interference; assignment is deterministic for that unit within an allocation epoch. User-level assignment is appropriate for persistent personalized effects, while request-level assignment may be valid when carryover and cross-request interference are negligible. Shadow traffic reserves its own accelerator, feature-store, and queue capacity so candidate work cannot degrade the champion. The router—not model code—owns allocation, eligibility, release pinning, and the revert switch.
+The mechanics that matter are assignment consistency and resource isolation. The experiment design chooses a randomization unit that contains carryover and plausible interference; assignment is deterministic for that unit within an allocation epoch. User-level assignment is appropriate for persistent personalized effects, while request-level assignment may be valid when carryover and cross-request interference are negligible. Shadow traffic reserves its own accelerator, feature-store, and queue capacity so candidate work cannot degrade the champion. The router (not model code) owns allocation, eligibility, release pinning, and the revert switch.
 
 Multi-model serving also forces a capacity decision that single-model deploys avoid: minimizing artifact-load time may require both versions to remain loaded and warm. That can approximately double resident model memory before workload state and may require overlap capacity for champion, candidate, and failure headroom; the actual accelerator increment depends on co-residency, traffic allocation, and isolation. Large models make this expensive enough that teams sometimes accept a longer recovery bound, keeping the previous version on cold standby and measuring its reload plus propagation time. That trade is legitimate, but it must be written into the rollback contract rather than discovered during an incident.
 
@@ -181,9 +181,9 @@ Multi-model serving also forces a capacity decision that single-model deploys av
 
 ## The Promotion Gate
 
-Between each rung of the ladder sits a promotion gate: the explicit decision, by a person or an automated policy, that a candidate has earned the right to the next level of exposure. The gate is where deployment meets [risk governance](./09-ml-risk-governance.md). A low-stakes ranking model might promote automatically when offline metrics and shadow divergence clear thresholds. A high-stakes model — credit decisions, content moderation, anything touching safety or regulation — should require a named human approver, a recorded justification, and a reviewed evaluation report before it advances, mirroring the staged authority used for [deployment strategies](../15-deployment/01-deployment-strategies.md) in ordinary software, with [feature flags](../15-deployment/02-feature-flags.md) as the runtime kill switch.
+Between each rung of the ladder sits a promotion gate: the explicit decision, by a person or an automated policy, that a candidate has earned the right to the next level of exposure. The gate is where deployment meets [risk governance](./09-ml-risk-governance.md). A low-stakes ranking model might promote automatically when offline metrics and shadow divergence clear thresholds. A high-stakes model (credit decisions, content moderation, anything touching safety or regulation) should require a named human approver, a recorded justification, and a reviewed evaluation report before it advances, mirroring the staged authority used for [deployment strategies](../15-deployment/01-deployment-strategies.md) in ordinary software, with [feature flags](../15-deployment/02-feature-flags.md) as the runtime kill switch.
 
-The pre-deploy gate is the cheapest place to catch the most expensive mistakes, so it should mechanically verify the contract before a single user is exposed: the artifact loads under its declared runtime, every required feature exists online with the right type, the score distribution is not collapsed to a near-constant, critical slices have not regressed below threshold, the fleet has capacity for the serving limits, and — the gate teams forget — the rollback target actually exists and loads. A model that fails any of these is not a release candidate; it is a liability that has not yet detonated.
+The pre-deploy gate is the cheapest place to catch the most expensive mistakes, so it should mechanically verify the contract before a single user is exposed: the artifact loads under its declared runtime, every required feature exists online with the right type, the score distribution is not collapsed to a near-constant, critical slices have not regressed below threshold, the fleet has capacity for the serving limits, and, critically, the rollback target actually exists and loads. A model that fails any of these is not a release candidate; it is a liability that has not yet detonated.
 
 A distinguished-engineer version of the gate is policy-as-code over registry metadata:
 
@@ -217,7 +217,7 @@ The point is not the YAML; it is that the deploy path reads enforceable state. I
 
 The recurring failures of model deployment are specific enough to name, and naming them is most of preventing them.
 
-**Schema-compatible but semantically wrong.** A feature exists online with the right type, so every compatibility check passes, but its *meaning* changed — `total_spend_30d` switched from gross to net revenue. The model now scores on inputs that silently mismatch its training, and nothing fails loudly. The defense is semantic feature contracts with owners, validation against baseline distributions, and treating any meaning change as a new feature version, not an in-place edit.
+**Schema-compatible but semantically wrong.** A feature exists online with the right type, so every compatibility check passes, but its *meaning* changed: `total_spend_30d` switched from gross to net revenue. The model now scores on inputs that silently mismatch its training, and nothing fails loudly. The defense is semantic feature contracts with owners, validation against baseline distributions, and treating any meaning change as a new feature version, not an in-place edit.
 
 **Silent canary.** The canary's short-term proxy metrics look fine, traffic ramps to 100 percent, and weeks later the mature labels reveal a regression that was present the whole time. The canary was measuring operational health and being read as if it measured quality. The defense is conservative ramps in delayed-label domains, separate tracking of proxy versus delayed metrics, and a champion/challenger window that outlives label maturation.
 
@@ -258,12 +258,12 @@ Rollback is a state transition plus an impact workflow. The controller latches t
 
 1. Offline evaluation and production rollout answer different questions; neither replaces deterministic tests, historical evaluation, or causal measurement.
 2. Shadow validates the live read path, canary bounds decision exposure, an experiment estimates causal impact, and warm dual versions reduce recovery time. Each supports a narrower claim than “the model is good.”
-3. The release unit is the decision system — model, feature schema, preprocessing, thresholds, runtime — and it must deploy atomically; a mismatch anywhere corrupts the output.
+3. The release unit is the decision system (model, feature schema, preprocessing, thresholds, runtime) and it must deploy atomically; a mismatch anywhere corrupts the output.
 4. Rollback requires a compatible release bundle, not just old weights; retain and test that bundle for the declared rollback horizon.
 5. Control-plane transitions need monotonic revisions, concurrency control, bounded propagation, and a per-decision release epoch so abort cannot race with ramp.
 6. Automatic action should reflect signal confidence, delay, and fallback safety; use minimum evidence, sustained breaches, and a latched abort to prevent flapping.
 7. Version the model with its contract and threshold policy; paired decision-rate matching can propose a migration baseline, but promotion must also evaluate calibration, expected loss, decision flips, capacity, and critical slices.
-8. Shadow and challenger traffic still consume features and compute — sample it and isolate its resources, or it becomes its own incident.
+8. Shadow and challenger traffic still consume features and compute: sample it and isolate its resources, or it becomes its own incident.
 9. The promotion gate is where deployment meets governance: match the required approval to the risk and reversibility of the model's actions.
 10. Irreversible actions cannot be rolled back by reverting the model; keep them behind reversible first steps, review queues, compensation, and staged authority.
 
@@ -271,11 +271,11 @@ Rollback is a state transition plus an impact workflow. The controller latches t
 
 ## References
 
-1. [Hidden Technical Debt in Machine Learning Systems](https://proceedings.neurips.cc/paper_files/paper/2015/file/86df7dcfd896fcaf2674f757a2463eba-Paper.pdf) — Sculley et al., 2015
-2. [Meet Michelangelo: Uber's Machine Learning Platform](https://www.uber.com/blog/michelangelo-machine-learning-platform/) — Uber Engineering, 2017
-3. [TensorFlow Serving: Flexible, High-Performance ML Serving](https://arxiv.org/abs/1712.06139) — Olston et al., 2017
+1. [Hidden Technical Debt in Machine Learning Systems](https://proceedings.neurips.cc/paper_files/paper/2015/file/86df7dcfd896fcaf2674f757a2463eba-Paper.pdf): Sculley et al., 2015
+2. [Meet Michelangelo: Uber's Machine Learning Platform](https://www.uber.com/blog/michelangelo-machine-learning-platform/): Uber Engineering, 2017
+3. [TensorFlow Serving: Flexible, High-Performance ML Serving](https://arxiv.org/abs/1712.06139): Olston et al., 2017
 4. [MLflow Model Registry](https://mlflow.org/docs/latest/ml/model-registry/)
-5. [KServe Documentation](https://kserve.github.io/website/) — canary, traffic splitting, and rollout for model serving
+5. [KServe Documentation](https://kserve.github.io/website/): canary, traffic splitting, and rollout for model serving
 6. [SEC Order: Knight Capital Americas LLC (Aug 1, 2012 deployment incident)](https://www.sec.gov/litigation/admin/2013/34-70694.pdf)
-7. [Site Reliability Engineering: Canarying Releases](https://sre.google/workbook/canarying-releases/) — Google SRE Workbook
-8. [Argo Rollouts Concepts](https://argo-rollouts.readthedocs.io/en/stable/concepts/) — analysis runs, pauses, promotion, and abort semantics
+7. [Site Reliability Engineering: Canarying Releases](https://sre.google/workbook/canarying-releases/): Google SRE Workbook
+8. [Argo Rollouts Concepts](https://argo-rollouts.readthedocs.io/en/stable/concepts/): analysis runs, pauses, promotion, and abort semantics

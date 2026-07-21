@@ -24,7 +24,7 @@ Choose a table format only after defining the table’s workload:
 | **Layout** | File format, partition transforms, sort/clustering, target file distribution, and key/index strategy. |
 | **Retention** | Time travel, audit, rollback, long readers, streaming offsets, legal holds, and recovery. |
 | **Maintenance** | Compaction, clustering, manifest/log optimization, snapshot expiry, cleaning, and orphan detection. |
-| **Interoperability** | Which engines must read and write which protocol features—not only recognize the table name. |
+| **Interoperability** | Which engines must read and write which protocol features, not only recognize the table name. |
 | **Recovery** | Commit retry, ambiguous commit resolution, catalog outage, corrupt metadata, and rollback procedure. |
 
 ### Invariants
@@ -177,7 +177,7 @@ The correct retry refreshes metadata and validates B’s logical assumptions aga
 
 ### Commit authority as a control-plane dependency
 
-Catalog outage may prevent new Iceberg commits while already resolved snapshots remain readable. Delta commit behavior depends on the storage/coordinator path used. Hudi writers may depend on a lock provider and timeline coordination. Capacity-plan and protect these services for commit rate, ambiguity resolution, and disaster recovery—not just table discovery.
+Catalog outage may prevent new Iceberg commits while already resolved snapshots remain readable. Delta commit behavior depends on the storage/coordinator path used. Hudi writers may depend on a lock provider and timeline coordination. Capacity-plan and protect these services for commit rate, ambiguity resolution, and disaster recovery, not just table discovery.
 
 ---
 
@@ -287,7 +287,7 @@ Compaction, clustering, and manifest/log optimization compete with ingestion for
 
 Old metadata and files support time travel, rollback, incremental readers, audits, and long-running queries. Cleanup must account for all of them.
 
-Separate:
+Manage these lifecycle operations separately:
 
 - **snapshot/version expiry:** remove historical table states according to policy;
 - **data-file cleaning/vacuum:** delete files no longer reachable from retained states;

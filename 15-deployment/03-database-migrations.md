@@ -58,7 +58,7 @@ actor, approvals, timestamps, and engine job identity
 3. A historical backfill cannot overwrite a value from a newer application write.
 4. A migration retry is idempotent or resumes from durable engine/workflow state.
 5. DDL lock acquisition and maintenance work are bounded; timing out does not leave the application blocked indefinitely.
-6. Validation covers values, nulls, tombstones, constraints, indexes, and dependent objects—not only row count.
+6. Validation covers values, nulls, tombstones, constraints, indexes, and dependent objects, not only row count.
 7. Contract/removal begins only after old readers, writers, replicas, CDC consumers, reports, and rollback needs are absent.
 8. Schema version never regresses on one database during ordinary rollback; recovery uses a new forward phase.
 9. Migration and serving traffic share explicit I/O, log, connection, and storage budgets.
@@ -141,7 +141,7 @@ An additive statement can still block or rewrite. Engine/version/table layout de
 
 ### Maintain new writes
 
-When old and new fields live in one database transaction, update both atomically and define one as authoritative. Database triggers can centralize coverage but add hidden write cost, recursion/order concerns, and deployment coupling. Application dual-write is explicit but every writer—including admin tools and jobs—must participate.
+When old and new fields live in one database transaction, update both atomically and define one as authoritative. Database triggers can centralize coverage but add hidden write cost, recursion/order concerns, and deployment coupling. Application dual-write is explicit but every writer (including admin tools and jobs) must participate.
 
 For cross-system writes, prefer one authoritative commit plus outbox/CDC and use the general [migration protocol](./06-migration-strategies.md). The schema protocol here assumes one logical database contract.
 
@@ -177,7 +177,7 @@ Switch reads by a sticky cohort or feature flag where semantics permit. Keep the
 
 ### Switch writes and contract
 
-Stopping writes to the old representation is the point at which rollback may require reverse transformation. If the mapping is lossy—larger type to smaller, split data to one field, new enum to old—the prior binary may no longer represent new values.
+Stopping writes to the old representation is the point at which rollback may require reverse transformation. If the mapping is lossy (larger type to smaller, split data to one field, new enum to old), the prior binary may no longer represent new values.
 
 Contract/removal is a separately reviewed deployment. First prove no old query, prepared statement, view, ORM, report, replica, CDC schema, restore script, or rollback artifact refers to the object. Rename-to-tombstone or revoke access can expose hidden dependencies before destructive drop, but even metadata renames can break actors and require locks.
 
@@ -265,7 +265,7 @@ $$
 T_{\mathrm{completion}} \ge \frac{N_{\mathrm{remaining}}}{r_{\mathrm{effective}}}
 $$
 
-Effective rate is constrained by source IOPS, target write/redo, replicas, lock conflicts, and user latency—not the worker's configured batch size.
+Effective rate is constrained by source IOPS, target write/redo, replicas, lock conflicts, and user latency, not the worker's configured batch size.
 
 Temporary space must survive original table + ghost/new index + logs/undo + sort/temp + backups/snapshots + free-space threshold. Disk-full during DDL can threaten the database, not merely the migration.
 
@@ -302,7 +302,7 @@ The command exits but leaves an invalid artifact that consumes space and may enf
 
 ### Contract runs while one consumer remains
 
-Application telemetry shows zero old-column reads, but a weekly finance export and a lagging CDC consumer still decode it. Drop breaks the export and poisons downstream replay. Dependency evidence must cover observation periods, schemas, prepared statements, and offline schedules—not only live application traces.
+Application telemetry shows zero old-column reads, but a weekly finance export and a lagging CDC consumer still decode it. Drop breaks the export and poisons downstream replay. Dependency evidence must cover observation periods, schemas, prepared statements, and offline schedules, not only live application traces.
 
 ### Cutover cannot acquire metadata lock
 
@@ -318,7 +318,7 @@ Migration roles are unusually powerful. Grant only required DDL/DML/catalog priv
 
 Backfill/validation paths must enforce tenant isolation, row-level security expectations, encryption/key domains, masking, retention, legal holds, and audit. Maintenance roles that bypass policies can accidentally copy or log cross-tenant data. Do not emit row values or secrets in mismatch logs.
 
-Temporary tables, snapshots, change logs, old columns, and backups extend the data lifecycle. Cleanup includes indexes, triggers, views, grants, keys, extracts, and ghost tables—not just the visible column.
+Temporary tables, snapshots, change logs, old columns, and backups extend the data lifecycle. Cleanup includes indexes, triggers, views, grants, keys, extracts, and ghost tables, not just the visible column.
 
 Protect migration APIs from arbitrary SQL, unbounded batch sizes, broad table targeting, and unauthorized contract/drop. Emergency cancellation and lock termination are audited production actions.
 
@@ -366,7 +366,7 @@ Property-test transformations for nulls, boundaries, encodings, timezone/collati
 3. Can the change be additive first, and which phase introduces irreversible values?
 4. Which representation is authoritative at every phase, and how are new writes mirrored atomically?
 5. What ordering/guard prevents historical backfill from overwriting current data?
-6. Which semantic checks—not only counts—gate read and write switches?
+6. Which semantic checks (not only counts) gate read and write switches?
 7. Can maintenance traffic coexist with peak, failure, compaction, backup, and replica recovery?
 8. What evidence proves every old dependency is gone before contract?
 9. Until when is rollback lossless, and what forward migration is required afterward?

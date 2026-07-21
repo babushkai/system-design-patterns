@@ -121,7 +121,7 @@ A coordinate identifies progress in a particular source history; it is not a uni
 
 ### PostgreSQL
 
-Logical decoding reads WAL through a logical replication slot. Relevant positions include an LSN from which WAL may still be required and a confirmed flush position reported by the consumer. A stalled slot may retain WAL until storage limits or operator action intervene. Failover continuity depends on PostgreSQL version, slot configuration/synchronization, standby position, and connector behavior—promoting a standby does not make every external logical consumer automatically resumable.
+Logical decoding reads WAL through a logical replication slot. Relevant positions include an LSN from which WAL may still be required and a confirmed flush position reported by the consumer. A stalled slot may retain WAL until storage limits or operator action intervene. Failover continuity depends on PostgreSQL version, slot configuration/synchronization, standby position, and connector behavior: promoting a standby does not make every external logical consumer automatically resumable.
 
 ### MySQL
 
@@ -170,7 +170,7 @@ Stable field IDs or schema versions are safer than inferring meaning from the la
 
 ## 7. Bootstrap: Proving Snapshot plus Tail Has No Gap
 
-A new target needs existing state and subsequent changes. A naive sequence—scan the table, then start the log—loses transactions committed during the scan. Starting the log first and scanning later can overwrite a newer streamed value with an older snapshot row.
+A new target needs existing state and subsequent changes. A naive sequence (scan the table, then start the log) loses transactions committed during the scan. Starting the log first and scanning later can overwrite a newer streamed value with an older snapshot row.
 
 Two families of correct protocol are common.
 
@@ -196,7 +196,7 @@ Systems such as DBLog and connector-specific incremental snapshots interleave ch
 5. Reconcile snapshot rows with log events between the watermarks so newer changes win.
 6. Persist chunk completion and repeat.
 
-This limits source locks and memory while allowing the change stream to progress. The correctness argument is the watermark interval and key reconciliation—not simply that reads are chunked.
+This limits source locks and memory while allowing the change stream to progress. The correctness argument is the watermark interval and key reconciliation, not simply that reads are chunked.
 
 ### Concrete failure trace: stale snapshot wins
 
@@ -210,7 +210,7 @@ The sink is now stale even though no event was lost. Fix this by attaching snaps
 
 ### A compacted topic is not automatically a full bootstrap
 
-Log compaction can retain a latest value per key, but completeness depends on compaction progress, delete-tombstone retention, topic retention, key stability, and transaction/read-isolation behavior. Do not discard the source snapshot plan until a test proves the topic can reconstruct the required state—including deletions—over the entire bootstrap duration.
+Log compaction can retain a latest value per key, but completeness depends on compaction progress, delete-tombstone retention, topic retention, key stability, and transaction/read-isolation behavior. Do not discard the source snapshot plan until a test proves the topic can reconstruct the required state (including deletions) over the entire bootstrap duration.
 
 ---
 

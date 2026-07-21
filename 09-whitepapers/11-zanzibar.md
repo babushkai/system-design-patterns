@@ -7,7 +7,7 @@
 - **Authors:** Ruoming Pang, Ramón Cáceres, Mike Burrows, Zhifeng Chen, Pratik Dave, Nathan Germer, Alexander Golynski, Kevin Graney, Nina Kang, Lea Kissner, Jeffrey L. Korn, Abhishek Parmar, Christopher D. Richards, and Mengzhi Wang
 - **Evaluated system:** Google's internal production deployment, with measurements primarily from December 2018 and longer availability observations where stated
 
-Scope: Zanzibar as published; open-source relationship-based authorization systems and subsequent Google changes are **later evolution**, not evaluation evidence.
+This analysis covers Zanzibar as published; open-source relationship-based authorization systems and subsequent Google changes are **later evolution**, not evaluation evidence.
 
 ## Problem and Workload
 
@@ -177,7 +177,7 @@ The much larger recent-check tail is the cost of a stronger freshness constraint
 
 ### Availability methodology
 
-The paper's availability was measured with sampled/replayed requests and probers—three in each cluster—over rolling 90-day windows. A qualified RPC counted successful if it completed within 5 seconds for safe requests or 15 seconds for recent requests. Under that definition, Zanzibar reported more than 99.999% availability for three years.
+The paper's availability was measured with sampled/replayed requests and probers (three in each cluster) over rolling 90-day windows. A qualified RPC counted successful if it completed within 5 seconds for safe requests or 15 seconds for recent requests. Under that definition, Zanzibar reported more than 99.999% availability for three years.
 
 This is a meaningful but specific metric. It includes generous deadline thresholds compared with ordinary check latency and reflects Google's internal client mix and deployment. It is not a theorem that a clone inherits five nines.
 
@@ -247,7 +247,7 @@ The durable lessons are narrower and stronger:
 
 ## Primary Reference
 
-- [Zanzibar: Google's Consistent, Global Authorization System — USENIX ATC 2019 (paper PDF)](https://www.usenix.org/system/files/atc19-pang.pdf)
+- [Zanzibar: Google's Consistent, Global Authorization System (USENIX ATC 2019 paper PDF)](https://www.usenix.org/system/files/atc19-pang.pdf)
 
 ## Related Chapters
 

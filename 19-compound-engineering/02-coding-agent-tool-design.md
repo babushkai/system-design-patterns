@@ -2,9 +2,9 @@
 
 ## TL;DR
 
-A production tool is the versioned protocol between a probabilistic planner and the systems it can affect. It requires typed arguments, normalized resource identity, authorization, bounded execution, cancellation semantics, structured results, provenance, redaction, and a durable receipt. Use the smallest primitives that preserve intent—read, search, patch, execute, inspect, and invoke a scoped connector—and expose dangerous composition to policy.
+A production tool is the versioned protocol between a probabilistic planner and the systems it can affect. It requires typed arguments, normalized resource identity, authorization, bounded execution, cancellation semantics, structured results, provenance, redaction, and a durable receipt. Use the smallest primitives that preserve intent (read, search, patch, execute, inspect, and invoke a scoped connector) and expose dangerous composition to policy.
 
-Scope: the tool registry, request/effect protocol, runtime boundary, and tool-specific failures. [Platform Fundamentals](./01-compound-engineering-fundamentals.md) defines task, isolation, scheduling, and approval; [Context Management](../17-llm-systems/08-context-management.md) covers runtime selection; [Repository Context and Policy](./03-agent-context-engineering.md) covers repository policy artifacts.
+This chapter defines the tool registry, request/effect protocol, runtime boundary, and tool-specific failure semantics. [Platform Fundamentals](./01-compound-engineering-fundamentals.md) defines task, isolation, scheduling, and approval; [Context Management](../17-llm-systems/08-context-management.md) covers runtime selection; [Repository Context and Policy](./03-agent-context-engineering.md) covers repository policy artifacts.
 
 ---
 
@@ -337,7 +337,7 @@ Fewer orthogonal primitives are easier to secure and teach than dozens of overla
 - Model partial and ambiguous completion explicitly; retry only after idempotency or reconciliation is established.
 - Repository reads need snapshot identity and truncation semantics; mutations need preimage checks and transactional repair.
 - Shell, browser, and connector tools amplify authority and require different isolation and effect controls.
-- Tool quality determines what evidence reaches the planner, but policy and the runtime—not descriptions—enforce safety.
+- Tool quality determines what evidence reaches the planner, but policy and the runtime (not descriptions) enforce safety.
 
 ---
 

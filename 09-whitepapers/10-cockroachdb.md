@@ -1,6 +1,6 @@
 # CockroachDB (SIGMOD 2020): Evidence-First Paper Analysis
 
-CockroachDB's 2020 design assembles range-level Raft, MVCC timestamps, transaction records, leases, and a distribution-aware optimizer. The challenge is preserving serializable SQL semantics while every table and index is encoded across independently replicated key ranges that can move and fail.
+CockroachDB's 2020 design assembles range-level Raft, MVCC timestamps, transaction records, leases, and a distribution-aware optimizer. No component alone provides distributed SQL; the challenge is preserving serializable SQL semantics while every table and index is encoded across independently replicated key ranges that can move and fail.
 
 ## Publication identity and frozen version
 
@@ -9,7 +9,7 @@ CockroachDB's 2020 design assembles range-level Raft, MVCC timestamps, transacti
 - **Venue and version:** ACM SIGMOD International Conference on Management of Data, 2020, pages 1493–1509
 - **Implementation evaluated:** CockroachDB v19.2.2 unless noted; the large TPC-C comparison explicitly used v19.2.0
 
-Scope: the paper's 2020 names and guarantees. Transaction locking, storage engines, multi-region SQL, changefeeds, serverless operation, and optimizer features evolved later.
+This analysis uses the paper's 2020 names and guarantees. Transaction locking, storage engines, multi-region SQL, changefeeds, serverless operation, and optimizer features evolved later.
 
 See [Distributed Transactions](../02-distributed-databases/07-distributed-transactions.md), [Consensus](../02-distributed-databases/08-consensus-algorithms.md), and [Partitioning](../02-distributed-databases/05-partitioning-strategies.md) for the isolated concepts.
 
@@ -122,7 +122,7 @@ Figure 4 ran SysBench reads/writes on three-node AWS clusters from c5d.large thr
 
 Figure 5 varied cluster size, replica factor, and the percentage of remote TPC-C NewOrder transactions on 4-vCPU GCP `n1-standard-4` machines. Each point averaged three runs and found maximum tpmC sustained for at least ten minutes; the largest case used 10,000 warehouses and 800 GB.
 
-Replication reduced throughput by up to 48% at factor three and 57% at factor five; distributed transactions imposed up to another 46% reduction. Throughput still scaled linearly with nodes in the graphed range. The important evidence is the measured tax of guarantees—not only the scale-out line.
+Replication reduced throughput by up to 48% at factor three and 57% at factor five; distributed transactions imposed up to another 46% reduction. Throughput still scaled linearly with nodes in the graphed range. The important evidence is the measured tax of guarantees, not only the scale-out line.
 
 ### Large TPC-C run
 

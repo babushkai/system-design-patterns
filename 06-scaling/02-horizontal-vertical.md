@@ -2,7 +2,7 @@
 
 Scaling is the deliberate change of a system's useful-capacity envelope. “Scale up” and “scale out” describe actuators, not outcomes: a larger machine can remain blocked on a serial lock, and ten more application replicas can overload a database, connection limit, or shared cache. Start with the workload, identify the limiting resource and coordination path, then design a reversible transition that preserves authority while capacity changes.
 
-Scope: **scaling dimensions, bottleneck models, and safe manual or planned scale transitions**. [Auto-Scaling](./08-auto-scaling.md) owns metric selection, delayed feedback, hysteresis, stabilization, and controller mechanics. [Database Sharding](./03-database-sharding.md) owns the operational lifecycle for distributing application data, while [Partitioning Strategies](../02-distributed-databases/05-partitioning-strategies.md) owns the underlying key-to-partition primitives.
+A scaling plan must define **scaling dimensions, bottleneck models, and safe manual or planned scale transitions**. [Auto-Scaling](./08-auto-scaling.md) owns metric selection, delayed feedback, hysteresis, stabilization, and controller mechanics. [Database Sharding](./03-database-sharding.md) owns the operational lifecycle for distributing application data, while [Partitioning Strategies](../02-distributed-databases/05-partitioning-strategies.md) owns the underlying key-to-partition primitives.
 
 ## Primary Evidence and Scope
 
@@ -31,7 +31,7 @@ A scaling proposal is incomplete until it states:
 | **Failure target** | Which host, zone, rollout, dependency, or region failure must the new shape survive? |
 | **Economic boundary** | Full cost including headroom, licenses, transfer, storage duplication, and operator effort? |
 
-Scaling should improve **goodput**—valid work completed within its contract—not merely requests accepted, threads created, or CPU consumed.
+Scaling should improve **goodput** (valid work completed within its contract), not merely requests accepted, threads created, or CPU consumed.
 
 ## State, authority, and invariants
 
@@ -141,7 +141,7 @@ Its simplicity is conditional. A 4× larger machine is not a 4× faster system i
 5. retain the old node as rollback capacity until new backups and recovery evidence exist;
 6. drain and retire only after the rollback horizon.
 
-When no replica path exists, the resize is a maintenance event with explicit downtime, backup/restore time, and abort points—not an instantaneous capacity toggle.
+When no replica path exists, the resize is a maintenance event with explicit downtime, backup/restore time, and abort points, not an instantaneous capacity toggle.
 
 ## Horizontal scaling
 
@@ -248,7 +248,7 @@ Vertical price curves, spot availability, and transfer tariffs are volatile. Ins
 3. New processes eagerly fill pools, exceeding the database's connection and memory budget.
 4. Queries slow, request concurrency rises, health checks fail, and the load balancer shifts traffic into a cascade.
 
-Allocate a global connection budget, start pools lazily, cap rollout overlap, and gate readiness on dependency capacity—not merely process startup.
+Allocate a global connection budget, start pools lazily, cap rollout overlap, and gate readiness on dependency capacity, not merely process startup.
 
 ### More workers reduce throughput
 

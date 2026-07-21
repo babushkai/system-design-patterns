@@ -54,11 +54,11 @@ flowchart LR
 
 ## Auditability and Lineage: You Cannot Govern What You Cannot Reconstruct
 
-Every governance question — *why was this person denied? was this model reviewed? what data did it learn from? can we roll it back?* — reduces to a reconstruction problem. If the system cannot reconstruct the conditions of a past decision, no amount of policy can govern it. **Lineage is therefore the foundation on which every other control rests**, the same way reproducibility is the foundation of the training pipeline.
+Every governance question (*why was this person denied? was this model reviewed? what data did it learn from? can we roll it back?*) reduces to a reconstruction problem. If the system cannot reconstruct the conditions of a past decision, no amount of policy can govern it. **Lineage is therefore the foundation on which every other control rests**, the same way reproducibility is the foundation of the training pipeline.
 
 The governance requirement extends the training pipeline's [reproducibility contract](./05-training-pipelines.md) from “what produced this model” to “what produced this decision.” Trace the model and training lineage, the release and policy versions, the inputs actually used, system fallbacks, and any human intervention. What must be retained, for how long, and in what form depends on purpose and applicable law; retaining every raw feature indefinitely can itself violate data-minimization and retention obligations.
 
-The serving path emits an append-only **decision event** with a unique ID, release epoch, artifact digest, policy version, input snapshot reference or governed digest, output, fallback state, and override. Tamper evidence comes from write-once storage controls, restricted writers, integrity hashes, replication, and audited reads—not from the word “immutable.” Sensitive input values can live in a separately encrypted vault with shorter retention while the decision ledger retains stable references and integrity proofs. Labels and appeals may link to the decision event, but they remain separate ledgers: using the audit stream directly as ground truth would mix what the system decided with whether that decision was correct.
+The serving path emits an append-only **decision event** with a unique ID, release epoch, artifact digest, policy version, input snapshot reference or governed digest, output, fallback state, and override. Tamper evidence comes from write-once storage controls, restricted writers, integrity hashes, replication, and audited reads, not from the word “immutable.” Sensitive input values can live in a separately encrypted vault with shorter retention while the decision ledger retains stable references and integrity proofs. Labels and appeals may link to the decision event, but they remain separate ledgers: using the audit stream directly as ground truth would mix what the system decided with whether that decision was correct.
 
 ---
 
@@ -186,9 +186,9 @@ Exceptions are also state. A break-glass authorization names the incident, scope
 
 ## Approval Gates and Separation of Duties
 
-For higher tiers, promotion requires an enforced authorization from roles independent enough to challenge the release. **Separation of duties** reduces conflict of interest and single-principal compromise; it does not assume authors are reckless or reviewers infallible. Required independence and expertise follow the harm model—for example model validation, domain risk, privacy, security, or legal review may own different claims.
+For higher tiers, promotion requires an enforced authorization from roles independent enough to challenge the release. **Separation of duties** reduces conflict of interest and single-principal compromise; it does not assume authors are reckless or reviewers infallible. Required independence and expertise follow the harm model: for example, model validation, domain risk, privacy, security, or legal review may own different claims.
 
-The enforcement boundary spans the **model registry** and deployment controller, the same components that anchor [deployment and rollouts](./06-model-deployment-rollouts.md). The registry stores the model bundle's eligibility lifecycle—registered, evaluated, approved, deprecated, retired—while separate deployment records store environment and rollout state such as staged, shadow, canary, active, and draining. A high-tier bundle cannot become `approved` without the required lineage, evaluation, and authorization; the deployment controller then refuses production canary or active intent unless that approval lease is valid for the exact bundle and use context. This is the governance analogue of the training pipeline's promotion gate: a model whose approval is "someone said yes in Slack" is not approved, because neither controller can enforce Slack.
+The enforcement boundary spans the **model registry** and deployment controller, the same components that anchor [deployment and rollouts](./06-model-deployment-rollouts.md). The registry stores the model bundle's eligibility lifecycle (registered, evaluated, approved, deprecated, retired), while separate deployment records store environment and rollout state such as staged, shadow, canary, active, and draining. A high-tier bundle cannot become `approved` without the required lineage, evaluation, and authorization; the deployment controller then refuses production canary or active intent unless that approval lease is valid for the exact bundle and use context. This is the governance analogue of the training pipeline's promotion gate: a model whose approval is "someone said yes in Slack" is not approved, because neither controller can enforce Slack.
 
 The engineering implication is that approval must be a *state in the registry*, queryable and enforced, not an event in a human's memory. A small declarative policy, evaluated by the gate, is enough:
 
@@ -279,7 +279,7 @@ This shape matters operationally. A denial reason that points to a missing regis
 
 ## Access Control: Who Is Allowed to Change a Consequential Model
 
-An approval gate is worthless if anyone can bypass it. Separation of duties only holds when the *permission* to promote, to edit a threshold, or to overwrite a feature definition is itself an enforced control. This is the access-control layer of governance, and it is the one teams most often leave implicit — every engineer has production credentials, and the gate is a convention rather than a constraint.
+An approval gate is worthless if anyone can bypass it. Separation of duties only holds when the *permission* to promote, to edit a threshold, or to overwrite a feature definition is itself an enforced control. This is the access-control layer of governance, and it is the one teams most often leave implicit: every engineer has production credentials, and the gate is a convention rather than a constraint.
 
 The blast radius of a change should determine its privilege boundary. Model, feature, threshold, policy, fallback, and authorization changes all affect decisions and require attributed identities and least-privilege roles. High-consequence changes use dual control; production artifacts and policy bundles are signed by the release path; the serving plane verifies digest and signature before activation. A registry that records approvals but permits an unsigned threshold edit is recording fiction. Emergency access is narrow, time-bound, heavily logged, and automatically revoked rather than shared as a standing administrator credential.
 
@@ -289,7 +289,7 @@ The blast radius of a change should determine its privilege boundary. Model, fea
 
 Legal duties are jurisdiction- and use-specific. In the EU, **GDPR Article 22** addresses decisions based solely on automated processing that produce legal or similarly significant effects, subject to stated exceptions; where the contract or consent exceptions apply, Article 22(3) requires safeguards including human intervention, an opportunity to express a view, and contesting the decision. GDPR transparency duties also interact with Articles 13–15 and have been interpreted through case law and regulatory guidance. The **EU AI Act** imposes risk-management, data-governance, logging, transparency, and human-oversight duties for covered actors and systems on a phased schedule. These regimes overlap but are not interchangeable, and architecture is not a substitute for legal scoping.
 
-The engineering implication is that explanation and contestability are end-to-end capabilities. The system needs decision lookup, preserved policy and input context, an explanation appropriate to the audience, a review route, override authority, and downstream correction. Feature attribution can help describe model sensitivity, but it is not automatically a causal explanation, a legal reason, or evidence that the final policy action was justified. Persist the explanation method and version—or enough governed context to recompute it—and validate fidelity and stability for the actual model class.
+The engineering implication is that explanation and contestability are end-to-end capabilities. The system needs decision lookup, preserved policy and input context, an explanation appropriate to the audience, a review route, override authority, and downstream correction. Feature attribution can help describe model sensitivity, but it is not automatically a causal explanation, a legal reason, or evidence that the final policy action was justified. Persist the explanation method and version (or enough governed context to recompute it) and validate fidelity and stability for the actual model class.
 
 The model output may also be only one input to the final action. A complete explanation distinguishes model score, deterministic eligibility rules, thresholds, missing-feature fallbacks, and human judgment. Otherwise the system explains the model while leaving the decision unexplained.
 
@@ -345,7 +345,7 @@ Equal-opportunity gap   = 0.81 − 0.68 = 0.13     ← qualified members of B ar
                                                     13 points less likely to be approved
 ```
 
-The selection-rate ratio needs no outcome labels and can be computed quickly; it measures a different quantity from equal opportunity, which conditions on a mature outcome. The “four-fifths” heuristic appears in the US Uniform Guidelines for Employee Selection Procedures; it is not a universal fairness definition, legal safe harbor, or appropriate threshold for unrelated domains. Conditional metrics inherit label delay and selective-label bias from [model monitoring](./04-model-monitoring.md). A governance policy must choose metrics from the harm model and legal context, record unavoidable tradeoffs among criteria, and evaluate uncertainty. Confidence intervals depend on the relevant denominators and event rates—not merely the total slice size—and gates need minimum evidence plus an escalation state rather than treating an underpowered slice as passing.
+The selection-rate ratio needs no outcome labels and can be computed quickly; it measures a different quantity from equal opportunity, which conditions on a mature outcome. The “four-fifths” heuristic appears in the US Uniform Guidelines for Employee Selection Procedures; it is not a universal fairness definition, legal safe harbor, or appropriate threshold for unrelated domains. Conditional metrics inherit label delay and selective-label bias from [model monitoring](./04-model-monitoring.md). A governance policy must choose metrics from the harm model and legal context, record unavoidable tradeoffs among criteria, and evaluate uncertainty. Confidence intervals depend on the relevant denominators and event rates (not merely the total slice size), and gates need minimum evidence plus an escalation state rather than treating an underpowered slice as passing.
 
 At system level, fairness monitoring needs a versioned cohort definition, lawful and access-controlled handling of protected attributes, maturity and missingness state, uncertainty, and an action policy. Not every alert should blindly roll back: a data-quality failure may freeze promotion, a credible severe disparity may suspend automation, and a low-powered slice may route more cases to review while evidence accumulates. Aggregate performance never overrides a predeclared harm limit, but the control must distinguish “measured safe,” “measured unsafe,” and “not measurable yet.”
 
@@ -363,7 +363,7 @@ Deletion and objection requests need forward-lineage impact analysis: which raw 
 
 Every governed model needs a named accountable owner or on-call rotation with authority to contain harm. An **orphaned model** can continue making consequential decisions after organizational ownership disappears, leaving no actor responsible for monitoring, explanation, or suspension.
 
-ML incidents demand a different playbook from service incidents because a model can be perfectly *healthy* — low latency, no errors — while causing real harm. The relevant severity scale is keyed to harm, not to system health.
+ML incidents demand a different playbook from service incidents because a model can be perfectly *healthy* (low latency, no errors) while causing real harm. The relevant severity scale is keyed to harm, not to system health.
 
 | Impact dimension | Classification input | Control consequence |
 |---|---|---|
@@ -447,7 +447,7 @@ The characteristic ways governance fails recur across organizations, and naming 
 
 **Fairness-as-a-one-time-check** certifies a model at launch and lets it drift. The defense is continuous slice monitoring with a pre-declared metric that the promotion gate enforces.
 
-**The orphaned model** runs in production with no owner, so no one notices, explains, or stops its harms. The defense is mandatory owner metadata, stale-model alerts, and a retirement path — a model without a retirement plan becomes permanent operational debt.
+**The orphaned model** runs in production with no owner, so no one notices, explains, or stops its harms. The defense is mandatory owner metadata, stale-model alerts, and a retirement path: a model without a retirement plan becomes permanent operational debt.
 
 **Nominal human oversight** places a rushed reviewer after the model without independent evidence or override authority. High agreement alone is not proof of rubber-stamping because easy cases may genuinely agree. Sample expert adjudication, time-to-review, reason diversity, slice-level overturns, and controlled tests of reviewer independence expose automation bias and capacity pressure.
 
@@ -483,15 +483,15 @@ Finally, test the controls themselves. Exercise rollback and authorization revoc
 
 ## Key Takeaways
 
-1. Governance is a closed loop of context mapping, authorization, operation, measurement, response, and retirement—not a document set or a promotion checklist.
+1. Governance is a closed loop of context mapping, authorization, operation, measurement, response, and retirement, not a document set or a promotion checklist.
 2. Risk tiering by impact (who is affected, reversibility, regulatory exposure) is the core decision framework; it parameterizes every other control.
 3. Decision traceability spans model and training lineage, release epoch, policy, actual inputs or governed snapshot, fallback state, and human action.
-4. Approval gates enforce separation of duties through the model registry — approval is a queryable state, not a memory.
+4. Approval gates enforce separation of duties through the model registry: approval is a queryable state, not a memory.
 5. Production governance artifacts should be structured: model inventory, per-decision audit log, and immutable promotion evidence bundle.
 6. Explanation and contestability require an end-to-end workflow; feature attribution alone is neither a causal explanation nor an appeal mechanism.
 7. Fairness controls need contextual metrics, lawful cohort data, uncertainty, mature labels, and an action for `INSUFFICIENT` evidence.
 8. Containment targets derive from harm velocity; authorization revocation, lower autonomy, rollback, and manual review must be tested against that objective.
-9. Governance incidents should produce new enforced controls — policy rules, metadata requirements, monitors, or runbooks — not only narrative postmortems.
+9. Governance incidents should produce new enforced controls (policy rules, metadata requirements, monitors, or runbooks), not only narrative postmortems.
 10. Every regulated model needs a named owner and a retirement path, or it becomes an unaccountable, permanent liability.
 11. Regulations must be mapped to scoped, testable obligations and current official text; shared platform controls help but do not create a universal “compliant” state.
 12. Control health is itself observable: expired approvals, untested fallbacks, audit gaps, review backlogs, and permanent exceptions are governance incidents.
@@ -500,12 +500,12 @@ Finally, test the controls themselves. Exercise rollback and authorization revoc
 
 ## References
 
-1. [SR 11-7: Guidance on Model Risk Management](https://www.federalreserve.gov/supervisionreg/srletters/sr1107.htm) — US Federal Reserve / OCC, 2011
-2. [Regulation (EU) 2024/1689 — Artificial Intelligence Act](https://eur-lex.europa.eu/eli/reg/2024/1689/oj) — official text
-3. [European Commission AI Act Implementation Timeline](https://ai-act-service-desk.ec.europa.eu/en/ai-act/eu-ai-act-implementation-timeline) — verify current application dates
-4. [Regulation (EU) 2016/679 — GDPR, Article 22 and Recital 71](https://eur-lex.europa.eu/eli/reg/2016/679/oj) — official text
+1. [SR 11-7: Guidance on Model Risk Management](https://www.federalreserve.gov/supervisionreg/srletters/sr1107.htm): US Federal Reserve / OCC, 2011
+2. [Regulation (EU) 2024/1689: Artificial Intelligence Act](https://eur-lex.europa.eu/eli/reg/2024/1689/oj): official text
+3. [European Commission AI Act Implementation Timeline](https://ai-act-service-desk.ec.europa.eu/en/ai-act/eu-ai-act-implementation-timeline): verify current application dates
+4. [Regulation (EU) 2016/679: GDPR, Article 22 and Recital 71](https://eur-lex.europa.eu/eli/reg/2016/679/oj): official text
 5. [NIST AI Risk Management Framework 1.0](https://nvlpubs.nist.gov/nistpubs/ai/NIST.AI.100-1.pdf)
-6. [Model Cards for Model Reporting](https://arxiv.org/abs/1810.03993) — Mitchell et al., 2019
-7. [Datasheets for Datasets](https://arxiv.org/abs/1803.09010) — Gebru et al., 2018
-8. [Hidden Technical Debt in Machine Learning Systems](https://proceedings.neurips.cc/paper_files/paper/2015/file/86df7dcfd896fcaf2674f757a2463eba-Paper.pdf) — Sculley et al., 2015
-9. [Uniform Guidelines on Employee Selection Procedures](https://www.ecfr.gov/current/title-29/subtitle-B/chapter-XIV/part-1607) — official US text for the four-fifths heuristic's scope
+6. [Model Cards for Model Reporting](https://arxiv.org/abs/1810.03993): Mitchell et al., 2019
+7. [Datasheets for Datasets](https://arxiv.org/abs/1803.09010): Gebru et al., 2018
+8. [Hidden Technical Debt in Machine Learning Systems](https://proceedings.neurips.cc/paper_files/paper/2015/file/86df7dcfd896fcaf2674f757a2463eba-Paper.pdf): Sculley et al., 2015
+9. [Uniform Guidelines on Employee Selection Procedures](https://www.ecfr.gov/current/title-29/subtitle-B/chapter-XIV/part-1607): official US text for the four-fifths heuristic's scope

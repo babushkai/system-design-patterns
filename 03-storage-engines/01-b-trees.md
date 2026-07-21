@@ -2,7 +2,7 @@
 
 A database B-tree is an ordered map engineered around fixed-size pages, a buffer pool, concurrent structural changes, and crash recovery. Its value is not the textbook `O(log n)` claim; many structures have that asymptotic cost. The value is high fanout: a handful of page accesses locates a key among billions, upper levels remain cached, and linked leaves turn an ordered range into mostly sequential work.
 
-Scope: the B+-tree page structure, search and mutation algorithms, latching, split recovery, and physical cost model. [Secondary Indexes](../02-distributed-databases/06-secondary-indexes.md) owns distributed placement and consistency of alternate access paths. [Write-Ahead Logging](./04-write-ahead-logging.md) owns transaction recovery theory, while [LSM Trees](./02-lsm-trees.md) covers the write-buffered alternative.
+A B+-tree implementation must account for page structure, search and mutation algorithms, latching, split recovery, and the physical cost model. [Secondary Indexes](../02-distributed-databases/06-secondary-indexes.md) owns distributed placement and consistency of alternate access paths. [Write-Ahead Logging](./04-write-ahead-logging.md) owns transaction recovery theory, while [LSM Trees](./02-lsm-trees.md) covers the write-buffered alternative.
 
 ## Workload and storage contract
 
@@ -48,7 +48,7 @@ height h ~= ceil(log_F(number_of_leaf_pages)) + 1
 leaf pages ~= live_entry_bytes / (P * target_leaf_fill)
 ```
 
-With an 8 KiB page and roughly 24 bytes per separator-plus-pointer, fanout is on the order of hundreds. Four levels can cover billions of entries. The root and first internal levels occupy little memory, so a point lookup usually performs several buffer hits and zero or one storage reads—not four independent random I/Os.
+With an 8 KiB page and roughly 24 bytes per separator-plus-pointer, fanout is on the order of hundreds. Four levels can cover billions of entries. The root and first internal levels occupy little memory, so a point lookup usually performs several buffer hits and zero or one storage reads, not four independent random I/Os.
 
 A range returning `Krows` costs one descent plus approximately `ceil(Krows / entries_per_leaf)` leaf visits, adjusted for visibility checks and heap fetches. If the leaf contains only row locators, unordered heap access may dominate the apparently sequential index scan. A covering or clustered layout changes that cost, at the price of wider entries.
 

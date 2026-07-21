@@ -2,7 +2,7 @@
 
 Discord combines workloads with incompatible physics. Text history is durable and read-heavy around recent channel partitions. Gateway sessions are long-lived, stateful connections with bursty fanout. Presence is ephemeral and high-churn. Voice and video are latency-sensitive UDP media flows. A useful design does not force all four through one scaling primitive.
 
-Evidence labels:
+Claims use three evidence labels:
 
 - **Documented**: a linked Discord engineering post or public protocol states the claim; figures and topologies are dated.
 - **Inference**: a conclusion drawn from those facts or product constraints, not a statement about undisclosed production internals.
@@ -157,7 +157,7 @@ Media queues must be latency-bounded. When congestion rises, drop expired video 
 
 ## Capacity model
 
-### Gateway memory—illustrative assumptions
+### Gateway memory: illustrative assumptions
 
 **Reference design.** Assume 8 million concurrent sessions, 28 KiB of measured application state per session, and 12 KiB of transport/runtime overhead. Base memory is:
 
@@ -173,7 +173,7 @@ $$
 
 This excludes kernel socket memory, compression dictionaries, guild caches, queues, replicas, deployment surge, and region evacuation. Benchmark with realistic subscription skew; average connections per host is not enough.
 
-### Text amplification—illustrative assumptions
+### Text amplification: illustrative assumptions
 
 At 250,000 committed messages/s, 1.4 storage mutations per message, replication factor 3, and a mean 18 actively subscribed gateway deliveries per message:
 
@@ -185,9 +185,9 @@ $$
 gateway\ deliveries/s = 250{,}000 \times 18 = 4.5\ million
 $$
 
-If an announcement raises active fanout to 50, the gateway plane—not the database command rate—becomes the likely bottleneck. All numbers are illustrative, not Discord scale claims.
+If an announcement raises active fanout to 50, the gateway plane, not the database command rate, becomes the likely bottleneck. All numbers are illustrative, not Discord scale claims.
 
-### SFU egress—illustrative assumptions
+### SFU egress: illustrative assumptions
 
 A room with 20 participants, 4 simultaneous video publishers, and an average selected bitrate of 1.2 Mbit/s per publisher-receiver pair needs roughly:
 
@@ -195,7 +195,7 @@ $$
 20 \times 4 \times 1.2 = 96\ Mbit/s
 $$
 
-before protocol overhead and retransmission. Capacity allocation must use measured regional egress, packet rate, CPU, NIC interrupts, and loss—not participant count alone.
+before protocol overhead and retransmission. Capacity allocation must use measured regional egress, packet rate, CPU, NIC interrupts, and loss, not participant count alone.
 
 ## Concrete failure trace: announcement hotspot
 
@@ -221,7 +221,7 @@ Provision static regional headroom for reconnect and call replacement. Autoscali
 
 ## Security, privacy, and abuse
 
-**Reference design.** Authenticate HTTP, Gateway, and voice-media credentials separately; bind each short-lived token to user, session, guild/room, permissions, and epoch. Check attachment references so knowing an object URL is not sufficient authorization. Rate-limit high-amplification operations—mentions, member enumeration, presence subscription, history scans—by cost rather than request count alone.
+**Reference design.** Authenticate HTTP, Gateway, and voice-media credentials separately; bind each short-lived token to user, session, guild/room, permissions, and epoch. Check attachment references so knowing an object URL is not sufficient authorization. Rate-limit high-amplification operations (mentions, member enumeration, presence subscription, and history scans) by cost rather than request count alone.
 
 Moderation and abuse systems need access to authorized content, but access should be purpose-limited, audited, and separated from ordinary operations. Presence and social graphs are sensitive metadata. Logs should store identifiers and bounded diagnostic fields, not indiscriminate message or media payloads.
 

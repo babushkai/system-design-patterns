@@ -4,11 +4,11 @@
 
 FinOps is a measurement and decision system for technology value, not a monthly bill dashboard. Its foundation is a reconciled cost ledger: normalize provider and internal charges into a stable schema, preserve billing and usage time, amortize commitments/credits under declared rules, allocate direct and shared cost with versioned drivers, and reconcile every published view back to authoritative totals.
 
-Unit economics divides an allocated cost population by a useful output from the same scope and interval. A falling total bill can hide worse unit cost; a rising bill can be healthy growth. Forecasts combine workload drivers, unit costs, fixed/committed capacity, seasonality, and planned architectural steps with uncertainty—not a straight line through invoice totals.
+Unit economics divides an allocated cost population by a useful output from the same scope and interval. A falling total bill can hide worse unit cost; a rising bill can be healthy growth. Forecasts combine workload drivers, unit costs, fixed/committed capacity, seasonality, and planned architectural steps with uncertainty, not a straight line through invoice totals.
 
 Optimization decisions compare net present savings with engineering effort, migration cost, reliability/performance risk, reversibility, and opportunity cost. Examples use no vendor-price assumptions.
 
-Shared plane: [Distributed Tracing and Telemetry Pipelines](./01-distributed-tracing.md). Scope here: cost normalization, allocation, forecasting, and unit economics; [Capacity Planning](../01-foundations/10-capacity-planning.md) covers demand sizing and [SLOs](./05-slos-error-budgets.md) reliability policy.
+[Distributed Tracing and Telemetry Pipelines](./01-distributed-tracing.md) defines the shared telemetry plane. This chapter covers cost normalization, allocation, forecasting, and unit economics; [Capacity Planning](../01-foundations/10-capacity-planning.md) covers demand sizing and [SLOs](./05-slos-error-budgets.md) covers reliability policy.
 
 ---
 
@@ -321,7 +321,7 @@ $$
 \text{error}_t = C_t - \hat{C}_t
 $$
 
-and scaled/percentage errors only where actuals are not near zero. Separate:
+and scaled/percentage errors only where actuals are not near zero. Decompose forecast error into:
 
 - volume error;
 - unit-cost/efficiency error;
@@ -418,7 +418,7 @@ Compare observed cost/usage with an expected distribution conditioned on:
 
 Detection output includes magnitude, duration, affected cost category/resource, likely driver, data watermark, and owner.
 
-Page only when immediate action can materially reduce ongoing loss or risk—for example a runaway workload. Route slower allocation drift or optimization opportunities to owned work queues. Alert delivery semantics belong to [Alert Evaluation and Notification](./04-alerting.md).
+Page only when immediate action can materially reduce ongoing loss or risk, for example a runaway workload. Route slower allocation drift or optimization opportunities to owned work queues. Alert delivery semantics belong to [Alert Evaluation and Notification](./04-alerting.md).
 
 ### Spend-rate projection
 
@@ -626,12 +626,12 @@ Use double-entry-style reconciliation properties: every published allocated amou
 
 ## References
 
-- [FinOps Framework](https://www.finops.org/framework/) — principles, personas, capabilities, and iterative operating model
-- [FOCUS Specification](https://focus.finops.org/focus-specification/) — normalized billing data dimensions, metrics, and contract
-- [OpenCost Specification](https://opencost.io/docs/specification/) — workload cost allocation model for cloud-native infrastructure
-- [FinOps Open Cost and Usage Specification](https://focus.finops.org/) — open cost/usage normalization ecosystem and governance
-- [Green Software Foundation: Software Carbon Intensity Specification](https://sci.greensoftware.foundation/) — explicit method for operational carbon intensity where sustainability is in scope
-- [Capacity Planning](../01-foundations/10-capacity-planning.md) — demand, headroom, queueing, and scenario sizing
-- [Multi-Tenancy](../06-scaling/12-multi-tenancy.md) — tenant isolation, metering, quotas, and noisy-neighbor boundaries
-- [SLOs and Error-Budget Control](./05-slos-error-budgets.md) — reliability constraints and policy
-- [ML Capacity and Cost Planning](../16-ml-systems/14-ml-capacity-cost-planning.md) — accelerator-specific capacity and model-serving unit economics
+- [FinOps Framework](https://www.finops.org/framework/): principles, personas, capabilities, and iterative operating model
+- [FOCUS Specification](https://focus.finops.org/focus-specification/): normalized billing data dimensions, metrics, and contract
+- [OpenCost Specification](https://opencost.io/docs/specification/): workload cost allocation model for cloud-native infrastructure
+- [FinOps Open Cost and Usage Specification](https://focus.finops.org/): open cost/usage normalization ecosystem and governance
+- [Green Software Foundation: Software Carbon Intensity Specification](https://sci.greensoftware.foundation/): explicit method for operational carbon intensity where sustainability is in scope
+- [Capacity Planning](../01-foundations/10-capacity-planning.md): demand, headroom, queueing, and scenario sizing
+- [Multi-Tenancy](../06-scaling/12-multi-tenancy.md): tenant isolation, metering, quotas, and noisy-neighbor boundaries
+- [SLOs and Error-Budget Control](./05-slos-error-budgets.md): reliability constraints and policy
+- [ML Capacity and Cost Planning](../16-ml-systems/14-ml-capacity-cost-planning.md): accelerator-specific capacity and model-serving unit economics

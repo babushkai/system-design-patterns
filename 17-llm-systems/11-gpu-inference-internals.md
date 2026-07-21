@@ -56,13 +56,13 @@ Single-stream ceiling = bandwidth / bytes per token
                       = 3.35 TB/s / 70 GB ≈ 48 tokens/sec
 ```
 
-The quotient is an optimistic weight-only upper bound, not a guaranteed 48 tokens/s. KV reads, embedding/output layers, non-matrix operations, allocator metadata, kernel inefficiency, and clocks add traffic or reduce sustained bandwidth. An observed result above the naive bound signals that an assumption changed—weights were shared across a batch, compressed, cached at another level, sparsely activated, or not all bytes were read—not that the roofline was violated.
+The quotient is an optimistic weight-only upper bound, not a guaranteed 48 tokens/s. KV reads, embedding/output layers, non-matrix operations, allocator metadata, kernel inefficiency, and clocks add traffic or reduce sustained bandwidth. An observed result above the naive bound signals that an assumption changed (weights were shared across a batch, compressed, cached at another level, sparsely activated, or not all bytes were read), not that the roofline was violated.
 
 **Decode at batch size B.** The same weight read now serves $B$ sequences: FLOPs scale with $B$, while weight bytes do not. With $b_w$ bytes per stored weight, weight-only arithmetic intensity is $2B/b_w$ FLOPs per byte. On the stated H100 example this reaches machine balance around $B\approx295$ for both dense BF16 and dense FP8. This is not an admission target: KV reads, activation traffic, collectives, padding, and the latency SLO alter or preclude that crossover.
 
 **Prefill.** Processing $N$ prompt tokens performs approximately `2 × P × N` dense-model FLOPs while amortizing weight reads across tokens. Weight-only intensity therefore grows roughly with $N$. Short or skinny prefills may remain launch- or bandwidth-limited, while long prompts introduce attention work and activation traffic that the simple parameter-count model omits. The important asymmetry is empirical: prefill and decode often occupy different roofline regions, so co-scheduling policy must control their interference.
 
-Speculative decoding is the same arithmetic exploited from another angle: a small draft model proposes k tokens, and the large model *verifies all k in one forward pass* — one weight read amortized over k tokens, exactly like batching, but within a single stream. That is why speculation helps most at low batch (spare compute everywhere) and fades at high batch (compute already spoken for).
+Speculative decoding is the same arithmetic exploited from another angle: a small draft model proposes k tokens, and the large model *verifies all k in one forward pass*: one weight read amortized over k tokens, exactly like batching, but within a single stream. That is why speculation helps most at low batch (spare compute everywhere) and fades at high batch (compute already spoken for).
 
 ---
 
@@ -97,7 +97,7 @@ Naive attention materializes the N×N score matrix in HBM:
 ```text
 One layer, one head, N = 8,192, BF16:
   S = QKᵀ: 8192² × 2 B ≈ 134 MB written to HBM, read back for softmax,
-  written again, read again for ×V — ≈ 0.5 GB of HBM traffic per head,
+  written again, read again for ×V: ≈ 0.5 GB of HBM traffic per head,
   × 64 heads × 80 layers ≈ multiple TB per single forward pass. Unusable.
 ```
 
@@ -129,7 +129,7 @@ Benchmark across concurrency until the goodput curve reaches its knee. The selec
 
 ## Quantization: Change the Byte and Compute Ledger
 
-Lower precision reduces stored bytes only to the extent that scales, zero points, grouping metadata, padding, and dequantization work permit. A native low-precision tensor-core path can reduce both memory traffic and arithmetic time; weight-only quantization primarily changes weight traffic and adds dequantization; KV quantization changes the context-dependent term. Consequently, the same artifact can accelerate low-batch decode while providing little gain—or a regression—for compute-bound prefill.
+Lower precision reduces stored bytes only to the extent that scales, zero points, grouping metadata, padding, and dequantization work permit. A native low-precision tensor-core path can reduce both memory traffic and arithmetic time; weight-only quantization primarily changes weight traffic and adds dequantization; KV quantization changes the context-dependent term. Consequently, the same artifact can accelerate low-batch decode while providing little gain (or a regression) for compute-bound prefill.
 
 For a $b$-bit weight representation, the ideal weight footprint is $Pb/8$, but capacity planning uses the serialized artifact plus runtime workspaces. The ideal bandwidth speedup from halving $W$ is bounded by the fraction of step time attributable to weight traffic. Once KV, collectives, sampling, or compute dominates, Amdahl's law caps the gain.
 
@@ -139,13 +139,13 @@ The governing rule from [Model Serving](../16-ml-systems/03-model-serving.md) ap
 
 ## Parallelism: TP, PP, EP
 
-When the model outgrows one GPU — in capacity or in required ceiling — you split it. The three axes have sharply different communication profiles:
+When the model outgrows one GPU (in capacity or in required ceiling), you split it. The three axes have sharply different communication profiles:
 
 **Tensor parallelism (TP)** slices layer operations across devices and introduces frequent collectives on the token-critical path. It is effective only while the selected topology's collective latency and bandwidth remain small relative to local compute and memory work. TP usually stays within the fastest coherent or switched accelerator domain. The ideal local weight-traffic reduction is divided by TP degree; collective and synchronization costs prevent linear scaling.
 
 **Pipeline parallelism (PP)** assigns contiguous layer blocks to stages and transfers activations across boundaries. It tolerates slower links than TP but introduces bubbles, stage imbalance, and additional buffering. Decode's token dependency makes microbatching harder than in training. Large deployments often compose TP inside a fast domain with PP across domains, but the degrees follow the measured topology and model partition rather than a fixed node size.
 
-**Expert parallelism (EP)** distributes mixture-of-experts parameters and routes tokens through an all-to-all exchange. Only active experts perform arithmetic for a token, but inactive expert weights still consume distributed capacity. Small batches underutilize experts; large batches expose routing skew and communication. Capacity and latency models therefore need total parameters, active parameters per token, expert placement, routing distribution, and straggler behavior—not only the advertised active-parameter count.
+**Expert parallelism (EP)** distributes mixture-of-experts parameters and routes tokens through an all-to-all exchange. Only active experts perform arithmetic for a token, but inactive expert weights still consume distributed capacity. Small batches underutilize experts; large batches expose routing skew and communication. Capacity and latency models therefore need total parameters, active parameters per token, expert placement, routing distribution, and straggler behavior, not only the advertised active-parameter count.
 
 ---
 
@@ -175,10 +175,10 @@ Structured outputs mask invalid next tokens according to grammar state. Efficien
 
 Each serving metric corresponds to a hardware regime, which is what makes them diagnostic rather than decorative:
 
-- **TTFT (time to first token)** — includes queue and prefill; diagnose it against prompt length, arithmetic intensity, attention shape, launch/communication overhead, and prefix reuse rather than assuming one bottleneck.
-- **TPOT / ITL (time per output token / inter-token latency)** — exposes decode scheduling and the active weight/KV/collective ledger; bandwidth often dominates at low batch, while compute, KV traffic, or communication can dominate elsewhere.
-- **Throughput (tok/s per GPU)** — the amortization metric; meaningless without the latency it was bought at.
-- **Goodput** — qualified completions or tokens per unit time within the declared SLO; interpret it with offered load, rejection, cost, and headroom.
+- **TTFT (time to first token)**: includes queue and prefill; diagnose it against prompt length, arithmetic intensity, attention shape, launch/communication overhead, and prefix reuse rather than assuming one bottleneck.
+- **TPOT / ITL (time per output token / inter-token latency)**: exposes decode scheduling and the active weight/KV/collective ledger; bandwidth often dominates at low batch, while compute, KV traffic, or communication can dominate elsewhere.
+- **Throughput (tok/s per GPU)**: the amortization metric; meaningless without the latency it was bought at.
+- **Goodput**: qualified completions or tokens per unit time within the declared SLO; interpret it with offered load, rejection, cost, and headroom.
 
 Benchmark with the workload's joint prompt/output/context/concurrency distribution and its real cache policy. Useful tools can replay length distributions and report percentile TTFT/ITL; standardized suites provide cross-system reference points. Fixed-length prompts hide scheduler interference and KV pressure, assumed cache-hit rates hide cold-path capacity, and means hide user-visible stalls. Use open-loop load to expose queueing and report both admitted and rejected work.
 
@@ -215,7 +215,7 @@ If the platform cannot state what reset or isolation guarantee applies to a devi
 
 **TP across a slow interconnect.** Tensor parallelism over a link whose collectives are slow relative to local work puts frequent layer-level communication on the token-critical path; the deployment remains correct at a fraction of expected throughput. Map TP and PP only after measuring the actual collective and activation-transfer schedule on each topology.
 
-**The quantization eval gap.** The INT4 model matches perplexity, passes the smoke test, ships — and a week later math-heavy or code-heavy traffic shows a regression no serving metric caught. Quality gates must be task evals, run per quantization artifact, not per model family.
+**The quantization eval gap.** The INT4 model matches perplexity, passes the smoke test, ships, and a week later math-heavy or code-heavy traffic shows a regression no serving metric caught. Quality gates must be task evals, run per quantization artifact, not per model family.
 
 **Throughput tuning past the SLO.** Benchmarks reward batch sizes and chunk sizes that a p99 inter-token SLO forbids. Any tok/s figure quoted without its latency percentile is a red flag in a design review.
 
@@ -254,15 +254,15 @@ If the platform cannot state what reset or isolation guarantee applies to a devi
 
 ## References
 
-- Williams, Waterman & Patterson — *Roofline: An Insightful Visual Performance Model* (2009)
-- Dao et al. — *FlashAttention* (2022), *FlashAttention-2* (2023); Shah et al. — *FlashAttention-3* (2024)
-- Kwon et al. — *Efficient Memory Management for LLM Serving with PagedAttention* (vLLM, 2023)
-- Zhong et al. — *DistServe: Disaggregating Prefill and Decoding* (2024)
-- Qin et al. — *Mooncake: A KVCache-centric Disaggregated Architecture* (2024)
-- DeepSeek-AI — *DeepSeek-V3 Technical Report* (2024)
-- Leviathan et al. — *Fast Inference via Speculative Decoding* (2023)
-- Dong et al. — *XGrammar: Flexible and Efficient Structured Generation* (2024)
-- [NVIDIA H100 specifications](https://www.nvidia.com/en-us/data-center/h100/) and [NVIDIA H200 specifications](https://www.nvidia.com/en-us/data-center/h200/) — worked-example hardware inputs and sparsity footnotes
-- [NVIDIA Multi-Instance GPU User Guide](https://docs.nvidia.com/datacenter/tesla/mig-user-guide/latest/) — supported hardware partitioning, memory paths, deployment, reset, and management boundaries
+- Williams, Waterman & Patterson: *Roofline: An Insightful Visual Performance Model* (2009)
+- Dao et al.: *FlashAttention* (2022), *FlashAttention-2* (2023); Shah et al.: *FlashAttention-3* (2024)
+- Kwon et al.: *Efficient Memory Management for LLM Serving with PagedAttention* (vLLM, 2023)
+- Zhong et al.: *DistServe: Disaggregating Prefill and Decoding* (2024)
+- Qin et al.: *Mooncake: A KVCache-centric Disaggregated Architecture* (2024)
+- DeepSeek-AI: *DeepSeek-V3 Technical Report* (2024)
+- Leviathan et al.: *Fast Inference via Speculative Decoding* (2023)
+- Dong et al.: *XGrammar: Flexible and Efficient Structured Generation* (2024)
+- [NVIDIA H100 specifications](https://www.nvidia.com/en-us/data-center/h100/) and [NVIDIA H200 specifications](https://www.nvidia.com/en-us/data-center/h200/): worked-example hardware inputs and sparsity footnotes
+- [NVIDIA Multi-Instance GPU User Guide](https://docs.nvidia.com/datacenter/tesla/mig-user-guide/latest/): supported hardware partitioning, memory paths, deployment, reset, and management boundaries
 - MLPerf Inference results (mlcommons.org); vLLM, SGLang, TensorRT-LLM documentation
-- [Attention & Transformers](../09-whitepapers/15-attention-transformers.md) — the architecture this chapter serves
+- [Attention & Transformers](../09-whitepapers/15-attention-transformers.md): the architecture this chapter serves

@@ -11,7 +11,7 @@ Spanner's distinguishing contribution is not merely “a database synchronized b
 
 The analysis below targets the OSDI 2012 design. Where the expanded paper provides clearer organization, it is identified as the 2013 version. Neither paper is current Cloud Spanner product documentation.
 
-[Distributed Transactions](../02-distributed-databases/07-distributed-transactions.md), [Consensus](../02-distributed-databases/08-consensus-algorithms.md), and [Distributed Time](../01-foundations/05-distributed-time.md) cover the component concepts. Scope here: their joint proof obligation.
+[Distributed Transactions](../02-distributed-databases/07-distributed-transactions.md), [Consensus](../02-distributed-databases/08-consensus-algorithms.md), and [Distributed Time](../01-foundations/05-distributed-time.md) cover the component concepts. This chapter focuses on their joint proof obligation.
 
 ## Problem and service contract
 
@@ -34,7 +34,7 @@ A deployment is a **universe**, divided into zones. A zone contains a zonemaster
 
 Each spanserver tablet stores mappings from `(key, timestamp)` to bytes, giving multi-version concurrency control. A tablet is associated with a Paxos state machine; replicas maintain the same ordered mutations, and one replica holds a timed leader lease. Reads and writes use the leader when the operation requires current serialization, while sufficiently up-to-date replicas can serve historical reads.
 
-The application data model is more structured than Bigtable's. Tables have schemas and primary keys. Child rows can be **interleaved** under parent rows so related records share key prefixes and placement. A **directory**—a set of rows with a common prefix—is the unit of placement. A directory can split into fragments as it grows, but the placement abstraction is what administrators move and replicate.
+The application data model is more structured than Bigtable's. Tables have schemas and primary keys. Child rows can be **interleaved** under parent rows so related records share key prefixes and placement. A **directory** (a set of rows with a common prefix) is the unit of placement. A directory can split into fragments as it grows, but the placement abstraction is what administrators move and replicate.
 
 ## Invariants that make the design work
 
@@ -56,7 +56,7 @@ Every participant either exposes the transaction's writes at the chosen commit t
 
 ## TrueTime and timestamp assignment
 
-`TT.now()` returns an interval `[earliest, latest]` guaranteed to contain absolute time. Its half-width, usually called epsilon, is uncertainty—not clock skew assumed to be zero. Time masters use GPS and atomic-clock references with different failure modes; per-machine daemons poll several masters, reject inconsistent sources, and increase uncertainty conservatively between polls.
+`TT.now()` returns an interval `[earliest, latest]` guaranteed to contain absolute time. Its half-width, usually called epsilon, bounds time uncertainty; TrueTime does not assume zero clock skew. Time masters use GPS and atomic-clock references with different failure modes; per-machine daemons poll several masters, reject inconsistent sources, and increase uncertainty conservatively between polls.
 
 For a read-write transaction, strict two-phase locking protects reads and writes. Participants first prepare through their Paxos groups. The coordinator leader chooses a commit timestamp no earlier than all prepare timestamps and no earlier than `TT.now().latest`. Before exposing success, it performs **commit wait** until `TT.after(commit_timestamp)` is true.
 

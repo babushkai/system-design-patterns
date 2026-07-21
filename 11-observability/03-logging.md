@@ -8,7 +8,7 @@ Distributed logs do not have one trustworthy total order. Preserve source sequen
 
 Collection must survive file rotation, container death, duplicate delivery, partial records, backpressure, and backend outage without blocking the application indefinitely. Index only fields needed for interactive search; tier the full immutable event body into cheaper retention. Redaction and tenant routing happen before data crosses an unauthorized boundary.
 
-Shared plane: [Distributed Tracing and Telemetry Pipelines](./01-distributed-tracing.md). Scope here: event schema, collection state, ordering, indexing, retention, privacy, and correlation; [Metrics](./02-metrics-monitoring.md) covers aggregates and [Incident Management](./07-incident-management.md) evidence handling.
+[Distributed Tracing and Telemetry Pipelines](./01-distributed-tracing.md) defines the shared telemetry plane. This chapter covers event schema, collection state, ordering, indexing, retention, privacy, and correlation; [Metrics](./02-metrics-monitoring.md) covers aggregates and [Incident Management](./07-incident-management.md) covers evidence handling.
 
 ---
 
@@ -550,13 +550,13 @@ Keep golden encoded events for every schema and verify the exact redacted repres
 
 ## References
 
-- [OpenTelemetry Logs Data Model](https://opentelemetry.io/docs/specs/otel/logs/data-model/) — event/observed timestamps, severity, body, attributes, trace context, and resources
-- [OpenTelemetry Logging Specification](https://opentelemetry.io/docs/specs/otel/logs/) — collection, correlation, appenders, and legacy sources
-- [OTLP Specification](https://opentelemetry.io/docs/specs/otlp/) — transport acknowledgement, retry, throttling, and partial success
-- [RFC 5424: The Syslog Protocol](https://www.rfc-editor.org/rfc/rfc5424) — structured event transport, timestamps, and origin
-- [RFC 3339: Date and Time on the Internet](https://www.rfc-editor.org/rfc/rfc3339) — interoperable timestamps
-- [OWASP Logging Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html) — security event design, injection, sensitive data, verification, and protection
-- [NIST SP 800-92: Guide to Computer Security Log Management](https://csrc.nist.gov/pubs/sp/800/92/final) — log infrastructure, retention, protection, and operations
-- [Distributed Tracing and Telemetry Pipelines](./01-distributed-tracing.md) — shared collectors, context, and trace correlation
-- [Metrics Systems and Monitoring](./02-metrics-monitoring.md) — aggregate event rates and pipeline health
-- [Incident Command and Learning](./07-incident-management.md) — evidence timelines, access, preservation, and postmortems
+- [OpenTelemetry Logs Data Model](https://opentelemetry.io/docs/specs/otel/logs/data-model/): event/observed timestamps, severity, body, attributes, trace context, and resources
+- [OpenTelemetry Logging Specification](https://opentelemetry.io/docs/specs/otel/logs/): collection, correlation, appenders, and legacy sources
+- [OTLP Specification](https://opentelemetry.io/docs/specs/otlp/): transport acknowledgement, retry, throttling, and partial success
+- [RFC 5424: The Syslog Protocol](https://www.rfc-editor.org/rfc/rfc5424): structured event transport, timestamps, and origin
+- [RFC 3339: Date and Time on the Internet](https://www.rfc-editor.org/rfc/rfc3339): interoperable timestamps
+- [OWASP Logging Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html): security event design, injection, sensitive data, verification, and protection
+- [NIST SP 800-92: Guide to Computer Security Log Management](https://csrc.nist.gov/pubs/sp/800/92/final): log infrastructure, retention, protection, and operations
+- [Distributed Tracing and Telemetry Pipelines](./01-distributed-tracing.md): shared collectors, context, and trace correlation
+- [Metrics Systems and Monitoring](./02-metrics-monitoring.md): aggregate event rates and pipeline health
+- [Incident Command and Learning](./07-incident-management.md): evidence timelines, access, preservation, and postmortems

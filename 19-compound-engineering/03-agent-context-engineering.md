@@ -6,7 +6,7 @@ A repository context system acquires facts and policies from multiple authoritie
 
 The hard problems are the same ones found in configuration, authorization, and software-supply-chain systems: ambiguous ownership, conflicting inheritance, stale replicas, rollback attacks, partial activation, tenant leakage, schema evolution, and untrusted content that impersonates instructions. Treat source authority, semantic trust, repository revision, tenant, scope, expiry, and provenance as typed fields. Never infer them from a filename or from where text happened to appear in a prompt.
 
-Scope: repository context artifacts and the policy control plane. [Context Management](../17-llm-systems/08-context-management.md) covers request-time selection, compaction, and token allocation; [Tool and Runtime Contracts](./02-coding-agent-tool-design.md) covers capabilities and enforcement; [Verification and Governance](./05-quality-engineering-with-ai-agents.md) covers review and quality gates.
+This chapter defines repository context artifacts and the policy control plane. [Context Management](../17-llm-systems/08-context-management.md) covers request-time selection, compaction, and token allocation; [Tool and Runtime Contracts](./02-coding-agent-tool-design.md) covers capabilities and enforcement; [Verification and Governance](./05-quality-engineering-with-ai-agents.md) covers review and quality gates.
 
 ---
 
@@ -434,10 +434,10 @@ Prompt-injection detection is defense in depth, not a proof of safety. The decis
 
 Track four versions independently:
 
-1. **Artifact schema version** — fields and validation rules for source artifacts.
-2. **Policy semantic version** — meaning of selectors, operators, outcomes, and combiners.
-3. **Bundle revision/digest** — immutable compiled content.
-4. **Compiler/evaluator version** — implementation that must preserve the declared semantics.
+1. **Artifact schema version**: fields and validation rules for source artifacts.
+2. **Policy semantic version**: meaning of selectors, operators, outcomes, and combiners.
+3. **Bundle revision/digest**: immutable compiled content.
+4. **Compiler/evaluator version**: implementation that must preserve the declared semantics.
 
 A syntactically additive field can be semantically breaking if an old evaluator ignores a new mandatory denial condition. Unknown security-critical fields fail compilation or activation; forward-compatible readers may ignore only fields explicitly declared informational.
 
@@ -569,7 +569,7 @@ Content-addressed deduplication, conditional fetches, regional fan-out, and shar
 
 ### Compiler capacity
 
-Compilation cost follows dependency closure, selector indexes, conflict analysis, and test corpus—not source line count. Cache immutable dependency results by digest and rebuild only affected composites. Bound:
+Compilation cost follows dependency closure, selector indexes, conflict analysis, and test corpus, not source line count. Cache immutable dependency results by digest and rebuild only affected composites. Bound:
 
 - artifact and dependency-graph size;
 - compilation CPU/memory/time;
@@ -693,7 +693,7 @@ Ask in order:
 7. Which principals, model endpoints, evaluators, and logs may receive its content?
 8. Which evidence proves compilation, activation, decision, and enforcement?
 
-If those questions do not have typed answers, the artifact is documentation—not a reliable policy input.
+If those questions do not have typed answers, the artifact is documentation, not a reliable policy input.
 
 ### Choose a deployment topology
 
@@ -740,29 +740,29 @@ A policy plane is not ready until it can demonstrate:
 7. Define last-known-good, expiry, revocation, and indeterminate behavior by effect risk.
 8. Treat repository and retrieved text as potentially adversarial evidence; capabilities and policy enforcement remain outside the model.
 9. Tenant identity belongs in every storage, cache, distribution, decision, and audit boundary.
-10. Test semantic decisions, precedence properties, migrations, isolation, faults, and load—not arbitrary file length.
+10. Test semantic decisions, precedence properties, migrations, isolation, faults, and load, not arbitrary file length.
 
 ---
 
 ## References
 
-- [EditorConfig Specification](https://spec.editorconfig.org/) — a stable example of hierarchical discovery, explicit roots, matching, and precedence semantics
-- [JSON Schema Draft 2020-12](https://json-schema.org/draft/2020-12) — machine-readable artifact schema and validation vocabulary
-- [CUE Language Specification](https://cuelang.org/docs/reference/spec/) — constraint unification and conflict-as-bottom semantics
-- [OASIS XACML 3.0 Core Specification](https://docs.oasis-open.org/xacml/3.0/xacml-3.0-core-spec-en.pdf) — authorization decisions and explicit policy-combining algorithms
-- [NIST SP 800-162: Guide to Attribute Based Access Control](https://csrc.nist.gov/pubs/sp/800/162/upd2/final) — subject, object, action, environment, and policy attribute model
-- [Open Policy Agent: Bundles](https://www.openpolicyagent.org/docs/management-bundles) — signed policy/data distribution and bundle activation
-- [Open Policy Agent: Status](https://www.openpolicyagent.org/docs/management-status) — desired/active revision and activation-failure reporting
-- [Open Policy Agent: Policy Testing](https://www.openpolicyagent.org/docs/policy-testing) — deterministic policy tests and coverage
-- [Open Policy Agent: Decision Logs](https://www.openpolicyagent.org/docs/management-decision-logs) — decision identity, policy metadata, audit, and redaction
-- [The Update Framework Specification](https://theupdateframework.github.io/specification/) — trusted metadata, expiry, rollback, freeze, and key-compromise resilience
-- [in-toto Attestation Framework Specification](https://github.com/in-toto/attestation/blob/main/spec/README.md) — provenance statements linking subjects to claims
-- [SLSA v1.2 Specification](https://slsa.dev/spec/v1.2/) — build provenance and supply-chain integrity model
-- [RFC 9110: HTTP Semantics](https://www.rfc-editor.org/rfc/rfc9110.html) — strong validators and conditional requests for cache validation and compare-and-swap
-- [SPIFFE Specifications](https://spiffe.io/docs/latest/spiffe-specs/) — workload identity, trust domains, and trust-bundle distribution
-- [OWASP LLM Prompt Injection Prevention Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/LLM_Prompt_Injection_Prevention_Cheat_Sheet.html) — prompt-injection threat patterns and defense in depth
-- [Git Revision Parsing](https://git-scm.com/docs/git-rev-parse) — resolving mutable revision expressions to object identities
-- [NIST SP 800-218: Secure Software Development Framework](https://csrc.nist.gov/pubs/sp/800/218/final) — protected development artifacts, provenance, and secure change practices
-- [Context Management](../17-llm-systems/08-context-management.md) — request-time context materialization, budgeting, compaction, and memory
-- [Tool and Runtime Contracts for Coding Agents](./02-coding-agent-tool-design.md) — capability issuance, policy enforcement, sandboxing, and effect receipts
-- [Quality Engineering with AI Agents](./05-quality-engineering-with-ai-agents.md) — implementation review, testing, and quality gates
+- [EditorConfig Specification](https://spec.editorconfig.org/): a stable example of hierarchical discovery, explicit roots, matching, and precedence semantics
+- [JSON Schema Draft 2020-12](https://json-schema.org/draft/2020-12): machine-readable artifact schema and validation vocabulary
+- [CUE Language Specification](https://cuelang.org/docs/reference/spec/): constraint unification and conflict-as-bottom semantics
+- [OASIS XACML 3.0 Core Specification](https://docs.oasis-open.org/xacml/3.0/xacml-3.0-core-spec-en.pdf): authorization decisions and explicit policy-combining algorithms
+- [NIST SP 800-162: Guide to Attribute Based Access Control](https://csrc.nist.gov/pubs/sp/800/162/upd2/final): subject, object, action, environment, and policy attribute model
+- [Open Policy Agent: Bundles](https://www.openpolicyagent.org/docs/management-bundles): signed policy/data distribution and bundle activation
+- [Open Policy Agent: Status](https://www.openpolicyagent.org/docs/management-status): desired/active revision and activation-failure reporting
+- [Open Policy Agent: Policy Testing](https://www.openpolicyagent.org/docs/policy-testing): deterministic policy tests and coverage
+- [Open Policy Agent: Decision Logs](https://www.openpolicyagent.org/docs/management-decision-logs): decision identity, policy metadata, audit, and redaction
+- [The Update Framework Specification](https://theupdateframework.github.io/specification/): trusted metadata, expiry, rollback, freeze, and key-compromise resilience
+- [in-toto Attestation Framework Specification](https://github.com/in-toto/attestation/blob/main/spec/README.md): provenance statements linking subjects to claims
+- [SLSA v1.2 Specification](https://slsa.dev/spec/v1.2/): build provenance and supply-chain integrity model
+- [RFC 9110: HTTP Semantics](https://www.rfc-editor.org/rfc/rfc9110.html): strong validators and conditional requests for cache validation and compare-and-swap
+- [SPIFFE Specifications](https://spiffe.io/docs/latest/spiffe-specs/): workload identity, trust domains, and trust-bundle distribution
+- [OWASP LLM Prompt Injection Prevention Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/LLM_Prompt_Injection_Prevention_Cheat_Sheet.html): prompt-injection threat patterns and defense in depth
+- [Git Revision Parsing](https://git-scm.com/docs/git-rev-parse): resolving mutable revision expressions to object identities
+- [NIST SP 800-218: Secure Software Development Framework](https://csrc.nist.gov/pubs/sp/800/218/final): protected development artifacts, provenance, and secure change practices
+- [Context Management](../17-llm-systems/08-context-management.md): request-time context materialization, budgeting, compaction, and memory
+- [Tool and Runtime Contracts for Coding Agents](./02-coding-agent-tool-design.md): capability issuance, policy enforcement, sandboxing, and effect receipts
+- [Quality Engineering with AI Agents](./05-quality-engineering-with-ai-agents.md): implementation review, testing, and quality gates

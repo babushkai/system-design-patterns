@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-A streaming system repeatedly updates state while input remains open. Correctness is the contract among **event time, progress estimation, allowed lateness, emitted revisions, durable state, replayable input, and sink effects**—not a choice between “real time” and accuracy.
+A streaming system repeatedly updates state while input remains open. Correctness is the contract among **event time, progress estimation, allowed lateness, emitted revisions, durable state, replayable input, and sink effects**, not a choice between “real time” and accuracy.
 
 An event may be processed more than once after failure even when operator state is exactly-once. A watermark may trigger an on-time result even though a later event can still arrive. A checkpoint can recover the dataflow while an external API has already performed an irreversible action. State these boundaries explicitly; framework labels cannot state them for you.
 
@@ -199,7 +199,7 @@ With **aligned checkpoints**, barriers flow through the graph. An operator waits
 
 With **unaligned checkpoints**, in-flight buffers may be captured so barriers can overtake queued data. This reduces barrier delay under backpressure but increases checkpoint I/O and recovery work. It does not remove the underlying throughput bottleneck.
 
-Incremental checkpoints upload changed state rather than every state file, but compaction and shared-file lifetime affect actual bytes. Measure full and incremental size, upload duration, barrier travel, alignment, and restore—not just checkpoint interval.
+Incremental checkpoints upload changed state rather than every state file, but compaction and shared-file lifetime affect actual bytes. Measure full and incremental size, upload duration, barrier travel, alignment, and restore, not just checkpoint interval.
 
 ### Checkpoints are not savepoints
 

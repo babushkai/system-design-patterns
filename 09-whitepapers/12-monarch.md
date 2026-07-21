@@ -162,7 +162,7 @@ flowchart TB
 
 Filters and partial aggregation are pushed toward leaves. Zone-level grouping combines leaf partials before the root. A join should execute at the lowest level where both inputs are colocated; moving it upward increases network volume and coordinator memory.
 
-The paper measured leaf output at 23.3% of leaf input—about a 4× reduction—across the production workload. This is an aggregate observation; individual queries can reduce by orders of magnitude or expand.
+The paper measured leaf output at 23.3% of leaf input, about a 4× reduction, across the production workload. This is an aggregate observation; individual queries can reduce by orders of magnitude or expand.
 
 ## Field Hints Index
 
@@ -262,7 +262,7 @@ Partial query metadata is part of correctness. A graph that silently omits an un
 
 ## Primary Reference
 
-- [Monarch: Google's Planet-Scale In-Memory Time Series Database — PVLDB 13(12), 2020](https://www.vldb.org/pvldb/vol13/p3181-adams.pdf)
+- [Monarch: Google's Planet-Scale In-Memory Time Series Database (PVLDB 13(12), 2020)](https://www.vldb.org/pvldb/vol13/p3181-adams.pdf)
 
 ## Related Chapters
 

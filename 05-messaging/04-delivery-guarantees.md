@@ -2,7 +2,7 @@
 
 Delivery guarantees describe uncertainty between producer, broker, consumer, and effect store. A broker can prove that a record was durably appended, fetched, or transactionally written to another broker partition. It cannot, by itself, prove that a payment, email, filesystem write, or unrelated database transaction happened exactly once. Correct design names each atomicity boundary and closes the gaps end to end.
 
-Scope: broker delivery semantics, acknowledgement ambiguity, producer retry deduplication, consumer effect commit, and the limits of “exactly once.” [Outbox and Inbox](07-outbox-pattern.md) owns atomic database-to-broker publication and transactional consumer deduplication. [Ordering](03-message-ordering.md) owns sequences. Workflow-specific retries and compensation belong to [Effect Commit Protocols](../18-workflow-job-systems/06-retry-idempotency-compensation.md).
+Delivery guarantees are end-to-end contracts over broker semantics, acknowledgement ambiguity, producer retry deduplication, consumer effect commit, and the limits of “exactly once.” [Outbox and Inbox](07-outbox-pattern.md) owns atomic database-to-broker publication and transactional consumer deduplication. [Ordering](03-message-ordering.md) owns sequences. Workflow-specific retries and compensation belong to [Effect Commit Protocols](../18-workflow-job-systems/06-retry-idempotency-compensation.md).
 
 ## Workload and guarantee contract
 
@@ -75,7 +75,7 @@ Build the protocol around these windows rather than happy-path SDK configuration
 
 ### Fire-and-forget
 
-The producer sends and does not await durable acknowledgement. It minimizes latency and resource use but permits silent loss during client, network, or broker failure. Restrict it to observations whose loss is acceptable and measured, such as sampled diagnostics—not business intent.
+The producer sends and does not await durable acknowledgement. It minimizes latency and resource use but permits silent loss during client, network, or broker failure. Restrict it to observations whose loss is acceptable and measured, such as sampled diagnostics, not business intent.
 
 ### Confirmed at-least-once publication
 
@@ -184,13 +184,13 @@ Replicated ingress is about 176 MiB/s before protocol/index overhead. Retry traf
 
 Fan-out delivery is `60,000 * 4 = 240,000` records/s. If consumer effect transactions sustain a measured 2,500/s per database shard at safe utilization, each full-rate subscription needs at least 24 effect shards before skew and failure reserve. Broker throughput is not end-to-end capacity.
 
-Batching amortizes acknowledgements but increases ambiguity/replay suffix and latency. Model batch fill time at low traffic, maximum transaction bytes, and recovery reprocessing—not only peak throughput.
+Batching amortizes acknowledgements but increases ambiguity/replay suffix and latency. Model batch fill time at low traffic, maximum transaction bytes, and recovery reprocessing, not only peak throughput.
 
 ## Concrete failure trace: disaster restore forgets dedup state
 
 A broker and consumer database are restored from backups after regional loss. The broker archive includes 48 hours of events, but the consumer inbox backup is 36 hours old. Replaying the broker suffix repeats 12 hours of already executed effects. The team assumed “at-least-once plus inbox equals exactly once,” but restored the two evidence streams to inconsistent recovery points.
 
-Containment pauses consumers and identifies effects with natural business references. Repair reconciles the 12-hour window before controlled replay. Prevention aligns recovery-point contracts, includes inbox/effect state in recovery manifests, retains downstream idempotency keys beyond maximum replay, and exercises cross-system restore—not independent component restore.
+Containment pauses consumers and identifies effects with natural business references. Repair reconciles the 12-hour window before controlled replay. Prevention aligns recovery-point contracts, includes inbox/effect state in recovery manifests, retains downstream idempotency keys beyond maximum replay, and exercises cross-system restore, not independent component restore.
 
 ## Operations and observability
 
@@ -213,7 +213,7 @@ Authenticate producer identity/epoch issuance and consumer groups. An attacker w
 
 Protect acknowledgement/checkpoint operations with generation-scoped tokens. Limit retry rate, batch size, transaction duration, and replay privileges. Broker logs, inboxes, and reconciliation records contain business identifiers and result references; apply least privilege, encryption, retention, and audit.
 
-Never deserialize untrusted payloads before schema/size checks. Duplicate storms are an availability attack even when effects are idempotent—the duplicate path still consumes broker, network, lookup, and transaction resources.
+Never deserialize untrusted payloads before schema/size checks. Duplicate storms are an availability attack even when effects are idempotent: the duplicate path still consumes broker, network, lookup, and transaction resources.
 
 ## Verification strategy
 
@@ -247,4 +247,4 @@ Use at-most-once only when loss is cheaper than duplication. Use at-least-once w
 - [Apache Kafka: Transactions](https://kafka.apache.org/documentation/#transactions)
 - [RabbitMQ: Consumer Acknowledgements and Publisher Confirms](https://www.rabbitmq.com/docs/confirms)
 - [Amazon SQS: At-Least-Once Delivery](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/standard-queues-at-least-once-delivery.html)
-- [Martin Kleppmann et al.: Online Event Processing—Achieving Consistency Where Distributed Transactions Have Failed](https://doi.org/10.1145/3329672.3329679)
+- [Martin Kleppmann et al.: Online Event Processing: Achieving Consistency Where Distributed Transactions Have Failed](https://doi.org/10.1145/3329672.3329679)

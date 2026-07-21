@@ -1,6 +1,6 @@
 # MapReduce (OSDI 2004): Evidence-First Paper Analysis
 
-MapReduce places the distributed-systems boundary around two programmer-supplied transformations; the runtime owns task placement, shuffle, retry, straggler mitigation, and output publication. Its lasting contribution is the contract that makes a large class of batch computations safely replayable.
+MapReduce's lasting contribution is not the word-count example. It places the distributed-systems boundary around two programmer-supplied transformations; the runtime owns task placement, shuffle, retry, straggler mitigation, and output publication. That contract makes a large class of batch computations safely replayable.
 
 ## Publication identity and scope
 
@@ -11,7 +11,7 @@ MapReduce places the distributed-systems boundary around two programmer-supplied
 
 Every number below belongs to that implementation and the paper's test cluster. It is not a benchmark for Hadoop, Spark, a cloud data warehouse, or a current Google service. The paper also describes a **bounded batch** computation. Event time, unbounded streams, iterative in-memory execution, SQL optimization, and exactly-once interaction with arbitrary external systems are outside its design.
 
-Scope here: what the 2004 paper establishes; [Batch Processing](../13-data-pipelines/01-batch-processing.md) covers the general design space.
+This chapter evaluates what the 2004 paper establishes; [Batch Processing](../13-data-pipelines/01-batch-processing.md) covers the general design space.
 
 ## Workload and problem boundary
 
@@ -65,7 +65,7 @@ The paper normally chooses `M` and `R` much larger than the worker count. Fine-g
 
 ### Partition, ordering, and combiners
 
-The default partitioner hashes the intermediate key, ensuring all values for a key reach one reducer. Applications can supply a different function—for example, range partitioning for ordered output—but then skew and partition-boundary quality become application concerns. Within a reduce partition, the runtime sorts by key; a custom grouping comparator can expose secondary-order patterns.
+The default partitioner hashes the intermediate key, ensuring all values for a key reach one reducer. Applications can supply a different function, such as range partitioning for ordered output, but skew and partition-boundary quality then become application concerns. Within a reduce partition, the runtime sorts by key; a custom grouping comparator can expose secondary-order patterns.
 
 A combiner performs local partial aggregation before shuffle. It is valid only when that partial operation preserves the reducer's meaning. The paper's word-count sum works; an arbitrary reducer is not automatically a legal combiner.
 
@@ -87,10 +87,10 @@ Section 3.6 addresses slow rather than dead workers. Near completion, the master
 
 The evaluation in Section 5 used a cluster of roughly 1,800 machines. Each had two 2 GHz Intel Xeon processors, 4 GB of memory, two 160 GB IDE disks, and gigabit Ethernet. The measured network bisection bandwidth was approximately 100–200 Gbit/s. Programs ran on a weekend afternoon when CPUs, disks, and network were mostly idle. Those details are part of every result.
 
-- **Grep (Figure 2):** the job scanned `10^10` records of 100 bytes—about 1 TB—split into 15,000 pieces, looking for a three-character pattern found in 92,337 records. With 1,764 workers, scan rate peaked above 30 GB/s. Maps finished around 80 seconds; end-to-end time was about 150 seconds, including roughly one minute of startup and GFS metadata overhead.
+- **Grep (Figure 2):** the job scanned `10^10` records of 100 bytes (about 1 TB), split into 15,000 pieces, looking for a three-character pattern found in 92,337 records. With 1,764 workers, scan rate peaked above 30 GB/s. Maps finished around 80 seconds; end-to-end time was about 150 seconds, including roughly one minute of startup and GFS metadata overhead.
 - **Sort (Figure 3a):** the job sorted the same record count and size, with 15,000 map tasks and 4,000 reduce tasks. Input peaked near 13 GB/s, shuffle finished around 600 seconds, and two-way-replicated output finished around 850 seconds. Including startup, elapsed time was 891 seconds. Because the output was replicated twice, the system wrote about 2 TB for a 1 TB logical result.
-- **Backup-task ablation (Figure 3b):** disabling backup tasks stretched sort from 891 to 1,283 seconds—a 44% increase. Five straggling reducers accounted for the long tail. This isolates the mechanism's effect in that run; it does not predict a fixed 44% improvement elsewhere.
-- **Failure injection (Figure 3c):** the authors killed 200 of 1,746 worker processes several minutes into sort. The cluster scheduler restarted them, lost local map output was recomputed, and the job completed in 933 seconds—42 seconds slower than the normal run.
+- **Backup-task ablation (Figure 3b):** disabling backup tasks stretched sort from 891 to 1,283 seconds, a 44% increase. Five straggling reducers accounted for the long tail. This isolates the mechanism's effect in that run; it does not predict a fixed 44% improvement elsewhere.
+- **Failure injection (Figure 3c):** the authors killed 200 of 1,746 worker processes several minutes into sort. The cluster scheduler restarted them, lost local map output was recomputed, and the job completed in 933 seconds, 42 seconds slower than the normal run.
 
 The evaluation demonstrates feasibility, failure recovery, and the value of locality and speculative execution. It does not compare cost, energy, multi-tenant interference, small-job latency, or alternative batch engines under matched durability semantics.
 

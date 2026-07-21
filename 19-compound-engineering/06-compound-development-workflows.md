@@ -2,9 +2,9 @@
 
 ## TL;DR
 
-Parallel coding agents turn software delivery into a scheduling and merge problem. Safe parallelism requires a dependency graph, explicit ownership of files and semantic invariants, isolated workspaces pinned to known revisions, bounded child budgets, durable handoffs, and an integration queue that revalidates every candidate against the actual target. The speedup is limited by the serial fraction—specification, shared interfaces, verification, conflict resolution, and approval—and by downstream capacity. More workers can increase wall-clock time when they duplicate context, contend on the same state, overload tests, or create semantic conflicts that textual merge tools cannot see.
+Parallel coding agents turn software delivery into a scheduling and merge problem. Safe parallelism requires a dependency graph, explicit ownership of files and semantic invariants, isolated workspaces pinned to known revisions, bounded child budgets, durable handoffs, and an integration queue that revalidates every candidate against the actual target. The speedup is limited by the serial fraction (specification, shared interfaces, verification, conflict resolution, and approval) and by downstream capacity. More workers can increase wall-clock time when they duplicate context, contend on the same state, overload tests, or create semantic conflicts that textual merge tools cannot see.
 
-Scope: decomposition, workspace isolation, coordination, handoff, integration, and recovery for concurrent changes. [Platform Fundamentals](./01-compound-engineering-fundamentals.md) defines shared state, capabilities, and effect receipts.
+This chapter defines decomposition, workspace isolation, coordination, handoff, integration, and recovery for concurrent changes. [Platform Fundamentals](./01-compound-engineering-fundamentals.md) defines shared state, capabilities, and effect receipts.
 
 ---
 
@@ -246,7 +246,7 @@ Do not ask a model to resolve a conflict from console text alone. Persist base, 
 
 ### Atomic target update
 
-The final branch/ref update uses compare-and-swap against the target revision verified. A late integrator cannot overwrite a newer target. External publication—pull request, artifact, deployment—stores its own idempotency key and receipt.
+The final branch/ref update uses compare-and-swap against the target revision verified. A late integrator cannot overwrite a newer target. External publication (pull request, artifact, deployment) stores its own idempotency key and receipt.
 
 ---
 
@@ -336,7 +336,7 @@ Parallelize when work items have stable boundaries, independent verification, an
 
 Use optimistic integration for low-conflict modules and reserved ownership for central contracts and migrations. Use stacked changes when each step is independently safe and reviewable; use one coherent candidate when splitting would create invalid intermediate states.
 
-Optimize for the shortest safe path from an accepted requirement to verified, integrated behavior—not for worker count.
+Optimize for the shortest safe path from an accepted requirement to verified, integrated behavior, not for worker count.
 
 ---
 

@@ -2,7 +2,7 @@
 
 Load balancing is the controlled assignment of work to eligible capacity. The difficult part is not choosing between round robin and least connections. It is keeping a fast, distributed data plane aligned with changing backend authority, then preventing health reactions, retries, drains, and long-lived connections from turning a small fault into a fleet-wide overload.
 
-Scope: the **L4 and L7 balancing data planes, endpoint eligibility, health and ejection, connection skew, and the controller state that programs routing**. [Partitioning Strategies](../02-distributed-databases/05-partitioning-strategies.md) owns placement algorithms for durable key spaces. [DNS and Connection Management](./13-dns-and-connection-management.md) owns discovery, resolver caching, and connection-pool lifetimes. [Multi-Region Architecture](./09-multi-region-architecture.md) owns regional authority and failover policy.
+Load-balancing correctness depends on **L4 and L7 data planes, endpoint eligibility, health and ejection, connection skew, and the controller state that programs routing**. [Partitioning Strategies](../02-distributed-databases/05-partitioning-strategies.md) owns placement algorithms for durable key spaces. [DNS and Connection Management](./13-dns-and-connection-management.md) owns discovery, resolver caching, and connection-pool lifetimes. [Multi-Region Architecture](./09-multi-region-architecture.md) owns regional authority and failover policy.
 
 ## Primary Evidence and Scope
 
@@ -313,7 +313,7 @@ Success is not “the proxy stayed up.” It is bounded admitted load, correct r
 5. What affinity benefit is required, and what is the hottest key plus membership-remap cost?
 6. How many endpoints may health logic eject while the fleet still survives its named failure?
 7. How are established connections drained or rebalanced when membership changes?
-8. Which resource—packets, bits, handshakes, CPU, memory, connections, or upstream concurrency—sets capacity?
+8. Which resource (packets, bits, handshakes, CPU, memory, connections, or upstream concurrency) sets capacity?
 9. Can controller loss, rollback, and a bad configuration preserve the last safe data plane?
 10. When no safe backend exists, which traffic is rejected rather than redistributed into a cascade?
 

@@ -30,7 +30,7 @@ graph LR
     end
 ```
 
-A chatbot maps one input to one output. A **workflow** chains LLM calls along a code path you wrote. An **agent** lets the model direct its own process: it decides which tool to call next based on what the last tool returned, and it keeps going until the goal is met or the harness stops it. That autonomy is the value and the risk — agents handle tasks you couldn't enumerate steps for, and they fail in ways you didn't enumerate either.
+A chatbot maps one input to one output. A **workflow** chains LLM calls along a code path you wrote. An **agent** lets the model direct its own process: it decides which tool to call next based on what the last tool returned, and it keeps going until the goal is met or the harness stops it. That autonomy is the value and the risk: agents handle tasks you couldn't enumerate steps for, and they fail in ways you didn't enumerate either.
 
 | Aspect | Chatbot | Workflow | Agent |
 |--------|---------|----------|-------|
@@ -76,7 +76,7 @@ Native structured tool calling removes a syntax failure class, but not semantic 
 
 Multiple proposed actions are concurrent only when their read/write sets and snapshot semantics permit it. Independent reads may run together. Overlapping writes require serialization or optimistic revision checks. A read following a write must either observe the committed result or be explicitly bound to the prior snapshot. Parallel syntax in a model response does not imply safe parallel execution.
 
-The loop terminates through typed reasons—verified completion, user pause, approval wait, deadline, budget exhaustion, policy denial, non-convergence, or unrecoverable error. A natural-language “done” is a completion proposal; the harness decides whether the evidence contract is satisfied. [Harness Engineering](./09-harness-engineering.md) develops the runtime mechanics, while [Orchestration Patterns](./02-orchestration-patterns.md) covers the surrounding control-flow choices.
+The loop terminates through typed reasons: verified completion, user pause, approval wait, deadline, budget exhaustion, policy denial, non-convergence, or unrecoverable error. A natural-language “done” is a completion proposal; the harness decides whether the evidence contract is satisfied. [Harness Engineering](./09-harness-engineering.md) develops the runtime mechanics, while [Orchestration Patterns](./02-orchestration-patterns.md) covers the surrounding control-flow choices.
 
 ### Reasoning effort is a resource allocation
 
@@ -116,7 +116,7 @@ stateDiagram-v2
     Ready --> Failed: terminal policy or invariant violation
 ```
 
-State must commit around side effects. A safe sequence is: persist the proposed action; obtain policy/approval; execute with the stable action ID; persist the result; then expose that result to the next model turn. A crash between execution and result persistence is reconciled by querying the tool with the same action ID or reading its idempotency record. “Exactly once” is not supplied by an agent framework—it is approximated at each side-effect boundary using the same outbox, idempotency, and reconciliation patterns as any distributed workflow.
+State must commit around side effects. A safe sequence is: persist the proposed action; obtain policy/approval; execute with the stable action ID; persist the result; then expose that result to the next model turn. A crash between execution and result persistence is reconciled by querying the tool with the same action ID or reading its idempotency record. “Exactly once” is not supplied by an agent framework: it is approximated at each side-effect boundary using the same outbox, idempotency, and reconciliation patterns as any distributed workflow.
 
 Parallel tool calls add a join. Reads against an immutable snapshot may execute freely. Writes that overlap the same resource need ordering or optimistic concurrency (expected file hash, row version, ETag). Tool results are appended in a deterministic order keyed by tool-call identity even if completion order varies; otherwise a replay can assemble a different context and send the model down a new path. Cancellation also has semantics: stop scheduling new actions, attempt to cancel running ones, mark actions whose outcome is unknown, and reconcile them before resume. Killing the process is not cancellation.
 
@@ -152,7 +152,7 @@ Agency is tractable when the environment exposes observations that discriminate 
 graph LR
     ACT["Act<br/>(edit code)"] --> VERIFY["Verify<br/>(run tests, typecheck, lint)"]
     VERIFY -->|fail, with errors| ACT
-    VERIFY -->|pass| DONE["Done — claim with evidence"]
+    VERIFY -->|pass| DONE["Done: claim with evidence"]
 ```
 
 Model the verifier as a sensor. A false acceptance commits bad state; a false rejection spends more work or blocks a valid result. Verification cadence therefore depends on the expected loss of undetected drift versus the cost and latency of sensing. Cheap local invariants can guard each transition; expensive end-to-end or human checks belong at risk boundaries. Self-evaluation is useful for proposing defects, but it is correlated with the generator and cannot be treated as independent acceptance evidence without calibration.
@@ -181,7 +181,7 @@ Because execution is stochastic, report the distribution across repeated runs an
 
 The agent is a controller acting on an environment through delayed, lossy observations. Unbounded looping is therefore not a feature; it is an unstable controller with an unlimited actuator budget. Define a **capability envelope** across four axes: what it may observe, what it may change, how long or how much it may spend, and which evidence is required before completion. Autonomy can be high on one axis and low on another. A coding agent may read an entire repository and run thousands of local tests while requiring approval for one network call or push.
 
-Budgets should be nested. A run has wall-clock, token, monetary, action, and retry budgets. A tool has its own timeout, output limit, and side-effect policy. A subagent receives a delegated slice rather than inheriting the parent run's remaining authority. When a boundary is reached, the harness should produce a typed event—`budget_exhausted`, `approval_required`, `verification_failed`, `no_progress`—that can be surfaced to a human or handled by a declared policy. Silently asking the model to “try harder” hides the condition and often converts a bounded failure into repeated spend.
+Budgets should be nested. A run has wall-clock, token, monetary, action, and retry budgets. A tool has its own timeout, output limit, and side-effect policy. A subagent receives a delegated slice rather than inheriting the parent run's remaining authority. When a boundary is reached, the harness should produce a typed event (`budget_exhausted`, `approval_required`, `verification_failed`, `no_progress`) that can be surfaced to a human or handled by a declared policy. Silently asking the model to “try harder” hides the condition and often converts a bounded failure into repeated spend.
 
 Progress detection is domain-specific. Repeated identical tool calls, unchanged verifier output, oscillating edits, and a growing context with no new durable artifact are signs of non-convergence. The harness can hash normalized actions and observations, detect cycles, and require the model to change strategy or pause. This is not a semantic proof that the task is stuck; it is a circuit breaker against the common mechanical loops that consume budget without information gain.
 
@@ -197,7 +197,7 @@ The correct autonomy level is earned empirically. Start with recommendation-only
 
 **Ambiguous side-effect retry** happens when a tool times out after committing and the harness retries with a new identity. The duplicate email, deployment, or payment is caused by execution semantics, not model reasoning. Stable action IDs, idempotent tools, and reconciliation are the defense.
 
-**Authority laundering** occurs when a low-trust source—retrieved document, webpage, issue comment, or tool output—convinces the model to invoke a high-authority tool. Data provenance must survive context assembly, and policy must authorize the action from the user's intent and tool contract rather than from text the model read.
+**Authority laundering** occurs when a low-trust source (retrieved document, webpage, issue comment, or tool output) convinces the model to invoke a high-authority tool. Data provenance must survive context assembly, and policy must authorize the action from the user's intent and tool contract rather than from text the model read.
 
 **Verifier theater** uses a weak or self-authored check that always agrees with the agent. A model writing both the implementation and a test that merely reproduces its assumptions has not produced independent evidence. Prefer existing or independently specified invariants, mutation tests, differential checks, and human review for non-programmatic judgments.
 
@@ -219,7 +219,7 @@ The decisive design artifact is not the system prompt. It is the run state machi
 
 1. An agent is a model-directed control loop; the harness and environment determine its real capability and safety.
 2. Durable execution needs distinct run, turn, action, and attempt identities so retries and recovery have defined semantics.
-3. Side-effect correctness comes from idempotency, atomic state transitions, and reconciliation—not from asking the model to be careful.
+3. Side-effect correctness comes from idempotency, atomic state transitions, and reconciliation, not from asking the model to be careful.
 4. Tool descriptions, result shapes, errors, and permissions form the agent's effective API and should be designed like one.
 5. Context is working memory, not durable truth; goals, constraints, state, and evidence need structured storage outside the transcript.
 6. Verification arrests compounding error. Completion is a harness decision backed by evidence, not a model stop token.
@@ -228,12 +228,12 @@ The decisive design artifact is not the system prompt. It is the run state machi
 
 ## References
 
-- [Building Effective Agents](https://www.anthropic.com/research/building-effective-agents) — Anthropic's workflow/agent taxonomy
-- [Effective Context Engineering for AI Agents](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents) — Anthropic
-- [Writing Effective Tools for Agents](https://www.anthropic.com/engineering/writing-tools-for-agents) — Anthropic
-- [Code Execution with MCP](https://www.anthropic.com/engineering/code-execution-with-mcp) — scripts instead of chained tool calls
-- [Model Context Protocol](https://modelcontextprotocol.io/) — specification and SDKs
-- [The Lethal Trifecta for AI Agents](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/) — Simon Willison
-- [SWE-bench](https://www.swebench.com/) / [τ-bench](https://arxiv.org/abs/2406.12045) / [GAIA](https://arxiv.org/abs/2311.12983) — agent benchmarks
-- [Context Rot: How Increasing Input Tokens Impacts LLM Performance](https://research.trychroma.com/context-rot) — Chroma research
-- [ReAct: Synergizing Reasoning and Acting in Language Models](https://arxiv.org/abs/2210.03629) — reasoning-and-action feedback-loop formulation
+- [Building Effective Agents](https://www.anthropic.com/research/building-effective-agents): Anthropic's workflow/agent taxonomy
+- [Effective Context Engineering for AI Agents](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents): Anthropic
+- [Writing Effective Tools for Agents](https://www.anthropic.com/engineering/writing-tools-for-agents): Anthropic
+- [Code Execution with MCP](https://www.anthropic.com/engineering/code-execution-with-mcp): scripts instead of chained tool calls
+- [Model Context Protocol](https://modelcontextprotocol.io/): specification and SDKs
+- [The Lethal Trifecta for AI Agents](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/): Simon Willison
+- [SWE-bench](https://www.swebench.com/) / [τ-bench](https://arxiv.org/abs/2406.12045) / [GAIA](https://arxiv.org/abs/2311.12983): agent benchmarks
+- [Context Rot: How Increasing Input Tokens Impacts LLM Performance](https://research.trychroma.com/context-rot): Chroma research
+- [ReAct: Synergizing Reasoning and Acting in Language Models](https://arxiv.org/abs/2210.03629): reasoning-and-action feedback-loop formulation

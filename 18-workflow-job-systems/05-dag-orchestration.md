@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-A DAG orchestrator materializes a versioned dependency graph as durable task instances. Correctness depends on run and data-interval identity, dependency readiness, task-attempt state, and atomic artifact publication—not process exit alone. Backfills are version-pinned production workloads that must not overwrite newer outputs; dynamic mapping must stay within scheduler-metadata and capacity budgets. Use DAGs for bounded dependency graphs, durable execution for long-lived entity state, and stream processors for unbounded event time.
+A DAG orchestrator materializes a versioned dependency graph as durable task instances. Correctness depends on run and data-interval identity, dependency readiness, task-attempt state, and atomic artifact publication, not process exit alone. Backfills are version-pinned production workloads that must not overwrite newer outputs; dynamic mapping must stay within scheduler-metadata and capacity budgets. Use DAGs for bounded dependency graphs, durable execution for long-lived entity state, and stream processors for unbounded event time.
 
 ---
 
@@ -181,7 +181,7 @@ The streaming engine determines event-time completeness; the DAG orchestrator sc
 
 ## Artifact Commit Protocol
 
-Task success should mean the declared output is durable, validated, and discoverable—not merely that a process exited zero.
+Task success should mean the declared output is durable, validated, and discoverable, not merely that a process exited zero.
 
 Use staging and idempotent atomic publication:
 
@@ -347,7 +347,7 @@ Expose both graph and data views:
 
 A run can be green while data is incomplete. Alert on missing/late partitions and quality contracts, not merely task failure. A task can be red after its external job actually succeeded; reconciliation adapters should query the external system by stable submission ID before resubmitting.
 
-Repair operations are durable commands—clear, retry, mark skipped, adopt external result, invalidate descendants, republish artifact—not direct database edits. Each command records actor, reason, expected prior state, affected closure, and new run revision.
+Repair operations are durable commands (clear, retry, mark skipped, adopt external result, invalidate descendants, republish artifact), not direct database edits. Each command records actor, reason, expected prior state, affected closure, and new run revision.
 
 ---
 

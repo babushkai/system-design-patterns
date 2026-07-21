@@ -62,7 +62,7 @@ These records answer different questions:
 5. **Idempotent reconciliation:** repeating a promotion or reconcile operation converges on the same state.
 6. **Separated authority:** untrusted change code cannot approve itself, sign a trusted release, or obtain unrestricted production credentials.
 7. **Policy before effect:** admission and promotion policy evaluate immutable inputs before the environment accepts them.
-8. **Observable completion:** “deployed” means the desired revision is applied and its required verification gates completed—not merely that a command exited zero.
+8. **Observable completion:** “deployed” means the desired revision is applied and its required verification gates completed, not merely that a command exited zero.
 9. **Compatible rollback:** the declared rollback target remains able to read/write current durable state or has an explicit recovery plan.
 10. **Auditable break glass:** emergency changes are bounded, attributable, reconciled back into source-of-truth state, and reviewed afterward.
 
@@ -188,7 +188,7 @@ artifact digest
   <- promotion and admission decisions
 ```
 
-An SBOM inventories components; it does not prove the artifact is safe. A signature proves control of a signing identity; it does not prove the signer or build was trustworthy. Provenance raises confidence only when the builder is isolated, inputs are complete, and admission verifies an expected issuer, repository, workflow, and policy—not merely “some valid signature.”
+An SBOM inventories components; it does not prove the artifact is safe. A signature proves control of a signing identity; it does not prove the signer or build was trustworthy. Provenance raises confidence only when the builder is isolated, inputs are complete, and admission verifies an expected issuer, repository, workflow, and policy, not merely “some valid signature.”
 
 SLSA defines incremental supply-chain guarantees. in-toto models steps and attestations. Sigstore provides short-lived identity-based signing and transparency mechanisms. Select a profile, then test verifier behavior for expired identity, wrong repository, missing transparency evidence, and digest mismatch.
 
@@ -513,19 +513,19 @@ Ask:
 9. Can production keep serving when CI, git hosting, registry, identity, or a controller is unavailable?
 10. Can a clean region be reconstructed from retained, independently accessible inputs?
 
-A credible delivery platform makes releases smaller and routine because identity, state transitions, and failure behavior are explicit—not because deployment complexity disappeared.
+A credible delivery platform makes releases smaller and routine because identity, state transitions, and failure behavior are explicit, not because deployment complexity disappeared.
 
 ---
 
 ## References
 
-- [OpenGitOps Principles](https://opengitops.dev/) — declarative, versioned, pulled, continuously reconciled desired state
-- [Kubernetes controller pattern](https://kubernetes.io/docs/concepts/architecture/controller/) — observe/diff/reconcile control loops
-- [SLSA specification](https://slsa.dev/spec/) — supply-chain levels, provenance, and build requirements
-- [in-toto specification](https://in-toto.io/) — cryptographically verifiable software-supply-chain steps
-- [Sigstore documentation](https://docs.sigstore.dev/) — identity-based signing and transparency mechanisms
-- [The Update Framework specification](https://theupdateframework.io/) — resilient artifact/update metadata and key roles
-- [NIST SP 800-218: Secure Software Development Framework](https://csrc.nist.gov/pubs/sp/800/218/final) — secure development and release practices
-- [Argo CD architecture](https://argo-cd.readthedocs.io/en/stable/operator-manual/architecture/) and [Flux architecture](https://fluxcd.io/flux/concepts/) — production GitOps controller designs
-- [SRE Workbook: Canarying Releases](https://sre.google/workbook/canarying-releases/) — outcome-based release verification
-- [DORA research program](https://dora.dev/research/) — delivery performance and reliability research
+- [OpenGitOps Principles](https://opengitops.dev/): declarative, versioned, pulled, continuously reconciled desired state
+- [Kubernetes controller pattern](https://kubernetes.io/docs/concepts/architecture/controller/): observe/diff/reconcile control loops
+- [SLSA specification](https://slsa.dev/spec/): supply-chain levels, provenance, and build requirements
+- [in-toto specification](https://in-toto.io/): cryptographically verifiable software-supply-chain steps
+- [Sigstore documentation](https://docs.sigstore.dev/): identity-based signing and transparency mechanisms
+- [The Update Framework specification](https://theupdateframework.io/): resilient artifact/update metadata and key roles
+- [NIST SP 800-218: Secure Software Development Framework](https://csrc.nist.gov/pubs/sp/800/218/final): secure development and release practices
+- [Argo CD architecture](https://argo-cd.readthedocs.io/en/stable/operator-manual/architecture/) and [Flux architecture](https://fluxcd.io/flux/concepts/): production GitOps controller designs
+- [SRE Workbook: Canarying Releases](https://sre.google/workbook/canarying-releases/): outcome-based release verification
+- [DORA research program](https://dora.dev/research/): delivery performance and reliability research

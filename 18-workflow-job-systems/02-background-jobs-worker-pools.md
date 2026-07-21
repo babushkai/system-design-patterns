@@ -1,6 +1,6 @@
 # Background Jobs and Worker Pools
 
-A background-job system accepts a bounded unit of work, makes it eligible through a durable queue or job table, gives a replaceable worker temporary authority to attempt it, and records a terminal or retryable outcome. Its safety depends on the exact claim token, state transition, and shutdown protocol—not on the existence of “a queue.”
+A background-job system accepts a bounded unit of work, makes it eligible through a durable queue or job table, gives a replaceable worker temporary authority to attempt it, and records a terminal or retryable outcome. Its safety depends on the exact claim token, state transition, and shutdown protocol, not on the existence of “a queue.”
 
 Background-job execution covers job records and transitions, receive/claim/complete protocols, broker acknowledgement interaction, database-backed claims, concurrency, restart boundaries, and graceful shutdown. [Message Queue Architecture](../05-messaging/01-message-queues.md) covers broker internals; [Poison-Message Quarantine](../05-messaging/08-dead-letter-queues.md) covers quarantine and redrive; [Priority, Fairness, and Backpressure](./07-priority-fairness-backpressure.md) covers allocation and admission; [Effect Commit Protocols](./06-retry-idempotency-compensation.md) covers external effects; [Leases and Recovery](./08-leases-heartbeats-recovery.md) covers lease timing, progress, and fencing.
 
@@ -285,7 +285,7 @@ Deployment capacity includes old and new pools concurrently, plus drain. Route o
 2. Jobs wait locally for several minutes.
 3. Visibility expires and other workers receive them while the first process later starts its copies.
 
-Bound receive to available slots, measure dispatch-to-start time, and size visibility for queue-client wait plus execution—not execution alone.
+Bound receive to available slots, measure dispatch-to-start time, and size visibility for queue-client wait plus execution, not execution alone.
 
 ### Database claim holds a lock through external I/O
 
@@ -317,7 +317,7 @@ A 14-day delayed job references payload schema 4, but the last schema-4 worker w
 
 ## Security and abuse boundaries
 
-Authorize producers by tenant and allowed job type; workers revalidate tenant/object authority at execution time because permissions and data may change while queued. Never dispatch arbitrary module/class/function names from untrusted payloads. Use an allowlisted handler registry and safe serialization—language-native object deserialization can execute code.
+Authorize producers by tenant and allowed job type; workers revalidate tenant/object authority at execution time because permissions and data may change while queued. Never dispatch arbitrary module/class/function names from untrusted payloads. Use an allowlisted handler registry and safe serialization: language-native object deserialization can execute code.
 
 Payload references need integrity hashes, access controls, expiry compatible with delay/retention, and tenant binding. Do not place long-lived credentials or sensitive records directly in queue bodies, error strings, metrics, or quarantine evidence. Receipt handles, broker credentials, and database claim tokens are attempt authority and should not be logged broadly.
 

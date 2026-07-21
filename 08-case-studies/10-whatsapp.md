@@ -1,8 +1,8 @@
 # WhatsApp: End-to-End Encrypted Multi-Device Messaging
 
-An encrypted messenger has two simultaneous correctness problems. The delivery system must route, buffer, retry, and deduplicate messages for intermittently connected devices. The cryptographic system must ensure that only intended devices can read content—even though servers coordinate device discovery and delivery. Multi-device support couples the two: one user is no longer one socket or one encryption identity.
+An encrypted messenger has two simultaneous correctness problems. The delivery system must route, buffer, retry, and deduplicate messages for intermittently connected devices. The cryptographic system must ensure that only intended devices can read content, even though servers coordinate device discovery and delivery. Multi-device support couples the two: one user is no longer one socket or one encryption identity.
 
-Evidence labels:
+Claims use three evidence labels:
 
 - **Documented**: stated in a linked WhatsApp/Meta engineering source; scale and architecture snapshots are dated.
 - **Inference**: a conclusion from documented behavior or messaging constraints, not a claim about private production internals.
@@ -23,7 +23,7 @@ The contract is:
 1. only authenticated participant devices obtain message plaintext or content keys;
 2. the server cannot silently add a recipient device without authorization and detection mechanisms;
 3. each logical send has a stable ID and each target device applies it at most once;
-4. acknowledgements name a stage—server accepted, device received, or user read;
+4. acknowledgements name a stage: server accepted, device received, or user read;
 5. an offline target remains recoverable until the declared expiry policy;
 6. device-list and key changes are ordered and auditable;
 7. metadata collection is minimized because encryption does not hide routing metadata;
@@ -153,7 +153,7 @@ This removes large bytes from connection servers. The object reference remains a
 
 **Documented, 2021.** When linking a companion, WhatsApp described the primary device encrypting a recent-history bundle, sending its key through an end-to-end encrypted message, and deleting the transfer key after import. Ongoing application state is stored server-side in end-to-end encrypted form with keys known only to the user's devices. [Meta Engineering, WhatsApp multi-device](https://engineering.fb.com/2021/07/14/security/whatsapp-multi-device/)
 
-**Reference design.** Encode mutable state as versioned encrypted operations—archive, mute, star, contact name, delete—rather than one last-written opaque blob. Each includes device ID, operation ID, logical version, and encrypted payload. Define deterministic merge per state type. Devices request deltas after a cursor and fall back to an encrypted snapshot after compaction.
+**Reference design.** Encode mutable state as versioned encrypted operations such as archive, mute, star, contact name, and delete, rather than one last-written opaque blob. Each includes device ID, operation ID, logical version, and encrypted payload. Define deterministic merge per state type. Devices request deltas after a cursor and fall back to an encrypted snapshot after compaction.
 
 ## Connections, mailboxes, and partitioning
 
@@ -163,7 +163,7 @@ Partition by stable account/device ID. Keep accepted server order per device whi
 
 ## Capacity model
 
-### Device fanout—illustrative assumptions
+### Device fanout: illustrative assumptions
 
 **Reference design.** Assume 1.4 million logical sends/s. Suppose 72% are one-to-one with 3.2 target-device envelopes on average, while 28% are group sends with 34 target-device deliveries:
 
@@ -173,7 +173,7 @@ $$
 
 At 1.1 KiB stored ciphertext/metadata and replication factor 3, transient replicated mailbox ingress is about 52.1 GiB/s. These are illustrative numbers, not WhatsApp measurements. They show why logical send rate alone is inadequate.
 
-### Offline backlog—illustrative assumptions
+### Offline backlog: illustrative assumptions
 
 If 7% of envelopes target offline devices and mean time to delivery/expiry is nine hours, Little's Law gives:
 
@@ -183,9 +183,9 @@ $$
 
 At 1.1 KiB each, raw backlog is about 38.4 TiB before replication, indexes, and tombstones. Measure the age tail: rarely online devices can dominate storage.
 
-### Persistent connections—illustrative assumptions
+### Persistent connections: illustrative assumptions
 
-For 900 million device connections at a measured 18 KiB application/transport footprint, memory is roughly 14.7 TiB. At 250,000 safe connections per host and 55% occupancy, the lower bound is about 6,546 hosts before regional redundancy. These assumptions are deliberately illustrative—not WhatsApp concurrency or server-density claims.
+For 900 million device connections at a measured 18 KiB application/transport footprint, memory is roughly 14.7 TiB. At 250,000 safe connections per host and 55% occupancy, the lower bound is about 6,546 hosts before regional redundancy. These assumptions are deliberately illustrative, not WhatsApp concurrency or server-density claims.
 
 ## Failure trace: lost acknowledgement during device change
 

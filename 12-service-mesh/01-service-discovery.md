@@ -8,7 +8,7 @@ A production design separates authoritative registration from client-local obser
 
 DNS, a registry client, and a discovery-aware proxy are delivery mechanisms with different caching and rollout semantics. Choose one only after defining the endpoint record, consistency target, stale-state policy, failure domains, and capacity model.
 
-Scope: endpoint lifecycle and discovery-state distribution. [Load Balancing](../06-scaling/01-load-balancing.md) covers request-selection algorithms, [DNS and Connection Management](../06-scaling/13-dns-and-connection-management.md) resolver and connection-cache mechanics, and [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md) retry budgets.
+This chapter covers endpoint lifecycle and discovery-state distribution. [Load Balancing](../06-scaling/01-load-balancing.md) covers request-selection algorithms, [DNS and Connection Management](../06-scaling/13-dns-and-connection-management.md) covers resolver and connection-cache mechanics, and [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md) covers retry budgets.
 
 ---
 
@@ -539,14 +539,14 @@ Ask in this order:
 
 ## References
 
-- [RFC 2782: A DNS RR for Specifying the Location of Services](https://www.rfc-editor.org/rfc/rfc2782) — SRV priority, weight, port, and target semantics
-- [RFC 6763: DNS-Based Service Discovery](https://www.rfc-editor.org/rfc/rfc6763) — service-instance discovery using DNS records
-- [RFC 8767: Serving Stale Data to Improve DNS Resiliency](https://www.rfc-editor.org/rfc/rfc8767) — bounded stale-answer behavior
-- [RFC 9665: Service Registration Protocol for DNS-Based Service Discovery](https://www.rfc-editor.org/rfc/rfc9665) — lease-based registration and TTL/lease separation
-- [gRPC Health Checking Protocol](https://grpc.io/docs/guides/health-checking/) — standard service and watch health semantics
-- [Kubernetes EndpointSlice](https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/) — scalable endpoint representation, conditions, and topology
-- [xDS Transport Protocol](https://www.envoyproxy.io/docs/envoy/latest/api-docs/xds_protocol) — snapshot/delta subscriptions, version, nonce, ACK/NACK, and dependency ordering
-- [Load Balancing](../06-scaling/01-load-balancing.md) — endpoint-selection algorithms and load signals
-- [DNS and Connection Management](../06-scaling/13-dns-and-connection-management.md) — DNS cache layers, rebinding, and connection lifetime
-- [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md) — retry budgets and deadline propagation
-- [Multi-Region Architecture](../06-scaling/09-multi-region-architecture.md) — regional routing, data placement, and failover
+- [RFC 2782: A DNS RR for Specifying the Location of Services](https://www.rfc-editor.org/rfc/rfc2782): SRV priority, weight, port, and target semantics
+- [RFC 6763: DNS-Based Service Discovery](https://www.rfc-editor.org/rfc/rfc6763): service-instance discovery using DNS records
+- [RFC 8767: Serving Stale Data to Improve DNS Resiliency](https://www.rfc-editor.org/rfc/rfc8767): bounded stale-answer behavior
+- [RFC 9665: Service Registration Protocol for DNS-Based Service Discovery](https://www.rfc-editor.org/rfc/rfc9665): lease-based registration and TTL/lease separation
+- [gRPC Health Checking Protocol](https://grpc.io/docs/guides/health-checking/): standard service and watch health semantics
+- [Kubernetes EndpointSlice](https://kubernetes.io/docs/concepts/services-networking/endpoint-slices/): scalable endpoint representation, conditions, and topology
+- [xDS Transport Protocol](https://www.envoyproxy.io/docs/envoy/latest/api-docs/xds_protocol): snapshot/delta subscriptions, version, nonce, ACK/NACK, and dependency ordering
+- [Load Balancing](../06-scaling/01-load-balancing.md): endpoint-selection algorithms and load signals
+- [DNS and Connection Management](../06-scaling/13-dns-and-connection-management.md): DNS cache layers, rebinding, and connection lifetime
+- [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md): retry budgets and deadline propagation
+- [Multi-Region Architecture](../06-scaling/09-multi-region-architecture.md): regional routing, data placement, and failover

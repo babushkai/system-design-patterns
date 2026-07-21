@@ -11,7 +11,7 @@ Bigtable's central move is to expose **physical locality as part of the data mod
 
 The paper is a 2006 system snapshot. It is not documentation for the later Google Cloud Bigtable product, Apache HBase, or Cassandra. Those systems share ideas but differ in replication, consensus, APIs, compaction, and operations.
 
-Scope here: how the paper composes [Data Modeling](../02-distributed-databases/10-data-modeling.md), [LSM Trees](../03-storage-engines/02-lsm-trees.md), and [SSTables and Compaction](../03-storage-engines/03-sstables-compaction.md).
+This chapter examines how the paper composes [Data Modeling](../02-distributed-databases/10-data-modeling.md), [LSM Trees](../03-storage-engines/02-lsm-trees.md), and [SSTables and Compaction](../03-storage-engines/03-sstables-compaction.md).
 
 ## Problem and workload shape
 
@@ -90,7 +90,7 @@ Persistent tablet state consists of SSTable references plus redo points. A repla
 
 For planned tablet movement, the source performs a minor compaction, stops serving, then performs a final small compaction. The destination can load SSTables without replaying the old server's log. Tablet splitting also exploits immutability: children initially share the parent's SSTables rather than rewriting them.
 
-The paper's lessons section is unusually candid. Real failures included memory and network corruption, clock skew, hung machines, extended partitions, and bugs in both the system and dependencies—not only clean crash-stop failures. The authors emphasize checksums and avoiding assumptions about rarely exercised recovery paths.
+The paper's lessons section is unusually candid. Real failures included memory and network corruption, clock skew, hung machines, extended partitions, and bugs in both the system and dependencies, not only clean crash-stop failures. The authors emphasize checksums and avoiding assumptions about rarely exercised recovery paths.
 
 ## Quantitative evidence in context
 

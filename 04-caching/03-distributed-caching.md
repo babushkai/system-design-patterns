@@ -6,7 +6,7 @@ A distributed cache is a sharded, replicated, memory-constrained data plane plus
 
 For ordinary caching, asynchronous replication and occasional lost cache writes are acceptable because the authoritative source can rebuild them. The same semantics are not automatically safe for sessions, locks, rate limits, or acknowledged write-behind data. Name the role before choosing the product.
 
-Scope: partitioning, replication, topology changes, hot keys, network behavior, and cache-cluster failure containment. Policy and sizing of the cached working set are in [Cache Semantics and Economics](01-cache-strategies.md), invalidation ordering in [Cache Invalidation and Coherence](02-cache-invalidation.md), and cold refill control in [Stampede, Cold Start, and Warming](04-cache-stampede.md).
+A distributed cache must define partitioning, replication, topology changes, hot-key handling, network behavior, and cluster-failure containment. Policy and sizing of the cached working set are in [Cache Semantics and Economics](01-cache-strategies.md), invalidation ordering in [Cache Invalidation and Coherence](02-cache-invalidation.md), and cold refill control in [Stampede, Cold Start, and Warming](04-cache-stampede.md).
 
 ---
 
@@ -119,7 +119,7 @@ Static stability matters: an unavailable topology service should not immediately
 
 ### 3.1 Slots and hash tags
 
-Redis Cluster maps keys into 16,384 logical hash slots and assigns slots to primary nodes. A hash tag—the non-empty substring inside braces—can co-locate related keys:
+Redis Cluster maps keys into 16,384 logical hash slots and assigns slots to primary nodes. A hash tag (the non-empty substring inside braces) can co-locate related keys:
 
 ~~~text
 {order:789}:summary

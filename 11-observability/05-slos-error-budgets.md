@@ -2,13 +2,13 @@
 
 ## TL;DR
 
-A service-level objective is a decision contract over a precisely defined service-level indicator. The indicator defines eligible events or intervals, good/bad classification, exclusions, measurement point, data source, and missing-data behavior. The objective defines target, window, population, and review policy. An error budget is the allowed bad fraction under that contract—not a universal number of outage minutes.
+A service-level objective is a decision contract over a precisely defined service-level indicator. The indicator defines eligible events or intervals, good/bad classification, exclusions, measurement point, data source, and missing-data behavior. The objective defines target, window, population, and review policy. An error budget is the allowed bad fraction under that contract, not a universal number of outage minutes.
 
 For target $S$, the allowed error fraction is $b=1-S$. Burn rate is observed error fraction divided by $b$. A multi-window alert requires both a long window that proves material budget consumption and a short window that proves the problem is still active. Choose burn thresholds from an explicit tolerated budget-consumption fraction and response horizon, not copied constants.
 
 Error-budget policy coordinates release and reliability work; it does not excuse known safety, security, durability, or contractual failures. Keep measurement independent enough to survive the service incident, expose data coverage, aggregate counts rather than percentages, and test the SLI against real failure scenarios.
 
-[Metrics Systems and Monitoring](./02-metrics-monitoring.md) covers signal semantics, [Alert Evaluation and Notification](./04-alerting.md) notification state, and [Incident Command and Learning](./07-incident-management.md) response. Scope here: SLI semantics, objective windows, burn math, and budget policy.
+[Metrics Systems and Monitoring](./02-metrics-monitoring.md) covers signal semantics, [Alert Evaluation and Notification](./04-alerting.md) covers notification state, and [Incident Command and Learning](./07-incident-management.md) covers response. This chapter covers SLI semantics, objective windows, burn math, and budget policy.
 
 ---
 
@@ -527,7 +527,7 @@ Track:
 - policy state, exception, and expiry; and
 - reliability work tied to budget outcomes.
 
-Review when product behavior, architecture, traffic, measurement, or contract changes—not only on a fixed calendar.
+Review when product behavior, architecture, traffic, measurement, or contract changes, not only on a fixed calendar.
 
 ## Verification Strategy
 
@@ -578,12 +578,12 @@ Run game days that fail the measurement path separately from the service. An SLO
 
 ## References
 
-- [Google SRE Workbook: Implementing SLOs](https://sre.google/workbook/implementing-slos/) — SLI selection, targets, windows, and error budgets
-- [Google SRE Workbook: Alerting on SLOs](https://sre.google/workbook/alerting-on-slos/) — burn rates and multi-window alert design
-- [Google SRE Workbook: Example SLO Document](https://sre.google/workbook/slo-document/) — objective specification and ownership
-- [Google SRE Workbook: Example Error Budget Policy](https://sre.google/workbook/error-budget-policy/) — predetermined reliability governance
-- [OpenSLO Specification](https://github.com/OpenSLO/OpenSLO) — machine-readable service-level objective model
-- [The Art of SLOs](https://sre.google/static/pdf/art-of-slos-handbook-a4.pdf) — practical SLO design and failure examples
-- [Metrics Systems and Monitoring](./02-metrics-monitoring.md) — counters, histograms, aggregation, gaps, and storage
-- [Alert Evaluation and Notification](./04-alerting.md) — alert state, missing data, grouping, routing, and HA
-- [Incident Command and Learning](./07-incident-management.md) — mitigation, communication, and evidence during budget-burning incidents
+- [Google SRE Workbook: Implementing SLOs](https://sre.google/workbook/implementing-slos/): SLI selection, targets, windows, and error budgets
+- [Google SRE Workbook: Alerting on SLOs](https://sre.google/workbook/alerting-on-slos/): burn rates and multi-window alert design
+- [Google SRE Workbook: Example SLO Document](https://sre.google/workbook/slo-document/): objective specification and ownership
+- [Google SRE Workbook: Example Error Budget Policy](https://sre.google/workbook/error-budget-policy/): predetermined reliability governance
+- [OpenSLO Specification](https://github.com/OpenSLO/OpenSLO): machine-readable service-level objective model
+- [The Art of SLOs](https://sre.google/static/pdf/art-of-slos-handbook-a4.pdf): practical SLO design and failure examples
+- [Metrics Systems and Monitoring](./02-metrics-monitoring.md): counters, histograms, aggregation, gaps, and storage
+- [Alert Evaluation and Notification](./04-alerting.md): alert state, missing data, grouping, routing, and HA
+- [Incident Command and Learning](./07-incident-management.md): mitigation, communication, and evidence during budget-burning incidents

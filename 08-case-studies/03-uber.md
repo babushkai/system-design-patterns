@@ -4,9 +4,9 @@ Ride fulfillment applies distributed-systems correctness to a physical world tha
 
 Claims are labeled:
 
-- **Documented** — stated in a dated Uber engineering post, paper, repository, or company report.
-- **Inference** — follows from documented constraints but is not a published implementation detail.
-- **Reference design** — a proposed Uber-like system, not a claim about Uber production.
+- **Documented**: stated in a dated Uber engineering post, paper, repository, or company report.
+- **Inference**: follows from documented constraints but is not a published implementation detail.
+- **Reference design**: a proposed Uber-like system, not a claim about Uber production.
 
 ## Evidence Boundary and Dated Scale
 

@@ -208,7 +208,7 @@ Use model checking or specification for ballot/log/membership invariants, implem
 5. What read protocol proves current authority and applied state?
 6. How are duplicate client commands recognized after leader and process failure?
 7. Can quorum replication, snapshots, and replacement fit the latency and recovery-capacity budget?
-8. Has the implemented protocol—not only the paper algorithm—been model- and history-tested?
+8. Has the implemented protocol (not only the paper algorithm) been model- and history-tested?
 
 ## Primary references
 

@@ -4,7 +4,7 @@
 
 Propagate one end-to-end deadline. Each hop decides whether enough budget remains to queue, connect, execute, retry, serialize, and return; work that cannot finish usefully should not start. A timeout bounds waiting but does **not** reveal whether a remote side effect committed.
 
-Retry only a classified transient outcome when operation semantics make another attempt safe. Assign one layer as retry owner, use exponential backoff with jitter, and cap aggregate retry traffic with a budget—not only attempts per request. Hedging races an idempotent request against a distinct replica after a delay; its benefit depends on uncorrelated tails, prompt cancellation, and spare capacity. Disable or budget extra attempts under overload.
+Retry only a classified transient outcome when operation semantics make another attempt safe. Assign one layer as retry owner, use exponential backoff with jitter, and cap aggregate retry traffic with a budget, not only attempts per request. Hedging races an idempotent request against a distinct replica after a delay; its benefit depends on uncorrelated tails, prompt cancellation, and spare capacity. Disable or budget extra attempts under overload.
 
 Deadlines bound time, retry/hedge budgets bound amplification, [rate limiting](./05-rate-limiting.md) bounds admission, [circuit breakers](./06-circuit-breakers.md) bound dependency state/concurrency, and [backpressure](./07-backpressure.md) bounds waiting. No one mechanism replaces the others.
 

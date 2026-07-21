@@ -14,7 +14,7 @@ A cache is a disposable, incomplete, and potentially stale projection of an auth
 
 Cache-aside and read-through describe who performs a load. Write-through, write-around, and write-behind describe where writes flow. None of them creates atomicity between an independent cache and database. Treat a cache hit as an optimization that must preserve the application's correctness contract.
 
-Scope: cache policy, tier placement, sizing, and economics. Freshness and invalidation are covered in [Cache Invalidation and Coherence](02-cache-invalidation.md), cluster mechanics in [Distributed Cache Internals](03-distributed-caching.md), and refill protection in [Stampede, Cold Start, and Warming](04-cache-stampede.md).
+A cache design must state its policy, tier placement, sizing, and economics. Freshness and invalidation are covered in [Cache Invalidation and Coherence](02-cache-invalidation.md), cluster mechanics in [Distributed Cache Internals](03-distributed-caching.md), and refill protection in [Stampede, Cold Start, and Warming](04-cache-stampede.md).
 
 ---
 
@@ -45,7 +45,7 @@ The useful invariants are:
 5. **Miss safety:** the origin remains protected when the cache is empty or unavailable.
 6. **Observability:** every response can be classified as fresh hit, stale hit, negative hit, miss, bypass, or error.
 
-If the first invariant is false—for example, acknowledged writes live only in Redis—the component is a database or durable write buffer. It needs durability, recovery, and consistency analysis beyond ordinary caching.
+If the first invariant is false (for example, acknowledged writes live only in Redis), the component is a database or durable write buffer. It needs durability, recovery, and consistency analysis beyond ordinary caching.
 
 ### 1.2 Contract worksheet
 
@@ -188,7 +188,7 @@ For HTTP responses:
 - **Vary** adds selected request headers to the cache key and can multiply variants.
 - **immutable** is appropriate for content-addressed or versioned resources whose URL changes with content.
 
-Treat authenticated and cookie-bearing responses as private unless a reviewed design explicitly makes them shareable. A CDN cache key must include every request property that can change the representation—tenant, locale, encoding, selected query parameters, and sometimes authorization class—while excluding tracking noise that only destroys hit rate.
+Treat authenticated and cookie-bearing responses as private unless a reviewed design explicitly makes them shareable. A CDN cache key must include every request property that can change the representation (tenant, locale, encoding, selected query parameters, and sometimes authorization class), while excluding tracking noise that only destroys hit rate.
 
 Content-addressed assets avoid invalidation:
 
@@ -296,7 +296,7 @@ $$
 \lambda_{\text{origin}} = \lambda(1-h) + \lambda_{\text{refresh}}
 $$
 
-The design must be safe at the lowest hit rate expected during restart, failover, resharding, or deploy—not only at steady state. If zero-hit traffic exceeds origin capacity, the service needs admission control, staged traffic, pre-warming, stale serving, or a smaller cacheable surface.
+The design must be safe at the lowest hit rate expected during restart, failover, resharding, or deploy, not only at steady state. If zero-hit traffic exceeds origin capacity, the service needs admission control, staged traffic, pre-warming, stale serving, or a smaller cacheable surface.
 
 ---
 

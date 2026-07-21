@@ -2,7 +2,7 @@
 
 ## Scope and Evidence Contract
 
-No single public “frontier provider architecture” exists. This analysis triangulates Orca (OSDI 2022), vLLM (SOSP 2023), DistServe (OSDI 2024), SGLang (NeurIPS 2024), and Mooncake (FAST 2025). Evidence labels:
+No single public “frontier provider architecture” exists. This analysis triangulates peer-reviewed systems: Orca (OSDI 2022), vLLM (SOSP 2023), DistServe (OSDI 2024), SGLang (NeurIPS 2024), and Mooncake (FAST 2025). The following labels distinguish paper evidence from inference and composite design:
 
 - **Documented fact:** a mechanism or result in one named paper and evaluation.
 - **Inference:** a consequence derived from the workload or documented mechanism.
@@ -66,7 +66,7 @@ Raw tokens/s can rise while goodput falls if large batches violate TTFT or TPOT 
 
 ## What the Primary Systems Actually Establish
 
-### Orca — OSDI 2022
+### Orca: OSDI 2022
 
 Orca introduced **iteration-level scheduling**: after each model iteration, finished sequences leave and newly ready sequences may join. That removes the “wait for every sequence in a static batch” barrier. Its selective batching mechanism let operations with different batching constraints coexist.
 
@@ -74,7 +74,7 @@ In the paper's GPT-3 175B evaluation, Orca reported up to 36.9× higher throughp
 
 **Established principle:** batch membership should follow token-generation progress, not whole-request lifetime.
 
-### vLLM and PagedAttention — SOSP 2023
+### vLLM and PagedAttention: SOSP 2023
 
 Autoregressive attention stores key and value tensors for previous tokens. Conventional contiguous allocation wastes memory through reserved-but-unused output space and fragmentation. vLLM's **PagedAttention** divides KV state into blocks, maps logical blocks to non-contiguous physical blocks, and enables copy-on-write sharing for common prefixes or parallel samples.
 
@@ -82,7 +82,7 @@ Across its evaluated workloads, vLLM reported 2–4× the throughput of FasterTr
 
 **Established principle:** KV memory is an operating-system-style allocation problem, and block tables decouple logical sequence growth from physical placement.
 
-### DistServe — OSDI 2024
+### DistServe: OSDI 2024
 
 DistServe separates prefill and decode onto different GPU pools. It then co-optimizes resource allocation, parallelism, and placement: prefill/decode transfer consumes interconnect bandwidth, so separating pools without topology-aware placement can lose the benefit.
 
@@ -90,7 +90,7 @@ The paper reported up to 7.4× more requests under its SLOs, or up to 12.6× tig
 
 **Established principle:** phase disaggregation can isolate TTFT from TPOT interference, but KV transfer becomes a first-class stage.
 
-### SGLang — NeurIPS 2024
+### SGLang: NeurIPS 2024
 
 SGLang targets structured generation programs with repeated prefixes, branching, tool interactions, and constrained decoding. **RadixAttention** stores reusable KV prefixes in a radix tree, while a compressed finite-state-machine representation reduces structured-output overhead.
 
@@ -98,9 +98,9 @@ The paper reported up to 6.4× higher throughput on evaluated structured languag
 
 **Established principle:** scheduling can exploit program structure and prefix lineage, not only independent request lengths.
 
-### Mooncake — FAST 2025
+### Mooncake: FAST 2025
 
-The paper's exact title is *Mooncake: Trading More Storage for Less Computation—A KVCache-centric Architecture for Serving LLM Chatbot*. It documents the Kimi production platform, including disaggregated prefill and decode and a distributed KV cache spanning accelerator memory, CPU DRAM, SSD, and network resources.
+The paper is *Mooncake: Trading More Storage for Less Computation*, subtitled *A KVCache-centric Architecture for Serving LLM Chatbot*. It documents the Kimi production platform, including disaggregated prefill and decode and a distributed KV cache spanning accelerator memory, CPU DRAM, SSD, and network resources.
 
 The production context was thousands of nodes and more than 100 billion tokens/day. The authors reported 115% and 107% more requests than previous vLLM-based systems on A800 and H800 deployments, respectively. These are vendor-authored production comparisons, not independently normalized benchmarks.
 
@@ -168,7 +168,7 @@ where:
 - $b$ is bytes per stored element,
 - $n$ is cached tokens.
 
-**Illustrative—not a provider fact:** with $L=80$, $H_{KV}=8$, $d_{head}=128$, BF16 ($b=2$), and $n=32{,}768$:
+**Illustrative, not a provider fact:** with $L=80$, $H_{KV}=8$, $d_{head}=128$, BF16 ($b=2$), and $n=32{,}768$:
 
 $$
 B_{KV}=10{,}737{,}418{,}240\ \text{bytes}=10\ \text{GiB per active sequence}
@@ -249,7 +249,7 @@ Exactly-once generation is generally the wrong abstraction once bytes have strea
 
 ## Overload and Congestive Collapse
 
-GPU queues hide overload until deadlines are already impossible. Long prompts then consume prefill and KV resources, decode slows, sequences remain resident longer, and KV pressure grows further—a positive feedback loop.
+GPU queues hide overload until deadlines are already impossible. Long prompts then consume prefill and KV resources, decode slows, sequences remain resident longer, and KV pressure grows further, creating a positive feedback loop.
 
 Break the loop before allocation:
 
@@ -310,7 +310,7 @@ See [LLM Evaluation](../17-llm-systems/10-llm-evaluation.md) for model-quality g
 ## Design-Review Questions
 
 1. What exact arrival, input-length, output-length, and prefix-reuse distributions drive capacity?
-2. Is the published objective TTFT, TPOT, end-to-end latency, or goodput—and at which percentile?
+2. Which objective is published: TTFT, TPOT, end-to-end latency, or goodput? If it is latency-based, which percentile does it constrain?
 3. What is the maximum KV reservation at admission, including beam/parallel samples and speculative state?
 4. When does cache affinity lose to queue imbalance? Show the cost function and measurements.
 5. Can a tenant infer another tenant's cached prefix through latency or billing?
@@ -334,11 +334,11 @@ See [LLM Evaluation](../17-llm-systems/10-llm-evaluation.md) for model-quality g
 
 ## Primary References
 
-- [Orca: A Distributed Serving System for Transformer-Based Generative Models — OSDI 2022](https://www.usenix.org/conference/osdi22/presentation/yu)
-- [Efficient Memory Management for Large Language Model Serving with PagedAttention — SOSP 2023](https://doi.org/10.1145/3600006.3613165)
-- [DistServe: Disaggregating Prefill and Decoding for Goodput-optimized Large Language Model Serving — OSDI 2024](https://www.usenix.org/conference/osdi24/presentation/zhong-yinmin)
-- [SGLang: Efficient Execution of Structured Language Model Programs — NeurIPS 2024](https://papers.nips.cc/paper_files/paper/2024/file/724be4472168f31ba1c9ac630f15dec8-Paper-Conference.pdf)
-- [Mooncake: Trading More Storage for Less Computation—A KVCache-centric Architecture for Serving LLM Chatbot — FAST 2025](https://www.usenix.org/system/files/fast25-qin.pdf)
+- [Orca: A Distributed Serving System for Transformer-Based Generative Models (OSDI 2022)](https://www.usenix.org/conference/osdi22/presentation/yu)
+- [Efficient Memory Management for Large Language Model Serving with PagedAttention (SOSP 2023)](https://doi.org/10.1145/3600006.3613165)
+- [DistServe: Disaggregating Prefill and Decoding for Goodput-optimized Large Language Model Serving (OSDI 2024)](https://www.usenix.org/conference/osdi24/presentation/zhong-yinmin)
+- [SGLang: Efficient Execution of Structured Language Model Programs (NeurIPS 2024)](https://papers.nips.cc/paper_files/paper/2024/file/724be4472168f31ba1c9ac630f15dec8-Paper-Conference.pdf)
+- [Mooncake: Trading More Storage for Less Computation (A KVCache-centric Architecture for Serving LLM Chatbot; FAST 2025)](https://www.usenix.org/system/files/fast25-qin.pdf)
 
 ## Related Chapters
 

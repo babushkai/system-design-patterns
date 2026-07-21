@@ -2,7 +2,7 @@
 
 Event sourcing stores accepted domain transitions as the authoritative record of an aggregate. Current state is obtained by folding an ordered stream of immutable facts, optionally starting from a verified snapshot. This is a domain persistence model, not a synonym for publishing integration events to a broker.
 
-Scope: authoritative aggregate streams, optimistic concurrency, event-store transactions, snapshots, evolution, retention, and temporal reconstruction. [CQRS Projections](06-cqrs.md) owns query read models. [Outbox and Inbox](07-outbox-pattern.md) owns atomic publication to other systems. [Ordering](03-message-ordering.md) owns downstream gap/resequence protocols.
+An event-sourced system must define authoritative aggregate streams, optimistic concurrency, event-store transactions, snapshots, evolution, retention, and temporal reconstruction. [CQRS Projections](06-cqrs.md) owns query read models. [Outbox and Inbox](07-outbox-pattern.md) owns atomic publication to other systems. [Ordering](03-message-ordering.md) owns downstream gap/resequence protocols.
 
 ## Workload and contract
 
@@ -80,7 +80,7 @@ The **data plane** authenticates commands, loads streams/snapshots, checks comma
 
 The **control plane** owns aggregate/event types, schemas/upcasters, shard placement, retention/legal holds, encryption keys, snapshot policies, repair tools, and publication/projection registrations. Changes are immutable versions with staged rollout; readers pin a compatible schema/upcaster bundle.
 
-The command service—not the store—normally owns business decision logic. The store enforces structural concurrency and uniqueness, while the aggregate code enforces domain invariants. Server-side stored procedures can combine them, but then domain-code deployment and replay compatibility move into the data tier.
+The command service (not the store) normally owns business decision logic. The store enforces structural concurrency and uniqueness, while the aggregate code enforces domain invariants. Server-side stored procedures can combine them, but then domain-code deployment and replay compatibility move into the data tier.
 
 ## Append transaction
 
@@ -122,7 +122,7 @@ state_n = apply(state_(n-1), event_n)
 
 Replay code validates aggregate ID, contiguous versions, event/schema identity, and stream checksum before applying. Unknown event types fail closed or use an explicit compatibility policy; silently skipping can produce plausible but false state.
 
-Aggregate code evolves. Keep historical transition compatibility, use read-time upcasters to a supported internal representation, or perform an audited stream migration to a new stream/type with lineage. Do not require old commands to remain executable—only events need to remain interpretable for the retained history.
+Aggregate code evolves. Keep historical transition compatibility, use read-time upcasters to a supported internal representation, or perform an audited stream migration to a new stream/type with lineage. Do not require old commands to remain executable; only events need to remain interpretable for the retained history.
 
 ## Snapshots
 
@@ -145,7 +145,7 @@ Snapshots do not justify deleting events unless the product explicitly changes f
 
 Separate wire schema version from semantic event type. Compatible additions can remain one type when absence has a stable meaning. Semantic changes use a new event type or version with explicit mapping.
 
-Upcasters are pure, deterministic functions from old stored representation to a supported in-memory representation. Record the chain and test every historical schema. Avoid network lookups and “current defaults.” If an old event lacks data now required, model `unknown`, derive from immutable historical context, or perform an explicit migration—do not invent today’s value.
+Upcasters are pure, deterministic functions from old stored representation to a supported in-memory representation. Record the chain and test every historical schema. Avoid network lookups and “current defaults.” If an old event lacks data now required, model `unknown`, derive from immutable historical context, or perform an explicit migration: do not invent today’s value.
 
 Event type deprecation proceeds by stopping new writes, ensuring all retained readers understand old/new forms, rebuilding projections, and retaining decoding support through the oldest kept event. Schema registries validate syntax; domain owners review semantics.
 

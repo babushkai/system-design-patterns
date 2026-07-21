@@ -135,7 +135,7 @@ Authorization is not an ordinary optional filter. A system may traverse forbidde
 
 Hash sharding balances vector counts and broadcasts each unconstrained query. Semantic partitioning routes to a subset of clusters but risks routing error: the true neighbor may live in a cell the router does not probe. Tenant partitioning narrows authorization and blast radius but inherits tenant skew. Time partitioning helps retention and freshness but makes historical queries fan out.
 
-Each shard returns local candidates; the coordinator merges distances only when they share an embedding space, distance definition, and score transformation. If some shards run the old space and others the new one, raw distance comparison is invalid. Dual-space migration should query and rank each space separately, then compare through a controlled fusion or shadow evaluation—not mix vectors in one ANN structure.
+Each shard returns local candidates; the coordinator merges distances only when they share an embedding space, distance definition, and score transformation. If some shards run the old space and others the new one, raw distance comparison is invalid. Dual-space migration should query and rank each space separately, then compare through a controlled fusion or shadow evaluation, not mix vectors in one ANN structure.
 
 Distributed ANN compounds approximation:
 

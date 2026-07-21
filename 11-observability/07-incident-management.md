@@ -4,11 +4,11 @@
 
 Incident response is a temporary command system for reducing harm under uncertainty. It begins when credible impact or risk is declared, not when root cause is known. A named incident commander establishes one decision log, assigns mitigation, communications, and evidence roles, controls parallel work, and repeatedly chooses the safest action that can reduce impact.
 
-Mitigation and diagnosis run in parallel, but restoration usually has priority. Every action names owner, expected effect, blast radius, rollback, observation window, and stop condition. Recovery is proven through user-facing signals, backlog/data reconciliation, regional coverage, and removal of temporary mitigations—not by one dashboard turning green.
+Mitigation and diagnosis run in parallel, but restoration usually has priority. Every action names owner, expected effect, blast radius, rollback, observation window, and stop condition. Recovery is proven through user-facing signals, backlog/data reconciliation, regional coverage, and removal of temporary mitigations, not by one dashboard turning green.
 
 Postmortems reconstruct conditions and decisions without blaming individuals. Corrective actions target detection, prevention, containment, mitigation, recovery, and organizational control; each has an owner, due/review state, verification evidence, and closure decision. A postmortem without action tracking is a narrative archive.
 
-[Alert Evaluation and Notification](./04-alerting.md) covers alert state and routing, [SLOs and Error-Budget Control](./05-slos-error-budgets.md) budget impact, and [Production Logging Architecture](./03-logging.md) evidence collection. Scope here: declaration, command, mitigation, communications, recovery, postmortems, and action governance.
+[Alert Evaluation and Notification](./04-alerting.md) covers alert state and routing, [SLOs and Error-Budget Control](./05-slos-error-budgets.md) covers budget impact, and [Production Logging Architecture](./03-logging.md) covers evidence collection. This chapter covers declaration, command, mitigation, communications, recovery, postmortems, and action governance.
 
 ---
 
@@ -690,13 +690,13 @@ Exercise the socio-technical system, not only a failover command. Include missin
 
 ## References
 
-- [NIST SP 800-61 Rev. 3: Incident Response Recommendations](https://csrc.nist.gov/pubs/sp/800/61/r3/final) — incident response integrated with cybersecurity risk management
-- [CISA Federal Government Cybersecurity Incident and Vulnerability Response Playbooks](https://www.cisa.gov/news-events/news/cisa-releases-cybersecurity-incident-and-vulnerability-response-playbooks) — standardized preparation, coordination, response, and recovery actions
-- [Google SRE Workbook: Incident Response](https://sre.google/workbook/incident-response/) — command roles, structure, and response practice
-- [Google SRE Workbook: Postmortem Culture](https://sre.google/workbook/postmortem-culture/) — blameless learning, review, and action tracking
-- [Google SRE Book: Managing Incidents](https://sre.google/sre-book/managing-incidents/) — incident command system and communications
-- [FIRST CSIRT Services Framework](https://www.first.org/standards/frameworks/csirts/csirt_services_framework_v2.1) — incident management service capabilities
-- [Alert Evaluation and Notification](./04-alerting.md) — detection, paging, routing, and notification HA
-- [SLOs and Error-Budget Control](./05-slos-error-budgets.md) — user impact, burn, and reliability policy
-- [Production Logging Architecture](./03-logging.md) — event evidence, ordering, retention, and restricted access
-- [Deployment Strategies](../15-deployment/01-deployment-strategies.md) — safe rollout, rollback, and recovery mechanics
+- [NIST SP 800-61 Rev. 3: Incident Response Recommendations](https://csrc.nist.gov/pubs/sp/800/61/r3/final): incident response integrated with cybersecurity risk management
+- [CISA Federal Government Cybersecurity Incident and Vulnerability Response Playbooks](https://www.cisa.gov/news-events/news/cisa-releases-cybersecurity-incident-and-vulnerability-response-playbooks): standardized preparation, coordination, response, and recovery actions
+- [Google SRE Workbook: Incident Response](https://sre.google/workbook/incident-response/): command roles, structure, and response practice
+- [Google SRE Workbook: Postmortem Culture](https://sre.google/workbook/postmortem-culture/): blameless learning, review, and action tracking
+- [Google SRE Book: Managing Incidents](https://sre.google/sre-book/managing-incidents/): incident command system and communications
+- [FIRST CSIRT Services Framework](https://www.first.org/standards/frameworks/csirts/csirt_services_framework_v2.1): incident management service capabilities
+- [Alert Evaluation and Notification](./04-alerting.md): detection, paging, routing, and notification HA
+- [SLOs and Error-Budget Control](./05-slos-error-budgets.md): user impact, burn, and reliability policy
+- [Production Logging Architecture](./03-logging.md): event evidence, ordering, retention, and restricted access
+- [Deployment Strategies](../15-deployment/01-deployment-strategies.md): safe rollout, rollback, and recovery mechanics

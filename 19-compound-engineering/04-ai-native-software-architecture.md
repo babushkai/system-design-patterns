@@ -4,7 +4,7 @@
 
 A repository is safe to change when a bounded requirement maps to a bounded, discoverable change surface, contracts exclude invalid combinations, verification observes important behavior, and failures can be isolated, reverted, or migrated. Measure dependency structure, change history, verification selectivity, rollback behavior, and escaped defects; universal file-size, token, coverage, or file-count thresholds do not establish safety.
 
-Scope: repository structure and evolvability. [Platform Fundamentals](./01-compound-engineering-fundamentals.md) defines the runtime, [Repository Context and Policy](./03-agent-context-engineering.md) defines instructions and policy, and [Verification and Governance](./05-quality-engineering-with-ai-agents.md) defines independent evidence.
+This chapter defines the repository structure and evolvability contract. [Platform Fundamentals](./01-compound-engineering-fundamentals.md) defines the runtime, [Repository Context and Policy](./03-agent-context-engineering.md) defines instructions and policy, and [Verification and Governance](./05-quality-engineering-with-ai-agents.md) defines independent evidence.
 
 ---
 
@@ -97,7 +97,7 @@ Make the command path and projection path visibly different in code. A search in
 
 ### Transaction boundaries
 
-Aggregate together state that must satisfy an invariant atomically. Keep unbounded or independently owned data outside and model the coordination explicitly. The correct boundary is driven by contention, access patterns, and failure semantics—not a fixed class or file size.
+Aggregate together state that must satisfy an invariant atomically. Keep unbounded or independently owned data outside and model the coordination explicitly. The correct boundary is driven by contention, access patterns, and failure semantics, not a fixed class or file size.
 
 When a transaction crosses systems, encode the workflow, idempotency, and compensation in a durable orchestrator rather than hiding it behind a method that appears synchronous. Cross-link to [Distributed Transactions](../02-distributed-databases/07-distributed-transactions.md), [Outbox](../05-messaging/07-outbox-pattern.md), and [Durable Execution](../18-workflow-job-systems/04-durable-execution-workflow-engines.md) instead of reimplementing those mechanisms locally.
 

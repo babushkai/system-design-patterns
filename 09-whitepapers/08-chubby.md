@@ -11,7 +11,7 @@ Chubby is a paper about packaging consensus into an operable coordination servic
 
 The paper does not fully publish Google's Paxos implementation, and Chubby is not a high-throughput database or a data-plane mutex around every request. It is a low-volume coordination substrate for leader election, small configuration records, naming, and coarse ownership.
 
-Scope here: the paper's lease, cache, and fencing behavior; [Distributed Locks](../01-foundations/09-distributed-locks.md) and [Leader Election](../02-distributed-databases/09-leader-election.md) cover the general patterns.
+This chapter examines the paper's lease, cache, and fencing behavior; [Distributed Locks](../01-foundations/09-distributed-locks.md) and [Leader Election](../02-distributed-databases/09-leader-election.md) cover the general patterns.
 
 ## Why a lock service instead of a consensus library
 
@@ -134,7 +134,7 @@ The part worth carrying forward is not the pathname syntax. It is the separation
 4. Which reads may be cached, and what blocks a write until invalidation is safe?
 5. Can KeepAlive overload cause correlated session loss?
 6. How are membership changes sequenced without losing quorum intersection?
-7. Are restore, corruption detection, client-library behavior, and operator error tested—not only replica crashes?
+7. Do tests cover restoration, corruption detection, client-library behavior, and operator-error scenarios in addition to replica crashes?
 
 ## Primary sources
 

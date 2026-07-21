@@ -72,7 +72,7 @@ Store one fact once when:
 - the dataset/query fits one database or a distributed SQL engine within objectives;
 - write correctness matters more than eliminating every join.
 
-Normalization does not make inconsistency impossible—applications can still duplicate semantics, skip constraints, or integrate external systems—but it reduces the number of copies one transaction must maintain.
+Normalization does not make inconsistency impossible (applications can still duplicate semantics, skip constraints, or integrate external systems), but it reduces the number of copies one transaction must maintain.
 
 ### 2.2 Denormalized projection
 
@@ -127,7 +127,7 @@ Outside:
   shipment service
 ```
 
-`order.total == sum(lines)` may belong in one transaction. Inventory allocation or payment confirmation crosses authorities and needs reservation, idempotency, workflow/effect commit, or compensation—not an ever-growing order row that copies the world.
+`order.total == sum(lines)` may belong in one transaction. Inventory allocation or payment confirmation crosses authorities and needs reservation, idempotency, workflow/effect commit, or compensation, not an ever-growing order row that copies the world.
 
 ### 3.1 Avoid aggregates that are too large
 
@@ -230,7 +230,7 @@ This may require duplicating order summary under customer and order collections.
 
 ### 5.4 Graph relationships
 
-Graph models fit variable-hop relationship queries—authorization paths, social connections, dependency graphs—when traversal is central. They do not make unbounded traversal cheap. Bound depth/fan-out, index labels/properties, and decide whether edge/node updates need transactions. For predictable fixed joins, relational adjacency tables may be simpler.
+Graph models fit variable-hop relationship queries (authorization paths, social connections, dependency graphs) when traversal is central. They do not make unbounded traversal cheap. Bound depth/fan-out, index labels/properties, and decide whether edge/node updates need transactions. For predictable fixed joins, relational adjacency tables may be simpler.
 
 ### 5.5 Time-series/event models
 
@@ -360,7 +360,7 @@ Payments, identity providers, shipping, and customer systems may own facts outsi
 
 ### 9.1 Additive compatibility
 
-Writers add optional/defaulted fields; readers tolerate unknowns; old writers remain valid until retired. Field absence, null and default may have different meanings—document them. Enumerations need unknown/future handling.
+Writers add optional/defaulted fields; readers tolerate unknowns; old writers remain valid until retired. Field absence, null and default may have different meanings: document them. Enumerations need unknown/future handling.
 
 ### 9.2 Semantic versioning of data
 
@@ -589,12 +589,12 @@ Start normalized and flexible when requirements evolve and measured joins fit. A
 
 ## References
 
-- [Kleppmann, *Designing Data-Intensive Applications*, Chapter 2](https://dataintensive.net/) — data models, query languages and representation trade-offs
-- [Amazon DynamoDB developer guide: Best practices for designing and using partition keys](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-partition-key-design.html) and [NoSQL design](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-general-nosql-design.html) — access-pattern and key design constraints
-- [Apache Cassandra data modeling](https://cassandra.apache.org/doc/latest/cassandra/developing/data-modeling/intro.html) — query-driven tables and partition/clustering keys
-- [MongoDB data-model design](https://www.mongodb.com/docs/manual/core/data-model-design/) — embedding/reference and document workload considerations
-- [PostgreSQL multicolumn indexes](https://www.postgresql.org/docs/current/indexes-multicolumn.html), [partial indexes](https://www.postgresql.org/docs/current/indexes-partial.html), and [row security](https://www.postgresql.org/docs/current/ddl-rowsecurity.html) — query/index/security semantics
-- [Chang et al., *Bigtable: A Distributed Storage System for Structured Data*](https://research.google/pubs/bigtable-a-distributed-storage-system-for-structured-data/) — row-key locality and tablet behavior
-- [DeCandia et al., *Dynamo: Amazon's Highly Available Key-value Store*](https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf) — key partitioning, replication and conflict trade-offs
-- [Helland, *Life beyond Distributed Transactions: An Apostate's Opinion*](https://www.cidrdb.org/cidr2007/papers/cidr07p15.pdf) — entity/transaction boundaries and workflow across them
-- [Fowler, *CQRS*](https://martinfowler.com/bliki/CQRS.html) — distinct write/read models and their operational cost
+- [Kleppmann, *Designing Data-Intensive Applications*, Chapter 2](https://dataintensive.net/): data models, query languages and representation trade-offs
+- [Amazon DynamoDB developer guide: Best practices for designing and using partition keys](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-partition-key-design.html) and [NoSQL design](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-general-nosql-design.html): access-pattern and key design constraints
+- [Apache Cassandra data modeling](https://cassandra.apache.org/doc/latest/cassandra/developing/data-modeling/intro.html): query-driven tables and partition/clustering keys
+- [MongoDB data-model design](https://www.mongodb.com/docs/manual/core/data-model-design/): embedding/reference and document workload considerations
+- [PostgreSQL multicolumn indexes](https://www.postgresql.org/docs/current/indexes-multicolumn.html), [partial indexes](https://www.postgresql.org/docs/current/indexes-partial.html), and [row security](https://www.postgresql.org/docs/current/ddl-rowsecurity.html): query/index/security semantics
+- [Chang et al., *Bigtable: A Distributed Storage System for Structured Data*](https://research.google/pubs/bigtable-a-distributed-storage-system-for-structured-data/): row-key locality and tablet behavior
+- [DeCandia et al., *Dynamo: Amazon's Highly Available Key-value Store*](https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf): key partitioning, replication and conflict trade-offs
+- [Helland, *Life beyond Distributed Transactions: An Apostate's Opinion*](https://www.cidrdb.org/cidr2007/papers/cidr07p15.pdf): entity/transaction boundaries and workflow across them
+- [Fowler, *CQRS*](https://martinfowler.com/bliki/CQRS.html): distinct write/read models and their operational cost

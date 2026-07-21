@@ -148,7 +148,7 @@ A count window reacts after a fixed number of outcomes; during low traffic it ma
 - configuration for slow-call and failure classification;
 - a reset/rebase rule after topology or version changes.
 
-Use additive bucket summaries—success, failure classes, slow outcomes, duration totals—rather than storing every call unless exact audit is required.
+Use additive bucket summaries (success, failure classes, slow outcomes, duration totals) rather than storing every call unless exact audit is required.
 
 ### Statistical caution
 

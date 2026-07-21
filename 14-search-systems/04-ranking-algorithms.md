@@ -99,7 +99,7 @@ For every feature define entity key, type, valid range, event-time semantics, fr
 
 Offline training joins are temporal. Suppose a click occurs at 10:05 and product price changes at 10:07. The row for that click must use the last price at or before 10:05, subject to the product’s event-time correction policy. A standard key join to the latest table leaks 10:07 into the past. Late events require replayable, versioned correction rather than silently rewriting labels without changing the dataset version.
 
-Parity tests replay captured requests through offline and online transforms, comparing values with declared tolerance. Monitor feature missingness, staleness, range, distribution, and correlation—not just RPC health. A perfectly available feature service can serve semantically wrong data.
+Parity tests replay captured requests through offline and online transforms, comparing values with declared tolerance. Monitor feature missingness, staleness, range, distribution, and correlation, not just RPC health. A perfectly available feature service can serve semantically wrong data.
 
 ## Learning-to-rank approaches
 
@@ -181,7 +181,7 @@ Package model artifact, feature-view version, candidate policy, thresholds, and 
 
 Roll out through offline replay, shadow scoring, small stable canary, controlled experiment, and staged traffic expansion. Shadow traffic validates latency, feature availability, score distributions, and disagreements without affecting users, but it cannot measure behavioral outcomes. Canary assignment should be deterministic and independent of experiment assignment unless the plan intentionally combines them.
 
-Rollback switches the complete release pointer. Keep the prior model and compatible online feature views warm for the rollback window. If a new release causes writes—such as updating subject state—define whether those effects are forward-compatible. A read-path rollback that leaves incompatible learned state behind is incomplete.
+Rollback switches the complete release pointer. Keep the prior model and compatible online feature views warm for the rollback window. If a new release causes writes (such as updating subject state), define whether those effects are forward-compatible. A read-path rollback that leaves incompatible learned state behind is incomplete.
 
 Fallback order is explicit and tested: full model; reduced feature/model release; stable non-personalized model; lexical baseline. Hard policy runs in every mode. Track degraded-mode rate as a product-quality metric, not only an availability detail.
 
@@ -198,7 +198,7 @@ Consider an illustrative peak workload:
 
 First-stage demand is `8,000 * 1,200 * 0.8 µs = 7.68` CPU-seconds/s. Reranking is `8,000 * 80 * 35 µs = 22.4` CPU-seconds/s. Together they require about 55 logical cores at 55% target utilization, before serialization, policy, logging, and failure reserve. The expensive stage dominates despite seeing far fewer candidates.
 
-Feature traffic is `8,000 * 4 KiB`, about 31 MiB/s of response payload before protocol overhead and replication. More important is `8,000 * 150 = 1.2 million` candidate-feature lookups/s logically; batching and locality determine whether the feature tier sees 8,000 RPC/s or a fan-out storm. Model p50 alone is insufficient—measure queueing and p99 by candidate count and degraded path.
+Feature traffic is `8,000 * 4 KiB`, about 31 MiB/s of response payload before protocol overhead and replication. More important is `8,000 * 150 = 1.2 million` candidate-feature lookups/s logically; batching and locality determine whether the feature tier sees 8,000 RPC/s or a fan-out storm. Model p50 alone is insufficient: measure queueing and p99 by candidate count and degraded path.
 
 Training and evaluation cost includes point-in-time joins, judgment collection, artifact retention, and replay. A larger candidate log can dominate storage: at 8,000 requests/s, logging 1,200 candidate rows of even 100 bytes would produce about 894 MiB/s. Log compact provenance, sample detailed traces under a governed policy, and retain enough to reproduce decisions without indiscriminately copying content.
 
@@ -260,7 +260,7 @@ Adopt additional ranking complexity only after answering:
 7. Can the complete release be shadowed, canaried, attributed, and rolled back?
 8. Which exact offline and online evidence will justify promotion?
 
-Often the best next change is better judgments, candidate coverage, or feature correctness—not a larger model.
+Often the best next change is better judgments, candidate coverage, or feature correctness, not a larger model.
 
 ## References
 

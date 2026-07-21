@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-A shared job scheduler separates admission, ordering, placement, and execution control. Strict priority can starve; round robin ignores cost; weighted fair queueing and deficit round robin allocate consumed service; dominant-resource fairness extends allocation across resource types. Apply backpressure at admission, charge retries to the original tenant and class budget, and operate against queue-age SLOs with a gaming-resistant cost model and failover-safe accounting.
+A shared job scheduler is a resource-allocation control plane, not a FIFO with priority labels. Admission decides whether the system can promise useful execution; ordering selects the next eligible job; placement matches it to compatible capacity; execution control leases, preempts, or cancels the running attempt. Strict priority can starve; round robin ignores cost; weighted fair queueing and deficit round robin allocate consumed service; dominant-resource fairness extends allocation across resource types. Apply backpressure at admission, charge retries to the original tenant and class budget, and operate against queue-age SLOs with a gaming-resistant cost model and failover-safe accounting.
 
 ---
 
@@ -376,7 +376,7 @@ Property-based tests can generate arrival/service traces and check invariants ov
 
 Before production, answer:
 
-1. What unit is charged—job, CPU-second, dominant share, downstream slot?
+1. What unit is charged: job, CPU-second, dominant share, downstream slot?
 2. Which class may legitimately starve, and for how long?
 3. What capacity is reserved and what can borrow it?
 4. At what predicted age/deadline does admission stop?

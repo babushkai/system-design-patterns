@@ -6,7 +6,7 @@ Backpressure is the propagation of downstream capacity information toward produc
 
 Every boundary needs a finite buffer, a full-buffer action, cancellation/deadline handling, and a signal the producer can obey. Options include blocking or asynchronous demand, explicit credits, cheap rejection, coalescing, sampling, degradation, or intentional loss. Durable queues absorb a bounded mismatch in time; they do not create service capacity.
 
-Scope: the flow of already admitted work and the overload policy at buffers. [Rate Limiting](./05-rate-limiting.md) owns entitlement/admission budgets, [Circuit Breakers](./06-circuit-breakers.md) own dependency health and in-flight calls, [Auto-Scaling](./08-auto-scaling.md) owns delayed capacity changes, and [Retries, Timeouts, and Hedging](./10-retries-timeouts-hedging.md) owns repeated attempts.
+Backpressure governs already admitted work and defines the overload policy at every buffer. [Rate Limiting](./05-rate-limiting.md) owns entitlement/admission budgets, [Circuit Breakers](./06-circuit-breakers.md) own dependency health and in-flight calls, [Auto-Scaling](./08-auto-scaling.md) owns delayed capacity changes, and [Retries, Timeouts, and Hedging](./10-retries-timeouts-hedging.md) owns repeated attempts.
 
 ---
 
@@ -299,7 +299,7 @@ Compose them:
 4. Acquire bounded queue/concurrency capacity.
 5. Call through dependency protection.
 6. Retry only within the remaining deadline and aggregate retry budget.
-7. Feed sustained demand—not uncontrolled queue growth alone—to autoscaling.
+7. Feed sustained demand (not uncontrolled queue growth alone) to autoscaling.
 
 The exact order depends on whether a token is charged for rejected or completed work, but the accounting boundary must be explicit.
 
@@ -404,7 +404,7 @@ Queue depth without arrival and completion rate cannot predict whether lag is gr
 - push beyond saturation, remove excess arrival, and prove autonomous recovery;
 - reconcile accepted work with completed, expired, dropped, and still-pending outcomes.
 
-Test long enough to expose retention, dead-letter, and replay loops—not only a short request burst.
+Test long enough to expose retention, dead-letter, and replay loops, not only a short request burst.
 
 ---
 

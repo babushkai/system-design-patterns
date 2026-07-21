@@ -2,13 +2,13 @@
 
 ## TL;DR
 
-A service mesh moves transport concerns—workload authentication, encryption, authorization enforcement, discovery consumption, connection management, retries, and telemetry—into a uniform data plane managed by a control plane. The value is consistent policy across polyglot workloads. The cost is a new distributed system on every request path.
+A service mesh moves transport concerns (workload authentication, encryption, authorization enforcement, discovery consumption, connection management, retries, and telemetry) into a uniform data plane managed by a control plane. The value is consistent policy across polyglot workloads. The cost is a new distributed system on every request path.
 
 The data plane must keep serving safely when the control plane is unavailable, yet it must not use expired identity, revoked trust, or arbitrarily stale authorization forever. Configuration delivery needs versioned resources, dependency-aware activation, ACK/NACK and applied-state telemetry. Workload identity needs attestation, short-lived credentials, overlapping rotation, trust-bundle transition, and connection renewal.
 
 Sidecars give per-workload isolation and attribution but multiply fixed cost. Node or shared “ambient” proxies amortize resources but enlarge failure and noisy-neighbor domains. Kernel/eBPF interception can reduce hops and improve visibility, but it does not eliminate user-space L7 processing, identity, policy distribution, or correctness risks. Choose the topology per policy layer and workload class rather than treating one deployment model as universally superior.
 
-Scope: east-west connectivity planes and failure behavior. [Service Discovery](./01-service-discovery.md) covers endpoint truth, [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md) retry mathematics, and [Zero Trust Architecture](../10-security/05-zero-trust-architecture.md) the broader security model.
+This chapter covers east-west connectivity planes and failure behavior. [Service Discovery](./01-service-discovery.md) covers endpoint truth, [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md) covers retry mathematics, and [Zero Trust Architecture](../10-security/05-zero-trust-architecture.md) covers the broader security model.
 
 ---
 
@@ -733,21 +733,21 @@ Use sidecars where per-workload L7 isolation is essential, shared/node layers wh
 7. Sidecars maximize per-workload isolation but multiply fixed cost; shared topologies trade cost for larger failure domains.
 8. eBPF improves capture and L3/L4 processing but does not replace L7 semantics, identity, or control-plane correctness.
 9. Mesh retries must share one deadline and attempt budget with callers and services.
-10. Test capture, attribution, isolation, rotation, stale state, and configuration convergence—not only happy-path routing.
+10. Test capture, attribution, isolation, rotation, stale state, and configuration convergence, not only happy-path routing.
 
 ---
 
 ## References
 
-- [xDS Transport Protocol](https://www.envoyproxy.io/docs/envoy/latest/api-docs/xds_protocol) — typed resources, state-of-the-world/delta delivery, ACK/NACK, TTL, and consistency
-- [SPIFFE Standards](https://spiffe.io/docs/latest/spiffe-specs/) — workload identities, verifiable identity documents, trust domains, bundles, and federation
-- [SPIFFE Workload API](https://spiffe.io/docs/latest/spiffe-specs/spiffe_workload_api/) — caller identification, streaming credentials, and rotation delivery
-- [RFC 8446: TLS 1.3](https://www.rfc-editor.org/rfc/rfc8446) — TLS authentication, key establishment, and connection security
-- [Kubernetes Sidecar Containers](https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/) — scheduler-native sidecar lifecycle semantics
-- [Linux Kernel BPF Documentation](https://docs.kernel.org/bpf/) — verifier, maps, program types, and kernel execution model
-- [RFC 9113: HTTP/2](https://www.rfc-editor.org/rfc/rfc9113) — multiplexed streams, flow control, connection errors, and graceful shutdown
-- [Service Discovery](./01-service-discovery.md) — endpoint lifecycle, watches, stale state, and draining
-- [Zero Trust Architecture](../10-security/05-zero-trust-architecture.md) — identity-centric security and continuous authorization
-- [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md) — deadline and retry-budget design
-- [Distributed Tracing and Telemetry Pipelines](../11-observability/01-distributed-tracing.md) — trace propagation and cross-service causality
-- [Backpressure](../06-scaling/07-backpressure.md) — bounded queues, flow control, and overload behavior
+- [xDS Transport Protocol](https://www.envoyproxy.io/docs/envoy/latest/api-docs/xds_protocol): typed resources, state-of-the-world/delta delivery, ACK/NACK, TTL, and consistency
+- [SPIFFE Standards](https://spiffe.io/docs/latest/spiffe-specs/): workload identities, verifiable identity documents, trust domains, bundles, and federation
+- [SPIFFE Workload API](https://spiffe.io/docs/latest/spiffe-specs/spiffe_workload_api/): caller identification, streaming credentials, and rotation delivery
+- [RFC 8446: TLS 1.3](https://www.rfc-editor.org/rfc/rfc8446): TLS authentication, key establishment, and connection security
+- [Kubernetes Sidecar Containers](https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/): scheduler-native sidecar lifecycle semantics
+- [Linux Kernel BPF Documentation](https://docs.kernel.org/bpf/): verifier, maps, program types, and kernel execution model
+- [RFC 9113: HTTP/2](https://www.rfc-editor.org/rfc/rfc9113): multiplexed streams, flow control, connection errors, and graceful shutdown
+- [Service Discovery](./01-service-discovery.md): endpoint lifecycle, watches, stale state, and draining
+- [Zero Trust Architecture](../10-security/05-zero-trust-architecture.md): identity-centric security and continuous authorization
+- [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md): deadline and retry-budget design
+- [Distributed Tracing and Telemetry Pipelines](../11-observability/01-distributed-tracing.md): trace propagation and cross-service causality
+- [Backpressure](../06-scaling/07-backpressure.md): bounded queues, flow control, and overload behavior

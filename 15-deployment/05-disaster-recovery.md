@@ -67,7 +67,7 @@ Include more than region outage:
 6. **Single authority after failover:** the old site cannot continue accepting conflicting writes; fencing applies at each authoritative resource.
 7. **Verified before traffic:** restored bytes pass integrity, schema, application, security, and business-invariant checks.
 8. **Idempotent orchestration:** restart/retry of recovery steps does not duplicate effects or destroy evidence.
-9. **Bounded data loss and outage:** observed RPO/RTO are measured from committed history and user capability—not backup job timestamps.
+9. **Bounded data loss and outage:** observed RPO/RTO are measured from committed history and user capability, not backup job timestamps.
 10. **Auditable decisions:** declaration, recovery-point selection, key access, repair, exception, traffic admission, and failback are attributable.
 
 ---
@@ -563,7 +563,7 @@ Track continuously:
 - corruption/invariant scan freshness;
 - drill RPO/RTO and open finding age.
 
-Alert on loss of recoverability before an incident—for example, a missing log segment or expiring key—not merely failed backup jobs.
+Alert on loss of recoverability before an incident (for example, a missing log segment or expiring key), not merely failed backup jobs.
 
 ---
 
@@ -606,11 +606,11 @@ If a design can answer only “where are the backups?”, it has described stora
 
 ## References
 
-- [NIST SP 800-34 Rev. 1: Contingency Planning Guide for Federal Information Systems](https://csrc.nist.gov/pubs/sp/800/34/r1/final) — contingency planning, recovery strategy, testing, and maintenance
-- [Google SRE Book: Data Integrity](https://sre.google/sre-book/data-integrity/) — layered defense, backup, restore, and corruption considerations
-- [PostgreSQL: Continuous Archiving and Point-in-Time Recovery](https://www.postgresql.org/docs/current/continuous-archiving.html) — base backup and WAL replay mechanics
-- [AWS Well-Architected: Disaster Recovery of Workloads](https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/disaster-recovery-dr-objectives.html) — RPO/RTO and recovery strategy trade-offs
-- [Azure Architecture Center: Disaster recovery and storage account failover](https://learn.microsoft.com/azure/well-architected/reliability/disaster-recovery) — recovery planning and regional failure considerations
-- [GitLab database outage postmortem, 2017](https://about.gitlab.com/blog/2017/02/01/gitlab-dot-com-database-incident/) — public evidence on backup/restore operational failure
-- [CISA StopRansomware Guide](https://www.cisa.gov/stopransomware/ransomware-guide) — isolated backups and recovery preparation against destructive compromise
-- [RFC 8905: The 'payto' URI Scheme for Payments](https://www.rfc-editor.org/rfc/rfc8905) — an example of why external financial identifiers and effects require explicit reconciliation, not blind replay
+- [NIST SP 800-34 Rev. 1: Contingency Planning Guide for Federal Information Systems](https://csrc.nist.gov/pubs/sp/800/34/r1/final): contingency planning, recovery strategy, testing, and maintenance
+- [Google SRE Book: Data Integrity](https://sre.google/sre-book/data-integrity/): layered defense, backup, restore, and corruption considerations
+- [PostgreSQL: Continuous Archiving and Point-in-Time Recovery](https://www.postgresql.org/docs/current/continuous-archiving.html): base backup and WAL replay mechanics
+- [AWS Well-Architected: Disaster Recovery of Workloads](https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/disaster-recovery-dr-objectives.html): RPO/RTO and recovery strategy trade-offs
+- [Azure Architecture Center: Disaster recovery and storage account failover](https://learn.microsoft.com/azure/well-architected/reliability/disaster-recovery): recovery planning and regional failure considerations
+- [GitLab database outage postmortem, 2017](https://about.gitlab.com/blog/2017/02/01/gitlab-dot-com-database-incident/): public evidence on backup/restore operational failure
+- [CISA StopRansomware Guide](https://www.cisa.gov/stopransomware/ransomware-guide): isolated backups and recovery preparation against destructive compromise
+- [RFC 8905: The 'payto' URI Scheme for Payments](https://www.rfc-editor.org/rfc/rfc8905): an example of why external financial identifiers and effects require explicit reconciliation, not blind replay

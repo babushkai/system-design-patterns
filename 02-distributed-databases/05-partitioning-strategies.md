@@ -1,8 +1,8 @@
 # Partitioning Strategies
 
-Partitioning maps one logical key space onto independently placeable units. The choice determines which requests are single-partition, which become distributed operations, where hot spots form, and how much state must move when capacity changes. A good partition function is therefore part of the data model and query contract—not a storage detail added after launch.
+Partitioning maps one logical key space onto independently placeable units. The choice determines which requests are single-partition, which become distributed operations, where hot spots form, and how much state must move when capacity changes. A good partition function is therefore part of the data model and query contract, not a storage detail added after launch.
 
-Scope: **logical partition boundaries, key-to-partition routing, and replica-placement primitives**. [Database Sharding](../06-scaling/03-database-sharding.md) owns the application and operational workflow for introducing shards, moving live data, cutover, rollback, and organizational ownership. [Secondary Indexes](./06-secondary-indexes.md) owns index placement, while [Distributed Transactions](./07-distributed-transactions.md) owns atomic work that crosses the resulting boundaries.
+Partitioning starts by defining **logical partition boundaries, key-to-partition routing, and replica-placement primitives**. [Database Sharding](../06-scaling/03-database-sharding.md) owns the application and operational workflow for introducing shards, moving live data, cutover, rollback, and organizational ownership. [Secondary Indexes](./06-secondary-indexes.md) owns index placement, while [Distributed Transactions](./07-distributed-transactions.md) owns atomic work that crosses the resulting boundaries.
 
 ## Workload contract
 
@@ -143,7 +143,7 @@ The parent must validate the epoch and either forward through a protocol that pr
 3. Storage dashboards show equal bytes, but its partition saturates CPU and queueing delay grows.
 4. Adding nodes moves cold partitions and leaves the indivisible key hot.
 
-The remedy is an application-level operation split, caching/replication for reads, or a deliberate striped representation—not another hash function.
+The remedy is an application-level operation split, caching/replication for reads, or a deliberate striped representation, not another hash function.
 
 ### Correlated replica placement
 
@@ -194,7 +194,7 @@ There is no universal bucket count. Model the per-partition fixed cost from the 
 
 ## Operations, migration, and testing
 
-Monitor bytes, reads, writes, CPU, queue time, compaction/recovery work, and replica lag **per partition**, with maxima and skew coefficients—not only node averages. Also track routing-epoch misses, redirects, split duration, copy backlog, unavailable placement constraints, and time to restore the desired replica set.
+Monitor bytes, reads, writes, CPU, queue time, compaction/recovery work, and replica lag **per partition**, with maxima and skew coefficients, not only node averages. Also track routing-epoch misses, redirects, split duration, copy backlog, unavailable placement constraints, and time to restore the desired replica set.
 
 Before changing a partition function, build an offline mapping diff: how many keys and bytes move, which queries change fan-out, which partitions become hottest, and how rollback maps new writes. Shadow-route sampled production keys to compare old and new ownership without executing writes.
 
@@ -204,7 +204,7 @@ Property tests should prove range coverage with no gaps/overlaps, deterministic 
 
 1. Which request fields are known before routing, and how many partitions does each critical operation touch?
 2. Does order/range locality matter more than uniform placement?
-3. What are the maximum key, tenant, and partition QPS and bytes—not only averages?
+3. What are the maximum key, tenant, and partition QPS and bytes, not only averages?
 4. Can one hot key be subdivided without breaking its invariant or order?
 5. What metadata epoch fences an old owner during split, move, and merge?
 6. How much data moves for one node addition or failure, and how long can catch-up take?

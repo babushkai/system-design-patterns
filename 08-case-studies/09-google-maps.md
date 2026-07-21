@@ -2,7 +2,7 @@
 
 A global map is not one database with a spatial index. It is a family of products built from a changing world model: viewport rendering, place lookup, geocoding, road snapping, route search, traffic-aware ETA, incident updates, and turn-by-turn navigation. Each path has different freshness, latency, correctness, and privacy constraints.
 
-Public sources describe Google Maps interfaces and selected algorithms, but not a complete current production topology. Evidence labels:
+Public sources describe Google Maps interfaces and selected algorithms, but not a complete current production topology. The following labels distinguish documented facts from inference and reference design:
 
 - **Documented**: stated in a linked Google/Google DeepMind source or primary paper; figures and capabilities are dated.
 - **Inference**: follows from documented behavior or geospatial constraints but is not a Google production claim.
@@ -123,7 +123,7 @@ flowchart TB
     C --> Route
 ```
 
-The data plane serves tile, place, geocode, route, and navigation requests. The publication control plane validates source changes, builds indexes, trains/evaluates models, produces signed manifests, rolls versions through cells, and can stop or roll back a release. Live traffic is a streaming data plane with its own expiry and quality controls—not an administrative configuration plane.
+The data plane serves tile, place, geocode, route, and navigation requests. The publication control plane validates source changes, builds indexes, trains/evaluates models, produces signed manifests, rolls versions through cells, and can stop or roll back a release. Live traffic is a streaming data plane with its own expiry and quality controls, not an administrative configuration plane.
 
 ## Map-tile path
 
@@ -183,7 +183,7 @@ Routing across partitions can use a hierarchy: local access graph, regional boun
 
 ## Capacity and cost model
 
-### Viewport amplification—illustrative assumptions
+### Viewport amplification: illustrative assumptions
 
 **Reference design.** Assume 1.5 million active map sessions at peak. Each session requests 10 visible/prefetch tiles on initial view and then 1.2 tiles/s while moving. If 20% initialize in any given second:
 
@@ -199,7 +199,7 @@ $$
 
 Improving hit rate from 96% to 97% reduces origin requests by 48,000/s. Cache keys must not fragment unnecessarily by parameters that do not affect bytes, but omitting language, policy, or style inputs can return incorrect tiles.
 
-### Routing compute—illustrative assumptions
+### Routing compute: illustrative assumptions
 
 Suppose 80,000 route requests/s, 2.4 candidates/request, and 3.5 ms CPU/candidate after precomputation:
 
@@ -211,7 +211,7 @@ At 55% target utilization, the CPU floor is about 1,222 cores before geocoding, 
 
 Route matrices amplify as `origins × destinations`. A 25-by-25 request means 625 route elements. Public Google documentation, checked in July 2026, limits non-transit route-matrix items to 625 and traffic-aware-optimal requests to 100, illustrating why cost-based admission is necessary. [Google, route matrix limits](https://developers.google.com/maps/documentation/javascript/routes/get-a-route-matrix)
 
-### Traffic state—illustrative assumptions
+### Traffic state: illustrative assumptions
 
 At 60 million accepted segment observations/minute, 48 bytes after aggregation, and replication factor 3:
 

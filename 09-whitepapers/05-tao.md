@@ -11,7 +11,7 @@ TAO shows what happens when a company turns a dominant access pattern into a sto
 
 The paper is not a specification for Meta's current graph infrastructure. It also does not describe arbitrary graph traversal, graph analytics, Cypher-like queries, or a globally serializable database. Its API is intentionally restrictive.
 
-[Distributed Caching](../04-caching/03-distributed-caching.md) and [Cache Invalidation](../04-caching/02-cache-invalidation.md) cover the reusable mechanics. Scope here: why TAO could apply them safely to one graph workload.
+[Distributed Caching](../04-caching/03-distributed-caching.md) and [Cache Invalidation](../04-caching/02-cache-invalidation.md) cover the reusable mechanics. This analysis explains why TAO could apply them safely to one graph workload.
 
 ## Workload that shaped the design
 
@@ -38,7 +38,7 @@ For each `(id1, atype)`, TAO maintains an association list ordered by descending
 
 That API matches “recent comments on this post” and “does this user like this object.” It does not expose multi-hop traversal. Applications compose calls and apply business logic themselves.
 
-Association types may declare an inverse. TAO couples create, update, and delete with the inverse edge—for example, `AUTHORED` and `AUTHORED_BY`. This is a domain invariant built into the service, not a general graph constraint mechanism. An inverse can reside on another shard, so one logical association update may touch both source and destination shards. Section 4.2 is explicit that these two writes are **not atomic**: a failure can leave a forward edge without its inverse, and an asynchronous job repairs the hanging association.
+Association types may declare an inverse. TAO couples each association create, update, or delete with the corresponding operation on its inverse edge; for example, `AUTHORED` and `AUTHORED_BY` form an inverse pair. This is a domain invariant built into the service, not a general graph constraint mechanism. An inverse can reside on another shard, so one logical association update may touch both source and destination shards. Section 4.2 is explicit that these two writes are **not atomic**: a failure can leave a forward edge without its inverse, and an asynchronous job repairs the hanging association.
 
 ## Persistence, sharding, and cache topology
 
@@ -62,7 +62,7 @@ Section 5.3 addresses skew rather than assuming hashing makes it disappear. Shar
 
 TAO caches objects, association counts, and bounded association-list ranges rather than an undifferentiated serialized blob. The service understands enough graph semantics to update or invalidate only the affected entries.
 
-Writes commit synchronously at the MySQL master. The master-region leader returns a **changeset** to the originating follower path, which updates or invalidates the local cache before acknowledging the caller. In normal operation—defined by the paper as at most one failure encountered by a request—this supplies read-after-write consistency for clients that stay on one follower tier.
+Writes commit synchronously at the MySQL master. The master-region leader returns a **changeset** to the originating follower path, which updates or invalidates the local cache before acknowledging the caller. In normal operation (defined by the paper as at most one failure encountered by a request), this supplies read-after-write consistency for clients that stay on one follower tier.
 
 Separately, MySQL's asynchronous replication stream carries refill and invalidation messages to each slave region. The paper orders those messages after the corresponding database transaction reaches the slave. Sending an invalidation first would allow a subsequent miss to refill from a still-stale slave.
 
@@ -70,7 +70,7 @@ Association lists make invalidation subtle. A concurrent edge insertion can chan
 
 The guarantee remains bounded. Switching to a backup follower tier can violate read-after-write if that tier has not received the refill. A partial leader failure or permanently lost invalidation can leave stale data. Cross-region database state is eventually consistent; TAO does not claim causal or serializable consistency for the whole graph.
 
-The paper also exposes an escape hatch rather than pretending eventual reads fit every operation: a request marked **critical** is proxied to the master region, where synchronous MySQL writes make the master database the consistent source of truth. This raises latency and centralizes the read path, so it is reserved for the small subset of operations—such as an authentication check in the paper's example—that cannot tolerate replica lag.
+The paper also exposes an escape hatch rather than pretending eventual reads fit every operation: a request marked **critical** is proxied to the master region, where synchronous MySQL writes make the master database the consistent source of truth. This raises latency and centralizes the read path, so it is reserved for the small subset of operations, such as an authentication check in the paper's example, that cannot tolerate replica lag.
 
 ## Failure paths and repair
 
@@ -114,7 +114,7 @@ The authors sampled 6.5 million requests randomly over 40 days and measured prod
 
 Meta's later engineering descriptions report that TAO continued to evolve operationally, but the 2013 paper's enduring pattern is narrower: **a domain-specific caching API can centralize coherence and make a relational backing store serve a read-dominant graph workload**. Modern graph stores may add traversal languages, stronger consistency, log-based storage, or different regional writes. Those additions change the proof boundary and should not be attributed to this paper.
 
-The design also contrasts usefully with [Dynamo](./02-dynamo.md): TAO sacrifices disconnected write availability and uses one master to avoid application conflict merge; Dynamo accepts concurrent versions to keep writes available. Neither is “more distributed” in the abstract—they protect different invariants.
+The design also contrasts usefully with [Dynamo](./02-dynamo.md): TAO sacrifices disconnected write availability and uses one master to avoid application conflict merge; Dynamo accepts concurrent versions to keep writes available. Neither is “more distributed” in the abstract; they protect different invariants.
 
 ## Design review questions
 

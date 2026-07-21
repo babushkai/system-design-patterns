@@ -4,9 +4,9 @@
 
 LLM infrastructure is a deadline-aware, quota-constrained distributed serving system around expensive stateful accelerators and fallible external providers. The platform must turn a logical model request into an admitted, policy-checked, version-pinned execution; schedule prefill and decode without allowing long prompts to starve interactive traffic; stream results with cancellation; account for tokens and cost; and preserve a trace across gateways, retrieval, model servers, and tools.
 
-Separate the global **control plane**—model catalog, policy, evaluation evidence, rollout state, quotas, pricing, and placement—from regional **data planes**—admission, routing, caches, queues, inference pools, and streaming. A provider API and a self-hosted model should implement the same logical contract but retain different failure semantics. Provider fallback is not transparent if models differ in tokenization, context limits, tool schemas, safety behavior, or output distribution.
+Separate the global **control plane** (model catalog, policy, evaluation evidence, rollout state, quotas, pricing, and placement) from regional **data planes**: admission, routing, caches, queues, inference pools, and streaming. A provider API and a self-hosted model should implement the same logical contract but retain different failure semantics. Provider fallback is not transparent if models differ in tokenization, context limits, tool schemas, safety behavior, or output distribution.
 
-Optimize for goodput—the rate of requests that meet correctness, latency, and policy bounds—and report cost efficiency beside it. Raw GPU utilization, tokens per second, low API price, or goodput alone can each improve while another product constraint gets worse.
+Optimize for goodput (the rate of requests that meet correctness, latency, and policy bounds) and report cost efficiency beside it. Raw GPU utilization, tokens per second, low API price, or goodput alone can each improve while another product constraint gets worse.
 
 Infrastructure covers the gateway, provider/self-hosted abstraction, global model/policy control plane, regional admission/routing/streaming data plane, and fleet operations. [GPU Inference Internals](./11-gpu-inference-internals.md) covers the device ledger; [Agent Inference](./12-agent-inference.md) covers session scheduling, KV residency, fan-out, and task goodput; [Harness Engineering](./09-harness-engineering.md) covers tool authority, effect commit, sandboxing, and durable agent state. A serving router must not become a workflow or authorization engine.
 
@@ -100,7 +100,7 @@ idempotency key, trace context, experiment assignment
 
 The response stream emits typed events such as `generation.started`, `content.delta`, `tool_call.proposed`, `usage.updated`, `generation.completed`, and `generation.failed`. A terminal event includes resolved model/provider revision where available, finish reason, input/output/cached/reasoning token accounting, safety/policy outcomes, and latency breakdown.
 
-Do not encode control state only as provider-specific JSON. The logical contract is versioned, and each adapter declares which capabilities it supports. Unsupported combinations fail at admission rather than degrading silently—for example, routing a strict JSON-schema request to a model that only approximately follows JSON.
+Do not encode control state only as provider-specific JSON. The logical contract is versioned, and each adapter declares which capabilities it supports. Unsupported combinations fail at admission rather than degrading silently; for example, a strict JSON-schema request is rejected instead of routed to a model that only approximately follows JSON.
 
 ## Control Plane
 
@@ -242,7 +242,7 @@ Using provider APIs replaces GPU operations with vendor dependency management. Y
 
 Use separate credentials and limits by environment and product, held in a secret manager. The gateway should expose no provider key to clients. Rate-limit before the provider, because discovering overload via paid rejected or timed-out requests is expensive.
 
-Provider status is an input, not proof. Circuit breakers open on local outcome windows by target and region. Avoid synchronized retries with exponential backoff and jitter, but respect the request's deadline—backoff that outlives the user is wasted work. A half-open probe uses low-volume safe traffic.
+Provider status is an input, not proof. Circuit breakers open on local outcome windows by target and region. Avoid synchronized retries with exponential backoff and jitter, but respect the request's deadline: backoff that outlives the user is wasted work. A half-open probe uses low-volume safe traffic.
 
 Multi-provider designs reduce correlated business dependency only if application features are portable and capacity is pre-arranged. An untested fallback account with no quota is not redundancy. Periodically exercise failover with representative requests and verify quality, safety, tool calls, and accounting.
 
@@ -375,7 +375,7 @@ Incident response starts with a safe control surface: stop a rollout, disable on
 | Economics | low utilization or rapid model churn | measured goodput gives lower total cost at required SLO |
 | Availability | vendor quota and regional dependency acceptable | capacity can be reserved across owned failure domains |
 
-Hybrid systems often use providers for frontier or burst traffic and self-hosted pools for stable high-volume paths. They still require a shared logical contract, evaluation, accounting, and explicit compatibility—not a lowest-common-denominator abstraction that hides important behavior.
+Hybrid systems often use providers for frontier or burst traffic and self-hosted pools for stable high-volume paths. They still require a shared logical contract, evaluation, accounting, and explicit compatibility, not a lowest-common-denominator abstraction that hides important behavior.
 
 ### Design sequence
 
@@ -399,15 +399,15 @@ Prefer the least operationally complex architecture that meets quality, policy, 
 - Prefill, decode, KV memory, batching, and model placement create distinct scheduling constraints; plan capacity from goodput at the product SLO.
 - Streaming, cancellation, partial output, and tool idempotency require explicit protocol semantics.
 - Optimize cost per verified successful outcome and preserve an immutable, reconciled usage ledger.
-- Policy is enforced in gateways, tools, sandboxes, and commit paths—not by trusting prompt instructions.
+- Policy is enforced in gateways, tools, sandboxes, and commit paths, not by trusting prompt instructions.
 
 ## References
 
-- [Orca: A Distributed Serving System for Transformer-Based Generative Models](https://www.usenix.org/conference/osdi22/presentation/yu) — iteration-level scheduling and selective batching
-- [Efficient Memory Management for Large Language Model Serving with PagedAttention](https://arxiv.org/abs/2309.06180) — paged KV-cache management and vLLM
-- [SGLang: Efficient Execution of Structured Language Model Programs](https://arxiv.org/abs/2312.07104) — structured generation runtime and prefix reuse
-- [DistServe: Disaggregating Prefill and Decoding for Goodput-optimized Large Language Model Serving](https://www.usenix.org/conference/osdi24/presentation/zhong-yinmin) — phase disaggregation
-- [Taming Throughput-Latency Tradeoff in LLM Inference with Sarathi-Serve](https://www.usenix.org/conference/osdi24/presentation/agrawal) — chunked prefills and stall-free scheduling
-- [FlashAttention-3: Fast and Accurate Attention with Asynchrony and Low-precision](https://arxiv.org/abs/2407.08608) — accelerator-aware attention kernels
-- [OpenTelemetry GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) — trace and metric vocabulary for generative AI systems
-- [NIST AI Risk Management Framework: Generative AI Profile](https://www.nist.gov/publications/artificial-intelligence-risk-management-framework-generative-artificial-intelligence) — generative-AI risk management guidance
+- [Orca: A Distributed Serving System for Transformer-Based Generative Models](https://www.usenix.org/conference/osdi22/presentation/yu): iteration-level scheduling and selective batching
+- [Efficient Memory Management for Large Language Model Serving with PagedAttention](https://arxiv.org/abs/2309.06180): paged KV-cache management and vLLM
+- [SGLang: Efficient Execution of Structured Language Model Programs](https://arxiv.org/abs/2312.07104): structured generation runtime and prefix reuse
+- [DistServe: Disaggregating Prefill and Decoding for Goodput-optimized Large Language Model Serving](https://www.usenix.org/conference/osdi24/presentation/zhong-yinmin): phase disaggregation
+- [Taming Throughput-Latency Tradeoff in LLM Inference with Sarathi-Serve](https://www.usenix.org/conference/osdi24/presentation/agrawal): chunked prefills and stall-free scheduling
+- [FlashAttention-3: Fast and Accurate Attention with Asynchrony and Low-precision](https://arxiv.org/abs/2407.08608): accelerator-aware attention kernels
+- [OpenTelemetry GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/): trace and metric vocabulary for generative AI systems
+- [NIST AI Risk Management Framework: Generative AI Profile](https://www.nist.gov/publications/artificial-intelligence-risk-management-framework-generative-artificial-intelligence): generative-AI risk management guidance

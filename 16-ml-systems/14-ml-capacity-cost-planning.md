@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-ML capacity planning turns measured workload envelopes and versioned per-replica benchmarks into ready-capacity, placement, and cost commitments. Size the complete system against safe goodput for named peak, rollout, failure, and quota scenarios—not averages or hardware peaks. Batch inference is bounded by deadline throughput; training by resource-hours, I/O, scheduler delay, and time-to-quality. [Model Serving](./03-model-serving.md) covers per-replica mechanics; [Distributed Training Internals](./15-distributed-training-internals.md) covers parallelism and collective behavior.
+ML capacity planning turns measured workload envelopes and versioned per-replica benchmarks into ready-capacity, placement, and cost commitments. Size the complete system against safe goodput for named peak, rollout, failure, and quota scenarios, not averages or hardware peaks. Batch inference is bounded by deadline throughput; training by resource-hours, I/O, scheduler delay, and time-to-quality. [Model Serving](./03-model-serving.md) covers per-replica mechanics; [Distributed Training Internals](./15-distributed-training-internals.md) covers parallelism and collective behavior.
 
 ---
 
@@ -160,7 +160,7 @@ c_safe[m,h,w] = max offered load λ such that
 
 ### Device Service Capacity and Queue Residence Use Different Clocks
 
-Queue wait consumes the request's deadline but does not consume accelerator service time. For a measured batching configuration, long-run device capacity is derived from completions over device-busy time—or, as a diagnostic approximation, achieved batch completions divided by device batch service time:
+Queue wait consumes the request's deadline but does not consume accelerator service time. For a measured batching configuration, long-run device capacity is derived from completions over device-busy time, or, as a diagnostic approximation, achieved batch completions divided by device batch service time:
 
 ```text
 device_completion_capacity ≈ completed_items / device_busy_seconds
@@ -319,7 +319,7 @@ A capacity plan should measure throughput per dollar, not only time-to-train. So
 
 A shared ML cluster is a scheduling system. Without policy, one team can starve others.
 
-Required controls:
+Multi-tenant GPU scheduling requires these controls:
 
 | Control | Purpose |
 |---|---|
@@ -467,7 +467,7 @@ If a solver instead uses dimensionless route shares `x[m,h]`, then `Σ_h x[m,h] 
 
 Minimize total cost subject to those constraints and failure scenarios. In practice the inputs are benchmark surfaces and the solver may be a spreadsheet, linear program, or policy heuristic. The value is the explicit coupling: moving traffic to a cheaper device can violate latency; co-locating models can exceed memory; reserving rollback residency consumes capacity even when it serves no traffic.
 
-Multi-model servers improve utilization when model demand is sparse, but eviction and loading turn memory into a cache. Track model hit rate, load bytes, eviction rate, load queue, and request deadlines. A popular large model can thrash smaller tenants out of memory; admission and residency policy should reserve critical models or isolate pools. Where request inputs can amplify work—long sequences, huge candidate sets, adversarial sparse features—apply per-tenant limits before expensive preprocessing so one tenant cannot convert a small QPS share into most of the device time.
+Multi-model servers improve utilization when model demand is sparse, but eviction and loading turn memory into a cache. Track model hit rate, load bytes, eviction rate, load queue, and request deadlines. A popular large model can thrash smaller tenants out of memory; admission and residency policy should reserve critical models or isolate pools. Where request inputs can amplify work (long sequences, huge candidate sets, adversarial sparse features), apply per-tenant limits before expensive preprocessing so one tenant cannot convert a small QPS share into most of the device time.
 
 ---
 
@@ -494,7 +494,7 @@ Long procurement or quota lead times turn forecasting into architecture. Record 
 
 ## Admission Control and Degradation Economics
 
-When offered load exceeds feasible capacity, the system must choose which work not to do. An unbounded queue makes that choice implicitly and badly: requests expire after consuming memory and perhaps compute. A bounded queue plus deadline-aware admission rejects work before its cost is sunk. Priority should be based on product semantics—checkout decisions before dashboard refreshes—not merely arrival order.
+When offered load exceeds feasible capacity, the system must choose which work not to do. An unbounded queue makes that choice implicitly and badly: requests expire after consuming memory and perhaps compute. A bounded queue plus deadline-aware admission rejects work before its cost is sunk. Priority should be based on product semantics (checkout decisions before dashboard refreshes), not merely arrival order.
 
 Common degradation steps are: serve a smaller/distilled model, reuse a bounded-staleness prediction, omit expensive feature groups, switch personalization to a deterministic baseline, move synchronous work to async, or shed low-priority tenants according to an explicit fairness policy. Each step changes quality and possibly risk, so it is a versioned policy with evaluation evidence, not an infrastructure improvisation. A fraud system may fail closed for a high-risk amount and fall back to rules for a low-risk one; a recommender can safely return popular items. Capacity and product policy meet at this boundary.
 
@@ -532,7 +532,7 @@ The key views answer different questions:
 | Goodput | on-time correct completions, fallback and wasted work | How much product-valid capacity did the fleet deliver? |
 | Economics | cost by model/tenant/hardware and successful decision | Which workload or inefficiency moved unit cost? |
 
-Reconcile forecasts, reservations, scheduler allocations, ready capacity, and observed goodput. A quota for unavailable accelerator types is not supply; an allocated node with a model still loading is not ready capacity; a completed response after its deadline is not goodput. Alert on the earliest causal signal—arrival or service-demand shift, queue-age slope, ready-capacity loss—not only on the terminal p99 breach. Fleet-scenario evidence establishes whether the intended degradation order and tenant allocation remain feasible; an operational procedure responds to deviations but does not substitute for that evidence.
+Reconcile forecasts, reservations, scheduler allocations, ready capacity, and observed goodput. A quota for unavailable accelerator types is not supply; an allocated node with a model still loading is not ready capacity; a completed response after its deadline is not goodput. Alert on the earliest causal signal (arrival or service-demand shift, queue-age slope, ready-capacity loss), not only on the terminal p99 breach. Fleet-scenario evidence establishes whether the intended degradation order and tenant allocation remain feasible; an operational procedure responds to deviations but does not substitute for that evidence.
 
 ---
 
@@ -597,7 +597,7 @@ For any ML workload, answer:
 6. How much capacity is ready now, and what demand can arrive during the measured actuation-time percentile?
 7. Does every named failure and maintenance state retain enough correctly placed capacity and dependency quota?
 8. How do rollout traffic, double residency, rollback retention, and draining replicas change the feasible fleet?
-9. What happens when feasible capacity is exhausted—delay, degrade, reroute, shed, or fail closed—and what quality/economic policy authorizes it?
+9. What happens when feasible capacity is exhausted (delay, degrade, reroute, shed, or fail closed) and what quality/economic policy authorizes it?
 10. What is cost per successful in-policy outcome or accepted training result under expected utilization and experiment volume?
 11. Which controller owns reservation, placement, replica intent, and traffic allocation, and how are delayed actions fenced?
 12. How are forecast, reserved, allocated, ready, and delivered-goodput states reconciled after every material event?
@@ -631,9 +631,9 @@ A plan that cannot answer these is not capacity planning; it is hoping the cloud
 1. [Capacity Planning and Back-of-the-Envelope Estimation](../01-foundations/10-capacity-planning.md)
 2. [Model Serving](./03-model-serving.md)
 3. [Training Pipelines](./05-training-pipelines.md)
-4. [The Tail at Scale](https://research.google/pubs/pub40801/) — Dean & Barroso, 2013
-5. [Clipper: A Low-Latency Online Prediction Serving System](https://www.usenix.org/conference/nsdi17/technical-sessions/presentation/crankshaw) — Crankshaw et al., NSDI 2017
+4. [The Tail at Scale](https://research.google/pubs/pub40801/): Dean & Barroso, 2013
+5. [Clipper: A Low-Latency Online Prediction Serving System](https://www.usenix.org/conference/nsdi17/technical-sessions/presentation/crankshaw): Crankshaw et al., NSDI 2017
 6. [FinOps and Cost Engineering](../11-observability/06-finops-cost-engineering.md)
 7. [Distributed Training Internals](./15-distributed-training-internals.md)
-8. [Roofline: An Insightful Visual Performance Model for Multicore Architectures](https://dl.acm.org/doi/10.1145/1498765.1498785) — Williams, Waterman & Patterson, 2009
-9. [Autopilot: Workload Autoscaling at Google](https://research.google/pubs/autopilot-workload-autoscaling-at-google/) — Rzadca et al., 2020
+8. [Roofline: An Insightful Visual Performance Model for Multicore Architectures](https://dl.acm.org/doi/10.1145/1498765.1498785): Williams, Waterman & Patterson, 2009
+9. [Autopilot: Workload Autoscaling at Google](https://research.google/pubs/autopilot-workload-autoscaling-at-google/): Rzadca et al., 2020

@@ -8,7 +8,7 @@ The hard design questions are dependency behavior and blast radius. What happens
 
 Keep gateway configuration immutable and revisioned, make stage ordering explicit, enforce request normalization before security decisions, and attach every upstream effect to the authenticated identity, route revision, deadline, and retry budget that governed it.
 
-Scope: edge mediation, route compilation, dependency failure, and bounded request composition. [Authentication Systems](../10-security/01-authentication-fundamentals.md), [OAuth 2.0 and OpenID Connect](../10-security/02-oauth2-openid-connect.md), [Authorization Patterns](../10-security/07-authorization-patterns.md), [API Security](../10-security/04-api-security.md), [Rate Limiting](../06-scaling/05-rate-limiting.md), and [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md) cover the linked mechanisms.
+This chapter covers edge mediation, route compilation, dependency failure, and bounded request composition. [Authentication Systems](../10-security/01-authentication-fundamentals.md), [OAuth 2.0 and OpenID Connect](../10-security/02-oauth2-openid-connect.md), [Authorization Patterns](../10-security/07-authorization-patterns.md), [API Security](../10-security/04-api-security.md), [Rate Limiting](../06-scaling/05-rate-limiting.md), and [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md) cover the linked mechanisms.
 
 ---
 
@@ -433,7 +433,7 @@ Keep the request path regional where possible:
 - regional telemetry buffering; and
 - immutable configuration replicas.
 
-A globally synchronous dependency can turn a regional edge into a global outage. When global freshness is mandatory—revoked credentials, hard cross-region financial quota, singleton operation—make that dependency explicit and fail according to the operation’s risk.
+A globally synchronous dependency can turn a regional edge into a global outage. When global freshness is mandatory (revoked credentials, hard cross-region financial quota, or a singleton operation), make that dependency explicit and fail according to the operation’s risk.
 
 ### Failover is more than routing
 
@@ -653,7 +653,7 @@ Do not place raw principal, token, path parameter, idempotency key, or cursor in
 | Load tests | Handshake storm, hot route, large body, slow stream, aggregation fan-out, and config reconnect |
 | Security tests | Smuggling, traversal, duplicate headers, cache-key confusion, credential leakage, and policy bypass |
 
-Replay a redacted production route corpus through old and candidate snapshots. Compare route, auth policy, quota class, upstream, timeout, and transformation—not only final status.
+Replay a redacted production route corpus through old and candidate snapshots. Compare route, auth policy, quota class, upstream, timeout, and transformation, not only final status.
 
 ## Decision Framework
 
@@ -694,24 +694,24 @@ Keep it downstream when it requires current business state, transactional invari
 7. Retry ownership and attempt budgets prevent multiplicative amplification.
 8. Activate route configuration with its complete policy, schema, and upstream dependency closure.
 9. Regional gateways should keep request-path dependencies regional unless global freshness is essential.
-10. Capacity is driven by in-flight time, fan-out, attempts, bytes, cryptography, and buffering—not request rate alone.
+10. Capacity is driven by in-flight time, fan-out, attempts, bytes, cryptography, and buffering, not request rate alone.
 
 ---
 
 ## References
 
-- [RFC 9110: HTTP Semantics](https://www.rfc-editor.org/rfc/rfc9110) — methods, status codes, intermediaries, conditional requests, and retry semantics
-- [RFC 9112: HTTP/1.1](https://www.rfc-editor.org/rfc/rfc9112) — message framing and request-smuggling considerations
-- [RFC 9113: HTTP/2](https://www.rfc-editor.org/rfc/rfc9113) — streams, connection errors, flow control, and intermediary behavior
-- [RFC 9457: Problem Details for HTTP APIs](https://www.rfc-editor.org/rfc/rfc9457) — machine-readable error representation
-- [RFC 6750: OAuth 2.0 Bearer Token Usage](https://www.rfc-editor.org/rfc/rfc6750) — bearer-token transport and threat requirements
-- [RFC 7662: OAuth 2.0 Token Introspection](https://www.rfc-editor.org/rfc/rfc7662) — authoritative token validation interface
-- [RFC 7239: Forwarded HTTP Extension](https://www.rfc-editor.org/rfc/rfc7239) — standardized forwarding metadata and trust considerations
-- [W3C Trace Context](https://www.w3.org/TR/trace-context/) — interoperable trace propagation and mutation rules
-- [OpenAPI Specification](https://spec.openapis.org/oas/latest.html) — machine-readable HTTP API contracts
-- [Authentication Systems](../10-security/01-authentication-fundamentals.md) — session, credential, and authenticator design
-- [Authorization Patterns](../10-security/07-authorization-patterns.md) — policy decision and enforcement models
-- [API Security](../10-security/04-api-security.md) — public API threat model and controls
-- [Rate Limiting](../06-scaling/05-rate-limiting.md) — algorithms, distributed counters, fairness, and quotas
-- [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md) — deadlines, retry budgets, and overload safety
-- [API Design and Evolution](./04-api-design-patterns.md) — public resource, error, concurrency, pagination, and compatibility contracts
+- [RFC 9110: HTTP Semantics](https://www.rfc-editor.org/rfc/rfc9110): methods, status codes, intermediaries, conditional requests, and retry semantics
+- [RFC 9112: HTTP/1.1](https://www.rfc-editor.org/rfc/rfc9112): message framing and request-smuggling considerations
+- [RFC 9113: HTTP/2](https://www.rfc-editor.org/rfc/rfc9113): streams, connection errors, flow control, and intermediary behavior
+- [RFC 9457: Problem Details for HTTP APIs](https://www.rfc-editor.org/rfc/rfc9457): machine-readable error representation
+- [RFC 6750: OAuth 2.0 Bearer Token Usage](https://www.rfc-editor.org/rfc/rfc6750): bearer-token transport and threat requirements
+- [RFC 7662: OAuth 2.0 Token Introspection](https://www.rfc-editor.org/rfc/rfc7662): authoritative token validation interface
+- [RFC 7239: Forwarded HTTP Extension](https://www.rfc-editor.org/rfc/rfc7239): standardized forwarding metadata and trust considerations
+- [W3C Trace Context](https://www.w3.org/TR/trace-context/): interoperable trace propagation and mutation rules
+- [OpenAPI Specification](https://spec.openapis.org/oas/latest.html): machine-readable HTTP API contracts
+- [Authentication Systems](../10-security/01-authentication-fundamentals.md): session, credential, and authenticator design
+- [Authorization Patterns](../10-security/07-authorization-patterns.md): policy decision and enforcement models
+- [API Security](../10-security/04-api-security.md): public API threat model and controls
+- [Rate Limiting](../06-scaling/05-rate-limiting.md): algorithms, distributed counters, fairness, and quotas
+- [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md): deadlines, retry budgets, and overload safety
+- [API Design and Evolution](./04-api-design-patterns.md): public resource, error, concurrency, pagination, and compatibility contracts

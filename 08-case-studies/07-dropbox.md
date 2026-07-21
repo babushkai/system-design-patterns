@@ -2,7 +2,7 @@
 
 A file-sync system must reconcile two very different kinds of state. File bytes are large, mostly immutable, and cheap to identify by content; namespace metadata is small, highly mutable, shared, and ordered by user actions. Treating both as generic “files in object storage” hides the central design problem: how devices converge after offline edits, renames, deletes, partial transfers, and conflicting writes without losing user data.
 
-Evidence labels:
+Claims use three evidence labels:
 
 - **Documented**: stated in a linked Dropbox engineering source; scale and topology snapshots are dated.
 - **Inference**: derived from public behavior or distributed-sync constraints, not asserted as private Dropbox implementation.
@@ -75,7 +75,7 @@ Publishing metadata before blocks satisfy this predicate creates a valid-looking
 
 **Documented, 2016 snapshot.** The same article described independently storing each block in at least two US zones and replicating a new local write to a remote zone asynchronously, normally within one second. This is a historical topology, not a claim that the exact regions, timing, or coding policy remains unchanged.
 
-**Documented, 2016.** Dropbox described continuous verification systems—including disk scrubbing and cross-zone checks—because replicas alone cannot detect every latent corruption, incorrect delete, or metadata inconsistency. [Dropbox, Pocket Watch](https://dropbox.tech/infrastructure/pocket-watch)
+**Documented, 2016.** Dropbox described continuous verification systems, including disk scrubbing and cross-zone checks, because replicas alone cannot detect every latent corruption, incorrect delete, or metadata inconsistency. [Dropbox, Pocket Watch](https://dropbox.tech/infrastructure/pocket-watch)
 
 ### Edgestore: general metadata
 
@@ -143,7 +143,7 @@ Content is naturally distributed by block/bucket ID. Placement must spread encod
 
 ## Capacity and cost model
 
-### Content traffic—illustrative assumptions
+### Content traffic: illustrative assumptions
 
 **Reference design.** Suppose a service receives 12 million file revisions per day, the mean changed payload is 6 MiB, and block reuse avoids 35% of uploaded bytes. Average ingress is:
 
@@ -237,13 +237,13 @@ Useful invariant tests include: no committed manifest has a missing block; apply
 4. Publish metadata only after referenced bytes meet the durability contract.
 5. Preserve conflicts when generic data cannot be merged safely.
 6. Verify durability independently of the component that performed replication.
-7. Include repair, compaction, migration, and garbage collection in capacity—not just foreground reads and writes.
+7. Include repair, compaction, migration, and garbage collection in capacity, not just foreground reads and writes.
 8. Design client determinism and failure simulation as architecture, not test polish.
 
 ## Primary sources
 
 - [Dropbox: Inside the Magic Pocket, 2016](https://dropbox.tech/infrastructure/inside-the-magic-pocket)
-- [Dropbox: Pocket Watch—verifying exabytes of data, 2016](https://dropbox.tech/infrastructure/pocket-watch)
+- [Pocket watch: Verifying exabytes of data (Dropbox, 2016)](https://dropbox.tech/infrastructure/pocket-watch)
 - [Dropbox: Reintroducing Edgestore, 2016](https://dropbox.tech/infrastructure/reintroducing-edgestore)
 - [Dropbox: Scaling to exabytes and beyond, 2016](https://dropbox.tech/infrastructure/magic-pocket-infrastructure)
 - [Dropbox: Rewriting the heart of our sync engine, 2020](https://dropbox.tech/infrastructure/rewriting-the-heart-of-our-sync-engine)

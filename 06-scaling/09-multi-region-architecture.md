@@ -34,7 +34,7 @@ One product commonly uses several postures. Define this table for user records, 
 2. Stale routing cannot grant write authority; storage validates epoch/fencing state.
 3. Reads meet their declared consistency even during routing changes.
 4. Surviving regions serve the admitted failure load without just-in-time control-plane success.
-5. RPO includes every accepted write path, queue, cache, index, and event—not only the primary database.
+5. RPO includes every accepted write path, queue, cache, index, and event, not only the primary database.
 6. Promotion and failback are idempotent, audited state machines with explicit abort points.
 7. Residency and access policy remain valid during failover and operator access.
 8. Returned regions cannot rejoin or serve divergent state until fenced and reconciled.

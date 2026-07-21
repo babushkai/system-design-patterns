@@ -1,8 +1,8 @@
 # Poison-Message Quarantine and Redrive
 
-A poison message is a delivery that cannot make progress under the current code, data, policy, or dependency state. Quarantine removes it from the hot delivery path while preserving enough evidence and identity to diagnose, repair, and replay it safely. A dead-letter queue is therefore an incident and repair subsystem—not a place to hide exhausted generic retries.
+A poison message is a delivery that cannot make progress under the current code, data, policy, or dependency state. Quarantine removes it from the hot delivery path while preserving enough evidence and identity to diagnose, repair, and replay it safely. A dead-letter queue is therefore an incident and repair subsystem, not a place to hide exhausted generic retries.
 
-Scope: failure classification, quarantine state, evidence, bulk isolation, repair, and controlled redrive. Retry timing/idempotency/compensation belong to [Workflow Effect Protocols](../18-workflow-job-systems/06-retry-idempotency-compensation.md). Queue claims are in [Message Queue Architecture](01-message-queues.md), and end-to-end duplicate effects are in [Delivery Guarantees](04-delivery-guarantees.md).
+A quarantine subsystem must define failure classification, quarantine state, retained evidence, bulk isolation, repair, and controlled redrive. Retry timing/idempotency/compensation belong to [Workflow Effect Protocols](../18-workflow-job-systems/06-retry-idempotency-compensation.md). Queue claims are in [Message Queue Architecture](01-message-queues.md), and end-to-end duplicate effects are in [Delivery Guarantees](04-delivery-guarantees.md).
 
 ## Workload and contract
 
@@ -178,7 +178,7 @@ For ordered keys, replay missing items before suffixes and respect current sourc
 
 Retention derives from investigation time, source replay, legal/audit, privacy deletion, and repair value. Apply separate horizons by error/data class. Monitor records and bytes approaching expiry without resolution.
 
-Payload references, schemas, encryption keys, and diagnostic traces must live at least as long as quarantine—or the record declares that payload was intentionally erased and can no longer be redriven. Copying a payload into quarantine creates another governed data store. Propagate deletion, residency, legal hold, and tenant-key destruction.
+Payload references, schemas, encryption keys, and diagnostic traces must live at least as long as quarantine, or the record declares that payload was intentionally erased and can no longer be redriven. Copying a payload into quarantine creates another governed data store. Propagate deletion, residency, legal hold, and tenant-key destruction.
 
 Store stack traces and raw exceptions separately with redaction; they may contain secrets or record content. Quarantine UI/search should not expose payload values as metric labels or broad full-text indexes.
 

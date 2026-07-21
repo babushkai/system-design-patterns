@@ -29,7 +29,7 @@ Define:
 | **Activity contract** | Task queue/capability, timeouts, progress checkpoint, cancellation, result size, and logical-effect identity? |
 | **Evolution** | Which histories run on which build/definition, and how are incompatible changes introduced/retired? |
 | **History lifecycle** | Event/byte limit, rollover rule, closed retention, archival, encryption key, and restore? |
-| **Repair** | Reset, terminate, cancel, pause, skip/patch, or start a compensating/new run—with whose authority? |
+| **Repair** | Who may reset, terminate, cancel, pause, skip/patch, or start a compensating/new run? |
 
 Durable execution does not mean physical exactly-once execution. Workflow code may replay many times. Activity/task semantics differ by engine and configuration, and arbitrary remote effects remain outside the history transaction.
 
@@ -39,7 +39,7 @@ Durable execution does not mean physical exactly-once execution. Workflow code m
 
 Temporal, Cadence, and Azure Durable orchestrators expose ordinary-looking code. The engine records commands and externally supplied outcomes; on activation the SDK reruns orchestration code and feeds recorded results back until it reaches the history frontier. Correctness requires the current code and SDK to emit a command sequence compatible with that history.
 
-The workflow code is a deterministic state-machine generator. Local variables are reconstructed results, not independently durable facts. The history—not a worker cache or stack snapshot—is authority.
+The workflow code is a deterministic state-machine generator. Local variables are reconstructed results, not independently durable facts. The history (not a worker cache or stack snapshot) is authority.
 
 ### Interpreted state machine
 
@@ -138,7 +138,7 @@ sequenceDiagram
 
 Detailed flow:
 
-1. The service commits an input event—start, activity result, timer fire, signal, cancellation, or child event—and makes a workflow task available.
+1. The service commits an input event (start, activity result, timer fire, signal, cancellation, or child event) and makes a workflow task available.
 2. A compatible worker receives a task token and history suffix/full history according to SDK/cache state.
 3. The SDK invokes workflow code in a deterministic scheduler. Each durable API call emits a command or awaits a recorded outcome.
 4. Before the frontier, commands are matched against history and recorded results are returned; no already-recorded activity or timer is newly scheduled.
@@ -146,7 +146,7 @@ Detailed flow:
 6. The service validates task authority/current execution state, appends the implied events, updates mutable state, and creates required transfer/timer/visibility work.
 7. If the completion is stale or ambiguous, the worker reloads/replays; it never invents a second history branch locally.
 
-The system records the commands and externally observed outcomes needed to reconstruct orchestration—not necessarily every physical retry event. For example, Temporal's current documentation says activity retries can remain represented by the scheduled event until a terminal activity event is written. Treat provider event density as measured capacity data.
+The system records the commands and externally observed outcomes needed to reconstruct orchestration, not necessarily every physical retry event. For example, Temporal's current documentation says activity retries can remain represented by the scheduled event until a terminal activity event is written. Treat provider event density as measured capacity data.
 
 ## Deterministic workflow code
 

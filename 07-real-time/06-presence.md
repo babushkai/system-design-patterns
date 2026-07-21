@@ -207,7 +207,7 @@ Maintain a regional subscription index from subject to gateways, not subject to 
 
 Presence is usually latest-value state. If a slow client has unread versions 910, 911, and 912 for one subject, keep only 912. Preserve the recipient delivery cursor by sending a compacted state update or requiring a snapshot; do not let per-connection memory grow with every heartbeat transition. Give room-critical changes a separate budget from decorative friend-list dots.
 
-Avoid durable per-recipient fan-out for enormous audiences unless the product promises offline presence history—which most do not. Persist subject changes for a short replay window, derive current snapshots, and route only to active watchers.
+Avoid durable per-recipient fan-out for enormous audiences unless the product promises offline presence history, which most do not. Persist subject changes for a short replay window, derive current snapshots, and route only to active watchers.
 
 ---
 
@@ -375,9 +375,9 @@ Use [Client Delivery Transports](./01-polling.md) for the final-hop replay and c
 
 ## References
 
-- [RFC 2778: A Model for Presence and Instant Messaging](https://datatracker.ietf.org/doc/html/rfc2778) — presentities, watchers, subscriptions, visibility, and the foundational threat model
-- [RFC 2779: Instant Messaging / Presence Protocol Requirements](https://datatracker.ietf.org/doc/html/rfc2779) — delivery, access, privacy, and scale requirements
-- [RFC 6121: XMPP Instant Messaging and Presence](https://datatracker.ietf.org/doc/html/rfc6121) — operational multi-resource presence and publish-subscribe semantics
-- [RFC 3856: A Presence Event Package for SIP](https://datatracker.ietf.org/doc/html/rfc3856) — subscriptions, notifications, expiry, and authorization semantics
-- [RFC 6455: The WebSocket Protocol](https://datatracker.ietf.org/doc/html/rfc6455) — one common transport for live presence delivery
-- [Redis keyspace notifications](https://redis.io/docs/latest/develop/pubsub/keyspace-notifications/) — fire-and-forget delivery and delayed expiration-event behavior when Redis is used as ephemeral session infrastructure
+- [RFC 2778: A Model for Presence and Instant Messaging](https://datatracker.ietf.org/doc/html/rfc2778): presentities, watchers, subscriptions, visibility, and the foundational threat model
+- [RFC 2779: Instant Messaging / Presence Protocol Requirements](https://datatracker.ietf.org/doc/html/rfc2779): delivery, access, privacy, and scale requirements
+- [RFC 6121: XMPP Instant Messaging and Presence](https://datatracker.ietf.org/doc/html/rfc6121): operational multi-resource presence and publish-subscribe semantics
+- [RFC 3856: A Presence Event Package for SIP](https://datatracker.ietf.org/doc/html/rfc3856): subscriptions, notifications, expiry, and authorization semantics
+- [RFC 6455: The WebSocket Protocol](https://datatracker.ietf.org/doc/html/rfc6455): one common transport for live presence delivery
+- [Redis keyspace notifications](https://redis.io/docs/latest/develop/pubsub/keyspace-notifications/): fire-and-forget delivery and delayed expiration-event behavior when Redis is used as ephemeral session infrastructure

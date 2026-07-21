@@ -6,7 +6,7 @@ A collaborative editor is a replicated database whose write latency must feel lo
 
 Operational Transformation (OT), sequence CRDTs, server-ordered property updates, and application-specific hybrids solve different contracts. The algorithm is only one component. A production sync engine also needs stable document/element/operation identity, authorization on reconnect, durable snapshots and logs, causal or server frontiers, acknowledgement and duplicate suppression, schema migration, undo semantics, compaction, hot-document fan-out, offline-device policy, and proof that garbage collection cannot resurrect deleted content.
 
-[Conflict Resolution](../02-distributed-databases/04-conflict-resolution.md) covers general causal metadata and CRDT merge algebra. Scope here: collaborative document state and end-to-end sync—optimistic local editing, sequence/tree operations, snapshot-plus-delta publication, long-offline replicas, compaction, presence separation, and user-visible recovery.
+[Conflict Resolution](../02-distributed-databases/04-conflict-resolution.md) covers general causal metadata and CRDT merge algebra. This chapter focuses on collaborative document state and end-to-end sync, including optimistic local editing, sequence/tree operations, snapshot-plus-delta publication, long-offline replicas, compaction, presence separation, and user-visible recovery.
 
 ---
 
@@ -170,7 +170,7 @@ Bob inserts   "dog"
 undesired converged result: cdaotg
 ```
 
-Modern designs preserve run/block intentions more carefully, but the exact behavior depends on identifier allocation and traversal. Test human edit patterns—paste, autocorrect, composition/IME, drag, block split—not only single-character random operations.
+Modern designs preserve run/block intentions more carefully, but the exact behavior depends on identifier allocation and traversal. Test human edit patterns such as paste, autocorrect, composition/IME, drag, and block split; do not rely only on single-character random operations.
 
 ### 4.2 Rich text marks
 
@@ -296,7 +296,7 @@ Authorization cache keys and room membership include tenant, canonical document 
 
 ### 7.2 End-to-end encrypted collaboration
 
-If servers cannot read content, clients must perform merge, schema validation, search, moderation, and key distribution. Membership change requires document-key rotation policy; removed users may retain old plaintext and keys, and offline updates encrypted under old membership need a defined fate. Metadata—document membership, size, edit timing, device identity—may remain visible.
+If servers cannot read content, clients must perform merge, schema validation, search, moderation, and key distribution. Membership change requires document-key rotation policy; removed users may retain old plaintext and keys, and offline updates encrypted under old membership need a defined fate. Metadata (document membership, size, edit timing, and device identity) may remain visible.
 
 Do not claim end-to-end encryption if the server can silently add a recovery recipient or deliver unverified client code that exfiltrates keys. The cryptographic boundary is described in [Cryptographic Key and Data-Protection Architecture](../10-security/06-encryption.md).
 
@@ -509,11 +509,11 @@ Choose the least complex protocol that meets the offline and conflict contract. 
 
 ## References
 
-- [Shapiro et al., *A Comprehensive Study of Convergent and Commutative Replicated Data Types*](https://inria.hal.science/inria-00555588/document) — state- and operation-based CRDT foundations
-- [Kleppmann and Beresford, *A Conflict-Free Replicated JSON Datatype*](https://arxiv.org/abs/1608.03960) — JSON/document CRDT design and formalization
-- [Kleppmann et al., *Interleaving anomalies in collaborative text editors*](https://martin.kleppmann.com/papers/interleaving-papoc19.pdf) — sequence intent/interleaving analysis
-- [Roh et al., *Replicated Abstract Data Types: Building Blocks for Collaborative Applications*](https://doi.org/10.1016/j.jpdc.2010.12.006) — RGA and collaborative sequence replication
-- [Nichols et al., *High-Latency, Low-Bandwidth Windowing in the Jupiter Collaboration System*](https://doi.org/10.1145/215585.215706) — client/server OT architecture
-- [Yjs documentation](https://docs.yjs.dev/) and [Automerge documentation](https://automerge.org/docs/) — production sequence/document CRDT libraries and sync formats
-- [How Figma's multiplayer technology works](https://www.figma.com/blog/how-figmas-multiplayer-technology-works/) — documented server-authoritative property synchronization trade-off
-- [Local-first software: You own your data, in spite of the cloud](https://www.inkandswitch.com/local-first/) — local-first product and architecture principles
+- [Shapiro et al., *A Comprehensive Study of Convergent and Commutative Replicated Data Types*](https://inria.hal.science/inria-00555588/document): state- and operation-based CRDT foundations
+- [Kleppmann and Beresford, *A Conflict-Free Replicated JSON Datatype*](https://arxiv.org/abs/1608.03960): JSON/document CRDT design and formalization
+- [Kleppmann et al., *Interleaving anomalies in collaborative text editors*](https://martin.kleppmann.com/papers/interleaving-papoc19.pdf): sequence intent/interleaving analysis
+- [Roh et al., *Replicated Abstract Data Types: Building Blocks for Collaborative Applications*](https://doi.org/10.1016/j.jpdc.2010.12.006): RGA and collaborative sequence replication
+- [Nichols et al., *High-Latency, Low-Bandwidth Windowing in the Jupiter Collaboration System*](https://doi.org/10.1145/215585.215706): client/server OT architecture
+- [Yjs documentation](https://docs.yjs.dev/) and [Automerge documentation](https://automerge.org/docs/): production sequence/document CRDT libraries and sync formats
+- [How Figma's multiplayer technology works](https://www.figma.com/blog/how-figmas-multiplayer-technology-works/): documented server-authoritative property synchronization trade-off
+- [Local-first software: You own your data, in spite of the cloud](https://www.inkandswitch.com/local-first/): local-first product and architecture principles

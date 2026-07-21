@@ -2,7 +2,7 @@
 
 Publish-subscribe turns one committed fact into independent consumption streams. Its central abstraction is not “send to many services”; it is a durable event plus subscription state that allows each consumer to progress, pause, replay, filter, and fail without changing another consumer’s position.
 
-Scope: topic contracts, fan-out architecture, subscription state, replay/bootstrap, filtering, and schema governance. It deliberately does not re-teach [Ordering](03-message-ordering.md) or [Delivery Guarantees](04-delivery-guarantees.md). Atomic domain publication belongs to [Outbox and Inbox](07-outbox-pattern.md). Multi-step business execution belongs to [Durable Workflows](../18-workflow-job-systems/04-durable-execution-workflow-engines.md) and [Retry, Idempotency, and Compensation](../18-workflow-job-systems/06-retry-idempotency-compensation.md).
+A pub/sub contract must define topic semantics, fan-out architecture, subscription state, replay and bootstrap, filtering, and schema governance. It deliberately does not re-teach [Ordering](03-message-ordering.md) or [Delivery Guarantees](04-delivery-guarantees.md). Atomic domain publication belongs to [Outbox and Inbox](07-outbox-pattern.md). Multi-step business execution belongs to [Durable Workflows](../18-workflow-job-systems/04-durable-execution-workflow-engines.md) and [Retry, Idempotency, and Compensation](../18-workflow-job-systems/06-retry-idempotency-compensation.md).
 
 ## Workload and contract
 
@@ -34,7 +34,7 @@ checkpoint(subscription, partition, position, generation)
 seek(subscription, replay_point)
 ```
 
-An event is a statement in the past tense—`OrderAccepted`—not an imperative `SendShipment`. Commands have one intended owner and belong in a work queue or workflow. Facts can have zero, one, or many consumers, including consumers added later.
+An event is a statement in the past tense (`OrderAccepted`), not an imperative `SendShipment`. Commands have one intended owner and belong in a work queue or workflow. Facts can have zero, one, or many consumers, including consumers added later.
 
 Define:
 
@@ -179,7 +179,7 @@ If one replay reads the full seven-day logical corpus in 12 hours, it adds about
 
 A team creates a replayable subscription for an experiment, pauses it, and abandons the project. Retention policy says the oldest active subscription checkpoint protects data. The checkpoint remains six months behind, disk usage grows, and brokers approach full capacity. Deleting old segments would violate the subscription’s apparent replay contract; keeping them threatens the whole topic.
 
-Containment stops low-priority publication or expands storage while identifying the owner. The control plane expires the subscription’s retention lease under audited policy, snapshots/archive if required, and advances the topic watermark. Prevention gives subscriptions owners, maximum retention leases, budget/quota, expiry, and alerts based on retained bytes attributable to each subscription—not merely consumer lag.
+Containment stops low-priority publication or expands storage while identifying the owner. The control plane expires the subscription’s retention lease under audited policy, snapshots/archive if required, and advances the topic watermark. Prevention gives subscriptions owners, maximum retention leases, budget/quota, expiry, and alerts based on retained bytes attributable to each subscription, not merely consumer lag.
 
 ## Operations and observability
 

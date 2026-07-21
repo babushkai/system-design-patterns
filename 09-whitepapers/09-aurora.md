@@ -1,6 +1,6 @@
 # Amazon Aurora (SIGMOD 2017): Evidence-First Paper Analysis
 
-Aurora's key idea is to treat network I/O—not disks—as the scarce database resource. The database engine sends **redo records rather than full pages** to a six-way, multi-AZ storage service. Storage nodes continuously materialize pages, repair replicas, back up data, and perform much of recovery. This removes duplicated database-to-storage traffic and turns crash recovery from a serial startup phase into ongoing distributed work.
+Aurora's key idea is to treat network I/O, not disks, as the scarce database resource. The database engine sends **redo records rather than full pages** to a six-way, multi-AZ storage service. Storage nodes continuously materialize pages, repair replicas, back up data, and perform much of recovery. This removes duplicated database-to-storage traffic and turns crash recovery from a serial startup phase into ongoing distributed work.
 
 ## Publication identity and boundary
 
@@ -11,7 +11,7 @@ Aurora's key idea is to treat network I/O—not disks—as the scarce database r
 
 The paper does not describe every present Aurora engine, feature, or topology. It presents one writer with shared storage and up to 15 read replicas. Later multi-writer, serverless, PostgreSQL-compatible, cross-region, or disaggregated-service features must be evaluated from their own sources.
 
-[Write-Ahead Logging](../03-storage-engines/04-write-ahead-logging.md), [Single-Leader Replication](../02-distributed-databases/01-single-leader-replication.md), and [Failure Modes](../01-foundations/06-failure-modes.md) cover conventional mechanisms. Scope here: Aurora's changed storage contract.
+[Write-Ahead Logging](../03-storage-engines/04-write-ahead-logging.md), [Single-Leader Replication](../02-distributed-databases/01-single-leader-replication.md), and [Failure Modes](../01-foundations/06-failure-modes.md) cover conventional mechanisms. This chapter focuses on Aurora's changed storage contract.
 
 ## Problem and workload assumptions
 
@@ -47,7 +47,7 @@ The database assigns each redo record a monotonically increasing log sequence nu
 
 Each redo record links to the previous record for that protection group. A segment derives a **Segment Complete LSN (SCL)**: the greatest point below which it has every required record. Peer gossip uses gaps in that sequence to repair missing data.
 
-The database tracks acknowledgements from segment replicas. Across protection groups it computes a **Volume Complete LSN (VCL)**—the highest contiguous volume point known complete. Completeness alone is not enough: InnoDB mini-transactions contain several contiguous redo records that must become visible atomically. The final record of each mini-transaction is marked a **Consistency Point LSN (CPL)**. The **Volume Durable LSN (VDL)** is the highest CPL no greater than the VCL.
+The database tracks acknowledgements from segment replicas. Across protection groups it computes a **Volume Complete LSN (VCL)**: the highest contiguous volume point known complete. Completeness alone is not enough: InnoDB mini-transactions contain several contiguous redo records that must become visible atomically. The final record of each mini-transaction is marked a **Consistency Point LSN (CPL)**. The **Volume Durable LSN (VDL)** is the highest CPL no greater than the VCL.
 
 This distinction is the core invariant:
 

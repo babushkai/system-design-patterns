@@ -4,7 +4,7 @@
 
 Distributed tracing reconstructs the causal path of one operation across process, protocol, queue, and region boundaries. Its correctness depends on context propagation, stable span semantics, explicit retry and asynchronous links, and a sampling policy that preserves the incidents and populations you intend to analyze.
 
-Shared telemetry architecture: instrumentation emits typed signals; local or regional collectors validate, enrich, redact, sample or aggregate, buffer, and export; stores index each signal under distinct cost and consistency models; a versioned control plane distributes schema, sampling, routing, and retention policy. Later chapters reuse this plane.
+The shared telemetry architecture works as follows: instrumentation emits typed signals; local or regional collectors validate, enrich, redact, sample or aggregate, buffer, and export; stores index each signal under distinct cost and consistency models; a versioned control plane distributes schema, sampling, routing, and retention policy. Later chapters reuse this plane.
 
 Head sampling decides cheaply before the trace is known. Tail sampling can retain errors and high latency but must buffer incomplete traces and make decisions under timeout, memory, and multi-region constraints. A hybrid usually combines a deterministic baseline with bounded tail rules. Trace context and baggage are untrusted at external boundaries: they are correlation hints, not authentication, and baggage needs an allowlist, size budget, and privacy policy.
 
@@ -72,7 +72,7 @@ The control plane publishes immutable, versioned policy. Collectors report desir
 7. Control-plane failure does not silently disable privacy, residency, or tenant policy.
 8. Observability infrastructure has independent health signals and failure domains from the services it observes.
 
-Scope below: trace-specific collection and storage; later chapters cover the other signals.
+The remainder of this chapter covers trace-specific collection and storage; later chapters cover the other signals.
 
 ## Trace Workload and Contract
 
@@ -503,7 +503,7 @@ Inject a synthetic trace across each supported protocol and failure domain. Veri
 5. Hybrid sampling preserves a deterministic baseline while bounding anomaly retention.
 6. Metrics, not biased trace samples, own population-level rates and percentiles.
 7. Collector acknowledgements, queues, retries, partial success, and drops need explicit semantics.
-8. Tail-buffer and outage-match capacity—not average trace traffic—drive design.
+8. Tail-buffer and outage-match capacity, not average trace traffic, drive design.
 9. Regional collection protects latency and residency; global trace completeness is a tradeoff.
 10. Verify causal correctness, privacy, loss behavior, and queryability end to end.
 
@@ -511,13 +511,13 @@ Inject a synthetic trace across each supported protocol and failure domain. Veri
 
 ## References
 
-- [W3C Trace Context](https://www.w3.org/TR/trace-context/) — interoperable trace propagation, mutation, privacy, and security
-- [W3C Baggage](https://www.w3.org/TR/baggage/) — distributed application context format and limits
-- [OpenTelemetry Trace Specification](https://opentelemetry.io/docs/specs/otel/trace/) — span model, SDK processing, sampling, and export
-- [OpenTelemetry Context Specification](https://opentelemetry.io/docs/specs/otel/context/) — immutable execution-scoped context
-- [OTLP Specification](https://opentelemetry.io/docs/specs/otlp/) — signal transport, retry, throttling, and partial success
-- [OpenTelemetry Semantic Conventions](https://opentelemetry.io/docs/specs/semconv/) — stable cross-signal attribute and operation semantics
-- [Dapper: A Large-Scale Distributed Systems Tracing Infrastructure](https://research.google/pubs/dapper-a-large-scale-distributed-systems-tracing-infrastructure/) — production tracing architecture and sampling
-- [Workflow Observability and Replay](../18-workflow-job-systems/09-workflow-observability-replay.md) — correlation for workflows that outlive a trace
-- [Logging Architecture](./03-logging.md) — discrete evidence, ordering, retention, and trace correlation
-- [Metrics Systems](./02-metrics-monitoring.md) — population aggregation, histograms, and storage
+- [W3C Trace Context](https://www.w3.org/TR/trace-context/): interoperable trace propagation, mutation, privacy, and security
+- [W3C Baggage](https://www.w3.org/TR/baggage/): distributed application context format and limits
+- [OpenTelemetry Trace Specification](https://opentelemetry.io/docs/specs/otel/trace/): span model, SDK processing, sampling, and export
+- [OpenTelemetry Context Specification](https://opentelemetry.io/docs/specs/otel/context/): immutable execution-scoped context
+- [OTLP Specification](https://opentelemetry.io/docs/specs/otlp/): signal transport, retry, throttling, and partial success
+- [OpenTelemetry Semantic Conventions](https://opentelemetry.io/docs/specs/semconv/): stable cross-signal attribute and operation semantics
+- [Dapper: A Large-Scale Distributed Systems Tracing Infrastructure](https://research.google/pubs/dapper-a-large-scale-distributed-systems-tracing-infrastructure/): production tracing architecture and sampling
+- [Workflow Observability and Replay](../18-workflow-job-systems/09-workflow-observability-replay.md): correlation for workflows that outlive a trace
+- [Logging Architecture](./03-logging.md): discrete evidence, ordering, retention, and trace correlation
+- [Metrics Systems](./02-metrics-monitoring.md): population aggregation, histograms, and storage

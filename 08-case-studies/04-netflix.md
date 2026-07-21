@@ -1,12 +1,12 @@
 # Netflix: Evidence, Inference, and a Streaming Reference Design
 
-Netflix separates a control plane for identity, catalog, personalization, playback authorization, and steering from a content plane that prepares and delivers immutable media. Public sources document dated components, not one complete current architecture.
+Netflix is not one “video service”: it separates a control plane for identity, catalog, personalization, playback authorization, and steering from a content plane that prepares and delivers immutable media. Public sources document dated components, not one complete current architecture.
 
 Claims use three labels:
 
-- **Documented** — stated in a dated Netflix primary source, paper, or repository.
-- **Inference** — follows from documented constraints but is not a published private implementation detail.
-- **Reference design** — a proposed Netflix-like service, not an assertion about Netflix production.
+- **Documented**: stated in a dated Netflix primary source, paper, or repository.
+- **Inference**: follows from documented constraints but is not a published private implementation detail.
+- **Reference design**: a proposed Netflix-like service, not an assertion about Netflix production.
 
 ## Evidence Boundary and Dated Scale
 
@@ -188,7 +188,7 @@ This is a **reference-design failure trace**, not a Netflix incident report.
 
 Defenses:
 
-- Compute health by client network, artifact, and delivered throughput—not host CPU alone.
+- Compute health by client network, artifact, and delivered throughput, not host CPU alone.
 - Canary steering policy by ISP/region/device and compare playback-start success before expansion.
 - Require artifact-presence proof and failure-domain diversity in the site list.
 - Bound client attempts, use jitter, and cancel superseded segment requests.

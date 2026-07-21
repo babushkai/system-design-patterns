@@ -2,9 +2,9 @@
 
 Instagram combines durable social state, a large media pipeline, personalized retrieval, and privacy-sensitive delivery. Public sources describe dated slices, not one timeless architecture. Claims use three labels:
 
-- **Documented** — stated in a dated Instagram or Meta primary source.
-- **Inference** — a consequence of documented behavior whose implementation is not public.
-- **Reference design** — a proposed Instagram-like architecture, never a statement about Meta's private system.
+- **Documented**: stated in a dated Instagram or Meta primary source.
+- **Inference**: a consequence of documented behavior whose implementation is not public.
+- **Reference design**: a proposed Instagram-like architecture, never a statement about Meta's private system.
 
 ## Evidence Boundary and Dated Scale
 
@@ -199,7 +199,7 @@ This is a **reference-design failure**, not a reported Instagram incident.
 5. Playback ranking continues recommending the video, increasing demand faster than caches fill.
 6. Operators see acceptable API latency but worsening startup delay and rebuffering.
 
-Required controls:
+Control the cascade at each amplification point:
 
 - Collapse concurrent fills by `(asset, rendition, segment)` and use shield caches.
 - Pre-position predicted hot content, while retaining origin fallback.
@@ -263,7 +263,7 @@ A **reference migration pattern** for a new post store, feed projection, or medi
 6. Roll forward by partition and retain a proven rollback point.
 7. Stop old writes, wait through the retention/replay window, then remove old reads and data.
 
-Ranking changes require offline replay, counterfactual limitations documented, then staged online experiments with integrity, diversity, latency, and compute guardrails—not click rate alone.
+Ranking changes require offline replay and explicit documentation of counterfactual limitations, followed by staged online experiments with integrity, diversity, latency, and compute guardrails, not click rate alone.
 
 ## Verification and Design Lessons
 

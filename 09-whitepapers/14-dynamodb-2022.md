@@ -6,7 +6,7 @@
 - **Venue and version:** USENIX Annual Technical Conference 2022 proceedings paper
 - **Evaluated system:** DynamoDB as described through 2021, with selected production observations and one YCSB microbenchmark
 
-Scope: the 2022 DynamoDB paper—not 2007 Dynamo or current product documentation. Capacity units, on-demand behavior, backup retention, and features are pinned to the paper.
+This analysis covers the 2022 DynamoDB paper, not 2007 Dynamo or current product documentation. Capacity units, on-demand behavior, backup retention, and features are pinned to the paper.
 
 ## Workload and Published Context
 
@@ -62,7 +62,7 @@ Combining both into one full-copy operation would leave the group under-replicat
 
 ### Why static partition budgets fail
 
-Suppose a table buys $C$ write units and has $P$ partitions. A static allocation gives each partition $C/P$. If one partition receives most writes, it throttles even while the table has unused capacity elsewhere. Splitting that partition can make the apparent budget per child smaller—**throughput dilution**.
+Suppose a table buys $C$ write units and has $P$ partitions. A static allocation gives each partition $C/P$. If one partition receives most writes, it throttles even while the table has unused capacity elsewhere. Splitting that partition can make the apparent budget per child smaller: **throughput dilution**.
 
 The paper describes an evolution:
 
@@ -85,7 +85,7 @@ GAC does not make a single hot item infinitely scalable. One item remains on one
 
 Size-only splitting does not necessarily help a small but hot partition. DynamoDB observes access distribution and can split a partition for **consumption**, choosing a boundary that separates hot key ranges.
 
-The operation takes minutes in the paper's account, so it is not an instantaneous response to a burst. Splitting is avoided when it would not distribute load—for example, one hot item or a sequential access pattern concentrated at one moving edge.
+The operation takes minutes in the paper's account, so it is not an instantaneous response to a burst. Splitting is avoided when it would not distribute load, for example with one hot item or a sequential access pattern concentrated at one moving edge.
 
 Partition design remains an application responsibility. A random write suffix can spread a hot logical counter but makes reads fan out; a time bucket can bound fan-out but creates rollover hotspots. See [Partitioning Strategies](../02-distributed-databases/05-partitioning-strategies.md).
 
@@ -118,7 +118,7 @@ The paper-era backup service produced a consistent backup to the nearest second 
 
 ## Failure Detection, Leases, and Gray Failures
 
-With three Availability-Zone replicas, a 2-of-3 quorum can continue after one replica/AZ path is lost. On leader failure, a new leader normally waits for the prior lease to expire—described as a couple of seconds—unless the old leader gracefully relinquishes it.
+With three Availability-Zone replicas, a 2-of-3 quorum can continue after one replica/AZ path is lost. On leader failure, a new leader normally waits for the prior lease to expire (described as a couple of seconds) unless the old leader gracefully relinquishes it.
 
 Gray failures are harder: one node may believe the leader is unreachable while peers can still reach it. Before triggering failover, a follower asks peers about their view. This corroboration reduces unnecessary elections and lease waits caused by one asymmetric network path.
 
@@ -185,7 +185,7 @@ The Prime Day 89.2 million requests/s figure and this YCSB experiment have diffe
 
 ## Primary Reference
 
-- [Amazon DynamoDB: A Scalable, Predictably Performant, and Fully Managed NoSQL Database Service — USENIX ATC 2022](https://www.usenix.org/system/files/atc22-elhemali.pdf)
+- [Amazon DynamoDB: A Scalable, Predictably Performant, and Fully Managed NoSQL Database Service (USENIX ATC 2022)](https://www.usenix.org/system/files/atc22-elhemali.pdf)
 
 ## Related Chapters
 

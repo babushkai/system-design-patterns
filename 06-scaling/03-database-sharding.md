@@ -63,7 +63,7 @@ $$
 target = snapshot(t_0) \cup changes(t_0, w]
 $$
 
-Validation must cover record identity, values, tombstones, schema transformations, and relevant secondary indexes—not only row count.
+Validation must cover record identity, values, tombstones, schema transformations, and relevant secondary indexes, not only row count.
 
 ### Tenant isolation
 
@@ -133,7 +133,7 @@ The routing unit is more consequential than the hash function.
 
 ### Tenant or aggregate root
 
-**Reference design.** Co-locate data that changes transactionally—often one tenant, account, workspace, or aggregate root. This preserves local transactions and makes tenant moves possible. A few very large tenants may exceed one shard and require sub-partitioning; that must be designed before a “tenant ID is always local” assumption reaches every query.
+**Reference design.** Co-locate data that changes transactionally, often one tenant, account, workspace, or aggregate root. This preserves local transactions and makes tenant moves possible. A few very large tenants may exceed one shard and require sub-partitioning; that must be designed before a “tenant ID is always local” assumption reaches every query.
 
 ### Fine-grained ranges or buckets
 
@@ -190,11 +190,11 @@ stateDiagram-v2
 
 The directory record must bind tenant, location, encryption-key domain, residency, and routing epoch. Copy jobs assume the tenant's authorization context but do not broaden it. Audit who approved the move and which validation evidence allowed cutover.
 
-Large tenants may have external side effects—object blobs, search indexes, queues, analytics—that are not transactionally moved with the primary database. Treat them as derived systems with independent convergence and rollback plans. Do not switch the primary and assume every projection follows automatically.
+Large tenants may have external side effects (object blobs, search indexes, queues, analytics) that are not transactionally moved with the primary database. Treat them as derived systems with independent convergence and rollback plans. Do not switch the primary and assume every projection follows automatically.
 
 ## Capacity and cost model
 
-### Shard count—illustrative assumptions
+### Shard count: illustrative assumptions
 
 **Reference design.** Suppose peak traffic is 1.2 million database operations/s. A shard is benchmarked at 35,000 operations/s at the required tail latency, but normal operation is capped at 55% to retain failover and migration headroom:
 

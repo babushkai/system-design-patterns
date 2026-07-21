@@ -1,8 +1,8 @@
 # Message Queue Architecture
 
-A message queue is a durable ownership-transfer mechanism for asynchronous work. Producers append an intent; one worker at a time receives a temporary claim; completion becomes final only when the queue records an acknowledgement. The core design problem is managing that state under crashes, overload, rebalancing, and retention—not choosing an SDK call.
+A message queue is a durable ownership-transfer mechanism for asynchronous work. Producers append an intent; one worker at a time receives a temporary claim; completion becomes final only when the queue records an acknowledgement. The core design problem is managing that state under crashes, overload, rebalancing, and retention, not choosing an SDK call.
 
-Scope: queue mechanics: enqueue, claim/visibility, acknowledgement, partitioning, worker flow control, backlog, retention, and capacity. [Message Ordering](03-message-ordering.md) owns sequence guarantees, [Delivery Guarantees](04-delivery-guarantees.md) owns duplicate/loss boundaries, and [Poison-Message Quarantine](08-dead-letter-queues.md) owns failed-message repair.
+A queue contract must specify enqueue, claim and visibility, acknowledgement, partitioning, worker flow control, backlog, retention, and capacity. [Message Ordering](03-message-ordering.md) owns sequence guarantees, [Delivery Guarantees](04-delivery-guarantees.md) owns duplicate/loss boundaries, and [Poison-Message Quarantine](08-dead-letter-queues.md) owns failed-message repair.
 
 ## Workload and contract
 
@@ -171,7 +171,7 @@ Authenticate producers and consumers separately and authorize queue, tenant, ope
 
 Validate envelope size, headers, delay, expiry, routing-key length, and payload reference before expensive work. Encrypt transport and durable records; isolate encryption keys and storage partitions where tenant or residency policy requires it. Queue metrics and traces must not expose raw payloads or sensitive routing keys.
 
-Control-plane changes—retention reduction, purge, replay, quota, consumer identity—need review, audit, and staged activation. Purge and bulk redrive are destructive operations with separate privileges and dry-run counts.
+Control-plane changes (retention reduction, purge, replay, quota, consumer identity) need review, audit, and staged activation. Purge and bulk redrive are destructive operations with separate privileges and dry-run counts.
 
 ## Verification strategy
 

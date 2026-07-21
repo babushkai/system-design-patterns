@@ -51,7 +51,7 @@ Version that state as one immutable **query policy**. A document records the ana
 
 Important invariants are:
 
-**Index/query analyzer compatibility.** Exact compatibility is not always required—edge n-grams are often produced only at index time—but each field declares a tested pair of index and query analyzers.
+**Index/query analyzer compatibility.** Exact compatibility is not always required (edge n-grams are often produced only at index time), but each field declares a tested pair of index and query analyzers.
 
 **Filters apply before information leaves the authorization boundary.** Security predicates are not best-effort post-processing.
 
@@ -75,7 +75,7 @@ The same surface query can require different field treatment:
 
 Synonyms are directional product rules. Expanding “laptop” to “notebook” may help recall; equating “apple” with the company in every context damages precision. Multi-token synonyms form a graph: “nyc” can map to “new york city” while phrase positions remain meaningful. Flattening that graph incorrectly can create matches that were never present.
 
-Query understanding can classify navigational, exact-identifier, broad informational, and structured-filter intent, but it should output an explicit plan fragment rather than mutate a query invisibly. Rewrite provenance—original term, rule ID, version, and expansion type—is essential for relevance debugging.
+Query understanding can classify navigational, exact-identifier, broad informational, and structured-filter intent, but it should output an explicit plan fragment rather than mutate a query invisibly. Rewrite provenance (original term, rule ID, version, and expansion type) is essential for relevance debugging.
 
 ## Retrieval primitives
 

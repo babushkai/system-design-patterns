@@ -2,7 +2,7 @@
 
 Ordering is a scoped relation between events, not a property that a broker can provide “globally” without cost or qualification. A useful design names which events must be comparable, who assigns their sequence, what happens at gaps, and how epochs prevent an old writer from extending a sequence after failover.
 
-Scope: order scope, partition sequencing, causal metadata, gaps, reorder buffers, epochs, rebalancing, and resharding. Queue claims are in [Message Queue Architecture](01-message-queues.md); duplicate/loss and acknowledgement ambiguity are in [Delivery Guarantees](04-delivery-guarantees.md).
+Message ordering is defined by its scope, partition sequencing, causal metadata, gap handling, reorder buffers, epochs, rebalancing, and resharding. Queue claims are in [Message Queue Architecture](01-message-queues.md); duplicate/loss and acknowledgement ambiguity are in [Delivery Guarantees](04-delivery-guarantees.md).
 
 ## Workload and order contract
 

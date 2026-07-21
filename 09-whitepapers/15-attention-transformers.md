@@ -11,7 +11,7 @@ The proceedings value used here is **41.0 BLEU** for the large English–French 
 
 ## What the Paper Claimed
 
-The paper replaced recurrent and convolutional sequence-to-sequence layers with attention and position-wise feed-forward layers. Its central empirical claim was about translation quality, training cost, and sequence parallelism—not that recurrence disappeared from every future sequence task or that attention alone solved language understanding.
+The paper replaced recurrent and convolutional sequence-to-sequence layers with attention and position-wise feed-forward layers. Its central empirical claim was about translation quality, training cost, and sequence parallelism, not that recurrence disappeared from every future sequence task or that attention alone solved language understanding.
 
 The original Transformer is an encoder-decoder:
 
@@ -253,7 +253,7 @@ These systems consequences are covered in [LLM Inference Platforms](../08-case-s
 
 ## Primary Reference
 
-- [Attention Is All You Need — NIPS 2017 proceedings PDF](https://papers.neurips.cc/paper/2017/file/3f5ee243547dee91fbd053c1c4a845aa-Paper.pdf)
+- [Attention Is All You Need (NIPS 2017 proceedings PDF)](https://papers.neurips.cc/paper/2017/file/3f5ee243547dee91fbd053c1c4a845aa-Paper.pdf)
 
 ## Related Chapters
 

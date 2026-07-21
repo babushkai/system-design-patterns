@@ -96,7 +96,7 @@ Authentication security is mostly lifecycle management: enrollment, use, replace
 
 ### Password verifiers
 
-Use a password-hashing function intended for this purpose—normally Argon2id, scrypt, or bcrypt through a maintained library. Store the algorithm and parameters with every verifier. Calibrate cost against the slowest supported production tier and the capacity reserved for authentication; a universal work factor or millisecond target ages badly as hardware and traffic change.
+Use a maintained library to apply a purpose-built password-hashing function, normally Argon2id, scrypt, or bcrypt. Store the algorithm and parameters with every verifier. Calibrate cost against the slowest supported production tier and the capacity reserved for authentication; a universal work factor or millisecond target ages badly as hardware and traffic change.
 
 Password verification consumes a scarce resource. If peak login traffic is $Q$ attempts/s and one verification consumes $t$ CPU-seconds, the unconstrained CPU demand is approximately:
 
@@ -176,7 +176,7 @@ Sender-constrained credentials reduce bearer replay but introduce client-key lif
 
 ## Capacity and Multi-Region Design
 
-Session capacity is driven by active sessions, record size, replication, and headroom—not registered users. For an illustrative workload with two million active sessions, 1.2 KiB per stored record, replication factor two, and a 70% target occupancy:
+Session capacity is driven by active sessions, record size, replication, and headroom, not registered users. For an illustrative workload with two million active sessions, 1.2 KiB per stored record, replication factor two, and a 70% target occupancy:
 
 $$
 \text{memory} \approx \frac{2{,}000{,}000 \times 1.2\ \text{KiB} \times 2}{0.70}
@@ -262,7 +262,7 @@ The final architecture should be explainable in four sentences: who owns authent
 - Local token verification trades online dependency for bounded stale authorization; it does not eliminate state.
 - Refresh rotation, global logout, and authenticator changes are concurrency-sensitive transactions.
 - Password verification and abuse defense need capacity planning and admission control.
-- Recovery and support operations must preserve—or deliberately re-establish—the account’s assurance.
+- Recovery and support operations must preserve, or deliberately re-establish, the account’s assurance.
 - Key distribution, revocation propagation, and audit buffering are control-plane problems that require failure tests.
 
 ---

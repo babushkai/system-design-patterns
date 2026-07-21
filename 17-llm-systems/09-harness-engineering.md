@@ -113,10 +113,10 @@ async def run(session: Session) -> Outcome:
 
 The details that matter:
 
-- **Stop conditions are a contract.** `end_turn` means the model *claims* completion — run the verifier before reporting success. Distinguish max-tokens truncation (continue), refusal (surface to human), and tool-use (loop).
+- **Stop conditions are a contract.** `end_turn` means the model *claims* completion: run the verifier before reporting success. Distinguish max-tokens truncation (continue), refusal (surface to human), and tool-use (loop).
 - **Checkpoint every turn.** Serialized messages + workspace snapshot = resumable runs, replayable bugs, and the substrate for durable-execution engines. "The pod restarted" should cost one turn, not the task.
 - **Interruptibility is a feature, not an edge case.** Humans steer mid-run; injected user messages must land between turns without corrupting tool-call/result pairing.
-- **Normalize tool results.** One envelope (status, content, truncation marker, timing) regardless of source — models handle uniform structure measurably better than ad-hoc strings.
+- **Normalize tool results.** One envelope (status, content, truncation marker, timing) regardless of source: models handle uniform structure measurably better than ad-hoc strings.
 - **Detect loops in the harness.** Hash recent tool-call signatures; on repetition, inject steering or escalate. Models repeat failing actions with cosmetic variations; the harness sees the pattern before the model admits it.
 
 `asyncio.gather` is safe only after the runtime has classified read/write sets and external-effect semantics. Two read-only calls can run concurrently; two writes to one artifact need serialization or an optimistic revision check; a write and a read of the same resource need an explicit snapshot rule. The scheduler also propagates the parent deadline and reserves child budgets before launching work. Otherwise parallelism creates races while appearing to improve latency.
@@ -165,7 +165,7 @@ Policy checks run again at commit. A plan approved ten minutes ago may now targe
 
 The harness needs deterministic contract tests independent of model quality: request compilation, tool schema compatibility, policy decisions, idempotent inbox/outbox handling, action fencing, context revision checks, budget propagation, cancellation, workspace recovery, and trace redaction. Use a scripted model adapter to emit malformed calls, duplicate action IDs, late responses, cyclic plans, and completion claims without evidence.
 
-State-machine tests kill the process between every durable transition. Tool simulators produce timeout-before-commit, timeout-after-commit, duplicate receipt, stale revision, partial stream, and compensation failure. Load tests inject provider throttling, queue saturation, cache loss, fan-out bursts, and slow clients. Security tests place hostile instructions in every data channel while observing whether capability policy—not model obedience—contains the effect.
+State-machine tests kill the process between every durable transition. Tool simulators produce timeout-before-commit, timeout-after-commit, duplicate receipt, stale revision, partial stream, and compensation failure. Load tests inject provider throttling, queue saturation, cache loss, fan-out bursts, and slow clients. Security tests place hostile instructions in every data channel while observing whether capability policy (not model obedience) contains the effect.
 
 End-to-end statistical evaluation measures the model–harness pair on representative tasks. [LLM Evaluation](./10-llm-evaluation.md) covers dataset and judge methodology. Harness evaluation must expose runtime faults and unsafe trajectories even when the final artifact passes.
 
@@ -231,7 +231,7 @@ Build the smallest runtime that makes the desired guarantee enforceable. Add com
 2. Canonical state is an event graph; each prompt is a disposable, policy-filtered context revision with a reproducible manifest.
 3. Tools execute through versioned action transactions with authority, read/write, retry, uncertainty, and reconciliation semantics.
 4. The model claims; the harness verifies. Ground truth in the loop or a human at the gate.
-5. Security lives in the permission boundary and sandbox — prompt text is advice, harness code is policy.
+5. Security lives in the permission boundary and sandbox: prompt text is advice, harness code is policy.
 6. Verify the runtime with deterministic state-machine and fault-injection tests, then evaluate the model–harness pair statistically.
 7. Version and progressively roll out the whole runtime tuple; long-running state needs explicit compatibility and migration semantics.
 
@@ -239,15 +239,15 @@ Build the smallest runtime that makes the desired guarantee enforceable. Add com
 
 ## References
 
-- [Building Effective Agents](https://www.anthropic.com/research/building-effective-agents) — Anthropic
-- [Effective Context Engineering for AI Agents](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents) — Anthropic
-- [Writing Effective Tools for Agents](https://www.anthropic.com/engineering/writing-tools-for-agents) — Anthropic
-- [Code Execution with MCP](https://www.anthropic.com/engineering/code-execution-with-mcp) — scripts over chained tool calls
-- [Claude Code Best Practices](https://www.anthropic.com/engineering/claude-code-best-practices) — a production harness, documented
-- [Model Context Protocol](https://modelcontextprotocol.io/) — tool/context integration standard
-- [MCP Authorization specification (2025-06-18)](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization) and [MCP Security Best Practices](https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices) — audience binding, token handling, session and confused-deputy defenses
-- [The Lethal Trifecta for AI Agents](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/) — Simon Willison
-- [Context Rot](https://research.trychroma.com/context-rot) — Chroma research on long-context degradation
-- [SWE-bench Verified](https://www.swebench.com/), [Terminal-Bench](https://www.tbench.ai/), [τ-bench](https://arxiv.org/abs/2406.12045), [OSWorld](https://os-world.github.io/) — harness-sensitive benchmarks
-- [OpenTelemetry GenAI Semantic Conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) — tracing standard for LLM systems
-- [Temporal](https://temporal.io/) — durable execution
+- [Building Effective Agents](https://www.anthropic.com/research/building-effective-agents): Anthropic
+- [Effective Context Engineering for AI Agents](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents): Anthropic
+- [Writing Effective Tools for Agents](https://www.anthropic.com/engineering/writing-tools-for-agents): Anthropic
+- [Code Execution with MCP](https://www.anthropic.com/engineering/code-execution-with-mcp): scripts over chained tool calls
+- [Claude Code Best Practices](https://www.anthropic.com/engineering/claude-code-best-practices): a production harness, documented
+- [Model Context Protocol](https://modelcontextprotocol.io/): tool/context integration standard
+- [MCP Authorization specification (2025-06-18)](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization) and [MCP Security Best Practices](https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices): audience binding, token handling, session and confused-deputy defenses
+- [The Lethal Trifecta for AI Agents](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/): Simon Willison
+- [Context Rot](https://research.trychroma.com/context-rot): Chroma research on long-context degradation
+- [SWE-bench Verified](https://www.swebench.com/), [Terminal-Bench](https://www.tbench.ai/), [τ-bench](https://arxiv.org/abs/2406.12045), [OSWorld](https://os-world.github.io/): harness-sensitive benchmarks
+- [OpenTelemetry GenAI Semantic Conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/): tracing standard for LLM systems
+- [Temporal](https://temporal.io/): durable execution

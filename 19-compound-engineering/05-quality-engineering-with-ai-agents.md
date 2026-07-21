@@ -4,7 +4,7 @@
 
 An agent-generated patch is a proposal, not proof. A trustworthy engineering system converts the task into explicit acceptance claims, records the provenance of the candidate, gathers independent evidence against the actual target revision, and lets policy plus accountable reviewers decide whether the evidence authorizes integration. The hardest failure is **correlated evidence**: the same run misunderstands the requirement, writes the implementation, generates tests for its interpretation, and then declares those tests sufficient. Separate specification, mutation, verification, and release authority where risk justifies it.
 
-Scope: evidence, review, and promotion decisions. [Platform Fundamentals](./01-compound-engineering-fundamentals.md) and [Tool Contracts](./02-coding-agent-tool-design.md) cover runtime isolation; [Repository Architecture](./04-ai-native-software-architecture.md) covers structure; [Security](../10-security/04-api-security.md) covers application-security mechanisms.
+This chapter defines evidence requirements, review controls, and promotion decisions. [Platform Fundamentals](./01-compound-engineering-fundamentals.md) and [Tool Contracts](./02-coding-agent-tool-design.md) cover runtime isolation; [Repository Architecture](./04-ai-native-software-architecture.md) covers structure; [Security](../10-security/04-api-security.md) covers application-security mechanisms.
 
 ---
 
@@ -146,7 +146,7 @@ migration, configuration, flag, and infrastructure changes
 verification evidence bundle
 ```
 
-Scope checks compare the candidate with task authority. Unexpected changes are not automatically wrong, but they require explanation and possibly broader approval. Protected paths—authentication, authorization, cryptography, release workflows, billing, data deletion, and policy—can require named owners regardless of test results.
+Scope checks compare the candidate with task authority. Unexpected changes are not automatically wrong, but they require explanation and possibly broader approval. Protected paths (authentication, authorization, cryptography, release workflows, billing, data deletion, and policy) can require named owners regardless of test results.
 
 Generated artifacts link to their source and generator receipt. Binary artifacts require provenance or are rebuilt in a trusted verifier. Dependency changes surface transitive, license, provenance, and lifecycle impact rather than appearing as an opaque lockfile diff.
 
@@ -347,7 +347,7 @@ The system is ready to integrate a candidate when every required claim has appli
 - Convert requirements into durable claims before judging the implementation.
 - Bind every result to specification, source, target, tool, environment, and policy revisions.
 - Distinguish self-produced evidence from independent oracles and authorities.
-- Govern by effect, reversibility, blast radius, detectability, and evidence—not line count or universal coverage targets.
+- Govern by effect, reversibility, blast radius, detectability, and evidence, not line count or universal coverage targets.
 - Protect the evidence pipeline and approval policy as part of the trusted computing base.
 - Feed escaped defects into deterministic contracts, tests, architecture, and policy rather than prompt folklore.
 

@@ -2,7 +2,7 @@
 
 DNS publishes names; resolvers turn those names into time-bounded answers; connection pools turn one answer into routing state that can outlive every DNS cache involved. Production cutovers fail when teams reason about only the authoritative record. The operational unit is the entire chain: authoritative publication, recursive and client caches, address-family selection, connection creation, pool lifetime, and endpoint drain.
 
-Scope: **DNS delegation and cache semantics, positive and negative TTLs, stale-answer policy, client resolution, dual-stack connection racing, pool/address lifecycle, DNS cutovers, and connection draining**. [Service Discovery](../12-service-mesh/01-service-discovery.md) owns endpoint authority, registration, health, watch streams, and control-plane state. [Load Balancing](./01-load-balancing.md) owns how a ready endpoint is selected and weighted. [Network Transport Internals](./14-network-transport-internals.md) owns TCP, TLS, QUIC, congestion control, and packet-level failure mechanics. [Multi-Region Architecture](./09-multi-region-architecture.md) owns regional authority and failover policy.
+A production DNS and connection contract must define **DNS delegation and cache semantics, positive and negative TTLs, stale-answer policy, client resolution, dual-stack connection racing, pool and address lifecycle, DNS cutovers, and connection draining**. [Service Discovery](../12-service-mesh/01-service-discovery.md) owns endpoint authority, registration, health, watch streams, and control-plane state. [Load Balancing](./01-load-balancing.md) owns how a ready endpoint is selected and weighted. [Network Transport Internals](./14-network-transport-internals.md) owns TCP, TLS, QUIC, congestion control, and packet-level failure mechanics. [Multi-Region Architecture](./09-multi-region-architecture.md) owns regional authority and failover policy.
 
 ## Primary Evidence and Scope
 
@@ -128,7 +128,7 @@ The SOA serial helps authoritative secondary servers decide whether to transfer 
 
 ### RRsets and aliases
 
-DNS caches an RRset—records with the same owner, type, and class—as a unit. Important contracts include:
+DNS caches an RRset (records with the same owner, type, and class) as a unit. Important contracts include:
 
 - `A` and `AAAA` publish IPv4 and IPv6 addresses. Multiple addresses are candidates; record order is not a portable health or weighting contract.
 - `CNAME` makes one owner an alias to another canonical name. Resolution follows the alias chain, and each RRset in the chain has its own TTL and failure surface.
@@ -202,7 +202,7 @@ $$
 \lambda_{\mathrm{auth,RRset}} \approx \frac{R}{T}
 $$
 
-**Illustrative:** 12 million clients aggregated behind about 24,000 independently caching resolver populations, with TTL 60 seconds, produce roughly `24,000 / 60 = 400` authoritative refreshes/s for one continuously requested RR type—not 200,000/s. That estimate omits cold caches, client subnet partitioning, several record types, alias-chain lookups, retry bursts, multiple anycast sites, and synchronized expiry.
+**Illustrative:** 12 million clients aggregated behind about 24,000 independently caching resolver populations, with TTL 60 seconds, produce roughly `24,000 / 60 = 400` authoritative refreshes/s for one continuously requested RR type, not 200,000/s. That estimate omits cold caches, client subnet partitioning, several record types, alias-chain lookups, retry bursts, multiple anycast sites, and synchronized expiry.
 
 Low TTL increases dependency on resolver and authoritative availability. Cache flush, restart, popular-name expiry, or reconnect storms make refreshes bursty, so capacity-test misses, DNSSEC responses, TCP fallback, and provider/API failure independently of average QPS.
 
@@ -456,7 +456,7 @@ At production-like load:
 6. fail a resolver site, authoritative provider, DNS control account, parent delegation path, and management network independently;
 7. restore an old zone/config snapshot and prove revision checks prevent accidental regression.
 
-The rollback drill is complete only when traffic, connections, identity, and data all return—not when one resolver shows the old address again.
+The rollback drill is complete only when traffic, connections, identity, and data all return, not when one resolver shows the old address again.
 
 ## Decision framework
 
@@ -473,13 +473,13 @@ The rollback drill is complete only when traffic, connections, identity, and dat
 
 ## Primary references
 
-- [RFC 1034, *Domain Names—Concepts and Facilities*](https://www.rfc-editor.org/rfc/rfc1034)
-- [RFC 1035, *Domain Names—Implementation and Specification*](https://www.rfc-editor.org/rfc/rfc1035)
+- [RFC 1034, *Domain Names: Concepts and Facilities*](https://www.rfc-editor.org/rfc/rfc1034)
+- [RFC 1035, *Domain Names: Implementation and Specification*](https://www.rfc-editor.org/rfc/rfc1035)
 - [RFC 2308, *Negative Caching of DNS Queries*](https://www.rfc-editor.org/rfc/rfc2308)
 - [RFC 4033, *DNS Security Introduction and Requirements*](https://www.rfc-editor.org/rfc/rfc4033)
 - [RFC 5452, *Measures for Making DNS More Resilient against Forged Answers*](https://www.rfc-editor.org/rfc/rfc5452)
 - [RFC 6891, *Extension Mechanisms for DNS (EDNS(0))*](https://www.rfc-editor.org/rfc/rfc6891)
-- [RFC 7766, *DNS Transport over TCP—Implementation Requirements*](https://www.rfc-editor.org/rfc/rfc7766)
+- [RFC 7766, *DNS Transport over TCP: Implementation Requirements*](https://www.rfc-editor.org/rfc/rfc7766)
 - [RFC 8305, *Happy Eyeballs Version 2*](https://www.rfc-editor.org/rfc/rfc8305)
 - [RFC 8767, *Serving Stale Data to Improve DNS Resiliency*](https://www.rfc-editor.org/rfc/rfc8767)
 - [RFC 9460, *Service Binding and Parameter Specification via the DNS*](https://www.rfc-editor.org/rfc/rfc9460)

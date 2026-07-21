@@ -2,7 +2,7 @@
 
 ## Job-Attempt Authority Protocol
 
-A lease grants one attempt temporary authority; an epoch names that grant; recovery advances authority after expiry or revocation. Stale-attempt fencing—not the timeout itself—prevents a replaced attempt from committing state or effects.
+A lease grants one attempt temporary authority; an epoch names that grant; recovery advances authority after expiry or revocation. Stale-attempt fencing (not the timeout itself) prevents a replaced attempt from committing state or effects.
 
 The job-attempt protocol covers claim epochs, renewal, separate liveness and progress signals, deadlines, reclaim, checkpoint resume, fencing, shutdown, and reconciliation. [Distributed Locks](../01-foundations/09-distributed-locks.md) covers generic lock acquisition; [Failure Modes](../01-foundations/06-failure-modes.md) covers failure detection; [Retry, Idempotency, and Compensation](./06-retry-idempotency-compensation.md) covers end-to-end effect protocols.
 
@@ -285,7 +285,7 @@ $$
 T_{drain} = \frac{E}{\mu - \lambda}
 $$
 
-If $\mu \le \lambda$, it never drains in steady state. Provision the authority store for renewal peaks plus claims, completions, progress, and reclaim—then test it under the correlated pause or outage that causes many leases to expire together. Randomly jitter renewals so a deploy does not synchronize the fleet.
+If $\mu \le \lambda$, it never drains in steady state. Provision the authority store for renewal peaks plus claims, completions, progress, and reclaim; then test it under the correlated pause or outage that causes many leases to expire together. Randomly jitter renewals so a deploy does not synchronize the fleet.
 
 ---
 
@@ -328,7 +328,7 @@ A store latency spike expires thousands of leases. Unbounded reclaim immediately
 ## Security Boundaries
 
 - Bind each grant to a tenant and worker identity; authorize every renewal, checkpoint, completion, and effect against that binding.
-- Use short-lived, least-privilege attempt credentials. Revocation narrows exposure, but fencing—not credential propagation speed—must protect correctness.
+- Use short-lived, least-privilege attempt credentials. Revocation narrows exposure, but fencing (not credential propagation speed) must protect correctness.
 - Make epoch allocation authority-controlled. A worker must not choose a larger token to impersonate a successor.
 - Encrypt checkpoint and effect payloads, validate manifests and content types, and prevent cross-tenant object references.
 - Separate repair permission from ordinary worker permission. Require strong authentication, expected-version checks, reason codes, and immutable audit entries.
@@ -389,8 +389,8 @@ If any protected effect has neither an enforceable epoch nor a stable deduplicat
 
 ## Primary Sources
 
-1. [Leases: An Efficient Fault-Tolerant Mechanism for Distributed File Cache Consistency](https://doi.org/10.1145/74850.74870) — Gray and Cheriton, SOSP 1989.
-2. [The Chubby Lock Service for Loosely-Coupled Distributed Systems](https://www.usenix.org/legacy/events/osdi06/tech/full_papers/burrows/burrows.pdf) — Burrows, OSDI 2006; sequencers illustrate effect-side stale-owner rejection.
-3. [ZooKeeper: Wait-free Coordination for Internet-scale Systems](https://www.usenix.org/legacy/event/atc10/tech/full_papers/Hunt.pdf) — Hunt et al., USENIX ATC 2010; sessions, versions, and ordered coordination state.
-4. [etcd API guarantees](https://etcd.io/docs/latest/learning/api_guarantees/) and [etcd lease API](https://etcd.io/docs/latest/learning/api/#lease-api) — official guarantees distinguish revisions, transactions, and lease TTL.
-5. [Temporal Java SDK ActivityExecutionContext](https://javadoc.io/static/io.temporal/temporal-sdk/1.32.0/io/temporal/activity/ActivityExecutionContext.html) — official SDK contract for activity heartbeat details and retry resume data.
+1. [Leases: An Efficient Fault-Tolerant Mechanism for Distributed File Cache Consistency](https://doi.org/10.1145/74850.74870): Gray and Cheriton, SOSP 1989.
+2. [The Chubby Lock Service for Loosely-Coupled Distributed Systems](https://www.usenix.org/legacy/events/osdi06/tech/full_papers/burrows/burrows.pdf): Burrows, OSDI 2006; sequencers illustrate effect-side stale-owner rejection.
+3. [ZooKeeper: Wait-free Coordination for Internet-scale Systems](https://www.usenix.org/legacy/event/atc10/tech/full_papers/Hunt.pdf): Hunt et al., USENIX ATC 2010; sessions, versions, and ordered coordination state.
+4. [etcd API guarantees](https://etcd.io/docs/latest/learning/api_guarantees/) and [etcd lease API](https://etcd.io/docs/latest/learning/api/#lease-api): official guarantees distinguish revisions, transactions, and lease TTL.
+5. [Temporal Java SDK ActivityExecutionContext](https://javadoc.io/static/io.temporal/temporal-sdk/1.32.0/io/temporal/activity/ActivityExecutionContext.html): official SDK contract for activity heartbeat details and retry resume data.

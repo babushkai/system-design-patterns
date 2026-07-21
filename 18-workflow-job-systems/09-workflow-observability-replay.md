@@ -283,7 +283,7 @@ Snapshot creation, validation, storage, and invalidation cost may dominate when 
 
 Keep unbounded identities out of metric labels. workflow_id, run_id, business key, exception text, and payload-derived values belong in an indexed store or exemplars, not time-series dimensions. Metrics use bounded workflow type, state, error class, queue, region, and tenant tier; links lead from an aggregate signal to filtered runs.
 
-Retention must cover the longest of operational recovery, replay compatibility, audit, dispute, and regulatory windows—or explicitly archive the evidence needed for each. Verify restore time: a cheap archive that takes days to hydrate may not satisfy the repair objective.
+Retention must cover the longest of operational recovery, replay compatibility, audit, dispute, and regulatory windows, or explicitly archive the evidence needed for each. Verify restore time: a cheap archive that takes days to hydrate may not satisfy the repair objective.
 
 ---
 
@@ -409,11 +409,11 @@ A workflow platform is operationally mature when an operator can explain one run
 
 ## Primary Sources
 
-1. [Temporal History Service architecture](https://github.com/temporalio/temporal/blob/main/docs/architecture/history-service.md) — official description of event history, mutable state, tasks, and reset branching.
-2. [Temporal Python SDK: Workflow Replay](https://github.com/temporalio/sdk-python#workflow-replay) — official replay API and determinism guidance.
-3. [AWS Step Functions execution details](https://docs.aws.amazon.com/step-functions/latest/dg/concepts-view-execution-details.html) and [GetExecutionHistory API](https://docs.aws.amazon.com/step-functions/latest/apireference/API_GetExecutionHistory.html) — official Standard/Express history and retention distinctions.
-4. [Distributed Snapshots: Determining Global States of Distributed Systems](https://doi.org/10.1145/214451.214456) — Chandy and Lamport, ACM TOCS 1985.
-5. [PROV-O: The PROV Ontology](https://www.w3.org/TR/prov-o/) — W3C Recommendation for entities, activities, agents, and provenance relationships.
+1. [Temporal History Service architecture](https://github.com/temporalio/temporal/blob/main/docs/architecture/history-service.md): official description of event history, mutable state, tasks, and reset branching.
+2. [Temporal Python SDK: Workflow Replay](https://github.com/temporalio/sdk-python#workflow-replay): official replay API and determinism guidance.
+3. [AWS Step Functions execution details](https://docs.aws.amazon.com/step-functions/latest/dg/concepts-view-execution-details.html) and [GetExecutionHistory API](https://docs.aws.amazon.com/step-functions/latest/apireference/API_GetExecutionHistory.html): official Standard/Express history and retention distinctions.
+4. [Distributed Snapshots: Determining Global States of Distributed Systems](https://doi.org/10.1145/214451.214456): Chandy and Lamport, ACM TOCS 1985.
+5. [PROV-O: The PROV Ontology](https://www.w3.org/TR/prov-o/): W3C Recommendation for entities, activities, agents, and provenance relationships.
 
 ---
 

@@ -2,7 +2,7 @@
 
 A distributed lock is a protocol for serializing a named critical section across processes that can pause, disconnect, restart, and disagree about time. Mutual exclusion at the lock service is only half the safety argument. A former holder may continue after its grant expires, so correctness-critical effects need a monotonically ordered fencing token that the protected resource validates atomically with the effect.
 
-Scope: **lock API semantics, critical-section scope, wait queues, fencing at protected resources, multi-lock deadlocks, and lock-service operation**. [Leader Election](../02-distributed-databases/09-leader-election.md) owns long-lived leadership terms, activation barriers, and failover. [Leases, Heartbeats, and Recovery](../18-workflow-job-systems/08-leases-heartbeats-recovery.md) owns task-claim renewal and abandoned-work recovery. [Consensus Algorithms](../02-distributed-databases/08-consensus-algorithms.md) owns how a replicated service agrees on lock state.
+A distributed-lock contract must specify **lock API semantics, critical-section scope, wait queues, fencing at protected resources, multi-lock deadlocks, and lock-service operation**. [Leader Election](../02-distributed-databases/09-leader-election.md) owns long-lived leadership terms, activation barriers, and failover. [Leases, Heartbeats, and Recovery](../18-workflow-job-systems/08-leases-heartbeats-recovery.md) owns task-claim renewal and abandoned-work recovery. [Consensus Algorithms](../02-distributed-databases/08-consensus-algorithms.md) owns how a replicated service agrees on lock state.
 
 ## Primary Evidence and Scope
 
@@ -212,7 +212,7 @@ Predecessor watches, bounded queues, randomized backoff, and per-namespace admis
 
 1. The lock database restores a snapshot whose last generation is 500.
 2. A protected resource has already accepted generation 740.
-3. New grants 501–739 are all rejected—or accepted incorrectly by resources that reset too.
+3. New grants 501–739 are all rejected, or accepted incorrectly by resources that reset too.
 
 Restore must preserve an epoch greater than every pre-restore grant, or rotate to a new higher namespace epoch. Test control-plane disaster recovery with live resource fence state.
 
@@ -271,7 +271,7 @@ Prefer an invariant-enforcing primitive:
 | Prevent duplicate API call | Idempotency key at the external API boundary |
 | Coordinate a long-lived controller | Leader election with activation/failover semantics |
 
-A lock reduces concurrency and adds another availability dependency. Use it when serialization matches the invariant and the protected boundary can enforce the grant—not because “distributed systems need locks.”
+A lock reduces concurrency and adds another availability dependency. Use it when serialization matches the invariant and the protected boundary can enforce the grant, not because “distributed systems need locks.”
 
 ## Decision framework
 

@@ -224,7 +224,7 @@ Return an explicit `resync_required` before disconnecting when possible. A recon
 
 ## Proxies, Timeouts, and Connection Draining
 
-Test the complete path—browser, carrier NAT, corporate proxy, CDN, WAF, load balancer, service mesh, gateway—not only localhost. Record these budgets separately:
+Test the complete path from browser through carrier NAT, corporate proxy, CDN, WAF, load balancer, service mesh, and gateway, not only localhost. Record these budgets separately:
 
 - handshake/connect timeout;
 - maximum request duration for long polling;
@@ -398,11 +398,11 @@ Then verify the non-negotiable contract: retained replay, snapshot boundary, ide
 
 ## References
 
-- [RFC 9110: HTTP Semantics](https://datatracker.ietf.org/doc/html/rfc9110) — validators, conditional requests, `Retry-After`, and HTTP semantics
-- [RFC 9111: HTTP Caching](https://datatracker.ietf.org/doc/html/rfc9111) — cache validation and freshness
-- [RFC 6202: Known Issues and Best Practices for Long Polling and Streaming](https://datatracker.ietf.org/doc/html/rfc6202) — timeout, intermediary, resource, and security considerations
-- [WHATWG HTML: Server-Sent Events](https://html.spec.whatwg.org/multipage/server-sent-events.html) — `EventSource`, event-stream parsing, reconnection, and `Last-Event-ID`
-- [RFC 6455: The WebSocket Protocol](https://datatracker.ietf.org/doc/html/rfc6455) — handshake, framing, control frames, origin, and closure
-- [RFC 7692: Compression Extensions for WebSocket](https://datatracker.ietf.org/doc/html/rfc7692) — negotiated per-message compression
-- [RFC 8441: Bootstrapping WebSockets with HTTP/2](https://datatracker.ietf.org/doc/html/rfc8441) — Extended CONNECT over HTTP/2
-- [RFC 9220: Bootstrapping WebSockets with HTTP/3](https://datatracker.ietf.org/doc/html/rfc9220) — Extended CONNECT adaptation for HTTP/3
+- [RFC 9110: HTTP Semantics](https://datatracker.ietf.org/doc/html/rfc9110): validators, conditional requests, `Retry-After`, and HTTP semantics
+- [RFC 9111: HTTP Caching](https://datatracker.ietf.org/doc/html/rfc9111): cache validation and freshness
+- [RFC 6202: Known Issues and Best Practices for Long Polling and Streaming](https://datatracker.ietf.org/doc/html/rfc6202): timeout, intermediary, resource, and security considerations
+- [WHATWG HTML: Server-Sent Events](https://html.spec.whatwg.org/multipage/server-sent-events.html): `EventSource`, event-stream parsing, reconnection, and `Last-Event-ID`
+- [RFC 6455: The WebSocket Protocol](https://datatracker.ietf.org/doc/html/rfc6455): handshake, framing, control frames, origin, and closure
+- [RFC 7692: Compression Extensions for WebSocket](https://datatracker.ietf.org/doc/html/rfc7692): negotiated per-message compression
+- [RFC 8441: Bootstrapping WebSockets with HTTP/2](https://datatracker.ietf.org/doc/html/rfc8441): Extended CONNECT over HTTP/2
+- [RFC 9220: Bootstrapping WebSockets with HTTP/3](https://datatracker.ietf.org/doc/html/rfc9220): Extended CONNECT adaptation for HTTP/3

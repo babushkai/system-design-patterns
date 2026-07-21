@@ -4,7 +4,7 @@
 
 Encryption is not a box labeled “AES” between an application and a database. It is a distributed protocol whose correctness depends on data classification, authenticated metadata, nonce allocation, key hierarchy, authorization to use keys, recoverability, rotation, and the lifetime of every plaintext copy.
 
-Separate:
+Separate the following cryptographic roles:
 
 - **bulk data encryption** with an authenticated-encryption algorithm such as AES-GCM or ChaCha20-Poly1305;
 - **key wrapping** through a key-encryption key (KEK) held by a KMS or HSM;
@@ -325,7 +325,7 @@ Backups create long-lived cryptographic dependencies. Inventory both ciphertext 
 
 ## 9. Capacity and Cost Model
 
-Consider an illustrative workload—not a vendor price claim:
+Consider an illustrative workload, not a vendor price claim:
 
 ```text
 write rate                   = 40,000 records/s
@@ -462,12 +462,12 @@ Reject a design that says only “AES-256 at rest and TLS in transit.” It name
 
 ## References
 
-- [RFC 5116: An Interface and Algorithms for Authenticated Encryption](https://www.rfc-editor.org/rfc/rfc5116) — AEAD interface and nonce requirements
-- [NIST SP 800-38D: Galois/Counter Mode](https://csrc.nist.gov/pubs/sp/800/38/d/final) — GCM construction and invocation constraints
-- [FIPS 197: Advanced Encryption Standard](https://csrc.nist.gov/pubs/fips/197/final) — AES specification
-- [RFC 8439: ChaCha20 and Poly1305 for IETF Protocols](https://www.rfc-editor.org/rfc/rfc8439) — ChaCha20-Poly1305
-- [RFC 8446: The Transport Layer Security Protocol Version 1.3](https://www.rfc-editor.org/rfc/rfc8446) — TLS 1.3 handshake and key schedule
-- [RFC 9180: Hybrid Public Key Encryption](https://www.rfc-editor.org/rfc/rfc9180) — standardized hybrid public-key construction
-- [NIST SP 800-57 Part 1: Recommendation for Key Management](https://csrc.nist.gov/pubs/sp/800/57/pt1/r5/final) — key lifecycle and protection guidance
-- [OWASP Cryptographic Storage Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Cryptographic_Storage_Cheat_Sheet.html) — application threat-model and implementation guidance
-- [AWS KMS Cryptographic Details](https://docs.aws.amazon.com/kms/latest/cryptographic-details/intro.html) and [Google Cloud envelope encryption](https://cloud.google.com/kms/docs/envelope-encryption) — concrete managed-key hierarchy designs
+- [RFC 5116: An Interface and Algorithms for Authenticated Encryption](https://www.rfc-editor.org/rfc/rfc5116): AEAD interface and nonce requirements
+- [NIST SP 800-38D: Galois/Counter Mode](https://csrc.nist.gov/pubs/sp/800/38/d/final): GCM construction and invocation constraints
+- [FIPS 197: Advanced Encryption Standard](https://csrc.nist.gov/pubs/fips/197/final): AES specification
+- [RFC 8439: ChaCha20 and Poly1305 for IETF Protocols](https://www.rfc-editor.org/rfc/rfc8439): ChaCha20-Poly1305
+- [RFC 8446: The Transport Layer Security Protocol Version 1.3](https://www.rfc-editor.org/rfc/rfc8446): TLS 1.3 handshake and key schedule
+- [RFC 9180: Hybrid Public Key Encryption](https://www.rfc-editor.org/rfc/rfc9180): standardized hybrid public-key construction
+- [NIST SP 800-57 Part 1: Recommendation for Key Management](https://csrc.nist.gov/pubs/sp/800/57/pt1/r5/final): key lifecycle and protection guidance
+- [OWASP Cryptographic Storage Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Cryptographic_Storage_Cheat_Sheet.html): application threat-model and implementation guidance
+- [AWS KMS Cryptographic Details](https://docs.aws.amazon.com/kms/latest/cryptographic-details/intro.html) and [Google Cloud envelope encryption](https://cloud.google.com/kms/docs/envelope-encryption): concrete managed-key hierarchy designs

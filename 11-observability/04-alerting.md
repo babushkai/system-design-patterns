@@ -6,7 +6,7 @@ Alerting is a stateful policy system that converts telemetry into human work. A 
 
 Correctness depends on evaluation time, data freshness, missing-data semantics, rule revision, stable alert identity, and high-availability coordination. Two evaluators can legitimately compute the same firing state, but receivers should not page twice. Conversely, aggressive deduplication or inhibition must not hide independent incidents.
 
-Page only for required human urgency and user/business impact. [SLOs and Error-Budget Control](./05-slos-error-budgets.md) covers burn-rate math; [Metrics Systems](./02-metrics-monitoring.md) covers signal semantics. Scope here: alert state, grouping, inhibition, silence, routing, delivery, and human load.
+Page only for required human urgency and user/business impact. [SLOs and Error-Budget Control](./05-slos-error-budgets.md) covers burn-rate math; [Metrics Systems](./02-metrics-monitoring.md) covers signal semantics. This chapter covers alert state, grouping, inhibition, silence, routing, delivery, and human load.
 
 ---
 
@@ -252,7 +252,7 @@ Replicas need not synchronize every Pending state if their evaluations are deter
 
 ### HA notification
 
-A cluster can gossip/replicate notification logs, but a regional partition may cause each side to notify. Decide whether duplicate paging during partition is preferable to no page—usually yes for high urgency—then deduplicate in the incident system when connectivity returns.
+A cluster can gossip/replicate notification logs, but a regional partition may cause each side to notify. Decide whether duplicate paging during partition is preferable to no page (usually yes for high urgency), then deduplicate in the incident system when connectivity returns.
 
 Never put all notification channels behind one provider or network path for critical pages. Maintain a tested fallback with independent credentials and routing.
 
@@ -319,7 +319,7 @@ $$
 \lambda_{\text{group-transition}} d c.
 $$
 
-State memory/storage scales with rule revisions, active fingerprints, pending history, notification log, silences, and inhibition indexes—not only rule count.
+State memory/storage scales with rule revisions, active fingerprints, pending history, notification log, silences, and inhibition indexes, not only rule count.
 
 ### Exceptional load
 
@@ -448,7 +448,7 @@ Alert on the alerting system through an independent path where possible.
 | Load tests | Region outage, alert cardinality explosion, silence expiry, and provider throttle |
 | Human review | Every page maps to a concrete action and post-incident outcome |
 
-Replay historical incidents and quiet periods through candidate rules. Compare pages, time-to-first-page, duplicate groups, missing incidents, and human attention—not only expression truth.
+Replay historical incidents and quiet periods through candidate rules. Compare pages, time-to-first-page, duplicate groups, missing incidents, and human attention, not only expression truth.
 
 ## Decision Framework
 
@@ -482,11 +482,11 @@ Replay historical incidents and quiet periods through candidate rules. Compare p
 
 ## References
 
-- [Prometheus Alerting Rules](https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/) — pending/firing state and rule evaluation
-- [Prometheus Alertmanager](https://prometheus.io/docs/alerting/latest/alertmanager/) — grouping, inhibition, silences, routing, and HA deduplication
-- [Google SRE Workbook: Monitoring](https://sre.google/workbook/monitoring/) — monitoring strategy and signal design
-- [Google SRE Workbook: Alerting on SLOs](https://sre.google/workbook/alerting-on-slos/) — symptom-oriented multi-window alert behavior
-- [OASIS Common Alerting Protocol](https://docs.oasis-open.org/emergency/cap/v1.2/CAP-v1.2-os.html) — interoperable alert message structure
-- [Metrics Systems and Monitoring](./02-metrics-monitoring.md) — instrument, aggregation, missing series, and query behavior
-- [SLOs and Error-Budget Control](./05-slos-error-budgets.md) — burn math and reliability policy
-- [Incident Command and Learning](./07-incident-management.md) — page-to-incident transition, command, communications, and mitigation
+- [Prometheus Alerting Rules](https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/): pending/firing state and rule evaluation
+- [Prometheus Alertmanager](https://prometheus.io/docs/alerting/latest/alertmanager/): grouping, inhibition, silences, routing, and HA deduplication
+- [Google SRE Workbook: Monitoring](https://sre.google/workbook/monitoring/): monitoring strategy and signal design
+- [Google SRE Workbook: Alerting on SLOs](https://sre.google/workbook/alerting-on-slos/): symptom-oriented multi-window alert behavior
+- [OASIS Common Alerting Protocol](https://docs.oasis-open.org/emergency/cap/v1.2/CAP-v1.2-os.html): interoperable alert message structure
+- [Metrics Systems and Monitoring](./02-metrics-monitoring.md): instrument, aggregation, missing series, and query behavior
+- [SLOs and Error-Budget Control](./05-slos-error-budgets.md): burn math and reliability policy
+- [Incident Command and Learning](./07-incident-management.md): page-to-incident transition, command, communications, and mitigation

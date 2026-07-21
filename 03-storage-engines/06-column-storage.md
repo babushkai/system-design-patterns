@@ -2,7 +2,7 @@
 
 Column-oriented storage makes one physical bet: analytical queries usually touch many rows but only a subset of their attributes. Storing values from the same column together reduces projected I/O, exposes homogeneous data to encoding, and lets execution operate on vectors rather than repeatedly interpreting row objects.
 
-Scope: the **analytical physical layout and scan path**: row groups, column chunks and pages, encodings, metadata pruning, late materialization, vectorized execution, update overlays, and scan capacity. [Data Encoding](./07-data-encoding.md) owns general serialization rules. [SSTables and Compaction](./03-sstables-compaction.md) owns immutable sorted-run lifecycle, and [Lakehouse Table Formats](../13-data-pipelines/05-lakehouse-table-formats.md) owns multi-file table snapshots and metadata protocols.
+An analytical column store is defined by its **physical layout and scan path**: row groups, column chunks and pages, encodings, metadata pruning, late materialization, vectorized execution, update overlays, and scan capacity. [Data Encoding](./07-data-encoding.md) owns general serialization rules. [SSTables and Compaction](./03-sstables-compaction.md) owns immutable sorted-run lifecycle, and [Lakehouse Table Formats](../13-data-pipelines/05-lakehouse-table-formats.md) owns multi-file table snapshots and metadata protocols.
 
 ## Workload and correctness contract
 
@@ -219,7 +219,7 @@ Use representative workload replay before changing sort order, row-group size, c
 
 Schema migration should maintain stable field IDs, explicitly allow type promotions, and test old/new writer-reader combinations. Validate statistics against a full scan and fuzz nulls, NaNs, extreme decimals, Unicode/collation, nested empty versus null collections, dictionary fallback, page boundaries, and corrupted checksums. Differential tests should compare vectorized/encoded execution with a simple row interpreter for randomly generated predicates.
 
-Fault tests should interrupt multipart upload, footer write, snapshot publication, delete-file replacement, and compaction. A reader must see either the old complete snapshot or the new complete snapshot—never a directory-shaped mixture.
+Fault tests should interrupt multipart upload, footer write, snapshot publication, delete-file replacement, and compaction. A reader must see either the old complete snapshot or the new complete snapshot, never a directory-shaped mixture.
 
 ## Decision framework
 

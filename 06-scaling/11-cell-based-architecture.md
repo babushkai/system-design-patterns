@@ -2,7 +2,7 @@
 
 Cell-based architecture scales a service by repeating a bounded, independently operable slice of the stack and assigning each workload unit to one cell. Its value is failure containment: a poison request, hot tenant, bad deployment, exhausted quota, or corrupt local state should affect one bounded population instead of the whole service. Cells work only when placement, routing, global dependencies, and evacuation preserve that boundary.
 
-Scope: **cell boundaries, placement and routing, tested cell limits, fleet lifecycle, cell deployment rings, evacuation, and shuffle-shard overlap mathematics**. [Multi-Tenant Isolation](./12-multi-tenancy.md) owns tenant identity, authorization, quotas, noisy-neighbor policy, and tenant lifecycle. [Multi-Region Architecture](./09-multi-region-architecture.md) owns regional authority, replication, and regional failover. [Database Sharding](./03-database-sharding.md) owns live data movement and shard fencing.
+A cell architecture must define **cell boundaries, placement and routing, tested cell limits, fleet lifecycle, cell deployment rings, evacuation, and shuffle-shard overlap mathematics**. [Multi-Tenant Isolation](./12-multi-tenancy.md) owns tenant identity, authorization, quotas, noisy-neighbor policy, and tenant lifecycle. [Multi-Region Architecture](./09-multi-region-architecture.md) owns regional authority, replication, and regional failover. [Database Sharding](./03-database-sharding.md) owns live data movement and shard fencing.
 
 ## Primary Evidence and Scope
 

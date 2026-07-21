@@ -1,6 +1,6 @@
 # Stripe: Designing a Correct Payment State Machine
 
-A payment is a long-lived protocol, not one atomic database call. It spans a merchant, Stripe, card or bank rails, asynchronous webhooks, refunds, disputes, and settlement. The core problem is preserving an explainable financial result when any participant can time out after a side effect.
+A payment is a long-lived protocol, not one atomic database call. It spans a merchant, Stripe, card or bank rails, asynchronous webhooks, refunds, disputes, and settlement. The core problem is preserving an explainable financial result when any participant can time out after performing its side effect.
 
 Evidence labels separate public facts from design reconstruction:
 
@@ -138,7 +138,7 @@ Stripe's published webhook guidance requires endpoint signature verification and
 
 Do not shard a double-entry transaction across independent authorities unless the ledger protocol explicitly supports atomic cross-shard posting. A safer design assigns all entries in one ledger transaction to one accounting partition and derives cross-partition settlement through paired, reconcilable transfer records.
 
-### Illustrative sizing—not Stripe production
+### Illustrative sizing: not Stripe production
 
 Assume a reference platform receives 20,000 original payment commands/s at peak. Each original command produces:
 

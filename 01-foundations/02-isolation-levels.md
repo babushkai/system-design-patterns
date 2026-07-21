@@ -117,7 +117,7 @@ snapshot S started before tx 24 committed -> reads v17
 snapshot S2 started after tx 24 committed -> reads v24
 ```
 
-The central invariant is: **a reader sees only versions committed before its snapshot, plus its own writes, and never versions from aborted or still-invisible transactions**. The exact metadata differs—transaction identifiers, commit timestamps, undo records, or immutable key suffixes—but the visibility rule is the product contract.
+The central invariant is: **a reader sees only versions committed before its snapshot, plus its own writes, and never versions from aborted or still-invisible transactions**. The exact metadata differs (transaction identifiers, commit timestamps, undo records, or immutable key suffixes), but the visibility rule is the product contract.
 
 ### Statement and transaction snapshots
 
@@ -185,7 +185,7 @@ $$
 T_{in} \xrightarrow{rw} T_{pivot} \xrightarrow{rw} T_{out}
 $$
 
-and aborts a participant when commit ordering makes the structure capable of closing a cycle. This may abort a history that would ultimately have been serializable—a conservative false positive—but it never permits a known serialization cycle. Read-only safe snapshots can avoid tracking when the engine proves that concurrent read/write transactions cannot create the dangerous structure.
+and aborts a participant when commit ordering makes the structure capable of closing a cycle. This may abort a history that would ultimately have been serializable (a conservative false positive), but it never permits a known serialization cycle. Read-only safe snapshots can avoid tracking when the engine proves that concurrent read/write transactions cannot create the dangerous structure.
 
 SSI moves the cost from lock waits to dependency metadata, predicate-read footprints, and aborts. Missing indexes can make one logical predicate cover a huge part of the database, increasing memory use and false conflicts even when the query itself is fast enough.
 
@@ -275,7 +275,7 @@ Do not publish universal “serializable costs X%” claims. Cost is a workload 
 
 ### The pooled-session leak
 
-Request A changes a session default to serializable or installs tenant context, then returns the connection without resetting it. Request B inherits that state. The symptom may be unexpected aborts—or cross-tenant data exposure. Prefer transaction-scoped settings, reset connections on checkout/check-in, and test pool reuse explicitly.
+Request A changes a session default to serializable or installs tenant context, then returns the connection without resetting it. Request B inherits that state. The symptom may be unexpected aborts or cross-tenant data exposure. Prefer transaction-scoped settings, reset connections on checkout/check-in, and test pool reuse explicitly.
 
 ### The long snapshot retention incident
 

@@ -54,7 +54,7 @@ Assume an attacker or defect may:
 ### 1.2 Core invariants
 
 1. **Canonical tenant binding:** every protected operation is bound to exactly one authorized tenant context or an explicitly modeled cross-tenant/platform operation.
-2. **Complete mediation:** all paths—including async workers, exports, analytics, support, migration, search, cache, object storage, and restore—enforce that context.
+2. **Complete mediation:** all paths (including async workers, exports, analytics, support, migration, search, cache, object storage, and restore) enforce that context.
 3. **Defense in depth:** application authorization and the data/resource layer independently prevent cross-tenant access where practical.
 4. **Global uniqueness of identity:** reused local object IDs cannot attach old or foreign permissions/data; tenant and generation are part of identity.
 5. **Placement fencing:** a stale router/writer cannot mutate a tenant's old location after migration epoch changes.
@@ -634,12 +634,12 @@ Choose pooling when logical controls, fair sharing and lifecycle tooling meet th
 
 ## References
 
-- [AWS Well-Architected SaaS Lens](https://docs.aws.amazon.com/wellarchitected/latest/saas-lens/saas-lens.html) — tenant isolation, onboarding, identity, tiering and operations
-- [Azure Architecture Center: Multitenant solutions](https://learn.microsoft.com/azure/architecture/guide/multitenant/overview) — isolation models and service-specific trade-offs
-- [Kubernetes multi-tenancy](https://kubernetes.io/docs/concepts/security/multi-tenancy/) — namespace, control/data-plane and stronger-isolation considerations
-- [PostgreSQL Row Security Policies](https://www.postgresql.org/docs/current/ddl-rowsecurity.html) — database-enforced row policy semantics and bypass conditions
-- [Amazon DynamoDB fine-grained access control](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/specifying-conditions.html) — leading-key and attribute policy conditions
-- [Shue et al., *Performance Isolation and Fairness for Multi-Tenant Cloud Storage*](https://www.usenix.org/conference/osdi12/technical-sessions/presentation/shue) — fairness and isolation under shared storage load
-- [Vuppalapati et al., *Building An Elastic Query Engine on Disaggregated Storage*](https://www.usenix.org/conference/nsdi20/presentation/vuppalapati) — multi-tenant scheduling and resource separation in analytical infrastructure
-- [Stripe: Online migrations at scale](https://stripe.com/blog/online-migrations) — live backfill, dual-read/write and cutover lessons
-- [NIST SP 800-207: Zero Trust Architecture](https://csrc.nist.gov/pubs/sp/800/207/final) — identity/resource-based access independent of network location
+- [AWS Well-Architected SaaS Lens](https://docs.aws.amazon.com/wellarchitected/latest/saas-lens/saas-lens.html): tenant isolation, onboarding, identity, tiering and operations
+- [Azure Architecture Center: Multitenant solutions](https://learn.microsoft.com/azure/architecture/guide/multitenant/overview): isolation models and service-specific trade-offs
+- [Kubernetes multi-tenancy](https://kubernetes.io/docs/concepts/security/multi-tenancy/): namespace, control/data-plane and stronger-isolation considerations
+- [PostgreSQL Row Security Policies](https://www.postgresql.org/docs/current/ddl-rowsecurity.html): database-enforced row policy semantics and bypass conditions
+- [Amazon DynamoDB fine-grained access control](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/specifying-conditions.html): leading-key and attribute policy conditions
+- [Shue et al., *Performance Isolation and Fairness for Multi-Tenant Cloud Storage*](https://www.usenix.org/conference/osdi12/technical-sessions/presentation/shue): fairness and isolation under shared storage load
+- [Vuppalapati et al., *Building An Elastic Query Engine on Disaggregated Storage*](https://www.usenix.org/conference/nsdi20/presentation/vuppalapati): multi-tenant scheduling and resource separation in analytical infrastructure
+- [Stripe: Online migrations at scale](https://stripe.com/blog/online-migrations): live backfill, dual-read/write and cutover lessons
+- [NIST SP 800-207: Zero Trust Architecture](https://csrc.nist.gov/pubs/sp/800/207/final): identity/resource-based access independent of network location

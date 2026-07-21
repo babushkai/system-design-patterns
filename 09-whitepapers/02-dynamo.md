@@ -11,7 +11,7 @@ Dynamo is a study in making **write acceptance during failure** the primary inva
 
 The 2007 system is **not Amazon DynamoDB**. The names share lineage, but the 2022 DynamoDB paper describes leader-based Multi-Paxos replication, a managed control plane, and no application-visible vector-clock reconciliation. See [Amazon DynamoDB (2022)](./14-dynamodb-2022.md) for that later design.
 
-Scope here: how the paper composes [Leaderless Replication](../02-distributed-databases/03-leaderless-replication.md), [Partitioning](../02-distributed-databases/05-partitioning-strategies.md), and [Conflict Resolution](../02-distributed-databases/04-conflict-resolution.md) for Dynamo's workload and evidence.
+This chapter examines how the paper composes [Leaderless Replication](../02-distributed-databases/03-leaderless-replication.md), [Partitioning](../02-distributed-databases/05-partitioning-strategies.md), and [Conflict Resolution](../02-distributed-databases/04-conflict-resolution.md) for Dynamo's workload and evidence.
 
 ## The service problem Dynamo chose
 
@@ -48,7 +48,7 @@ Table 1 is the paper's compact design map: consistent hashing for partitioning, 
 
 Keys hash onto a ring. Each storage node owns multiple virtual nodes, so physical capacity and failure domains can be represented by multiple positions. A key's **preference list** walks clockwise to choose `N` distinct physical nodes. The distinct-node rule matters: replicas placed on several virtual positions of one machine would not survive that machine's loss.
 
-The paper evaluates three partitioning strategies and reports that its third strategy—fixed, equal-sized partitions assigned to nodes—improved bootstrapping and archival because partition boundaries no longer changed with membership. This is a useful correction to the folklore that “virtual nodes” alone solve all operational movement problems.
+The paper evaluates three partitioning strategies and reports that its third strategy (fixed, equal-sized partitions assigned to nodes) improved bootstrapping and archival because partition boundaries no longer changed with membership. This is a useful correction to the folklore that “virtual nodes” alone solve all operational movement problems.
 
 ### Coordinator and tunable quorum
 
@@ -66,7 +66,7 @@ This is why the scheme is called sloppy: it preserves the requested count of suc
 
 The coordinator compares returned versions during reads and updates lagging replicas, repairing hot data as a side effect of foreground traffic. For cold data, replicas exchange Merkle trees. Equal subtree hashes prove that the corresponding key ranges match; unequal branches are recursively narrowed, limiting transfer to divergent ranges.
 
-Merkle trees are tied to ownership ranges. Membership changes can invalidate trees and trigger recomputation—one reason the paper's later fixed-partition strategy made operations simpler.
+Merkle trees are tied to ownership ranges. Membership changes can invalidate trees and trigger recomputation; this is one reason the paper's later fixed-partition strategy made operations simpler.
 
 ## Membership and failure handling
 
@@ -105,13 +105,13 @@ The paper also reports an important operational failure mode: anti-entropy and h
 - Full membership is held at every node; the paper does not establish behavior at enormous cluster sizes.
 - Evaluation is author-operated and workload-specific. It does not compare Dynamo with a strong-consistency design under matched failure, cost, and durability targets.
 
-These costs explain why Dynamo is a choice for a particular invariant hierarchy—not a default database architecture.
+These costs explain why Dynamo is a choice for a particular invariant hierarchy, not a default database architecture.
 
 ## Published design versus later evolution
 
 The later DynamoDB service retained partitioned key/value access, explicit capacity management, and attention to high-percentile predictability. The 2022 paper says it changed the core replication model to Multi-Paxos leaders, offered strong reads, centralized much control-plane work, and removed application-visible sibling reconciliation. In other words, the product retained Dynamo's workload decomposition while rejecting several mechanisms that imposed operational or application complexity.
 
-Other Dynamo-inspired systems retained different subsets—consistent hashing, tunable quorums, repair, or vector-like version metadata. “Dynamo-style” therefore does not identify one consistency model. A design review must name which replica set, conflict, read, repair, and membership rules are actually present.
+Other Dynamo-inspired systems retained different subsets: consistent hashing, tunable quorums, repair, or vector-like version metadata. “Dynamo-style” therefore does not identify one consistency model. A design review must name which replica set, conflict, read, repair, and membership rules are actually present.
 
 ## Decision framework
 

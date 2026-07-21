@@ -2,7 +2,7 @@
 
 Conflict resolution is the policy that turns **independently accepted, causally concurrent updates** into one convergent state. It cannot recover an intention the system never recorded. A merge can preserve both shopping-cart additions, for example, but it cannot decide whether two users who independently claimed the same username should share it. The data type and business invariant must define that answer.
 
-Scope: detection, representation, merge semantics, deletion knowledge, and repair of conflicting versions. [Multi-Leader Replication](./02-multi-leader-replication.md) and [Leaderless Replication](./03-leaderless-replication.md) own the replica protocols that create and exchange those versions. [Distributed Transactions](./07-distributed-transactions.md) owns coordination when an invariant cannot be merged safely.
+Conflict resolution must define detection, representation, merge semantics, deletion knowledge, and repair for conflicting versions. [Multi-Leader Replication](./02-multi-leader-replication.md) and [Leaderless Replication](./03-leaderless-replication.md) own the replica protocols that create and exchange those versions. [Distributed Transactions](./07-distributed-transactions.md) owns coordination when an invariant cannot be merged safely.
 
 ## Start with the contract, not the merge function
 
@@ -75,7 +75,7 @@ An LWW register chooses the maximum element under a **total order**, commonly `(
 winner = max(versions, key = (logical_or_physical_time, stable_writer_id))
 ```
 
-The tie-breaker guarantees convergence, not that an unsynchronized clock identified the real last writer. A hybrid logical clock preserves causal order better than a raw wall clock, but LWW still deliberately discards concurrent information. It is suitable only when any deterministic winner is semantically acceptable—cache hints, replaceable preferences, or fields whose authoritative source will refresh them.
+The tie-breaker guarantees convergence, not that an unsynchronized clock identified the real last writer. A hybrid logical clock preserves causal order better than a raw wall clock, but LWW still deliberately discards concurrent information. It is suitable only when any deterministic winner is semantically acceptable: cache hints, replaceable preferences, or fields whose authoritative source will refresh them.
 
 Deletes in an LWW register are values too. A tombstone must participate in the same order; physically removing it early allows an older live value to win again.
 
@@ -107,7 +107,7 @@ The simple representation retains add dots and removed dots forever. Optimized f
 
 ### Operation-based and delta-state CRDTs
 
-Operation-based CRDTs disseminate operations rather than full state. Their convergence depends on the data type's transport assumptions—often reliable causal delivery plus duplicate suppression, or operations designed to commute under a weaker order. Delta-state CRDTs disseminate small joinable state fragments and retain the idempotent join model while reducing bandwidth.
+Operation-based CRDTs disseminate operations rather than full state. Their convergence usually requires either reliable causal delivery plus duplicate suppression or operations designed to commute under a weaker delivery order. Delta-state CRDTs disseminate small joinable state fragments and retain the idempotent join model while reducing bandwidth.
 
 Do not label arbitrary event handlers a CRDT. The proof must name the state order or operation-delivery contract and demonstrate convergence for every concurrent operation pair, including add/remove, update/delete, and duplicate delivery.
 
@@ -126,7 +126,7 @@ Operation logs require bounded retention, deterministic replay, idempotency, and
 3. Each implementation keeps its local value on equality.
 4. Every exchange repeats the tie and leaves A and B different.
 
-The fix is a total deterministic order—or retaining both versions—not hoping timestamp precision makes ties impossible.
+The fix is a total deterministic order (or retaining both versions), not hoping timestamp precision makes ties impossible.
 
 ### Delete resurrection
 

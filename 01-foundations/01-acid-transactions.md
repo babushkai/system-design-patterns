@@ -37,7 +37,7 @@ These are not theoretical failure classes. Correctly implemented and configured 
 
 ---
 
-## Atomicity — Deep Dive
+## Atomicity: Deep Dive
 
 ### What It Actually Means
 
@@ -47,7 +47,7 @@ Atomicity does NOT mean "all operations happen instantaneously." That is closer 
 
 ### Why It Matters
 
-Without atomicity, every multi-statement operation is a potential source of data corruption. Any crash, network timeout, or constraint violation mid-transaction leaves the database in an inconsistent intermediate state. The alternative — writing manual cleanup and rollback logic in application code — is prohibitively error-prone.
+Without atomicity, every multi-statement operation is a potential source of data corruption. Any crash, network timeout, or constraint violation mid-transaction leaves the database in an inconsistent intermediate state. The alternative (writing manual cleanup and rollback logic in application code) is prohibitively error-prone.
 
 ### Undo Log vs Redo Log
 
@@ -64,7 +64,7 @@ Undo and redo are two complementary logging techniques used by many databases. T
 - The relevant log record must reach the configured durability boundary before the corresponding data page is allowed to be the sole durable copy
 - On crash recovery, replay restores the database to a state from which transaction commit/abort visibility can be resolved
 - Used by PostgreSQL as the primary mechanism (pg_wal directory)
-- PostgreSQL WAL is append-only, sequential I/O — much faster than random page writes
+- PostgreSQL WAL is append-only, sequential I/O: much faster than random page writes
 
 **InnoDB uses both undo and redo:**
 
@@ -89,7 +89,7 @@ PostgreSQL transaction lifecycle:
 6. Old row versions cleaned up by autovacuum (async)
 ```
 
-The key difference: InnoDB needs undo logs for rollback because it updates pages in-place. PostgreSQL uses MVCC — old row versions remain in the heap until vacuumed — so it doesn't need a separate undo log for atomicity.
+The key difference: InnoDB needs undo logs for rollback because it updates pages in-place. PostgreSQL uses MVCC (old row versions remain in the heap until vacuumed), so it doesn't need a separate undo log for atomicity.
 
 ### How ROLLBACK Works: Undo Chains and Transaction Status
 
@@ -111,7 +111,7 @@ ROLLBACK T1:
   7. Follow prev_undo_ptr to NULL → done
 ```
 
-Each transaction maintains a linked list of its undo records. Rollback traverses this chain in reverse order. This is why rolling back a transaction that modified millions of rows can take as long as the transaction itself — it must undo each change individually.
+Each transaction maintains a linked list of its undo records. Rollback traverses this chain in reverse order. This is why rolling back a transaction that modified millions of rows can take as long as the transaction itself: it must undo each change individually.
 
 **PostgreSQL rollback** normally avoids physically reversing each heap change in the foreground. The transaction is recorded or treated as aborted; its tuple versions are invisible to later transactions and are reclaimed later by vacuum. That can make the client-visible abort fast, but it defers cleanup work and can leave substantial table/index bloat after a large aborted transaction.
 
@@ -153,13 +153,13 @@ Coordinator (transaction manager)
 ├── Participant A (shard holding Account A)
 └── Participant B (shard holding Account B)
 
-Phase 1 — Prepare (vote):
+Phase 1: Prepare (vote):
   Coordinator → A: "PREPARE transaction T1"
   Coordinator → B: "PREPARE transaction T1"
   A: writes all changes to durable log, acquires locks, responds YES
   B: writes all changes to durable log, acquires locks, responds YES
 
-Phase 2 — Commit (decision):
+Phase 2: Commit (decision):
   Coordinator: all voted YES → writes COMMIT decision to its own durable log
   Coordinator → A: "COMMIT T1"
   Coordinator → B: "COMMIT T1"
@@ -191,7 +191,7 @@ Timeline:
   t1: A votes YES, B votes YES (both holding locks, changes durable)
   t2: Coordinator crashes before a decision is durably available to participants
 
-  A and B are now "in doubt" — neither can unilaterally choose an outcome:
+  A and B are now "in doubt": neither can unilaterally choose an outcome:
   - Committing could disagree with an ABORT decision
   - Aborting could disagree with a COMMIT decision
   - Prepared resources remain held until the decision service recovers or an
@@ -219,7 +219,7 @@ COMMIT PREPARED 'transfer_1001_partA';
 
 ---
 
-## Consistency — Invariants Are a Shared Responsibility
+## Consistency: Invariants Are a Shared Responsibility
 
 ### What the Database Enforces vs What It Can't
 
@@ -337,7 +337,7 @@ Some systems deliberately omit or relax these constraints for latency, availabil
 
 ---
 
-## Isolation — The Expensive Letter
+## Isolation: The Expensive Letter
 
 ### The Core Challenge
 
@@ -389,7 +389,7 @@ Prefer a transaction API or `BEGIN ... ISOLATION LEVEL` so scope is visible. If 
 
 ---
 
-## Durability — The Latency Letter
+## Durability: The Latency Letter
 
 ### Why It Matters
 
@@ -431,9 +431,9 @@ Failure point 3: Virtualized or network storage
     corruption, credentials misuse, or application-level deletion
 ```
 
-**PostgreSQL and fsync — the 2018 incident:**
+**PostgreSQL and fsync: the 2018 incident:**
 
-PostgreSQL before v12 had a critical bug: if fsync() failed, PostgreSQL retried the fsync, assuming the dirty page was still in the kernel page cache. But some Linux kernels (pre-5.2) removed the dirty page from the page cache on fsync failure. The retry fsync'd a clean page — succeeding without writing anything. This meant PostgreSQL thought data was durable when it wasn't.
+PostgreSQL before v12 had a critical bug: if fsync() failed, PostgreSQL retried the fsync, assuming the dirty page was still in the kernel page cache. But some Linux kernels (pre-5.2) removed the dirty page from the page cache on fsync failure. The retry fsync'd a clean page, succeeding without writing anything. This meant PostgreSQL thought data was durable when it wasn't.
 
 PostgreSQL 12+ responds to fsync failure by performing a PANIC (crash recovery) rather than retrying, because the kernel state is untrustworthy.
 
@@ -648,7 +648,7 @@ cur.execute("UPDATE counters          cur.execute("UPDATE counters
 # Final value: 11 (should be 12)
 ```
 
-**The fix — atomic UPDATE:**
+**The fix: atomic UPDATE:**
 
 ```sql
 -- Correct: single atomic statement, no read-then-write race
@@ -965,9 +965,9 @@ SHOW VARIABLES LIKE 'sync_binlog';                      -- should be 1 for durab
 
 ## References
 
-- [PostgreSQL: Transaction Isolation](https://www.postgresql.org/docs/current/transaction-iso.html) — level semantics, anomalies, and serialization failures
-- [PostgreSQL: SET TRANSACTION](https://www.postgresql.org/docs/current/sql-set-transaction.html) — transaction-scoped versus session-scoped characteristics
-- [PostgreSQL: Reliability and the Write-Ahead Log](https://www.postgresql.org/docs/current/wal-reliability.html) — flush, storage-cache, and filesystem assumptions
-- [MySQL: SAVEPOINT, ROLLBACK TO SAVEPOINT, and RELEASE SAVEPOINT](https://dev.mysql.com/doc/refman/8.4/en/savepoint.html) — InnoDB savepoint and retained-lock behavior
-- [CockroachDB: Foreign Key Constraint](https://www.cockroachlabs.com/docs/stable/foreign-key.html) — enforced referential integrity in a distributed SQL database
-- [Spanner: Foreign Keys](https://cloud.google.com/spanner/docs/foreign-keys/overview) — enforced and informational foreign-key semantics
+- [PostgreSQL: Transaction Isolation](https://www.postgresql.org/docs/current/transaction-iso.html): level semantics, anomalies, and serialization failures
+- [PostgreSQL: SET TRANSACTION](https://www.postgresql.org/docs/current/sql-set-transaction.html): transaction-scoped versus session-scoped characteristics
+- [PostgreSQL: Reliability and the Write-Ahead Log](https://www.postgresql.org/docs/current/wal-reliability.html): flush, storage-cache, and filesystem assumptions
+- [MySQL: SAVEPOINT, ROLLBACK TO SAVEPOINT, and RELEASE SAVEPOINT](https://dev.mysql.com/doc/refman/8.4/en/savepoint.html): InnoDB savepoint and retained-lock behavior
+- [CockroachDB: Foreign Key Constraint](https://www.cockroachlabs.com/docs/stable/foreign-key.html): enforced referential integrity in a distributed SQL database
+- [Spanner: Foreign Keys](https://cloud.google.com/spanner/docs/foreign-keys/overview): enforced and informational foreign-key semantics

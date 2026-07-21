@@ -467,7 +467,7 @@ During region failover:
 5. insert occurrences idempotently;
 6. release work through recovery admission budgets.
 
-Recovery point for schedules includes the ledger, timer state, payload references, occurrence states, and effect outcomes—not merely cron definitions.
+Recovery point for schedules includes the ledger, timer state, payload references, occurrence states, and effect outcomes, not merely cron definitions.
 
 ---
 

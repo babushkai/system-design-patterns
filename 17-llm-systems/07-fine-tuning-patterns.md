@@ -65,13 +65,13 @@ The reduction depends on layer dimensions, target modules, and rank. **QLoRA** s
 
 Choose target modules and rank through ablation. Low rank can underfit a complex distribution shift; excessive rank raises memory and can overfit without improving the product metric. A merged adapter removes runtime adapter selection but creates a separate full artifact. An unmerged adapter preserves composability and multi-tenant serving but adds compatibility, cache, scheduling, and isolation concerns.
 
-At the end you either **merge** the adapter into the base weights (zero serving overhead, one artifact) or keep it separate — which enables the serving pattern below.
+At the end you either **merge** the adapter into the base weights (zero serving overhead, one artifact) or keep it separate, which enables the serving pattern below.
 
 ### Preference Optimization: DPO and Friends
 
 SFT teaches the model what target outputs look like; preference methods fit relative judgments where no single reference completion captures the objective. Online RLHF introduces rollout, reward-model, policy, reference, and value/optimizer state plus reward-hacking and stability risks. **DPO** trains directly on `(prompt, chosen, rejected)` triples relative to a reference policy, avoiding online policy rollouts and a separately served reward model in the optimization loop. This simplifies one class of preference training but does not make pair collection, reference choice, regularization, or evaluation trivial. Other objectives encode different assumptions about feedback and policy drift; choose from the label contract rather than framework defaults.
 
-Policy optimization with verifiable rewards uses executable or otherwise checkable outcomes instead of a learned preference score. It is attractive where rollouts can be sandboxed and reward cannot be cheaply gamed—formal answers, tests, or constrained environments. It introduces rollout infrastructure, variance, credit assignment, environment versioning, and reward-hacking risk. Compare it with rejection sampling or SFT on verified successes before operating an online RL loop.
+Policy optimization with verifiable rewards uses executable or otherwise checkable outcomes instead of a learned preference score. It is attractive where rollouts can be sandboxed and reward cannot be cheaply gamed: formal answers, tests, or constrained environments. It introduces rollout infrastructure, variance, credit assignment, environment versioning, and reward-hacking risk. Compare it with rejection sampling or SFT on verified successes before operating an online RL loop.
 
 For a prompt $x$, preferred response $y_w$, rejected response $y_l$, policy $\pi_\theta$, and frozen reference $\pi_{ref}$, DPO increases the relative log-probability margin of the preferred pair:
 
@@ -83,7 +83,7 @@ $$
 \right]\right).
 $$
 
-The reference term restrains drift from the starting policy; $\beta$ controls that trade-off. The equation also exposes a data requirement: a preference pair must express a meaningful distinction. If `chosen` and `rejected` differ in several dimensions—correctness, verbosity, tone, and formatting—the model cannot know which preference to learn. Capture rubric dimension and annotator rationale, balance response position, include close calls, and measure label agreement.
+The reference term restrains drift from the starting policy; $\beta$ controls that trade-off. The equation also exposes a data requirement: a preference pair must express a meaningful distinction. If `chosen` and `rejected` differ in several dimensions (correctness, verbosity, tone, and formatting), the model cannot know which preference to learn. Capture rubric dimension and annotator rationale, balance response position, include close calls, and measure label agreement.
 
 Preference optimization can exploit artifacts of the data collector. If annotators prefer longer answers, the policy learns length; if a judge model produced both labels and later grades the release, the apparent improvement can be self-agreement. Run dimension-specific human evaluation and objective checks outside the preference pipeline.
 
@@ -119,7 +119,7 @@ The training corpus and its lineage determine what intervention can be reproduce
 
 **Deduplicate, decontaminate, split honestly.** Near-duplicate examples silently overweight their pattern; eval examples leaking into training data produce the classic too-good-to-be-true validation score ([leakage](../16-ml-systems/05-training-pipelines.md), in fine-tuning clothes). Split by *entity or scenario*, not by row, when generalization to new entities is the goal.
 
-**Version the dataset like a release artifact.** Snapshot, hash, and record the exact training set with the produced model — a tuned model whose data can't be reconstructed can't be debugged, audited, or legally defended. The full argument lives in [dataset management](../16-ml-systems/11-dataset-management-versioning.md); fine-tuning inherits all of it, plus a sharper privacy edge: PII in training data can resurface verbatim in generations, so scrubbing happens *before* training, not in the output filter.
+**Version the dataset like a release artifact.** Snapshot, hash, and record the exact training set with the produced model: a tuned model whose data can't be reconstructed can't be debugged, audited, or legally defended. The full argument lives in [dataset management](../16-ml-systems/11-dataset-management-versioning.md); fine-tuning inherits all of it, plus a sharper privacy edge: PII in training data can resurface verbatim in generations, so scrubbing happens *before* training, not in the output filter.
 
 **Format for the target.** Chat-tuned bases encode template assumptions through roles and special tokens; a training/serving mismatch silently changes the learned sequence distribution. Pin tokenizer, chat template, role boundaries, loss mask, and serving-time instruction contract as one compatibility tuple.
 
@@ -246,7 +246,7 @@ Safety tuning does not replace runtime policy. Distribution shift, adversarial i
 
 **Style drift laundered as success.** The tuned model *sounds* more on-brand, and a judge model rewards the confidence while factuality quietly drops. Defense: separate evals for correctness and style; never a single "quality" score.
 
-**Unreproducible artifact.** Great model, unknown data, departed author. Defense: the reproducibility contract — data snapshot hash, base model + revision, config, seed — enforced at registry time, exactly as for any [model registry](../16-ml-systems/13-model-registry-metadata.md) entry.
+**Unreproducible artifact.** Great model, unknown data, departed author. Defense: the reproducibility contract (data snapshot hash, base model + revision, config, seed) enforced at registry time, exactly as for any [model registry](../16-ml-systems/13-model-registry-metadata.md) entry.
 
 **Stranded adapter.** The base model family moves two generations; the adapter is welded to obsolete weights and the data pipeline to regenerate it was never built. Defense: budget the refresh pipeline, not the one-off run; keep the training set (the durable asset) in better shape than the checkpoint.
 
@@ -264,7 +264,7 @@ Safety tuning does not replace runtime policy. Distribution shift, adversarial i
 
 ## Decision Framework
 
-*Did a strong prompt with examples and schema enforcement fail, measurably, on an eval set?* If it wasn't tried, or there's no eval set, the answer to "should we fine-tune" is no — not yet.
+*Did a strong prompt with examples and schema enforcement fail, measurably, on an eval set?* If it wasn't tried, or there's no eval set, the answer to "should we fine-tune" is no, not yet.
 
 *Is the gap knowledge or behavior?* Knowledge → retrieval. Behavior (style, format, task skill, tool reliability) → tuning is on the table.
 
@@ -291,13 +291,13 @@ Safety tuning does not replace runtime policy. Distribution shift, adversarial i
 
 ## References
 
-1. [LoRA: Low-Rank Adaptation of Large Language Models](https://arxiv.org/abs/2106.09685) — Hu et al., 2021
-2. [QLoRA: Efficient Finetuning of Quantized LLMs](https://arxiv.org/abs/2305.14314) — Dettmers et al., 2023
-3. [Direct Preference Optimization: Your Language Model is Secretly a Reward Model](https://arxiv.org/abs/2305.18290) — Rafailov et al., 2023
-4. [Training Language Models to Follow Instructions with Human Feedback](https://arxiv.org/abs/2203.02155) — Ouyang et al., 2022 (RLHF)
-5. [Constitutional AI: Harmlessness from AI Feedback](https://arxiv.org/abs/2212.08073) — Bai et al., 2022
-6. [LIMA: Less Is More for Alignment](https://arxiv.org/abs/2305.11206) — Zhou et al., 2023
-7. [DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning](https://arxiv.org/abs/2501.12948) — DeepSeek, 2025 (GRPO, verifiable rewards)
-8. [S-LoRA: Serving Thousands of Concurrent LoRA Adapters](https://arxiv.org/abs/2311.03285) — Sheng et al., 2023
-9. [TRL — Transformer Reinforcement Learning](https://huggingface.co/docs/trl) — SFT/DPO/GRPO tooling
-10. [Distilling Step-by-Step!](https://arxiv.org/abs/2305.02301) — Hsieh et al., 2023
+1. [LoRA: Low-Rank Adaptation of Large Language Models](https://arxiv.org/abs/2106.09685): Hu et al., 2021
+2. [QLoRA: Efficient Finetuning of Quantized LLMs](https://arxiv.org/abs/2305.14314): Dettmers et al., 2023
+3. [Direct Preference Optimization: Your Language Model is Secretly a Reward Model](https://arxiv.org/abs/2305.18290): Rafailov et al., 2023
+4. [Training Language Models to Follow Instructions with Human Feedback](https://arxiv.org/abs/2203.02155): Ouyang et al., 2022 (RLHF)
+5. [Constitutional AI: Harmlessness from AI Feedback](https://arxiv.org/abs/2212.08073): Bai et al., 2022
+6. [LIMA: Less Is More for Alignment](https://arxiv.org/abs/2305.11206): Zhou et al., 2023
+7. [DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning](https://arxiv.org/abs/2501.12948): DeepSeek, 2025 (GRPO, verifiable rewards)
+8. [S-LoRA: Serving Thousands of Concurrent LoRA Adapters](https://arxiv.org/abs/2311.03285): Sheng et al., 2023
+9. [TRL - Transformers Reinforcement Learning](https://huggingface.co/docs/trl): SFT/DPO/GRPO tooling
+10. [Distilling Step-by-Step!](https://arxiv.org/abs/2305.02301): Hsieh et al., 2023

@@ -59,7 +59,7 @@ Assume an attacker may:
 ### 1.2 Core invariants
 
 1. **Complete mediation:** every protected operation crosses an enforcement point, including batch, export, background, admin, and direct-storage paths.
-2. **Canonical identity:** subject, workload, tenant, action, and resource identifiers come from authenticated or authoritative context—not caller-chosen headers.
+2. **Canonical identity:** subject, workload, tenant, action, and resource identifiers come from authenticated or authoritative context, not caller-chosen headers.
 3. **Default deny:** absence, malformed policy, unsupported schema, timeout, and indeterminate evaluation never silently become allow.
 4. **Resource binding:** the decision applies to one canonical resource and action; a result for one tenant or object cannot be replayed for another.
 5. **Revision awareness:** security-sensitive callers can require at-least-as-fresh policy state.
@@ -254,7 +254,7 @@ Hybrid designs are common:
 - a local cache or replica with revision bounds;
 - highly sensitive actions requiring a current central decision.
 
-Define three outcomes. `deny` is a valid policy result; `indeterminate` means the engine could not safely decide. Treating PDP timeout as a policy deny may be operationally acceptable for a protected mutation but should preserve a distinct reason. Treating it as allow widens authority during failure and requires an exceptional, narrowly documented risk decision—not a generic availability fallback.
+Define three outcomes. `deny` is a valid policy result; `indeterminate` means the engine could not safely decide. Treating PDP timeout as a policy deny may be operationally acceptable for a protected mutation but should preserve a distinct reason. Treating it as allow widens authority during failure and requires an exceptional, narrowly documented risk decision, not a generic availability fallback.
 
 ---
 
@@ -346,7 +346,7 @@ Offer explicit consistency modes rather than a boolean “consistent” flag:
 - **bounded staleness:** accept a result within a declared time/revision window;
 - **best effort:** appropriate only where stale authorization cannot expose protected state.
 
-Adding permission can also be security-sensitive—for example, a malicious admin granting an attacker access—so do not assume positive changes are harmless while only revocation matters. Classify mutations and resource operations by risk.
+Adding permission can also be security-sensitive. For example, a malicious admin can grant an attacker access, so do not assume positive changes are harmless while only revocation matters. Classify mutations and resource operations by risk.
 
 ### 6.2 Revocation SLO
 
@@ -496,7 +496,7 @@ Authorization is usually tier zero: when it is unavailable, protected business o
 3. A regional cache retains an earlier positive decision.
 4. The contractor exports data for the cache TTL.
 
-Prevent by propagating a revision floor to sensitive operations, invalidating known dependencies, and measuring exposure—not by claiming “eventual consistency.”
+Prevent by propagating a revision floor to sensitive operations, invalidating known dependencies, and measuring exposure, not by claiming “eventual consistency.”
 
 **Policy rollout widens access**
 
@@ -649,11 +649,11 @@ The architecture is incomplete if it demonstrates only an SDK call returning `tr
 
 ## References
 
-- [Zanzibar: Google's Consistent, Global Authorization System](https://research.google/pubs/zanzibar-googles-consistent-global-authorization-system/) — relation tuples, userset rewrites, consistency tokens, and global serving architecture
-- [NIST Role-Based Access Control project](https://csrc.nist.gov/projects/role-based-access-control) — formal RBAC models and constraints
-- [NIST SP 800-162: Guide to Attribute Based Access Control](https://csrc.nist.gov/pubs/sp/800/162/upd2/final) — ABAC concepts and enterprise considerations
-- [Cedar policy language specification](https://docs.cedarpolicy.com/) and [Cedar design and formal analysis](https://www.cedarpolicy.com/en/science) — analyzable authorization-policy semantics
-- [Open Policy Agent documentation](https://www.openpolicyagent.org/docs/latest/) — policy decision APIs, bundles, and partial evaluation
-- [SpiceDB documentation](https://authzed.com/docs) and [OpenFGA documentation](https://openfga.dev/docs) — production implementations of relationship-based authorization
-- [PostgreSQL row security policies](https://www.postgresql.org/docs/current/ddl-rowsecurity.html) — database-level row predicate enforcement
-- [Google Cloud IAM consistency](https://cloud.google.com/iam/docs/access-change-propagation) — concrete operational treatment of authorization propagation
+- [Zanzibar: Google's Consistent, Global Authorization System](https://research.google/pubs/zanzibar-googles-consistent-global-authorization-system/): relation tuples, userset rewrites, consistency tokens, and global serving architecture
+- [NIST Role-Based Access Control project](https://csrc.nist.gov/projects/role-based-access-control): formal RBAC models and constraints
+- [NIST SP 800-162: Guide to Attribute Based Access Control](https://csrc.nist.gov/pubs/sp/800/162/upd2/final): ABAC concepts and enterprise considerations
+- [Cedar policy language specification](https://docs.cedarpolicy.com/) and [Cedar design and formal analysis](https://www.cedarpolicy.com/en/science): analyzable authorization-policy semantics
+- [Open Policy Agent documentation](https://www.openpolicyagent.org/docs/latest/): policy decision APIs, bundles, and partial evaluation
+- [SpiceDB documentation](https://authzed.com/docs) and [OpenFGA documentation](https://openfga.dev/docs): production implementations of relationship-based authorization
+- [PostgreSQL row security policies](https://www.postgresql.org/docs/current/ddl-rowsecurity.html): database-level row predicate enforcement
+- [Google Cloud IAM consistency](https://cloud.google.com/iam/docs/access-change-propagation): concrete operational treatment of authorization propagation

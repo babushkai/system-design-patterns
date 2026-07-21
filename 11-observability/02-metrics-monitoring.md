@@ -6,9 +6,9 @@ Metrics turn many observations into bounded numeric time series. Their power com
 
 Counters represent additive change, gauges represent a sampled state, and histograms preserve distributions so they can be aggregated before quantiles are estimated. Never average per-instance percentiles. Cumulative and delta streams can both work, but collectors must preserve single-writer identity, start time, resets, and gaps when converting between them.
 
-Scrape, push/OTLP, and remote write solve different transport boundaries. All require bounded queues, explicit timestamps, authentication, tenant isolation, and loss telemetry. Capacity is driven by active series, churn, samples, histogram buckets, retention, replication, and query scan—not the number of metric names.
+Scrape, push/OTLP, and remote write solve different transport boundaries. All require bounded queues, explicit timestamps, authentication, tenant isolation, and loss telemetry. Capacity is driven by active series, churn, samples, histogram buckets, retention, replication, and query scan, not the number of metric names.
 
-Shared plane: [Distributed Tracing and Telemetry Pipelines](./01-distributed-tracing.md). Scope here: metric instruments, aggregation, transport, storage, and query capacity; [Alerting](./04-alerting.md) covers notification state and [SLOs](./05-slos-error-budgets.md) reliability interpretation.
+[Distributed Tracing and Telemetry Pipelines](./01-distributed-tracing.md) defines the shared telemetry plane. This chapter covers metric instruments, aggregation, transport, storage, and query capacity; [Alerting](./04-alerting.md) covers notification state and [SLOs](./05-slos-error-budgets.md) covers reliability interpretation.
 
 ---
 
@@ -512,13 +512,13 @@ Use a synthetic canary that emits known counter, gauge, and histogram patterns w
 
 ## References
 
-- [OpenTelemetry Metrics Data Model](https://opentelemetry.io/docs/specs/otel/metrics/data-model/) — streams, temporality, resets, gaps, overlap, histograms, and exemplars
-- [OpenTelemetry Metrics SDK Specification](https://opentelemetry.io/docs/specs/otel/metrics/sdk/) — instruments, views, aggregation, and cardinality limits
-- [Prometheus Data Model](https://prometheus.io/docs/concepts/data_model/) — time-series identity, labels, samples, and staleness
-- [OpenMetrics Specification](https://github.com/prometheus/OpenMetrics/blob/main/specification/OpenMetrics.md) — metric exposition types and wire semantics
-- [Prometheus Remote Write Specification](https://prometheus.io/docs/specs/prw/remote_write_spec/) — sample transport and compatibility
-- [Prometheus Storage](https://prometheus.io/docs/prometheus/latest/storage/) — WAL, local time-series blocks, retention, and operational behavior
-- [Monarch: Google’s Planet-Scale In-Memory Time Series Database](https://www.vldb.org/pvldb/vol13/p3181-adams.pdf) — distributed metric ingestion, indexing, query, and regional operation
-- [Distributed Tracing and Telemetry Pipelines](./01-distributed-tracing.md) — shared collection/control plane and trace exemplars
-- [Alert Evaluation and Notification](./04-alerting.md) — rule state, routing, and missing-data behavior
-- [SLOs and Error-Budget Control](./05-slos-error-budgets.md) — SLI aggregation and burn-rate interpretation
+- [OpenTelemetry Metrics Data Model](https://opentelemetry.io/docs/specs/otel/metrics/data-model/): streams, temporality, resets, gaps, overlap, histograms, and exemplars
+- [OpenTelemetry Metrics SDK Specification](https://opentelemetry.io/docs/specs/otel/metrics/sdk/): instruments, views, aggregation, and cardinality limits
+- [Prometheus Data Model](https://prometheus.io/docs/concepts/data_model/): time-series identity, labels, samples, and staleness
+- [OpenMetrics Specification](https://github.com/prometheus/OpenMetrics/blob/main/specification/OpenMetrics.md): metric exposition types and wire semantics
+- [Prometheus Remote Write Specification](https://prometheus.io/docs/specs/prw/remote_write_spec/): sample transport and compatibility
+- [Prometheus Storage](https://prometheus.io/docs/prometheus/latest/storage/): WAL, local time-series blocks, retention, and operational behavior
+- [Monarch: Google’s Planet-Scale In-Memory Time Series Database](https://www.vldb.org/pvldb/vol13/p3181-adams.pdf): distributed metric ingestion, indexing, query, and regional operation
+- [Distributed Tracing and Telemetry Pipelines](./01-distributed-tracing.md): shared collection/control plane and trace exemplars
+- [Alert Evaluation and Notification](./04-alerting.md): rule state, routing, and missing-data behavior
+- [SLOs and Error-Budget Control](./05-slos-error-budgets.md): SLI aggregation and burn-rate interpretation

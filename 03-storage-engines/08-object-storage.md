@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-Object storage exposes a small key/object API over a large distributed metadata and blob-placement system. The abstraction is not a POSIX filesystem: a key is not a directory entry, rename is generally copy-plus-delete, append and in-place mutation are absent or service/tier-specific, and atomicity normally applies to one object version—not an arbitrary group of keys.
+Object storage exposes a small key/object API over a large distributed metadata and blob-placement system. The abstraction is not a POSIX filesystem: a key is not a directory entry, rename is generally copy-plus-delete, append and in-place mutation are absent or service/tier-specific, and atomicity normally applies to one object version, not an arbitrary group of keys.
 
 A production design must pin the exact provider/API consistency contract, conditional-request semantics, checksum behavior, versioning/lifecycle rules, event guarantees, regional replication, and encryption boundary. Do not rely on folklore such as a timeless “requests per prefix” number or assume every `ETag` is a content hash.
 
@@ -253,7 +253,7 @@ The front end resolves metadata, selects healthy shards/copies, and streams full
 
 ### 6.1 Range and parallel reads
 
-Large analytical/media readers can issue bounded parallel range requests against immutable versions. Pin the version/generation so ranges cannot mix an overwrite. Align ranges with file-format units where possible—Parquet row groups/column chunks, video segments, index blocks.
+Large analytical/media readers can issue bounded parallel range requests against immutable versions. Pin the version/generation so ranges cannot mix an overwrite. Align ranges with file-format units where possible: Parquet row groups/column chunks, video segments, index blocks.
 
 Parallelism is not free. It increases request charges, connection/port use, metadata QPS, tail amplification, and competition. Determine the concurrency knee from open-loop load against the real region/object-size distribution.
 
@@ -417,7 +417,7 @@ Use conditional update on G; loser rereads/rebases. Garbage-collect its unreacha
 
 1. Client computes MD5 of a large file.
 2. Multipart upload returns an ETag with provider-specific multipart meaning.
-3. Client treats mismatch as corruption and retries indefinitely—or treats equality assumptions as integrity proof in another path.
+3. Client treats mismatch as corruption and retries indefinitely, or treats equality assumptions as integrity proof in another path.
 
 Use documented checksum fields/algorithms and store the producer's content digest separately from the concurrency token.
 
@@ -533,7 +533,7 @@ Ask:
 9. How are tenant, capability URL, encryption, lifecycle, and admin authorities separated?
 10. What exactly replicates across regions, what is the RPO, and how are stale writers fenced?
 11. Can a full restore meet RTO with historical key versions and realistic object-count distribution?
-12. Which migration test proves semantic—not merely API—compatibility?
+12. Which migration test proves semantic (not merely API) compatibility?
 
 Use object storage when immutable bulk bytes, parallel throughput, independent durability, and simple key/version access fit. Use a database/catalog for rich queries and multi-record transactions, a filesystem for POSIX rename/append semantics, and block storage beneath latency-sensitive mutable engines.
 
@@ -541,11 +541,11 @@ Use object storage when immutable bulk bytes, parallel throughput, independent d
 
 ## References
 
-- [Calder et al., *Windows Azure Storage: A Highly Available Cloud Storage Service with Strong Consistency*](https://dl.acm.org/doi/10.1145/2043556.2043571) — front end, partition and stream layers
-- [Muralidhar et al., *f4: Facebook's Warm BLOB Storage System*](https://www.usenix.org/conference/osdi14/technical-sessions/presentation/muralidhar) — erasure-coded warm blob storage and fault domains
-- [Huang et al., *Erasure Coding in Windows Azure Storage*](https://www.usenix.org/conference/atc12/technical-sessions/presentation/huang) — local reconstruction codes and repair trade-offs
-- [Warfield, *Building and operating a pretty big storage system*](https://www.allthingsdistributed.com/2023/07/building-and-operating-a-pretty-big-storage-system.html) — published S3 architectural evolution
-- [Amazon S3 data consistency model](https://docs.aws.amazon.com/AmazonS3/latest/userguide/Welcome.html#ConsistencyModel), [conditional requests](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-requests.html), [checksums](https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html), and [performance design patterns](https://docs.aws.amazon.com/AmazonS3/latest/userguide/optimizing-performance.html) — current service-specific contracts
-- [Google Cloud Storage request preconditions](https://cloud.google.com/storage/docs/request-preconditions) and [consistency](https://cloud.google.com/storage/docs/consistency) — generation/metageneration and service semantics
-- [Azure Blob conditional headers](https://learn.microsoft.com/rest/api/storageservices/specifying-conditional-headers-for-blob-service-operations) and [data protection overview](https://learn.microsoft.com/azure/storage/blobs/data-protection-overview) — concurrency and retained-version controls
-- [OpenStack Swift architecture](https://docs.openstack.org/swift/latest/overview_architecture.html) and [Ceph erasure coding](https://docs.ceph.com/en/latest/rados/operations/erasure-code/) — self-operated object/data placement designs
+- [Calder et al., *Windows Azure Storage: A Highly Available Cloud Storage Service with Strong Consistency*](https://dl.acm.org/doi/10.1145/2043556.2043571): front end, partition and stream layers
+- [Muralidhar et al., *f4: Facebook's Warm BLOB Storage System*](https://www.usenix.org/conference/osdi14/technical-sessions/presentation/muralidhar): erasure-coded warm blob storage and fault domains
+- [Huang et al., *Erasure Coding in Windows Azure Storage*](https://www.usenix.org/conference/atc12/technical-sessions/presentation/huang): local reconstruction codes and repair trade-offs
+- [Warfield, *Building and operating a pretty big storage system*](https://www.allthingsdistributed.com/2023/07/building-and-operating-a-pretty-big-storage-system.html): published S3 architectural evolution
+- [Amazon S3 data consistency model](https://docs.aws.amazon.com/AmazonS3/latest/userguide/Welcome.html#ConsistencyModel), [conditional requests](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-requests.html), [checksums](https://docs.aws.amazon.com/AmazonS3/latest/userguide/checking-object-integrity.html), and [performance design patterns](https://docs.aws.amazon.com/AmazonS3/latest/userguide/optimizing-performance.html): current service-specific contracts
+- [Google Cloud Storage request preconditions](https://cloud.google.com/storage/docs/request-preconditions) and [consistency](https://cloud.google.com/storage/docs/consistency): generation/metageneration and service semantics
+- [Azure Blob conditional headers](https://learn.microsoft.com/rest/api/storageservices/specifying-conditional-headers-for-blob-service-operations) and [data protection overview](https://learn.microsoft.com/azure/storage/blobs/data-protection-overview): concurrency and retained-version controls
+- [OpenStack Swift architecture](https://docs.openstack.org/swift/latest/overview_architecture.html) and [Ceph erasure coding](https://docs.ceph.com/en/latest/rados/operations/erasure-code/): self-operated object/data placement designs

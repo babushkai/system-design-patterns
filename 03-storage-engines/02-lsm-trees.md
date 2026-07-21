@@ -1,8 +1,8 @@
 # LSM Trees
 
-A log-structured merge tree turns foreground random writes into an append plus an in-memory ordered update. Immutable sorted files are produced later, and background work reconciles them. This shifts—not removes—cost: write latency becomes smooth while read amplification, space amplification, and deferred rewrite debt become operating concerns.
+A log-structured merge tree turns foreground random writes into an append plus an in-memory ordered update. Immutable sorted files are produced later, and background work reconciles them. This shifts (not removes) cost: write latency becomes smooth while read amplification, space amplification, and deferred rewrite debt become operating concerns.
 
-Scope: the end-to-end LSM pipeline: WAL and memtable admission, internal versions, point and range reads across components, recovery, snapshots, and overload control. [SSTables and Compaction](./03-sstables-compaction.md) owns immutable-file publication, compaction transactions, strategy mechanics, and safe version/tombstone collection. [Bloom Filters](./05-bloom-filters.md) owns filter mathematics, and [Write-Ahead Logging](./04-write-ahead-logging.md) owns general WAL recovery theory.
+The end-to-end LSM pipeline spans WAL and memtable admission, internal versions, point and range reads across components, recovery, snapshots, and overload control. [SSTables and Compaction](./03-sstables-compaction.md) owns immutable-file publication, compaction transactions, strategy mechanics, and safe version/tombstone collection. [Bloom Filters](./05-bloom-filters.md) owns filter mathematics, and [Write-Ahead Logging](./04-write-ahead-logging.md) owns general WAL recovery theory.
 
 ## Workload and service contract
 
@@ -101,7 +101,7 @@ Use separate quantities rather than one vague “write amplification.” Let `F`
 device write bytes/s ~= F * WAL_factor + F * WA_file
 ```
 
-`WAL_factor` is near one before filesystem/device amplification, but compression and batching change it. This demand plus foreground reads, repair, snapshots, and free-space headroom must fit below sustainable—not burst—device bandwidth. If background capacity is lower than file work arriving, pending compaction bytes grow without bound.
+`WAL_factor` is near one before filesystem/device amplification, but compression and batching change it. This demand plus foreground reads, repair, snapshots, and free-space headroom must fit below sustainable (not burst) device bandwidth. If background capacity is lower than file work arriving, pending compaction bytes grow without bound.
 
 For memtable target `M` bytes and incoming rate `F`, a memtable fills in roughly `M/F` seconds. With `n_imm` permitted immutable memtables, the burst cushion before a hard stall is at most `n_imm * M / F`, less time already consumed by flush. This is why immutable count is a pressure gauge, not free buffering.
 
@@ -147,7 +147,7 @@ Verification uses a simple versioned ordered map as an oracle. Generate puts, de
 
 ## Migration and decision framework
 
-Most tunable changes—memtable size, compression, filter policy, or background concurrency—affect newly produced files and converge gradually through normal maintenance. Comparator, internal-key, sequence, encryption, or merge semantics are format changes. Build a new column family or database, copy a consistent snapshot, tail later mutations, validate range digests and query results, then switch an atomic handle while keeping rollback state.
+Most tunable changes (memtable size, compression, filter policy, or background concurrency) affect newly produced files and converge gradually through normal maintenance. Comparator, internal-key, sequence, encryption, or merge semantics are format changes. Build a new column family or database, copy a consistent snapshot, tail later mutations, validate range digests and query results, then switch an atomic handle while keeping rollback state.
 
 Choose an LSM when sustained ingest, sequential device writes, immutable snapshots, and high write concurrency outweigh added read and background complexity. Choose a [B+-tree](./01-b-trees.md) for predictable point/range latency and update locality in a cacheable working set. For TTL data, choose a file policy that can expire whole time windows rather than creating per-key deletion debt. The decisive capacity question is not “can the foreground append this fast?” but **can the whole system rewrite, read, repair, and reclaim this stream indefinitely?**
 

@@ -6,7 +6,7 @@ Invalidation is a distributed consistency protocol between an authoritative writ
 
 Use a product-defined freshness contract, a durable change signal when propagation matters, monotonic source versions to reject stale work, and a TTL as a failure bound. Prefer idempotent deletion over blind value updates. For races where a reader can refill an old value after deletion, deletion alone is insufficient: use a version fence, generation, lease, or accept a measured TTL-bounded window.
 
-Scope: freshness guarantees, invalidation races, dependency propagation, and coherence across L1, L2, CDN, and browser caches. Cache placement and economics live in [Cache Semantics and Economics](01-cache-strategies.md); cluster failover lives in [Distributed Cache Internals](03-distributed-caching.md); refill amplification lives in [Stampede, Cold Start, and Warming](04-cache-stampede.md).
+Cache coherence depends on explicit freshness guarantees, race handling, dependency propagation, and behavior across L1, L2, CDN, and browser caches. Cache placement and economics live in [Cache Semantics and Economics](01-cache-strategies.md); cluster failover lives in [Distributed Cache Internals](03-distributed-caching.md); refill amplification lives in [Stampede, Cold Start, and Warming](04-cache-stampede.md).
 
 ---
 
@@ -139,7 +139,7 @@ Incrementing a generation is an O(1) logical invalidation for a namespace. Trade
 - a missed generation update can split readers;
 - changing a global generation can create a cold-cache event.
 
-Use a generation for serializer changes, bulk content releases, or bounded groups—not as a reflex for every row write.
+Use a generation for serializer changes, bulk content releases, or bounded groups, not as a reflex for every row write.
 
 ### 2.5 Tag or surrogate-key invalidation
 

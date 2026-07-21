@@ -171,46 +171,46 @@ Evidence labels used throughout the fieldbook:
 - [Service and Platform Migration](15-deployment/06-migration-strategies.md)
 
 ### Part 16: ML Systems
-- [ML System Fundamentals](16-ml-systems/01-ml-system-fundamentals.md) — control planes, training/serving parity, maturity model
-- [Feature Stores](16-ml-systems/02-feature-stores.md) — point-in-time correctness, offline/online parity, freshness SLOs
-- [Model Serving](16-ml-systems/03-model-serving.md) — latency budgets, batching, routing, degradation ladders
-- [Model Monitoring](16-ml-systems/04-model-monitoring.md) — drift detection, label delay, slice guardrails, triage flow
-- [Training Pipelines](16-ml-systems/05-training-pipelines.md) — TFX/Kubeflow/Airflow DSLs, reproducibility, promotion gates, distributed training
-- [Model Deployment and Rollouts](16-ml-systems/06-model-deployment-rollouts.md) — canary sizing, shadow isolation, kill switches, threshold migration, rollback playbooks
-- [Recommendation Systems](16-ml-systems/07-recommendation-systems.md) — two-tower retrieval, Wide & Deep, ANN indexing, DPP diversity, exploration, cold start
-- [Online Experiments](16-ml-systems/08-online-experiments.md) — power analysis, SRM checks, CUPED, sequential testing, interleaving
-- [ML Risk and Governance](16-ml-systems/09-ml-risk-governance.md) — risk tiers, model cards, proxy detection, audit logs, incident response, lifecycle
-- [Label and Ground-Truth Systems](16-ml-systems/10-label-ground-truth-systems.md) — label delay, selective labels, human review, weak supervision, append-only label stores
-- [Dataset Management and Versioning](16-ml-systems/11-dataset-management-versioning.md) — immutable snapshots, manifests, split reproducibility, lineage, privacy deletion
-- [Offline Evaluation and Metric Design](16-ml-systems/12-offline-evaluation-metrics.md) — metric selection, thresholds, calibration, leakage, slices, uncertainty
-- [Model Registry and ML Metadata](16-ml-systems/13-model-registry-metadata.md) — artifact identity, serving contracts, lifecycle states, promotion gates, rollback metadata
-- [ML Capacity and Cost Planning](16-ml-systems/14-ml-capacity-cost-planning.md) — GPU sizing, batching, feature fanout, training cost, queueing, headroom
-- [Distributed Training Internals](16-ml-systems/15-distributed-training-internals.md) — parallelism topologies, collectives, ZeRO/FSDP, MFU, failure math, checkpointing
+- [ML System Fundamentals](16-ml-systems/01-ml-system-fundamentals.md): control planes, training/serving parity, maturity model
+- [Feature Stores](16-ml-systems/02-feature-stores.md): point-in-time correctness, offline/online parity, freshness SLOs
+- [Model Serving](16-ml-systems/03-model-serving.md): latency budgets, batching, routing, degradation ladders
+- [Model Monitoring](16-ml-systems/04-model-monitoring.md): drift detection, label delay, slice guardrails, triage flow
+- [Training Pipelines](16-ml-systems/05-training-pipelines.md): TFX/Kubeflow/Airflow DSLs, reproducibility, promotion gates, distributed training
+- [Model Deployment and Rollouts](16-ml-systems/06-model-deployment-rollouts.md): canary sizing, shadow isolation, kill switches, threshold migration, rollback playbooks
+- [Recommendation Systems](16-ml-systems/07-recommendation-systems.md): two-tower retrieval, Wide & Deep, ANN indexing, DPP diversity, exploration, cold start
+- [Online Experiments](16-ml-systems/08-online-experiments.md): power analysis, SRM checks, CUPED, sequential testing, interleaving
+- [ML Risk and Governance](16-ml-systems/09-ml-risk-governance.md): risk tiers, model cards, proxy detection, audit logs, incident response, lifecycle
+- [Label and Ground-Truth Systems](16-ml-systems/10-label-ground-truth-systems.md): label delay, selective labels, human review, weak supervision, append-only label stores
+- [Dataset Management and Versioning](16-ml-systems/11-dataset-management-versioning.md): immutable snapshots, manifests, split reproducibility, lineage, privacy deletion
+- [Offline Evaluation and Metric Design](16-ml-systems/12-offline-evaluation-metrics.md): metric selection, thresholds, calibration, leakage, slices, uncertainty
+- [Model Registry and ML Metadata](16-ml-systems/13-model-registry-metadata.md): artifact identity, serving contracts, lifecycle states, promotion gates, rollback metadata
+- [ML Capacity and Cost Planning](16-ml-systems/14-ml-capacity-cost-planning.md): GPU sizing, batching, feature fanout, training cost, queueing, headroom
+- [Distributed Training Internals](16-ml-systems/15-distributed-training-internals.md): parallelism topologies, collectives, ZeRO/FSDP, MFU, failure math, checkpointing
 
 ### Part 17: LLM Systems
-- [Agent Fundamentals](17-llm-systems/01-agent-fundamentals.md) — durable loops, action identity, authority, evidence, and bounded autonomy
-- [Orchestration Patterns](17-llm-systems/02-orchestration-patterns.md) — deterministic workflows versus adaptive branches, typed state graphs, latency and cost composition
-- [Multi-Agent Systems](17-llm-systems/03-multi-agent-systems.md) — delegation, shared state, message semantics, scheduling, and correlated failure
-- [RAG Patterns](17-llm-systems/04-rag-patterns.md) — corpus publication, authorization-aware retrieval, evidence packets, grounded generation, and citation provenance
-- [LLM Infrastructure](17-llm-systems/05-llm-infrastructure.md) — gateway and model control planes, regional admission/routing/streaming, provider and self-hosted fleets
-- [Prompt Engineering](17-llm-systems/06-prompt-engineering.md) — versioned request compilation, structured outputs, tool schemas, prompt-injection test boundaries
-- [Fine-Tuning Patterns](17-llm-systems/07-fine-tuning-patterns.md) — method choice, dataset/release identity, serving adapters, privacy and evaluation
-- [Context Management](17-llm-systems/08-context-management.md) — context revisions, compaction, memory, token budgets, and concurrency
-- [Harness Engineering](17-llm-systems/09-harness-engineering.md) — action transactions, permission boundaries, sandbox/secret broker, recovery and rollout
-- [LLM Evaluation and Observability](17-llm-systems/10-llm-evaluation.md) — estimands, datasets, calibrated evaluators, uncertainty, traces and production feedback
-- [GPU Inference Internals](17-llm-systems/11-gpu-inference-internals.md) — phase rooflines, KV/device memory, kernels, parallelism, and accelerator isolation
-- [Agent Inference](17-llm-systems/12-agent-inference.md) — multi-turn session scheduling, KV residency, cache-aware routing, fan-out and task-level goodput
+- [Agent Fundamentals](17-llm-systems/01-agent-fundamentals.md): durable loops, action identity, authority, evidence, and bounded autonomy
+- [Orchestration Patterns](17-llm-systems/02-orchestration-patterns.md): deterministic workflows versus adaptive branches, typed state graphs, latency and cost composition
+- [Multi-Agent Systems](17-llm-systems/03-multi-agent-systems.md): delegation, shared state, message semantics, scheduling, and correlated failure
+- [RAG Patterns](17-llm-systems/04-rag-patterns.md): corpus publication, authorization-aware retrieval, evidence packets, grounded generation, and citation provenance
+- [LLM Infrastructure](17-llm-systems/05-llm-infrastructure.md): gateway and model control planes, regional admission/routing/streaming, provider and self-hosted fleets
+- [Prompt Engineering](17-llm-systems/06-prompt-engineering.md): versioned request compilation, structured outputs, tool schemas, prompt-injection test boundaries
+- [Fine-Tuning Patterns](17-llm-systems/07-fine-tuning-patterns.md): method choice, dataset/release identity, serving adapters, privacy and evaluation
+- [Context Management](17-llm-systems/08-context-management.md): context revisions, compaction, memory, token budgets, and concurrency
+- [Harness Engineering](17-llm-systems/09-harness-engineering.md): action transactions, permission boundaries, sandbox/secret broker, recovery and rollout
+- [LLM Evaluation and Observability](17-llm-systems/10-llm-evaluation.md): estimands, datasets, calibrated evaluators, uncertainty, traces and production feedback
+- [GPU Inference Internals](17-llm-systems/11-gpu-inference-internals.md): phase rooflines, KV/device memory, kernels, parallelism, and accelerator isolation
+- [Agent Inference](17-llm-systems/12-agent-inference.md): multi-turn session scheduling, KV residency, cache-aware routing, fan-out and task-level goodput
 
 ### Part 18: Workflow & Job Systems
-- [Workflow System Fundamentals](18-workflow-job-systems/01-workflow-system-fundamentals.md) — workload taxonomy, durable state model, ownership and engine selection
-- [Background Jobs and Worker Pools](18-workflow-job-systems/02-background-jobs-worker-pools.md) — queue/worker contracts, acknowledgement, concurrency and overload
-- [Distributed Scheduling and Timer Services](18-workflow-job-systems/03-distributed-cron-scheduling.md) — timer state, claiming, misfires, recurrence, sharding and clock semantics
-- [Durable Execution and Workflow Engines](18-workflow-job-systems/04-durable-execution-workflow-engines.md) — event histories, deterministic replay, commands, signals and versioning
-- [DAG Orchestration](18-workflow-job-systems/05-dag-orchestration.md) — dependency graphs, artifact readiness, backfills and critical-path execution
-- [Effect Commit Protocols for Workflows](18-workflow-job-systems/06-retry-idempotency-compensation.md) — ambiguous effects, inbox/outbox, idempotency, reconciliation and compensation
-- [Priority Queues, Fairness, and Backpressure](18-workflow-job-systems/07-priority-fairness-backpressure.md) — admission, quotas, starvation bounds and tenant scheduling
-- [Leases, Heartbeats, and Recovery](18-workflow-job-systems/08-leases-heartbeats-recovery.md) — attempt ownership, fencing, timeout detection and reassignment
-- [Workflow Observability and Replay](18-workflow-job-systems/09-workflow-observability-replay.md) — history/attempt correlation, stuck-state diagnosis, replay and forensic evidence
+- [Workflow System Fundamentals](18-workflow-job-systems/01-workflow-system-fundamentals.md): workload taxonomy, durable state model, ownership and engine selection
+- [Background Jobs and Worker Pools](18-workflow-job-systems/02-background-jobs-worker-pools.md): queue/worker contracts, acknowledgement, concurrency and overload
+- [Distributed Scheduling and Timer Services](18-workflow-job-systems/03-distributed-cron-scheduling.md): timer state, claiming, misfires, recurrence, sharding and clock semantics
+- [Durable Execution and Workflow Engines](18-workflow-job-systems/04-durable-execution-workflow-engines.md): event histories, deterministic replay, commands, signals and versioning
+- [DAG Orchestration](18-workflow-job-systems/05-dag-orchestration.md): dependency graphs, artifact readiness, backfills and critical-path execution
+- [Effect Commit Protocols for Workflows](18-workflow-job-systems/06-retry-idempotency-compensation.md): ambiguous effects, inbox/outbox, idempotency, reconciliation and compensation
+- [Priority Queues, Fairness, and Backpressure](18-workflow-job-systems/07-priority-fairness-backpressure.md): admission, quotas, starvation bounds and tenant scheduling
+- [Leases, Heartbeats, and Recovery](18-workflow-job-systems/08-leases-heartbeats-recovery.md): attempt ownership, fencing, timeout detection and reassignment
+- [Workflow Observability and Replay](18-workflow-job-systems/09-workflow-observability-replay.md): history/attempt correlation, stuck-state diagnosis, replay and forensic evidence
 
 ### Part 19: Engineering Systems for Coding Agents
 - [Coding Agent Platform Fundamentals](19-compound-engineering/01-compound-engineering-fundamentals.md)

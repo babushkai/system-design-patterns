@@ -150,7 +150,7 @@ Unbounded `Vary: User-Agent` or arbitrary cookies create enormous cardinality. P
 
 Shared caching of authenticated responses is opt-in under HTTP semantics. A CDN must not infer public cacheability from a `200`. Prefer bypass/private policy unless the origin explicitly marks a safe shared representation and the key excludes no authorization-dependent bytes.
 
-Do not key on raw bearer tokens: this stores secrets in cache metadata and destroys reuse. If a response is safely shareable within an authorization cohort, derive a bounded opaque policy class after authentication and include that class—not the credential—in the key.
+Do not key on raw bearer tokens: this stores secrets in cache metadata and destroys reuse. If a response is safely shareable within an authorization cohort, derive a bounded opaque policy class after authentication and include that class (not the credential) in the key.
 
 ### Key-version migrations
 
@@ -244,7 +244,7 @@ Rate-limit purge breadth, then pace refills. “Purge everything” followed by 
 
 ## Capacity and cost model
 
-### Origin offload—illustrative assumptions
+### Origin offload: illustrative assumptions
 
 **Reference design.** Let client rate be `R`, local hit ratio `h_e`, and shield hit ratio on edge misses `h_s`:
 
@@ -258,9 +258,9 @@ $$
 R_{origin}=8M \times 0.06 \times 0.30=144{,}000\ requests/s
 $$
 
-If a purge temporarily lowers local and shield hits to 20% and 10%, raw miss demand becomes 5.76 million requests/s—40× normal origin traffic. Admission and collapsed refill are correctness for origin availability, not an optimization.
+If a purge temporarily lowers local and shield hits to 20% and 10%, raw miss demand becomes 5.76 million requests/s: 40× normal origin traffic. Admission and collapsed refill are correctness for origin availability, not an optimization.
 
-### Bandwidth—illustrative assumptions
+### Bandwidth: illustrative assumptions
 
 At 900,000 responses/s with mean body 180 KiB in one region:
 

@@ -91,7 +91,7 @@ An attacker who moves a host's time can affect certificate validation, token exp
 Operate time synchronization as infrastructure:
 
 1. use multiple independent, authorized sources and monitor source selection;
-2. authenticate exchanges where supported—Network Time Security (NTS) protects NTP client/server authentication and packet integrity;
+2. authenticate exchanges where supported: Network Time Security (NTS) protects NTP client/server authentication and packet integrity;
 3. restrict control/query modes and prevent the service from becoming an amplification endpoint;
 4. alert on offset, root dispersion/uncertainty, reachability, frequency correction, source changes, and unsynchronized state;
 5. define a degraded mode when uncertainty exceeds the consumer's bound.
@@ -108,7 +108,7 @@ Lamport's happens-before relation, written $a \rightarrow b$, is the transitive 
 
 1. events ordered within one process;
 2. a message send before its corresponding receive; and
-3. transitivity—if $a \rightarrow b$ and $b \rightarrow c$, then $a \rightarrow c$.
+3. transitivity: if $a \rightarrow b$ and $b \rightarrow c$, then $a \rightarrow c$.
 
 Events for which neither $a \rightarrow b$ nor $b \rightarrow a$ holds are concurrent in the model. “Concurrent” does not mean simultaneous wall time; it means the system has no causal evidence relating them.
 
@@ -192,7 +192,7 @@ An HLC is **not** an uncertainty interval and does not by itself guarantee exter
 
 - cap or reject remote physical components beyond the accepted future-skew window;
 - include a node/epoch tie-breaker when a total order must be unique;
-- monitor logical-counter growth—sustained high values can indicate a stuck/future clock;
+- monitor logical-counter growth: sustained high values can indicate a stuck/future clock;
 - define encoding overflow and rollback behavior before deployment;
 - retain original event time separately when HLC is an ingestion/order coordinate.
 
@@ -211,7 +211,7 @@ A simplified externally consistent commit protocol is:
 
 The **commit wait** ensures that when a caller observes completion, real time has passed the assigned timestamp. A later transaction can therefore receive a later timestamp, preserving real-time precedence. Commit latency includes uncertainty: poor synchronization is now a database tail-latency problem by design.
 
-The guarantee depends on the entire trusted system—reference clocks, oscillator holdover, cross-checking, daemon/kernel path, uncertainty calculation, and fail-safe behavior. Copying the API shape without that infrastructure gives a decorative interval, not the proof.
+The guarantee depends on the entire trusted system: reference clocks, oscillator holdover, cross-checking, daemon/kernel path, uncertainty calculation, and fail-safe behavior. Copying the API shape without that infrastructure gives a decorative interval, not the proof.
 
 ---
 

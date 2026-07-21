@@ -538,7 +538,7 @@ Do not place provider secrets or raw payment/health data in workflow history sim
 
 ## 13. Observability and Repair
 
-Track by effect type, provider, tenant class, region, and outcome—not by raw operation key in metric labels:
+Track by effect type, provider, tenant class, region, and outcome, not by raw operation key in metric labels:
 
 - logical effects versus attempts;
 - duplicate-key replay rate;

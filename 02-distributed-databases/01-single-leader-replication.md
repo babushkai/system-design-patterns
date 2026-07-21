@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-Single-leader replication makes one node the serialization point for writes and turns its commit history into an ordered replication stream. The easy diagram—primary sends a log to replicas—omits the real protocol: which log position is durable before acknowledgment, how a follower proves it has the same history, which read positions are safe, how a new leader receives a higher epoch, and how the old leader is fenced. Asynchronous acknowledgment minimizes write latency but admits an RPO window. Synchronous acknowledgment protects only the stage actually acknowledged: received, flushed, or applied are different guarantees. Replica reads need a session or commit-position fence if freshness matters. Safe failover is not “pick the most responsive replica”; it is a state transition that preserves the committed prefix, issues a new term/timeline, prevents stale writers, resolves ambiguous client outcomes, and repairs followers without reintroducing divergent history.
+Single-leader replication makes one node the serialization point for writes and turns its commit history into an ordered replication stream. The easy diagram (primary sends a log to replicas) omits the real protocol: which log position is durable before acknowledgment, how a follower proves it has the same history, which read positions are safe, how a new leader receives a higher epoch, and how the old leader is fenced. Asynchronous acknowledgment minimizes write latency but admits an RPO window. Synchronous acknowledgment protects only the stage actually acknowledged: received, flushed, or applied are different guarantees. Replica reads need a session or commit-position fence if freshness matters. Safe failover is not “pick the most responsive replica”; it is a state transition that preserves the committed prefix, issues a new term/timeline, prevents stale writers, resolves ambiguous client outcomes, and repairs followers without reintroducing divergent history.
 
 ---
 
@@ -32,7 +32,7 @@ primary append -> primary durable -> replica received -> replica durable -> repl
        LSN 841        LSN 841          LSN 841          LSN 841          LSN 839
 ```
 
-Use the engine's native coordinate—LSN, binlog file/offset, GTID set, term/index, or timeline/position—but retain the distinction:
+Use the engine's native coordinate (LSN, binlog file/offset, GTID set, term/index, or timeline/position), but retain the distinction:
 
 1. **generated:** the primary assigned the next ordered position;
 2. **durable locally:** the primary's crash recovery can reproduce it;
@@ -104,7 +104,7 @@ The business RPO is not bytes; it is acknowledged commands in that interval. Tra
 
 ### One synchronous follower
 
-The primary waits for one eligible follower. This can survive primary loss if the failover controller is constrained to promote a node containing that durable acknowledgment. It may stop writes when no eligible synchronous follower exists—or silently/explicitly fall back to asynchronous mode, reintroducing an RPO window. That downgrade must be a visible state transition with an owner, alert, and recovery condition.
+The primary waits for one eligible follower. This can survive primary loss if the failover controller is constrained to promote a node containing that durable acknowledgment. It may stop writes when no eligible synchronous follower exists, or silently/explicitly fall back to asynchronous mode, reintroducing an RPO window. That downgrade must be a visible state transition with an owner, alert, and recovery condition.
 
 ### Quorum or named synchronous sets
 
@@ -184,7 +184,7 @@ A candidate must satisfy:
 - it can obtain the new epoch and reject old-epoch traffic;
 - its apply/recovery time meets the failover objective.
 
-“Most advanced” is insufficient if a node has uncommitted or divergent local entries. The engine needs a history relation—timeline ancestry, GTID executed set, or term/index rules—to distinguish a valid extension from a fork.
+“Most advanced” is insufficient if a node has uncommitted or divergent local entries. The engine needs a history relation (timeline ancestry, GTID executed set, or term/index rules) to distinguish a valid extension from a fork.
 
 ### Planned switchover
 
@@ -220,7 +220,7 @@ old primary:    A B C D E
 new primary:    A B C F G
 ```
 
-These are not ordinary replication lag. The suffixes encode potentially conflicting committed effects. Automatically rewinding `D E` is data loss; replaying them after `F G` may violate constraints or repeat effects. Freeze the losing history, preserve forensic copies, identify client-visible commits by command ID, and perform domain reconciliation. The prevention mechanism—fencing—is far cheaper than recovery.
+These are not ordinary replication lag. The suffixes encode potentially conflicting committed effects. Automatically rewinding `D E` is data loss; replaying them after `F G` may violate constraints or repeat effects. Freeze the losing history, preserve forensic copies, identify client-visible commits by command ID, and perform domain reconciliation. The prevention mechanism (fencing) is far cheaper than recovery.
 
 ### Rejoining an old primary
 

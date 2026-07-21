@@ -4,7 +4,7 @@
 
 Zero trust is an authorization architecture, not a product and not “put mTLS everywhere.” Network location is treated as a weak signal. Every access decision binds an authenticated principal, workload, device or runtime posture, requested action, resource, tenant, and policy revision; enforcement occurs at a boundary that the caller cannot bypass.
 
-Required controls:
+A zero-trust design requires:
 
 - cryptographic human and workload identity with short-lived credentials;
 - explicit trust domains and federation;
@@ -586,7 +586,7 @@ Do not call an architecture zero trust merely because it uses a mesh, proxy, VPN
 - [SPIFFE Workload API Specification](https://spiffe.io/docs/latest/spiffe-specs/spiffe_workload_api/)
 - [RFC 8705: OAuth 2.0 Mutual-TLS Client Authentication and Certificate-Bound Access Tokens](https://www.rfc-editor.org/rfc/rfc8705)
 - [RFC 9700: Best Current Practice for OAuth 2.0 Security](https://www.rfc-editor.org/rfc/rfc9700)
-- [Google Research: BeyondCorp—A New Approach to Enterprise Security](https://research.google/pubs/beyondcorp-a-new-approach-to-enterprise-security/)
+- [BeyondCorp: A New Approach to Enterprise Security (Google Research)](https://research.google/pubs/beyondcorp-a-new-approach-to-enterprise-security/)
 
 ---
 

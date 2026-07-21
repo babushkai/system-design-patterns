@@ -29,11 +29,11 @@ For each operation, define externally meaningful outcomes:
 | Superseded/fenced | caller no longer has authority for this epoch | reacquire authority; never retry blindly |
 | Indeterminate integrity | stored or replicated state may be corrupt | isolate, verify, repair from trusted evidence |
 
-An API that returns only `200` or `500` hides whether a timed-out mutation committed. [Idempotency and Operation Identity](./08-idempotency.md) defines the corresponding retry protocol.
+An API that returns only `200` or `500` hides the most important state: whether a timed-out mutation committed. A timeout proves only that the caller did not receive a response; it does not prove rollback. Retrying under a new identity can duplicate a payment or reservation, while refusing to retry can lose an operation that never committed. The safe protocol reuses a stable idempotency key and queries the recorded outcome until the caller can distinguish committed, rejected, or still unknown. [Idempotency and Operation Identity](./08-idempotency.md) defines that protocol; this chapter defines the failure semantics that make it necessary.
 
 ### 1.1 Safety, liveness, and durability
 
-- **Safety:** something forbidden never happens—for example, two owners never both commit writes for the same lease epoch.
+- **Safety:** something forbidden never happens; for example, two owners never both commit writes for the same lease epoch.
 - **Liveness:** a valid operation eventually completes under stated timing and fault assumptions.
 - **Durability:** once an operation reaches its documented commit point, its effect survives the documented failures.
 
@@ -557,13 +557,13 @@ A resilience design is incomplete if its failure story ends at “retry, fail ov
 
 ## References
 
-- [Unreliable Failure Detectors for Reliable Distributed Systems](https://doi.org/10.1145/226643.226647) — Chandra and Toueg's failure-detector abstractions
-- [SWIM: Scalable Weakly-consistent Infection-style Process Group Membership Protocol](https://www.cs.cornell.edu/projects/Quicksilver/public_pdfs/SWIM.pdf) — scalable probing, suspicion, and membership dissemination
-- [The Phi Accrual Failure Detector](https://doi.org/10.1109/RELDIS.2004.1353014) — adaptive suspicion rather than a binary fixed timeout
-- [Gray Failure: The Achilles' Heel of Cloud-Scale Systems](https://www.microsoft.com/en-us/research/publication/gray-failure-achilles-heel-cloud-scale-systems/) — observer-dependent partial failures
-- [Practical Byzantine Fault Tolerance](https://www.usenix.org/conference/osdi-99/practical-byzantine-fault-tolerance) — concrete $3f+1$ Byzantine replication design and assumptions
-- [The Part-Time Parliament](https://lamport.azurewebsites.net/pubs/lamport-paxos.pdf) — safety and progress under partial synchrony in Paxos
-- [How Complex Systems Fail](https://how.complexsystems.fail/) — Richard Cook's concise model of interacting failure and defense
-- [Google SRE: Addressing Cascading Failures](https://sre.google/sre-book/addressing-cascading-failures/) — overload, retries, deadlines, and load shedding
-- [Jepsen analyses](https://jepsen.io/analyses) — fault-injected history checking against consistency claims
-- [RFC 8633: Network Time Protocol Best Current Practices](https://www.rfc-editor.org/rfc/rfc8633) — operational clock synchronization and security considerations
+- [Unreliable Failure Detectors for Reliable Distributed Systems](https://doi.org/10.1145/226643.226647): Chandra and Toueg's failure-detector abstractions
+- [SWIM: Scalable Weakly-consistent Infection-style Process Group Membership Protocol](https://www.cs.cornell.edu/projects/Quicksilver/public_pdfs/SWIM.pdf): scalable probing, suspicion, and membership dissemination
+- [The Phi Accrual Failure Detector](https://doi.org/10.1109/RELDIS.2004.1353014): adaptive suspicion rather than a binary fixed timeout
+- [Gray Failure: The Achilles' Heel of Cloud-Scale Systems](https://www.microsoft.com/en-us/research/publication/gray-failure-achilles-heel-cloud-scale-systems/): observer-dependent partial failures
+- [Practical Byzantine Fault Tolerance](https://www.usenix.org/conference/osdi-99/practical-byzantine-fault-tolerance): concrete $3f+1$ Byzantine replication design and assumptions
+- [The Part-Time Parliament](https://lamport.azurewebsites.net/pubs/lamport-paxos.pdf): safety and progress under partial synchrony in Paxos
+- [How Complex Systems Fail](https://how.complexsystems.fail/): Richard Cook's concise model of interacting failure and defense
+- [Google SRE: Addressing Cascading Failures](https://sre.google/sre-book/addressing-cascading-failures/): overload, retries, deadlines, and load shedding
+- [Jepsen analyses](https://jepsen.io/analyses): fault-injected history checking against consistency claims
+- [RFC 8633: Network Time Protocol Best Current Practices](https://www.rfc-editor.org/rfc/rfc8633): operational clock synchronization and security considerations

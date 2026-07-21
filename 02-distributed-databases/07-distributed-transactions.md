@@ -2,7 +2,7 @@
 
 A distributed transaction makes one outcome authoritative across multiple independently durable participants. The central problem is not sending `COMMIT` twice. It is preserving atomicity when processes crash at every instruction boundary, messages are lost or duplicated, and some participants have made promises they can no longer revoke.
 
-Scope: **atomic commit across storage participants**, its interaction with isolation, and alternatives whose contracts are explicitly weaker. [ACID Transactions](../01-foundations/01-acid-transactions.md) and [Isolation Levels](../01-foundations/02-isolation-levels.md) define local transaction semantics. [Consensus Algorithms](./08-consensus-algorithms.md) owns replication of a participant or decision record. [Outbox Pattern](../05-messaging/07-outbox-pattern.md) owns reliable database-to-message publication, and [Database Sharding](../06-scaling/03-database-sharding.md) owns operational shard migration.
+Distributed transaction design centers on **atomic commit across storage participants**, its interaction with isolation, and alternatives whose contracts are explicitly weaker. [ACID Transactions](../01-foundations/01-acid-transactions.md) and [Isolation Levels](../01-foundations/02-isolation-levels.md) define local transaction semantics. [Consensus Algorithms](./08-consensus-algorithms.md) owns replication of a participant or decision record. [Outbox Pattern](../05-messaging/07-outbox-pattern.md) owns reliable database-to-message publication, and [Database Sharding](../06-scaling/03-database-sharding.md) owns operational shard migration.
 
 ## Define the outcome contract
 
@@ -102,7 +102,7 @@ If B presumed abort merely because the vote timed out, it could race a coordinat
 1. A and B vote `YES`.
 2. C durably records `COMMIT` and sends it only to A.
 3. A commits; C crashes; B remains prepared and holds locks/intents.
-4. C recovers—or another process reads the replicated decision—and replays `COMMIT` to B.
+4. C recovers (or another process reads the replicated decision) and replays `COMMIT` to B.
 
 The interval is partially applied but not an arbitrary outcome. Decision durability and idempotent replay are the recovery spine.
 
@@ -164,7 +164,7 @@ Lock or intent hold time begins before prepare and ends only after decision appl
 hold_time = execution + prepare + decision_delay + recovery_delay_if_any
 ```
 
-One in-doubt transaction can therefore block unrelated work on every key it touched. Capacity models must include maximum prepared transactions, lock-table/intents bytes, decision-replay throughput, and the oldest unresolved age—not only committed transactions per second.
+One in-doubt transaction can therefore block unrelated work on every key it touched. Capacity models must include maximum prepared transactions, lock-table/intents bytes, decision-replay throughput, and the oldest unresolved age, not only committed transactions per second.
 
 Tail latency also amplifies with fan-out. If each participant completion has CDF `F(t)` and were independent, all `p` complete by `t` with probability `F(t)^p`. A transaction coordinator observes the maximum, so a rare slow shard becomes common at high fan-out.
 
@@ -180,7 +180,7 @@ No optimization removes the need to identify which durable facts make success ir
 
 ## Sagas are durable workflows, not atomic commit
 
-A saga is a durable sequence of local transactions with compensating actions. Intermediate states are visible, and compensation is a new business operation—not time travel.
+A saga is a durable sequence of local transactions with compensating actions. Intermediate states are visible, and compensation is a new business operation, not time travel.
 
 For a trip workflow:
 
@@ -191,7 +191,7 @@ cancel flight <- cancel hotel <- refund payment
 
 A refund can fail, arrive after a statement closes, or incur a fee. An email cannot be unsent. Inventory released by compensation may already have affected another customer. The contract is eventual business reconciliation, usually with explicit `PENDING`, `CONFIRMED`, `COMPENSATING`, `COMPENSATED`, and `MANUAL_REVIEW` states.
 
-An orchestrated saga stores the step state, attempt ID, result, next retry, and compensation progress in a durable coordinator. Choreography distributes transitions among event consumers; it removes one code owner but makes global state reconstruction and cycle prevention harder. Neither style is automatically more available—the relevant question is whether every transition and message is durable and idempotent.
+An orchestrated saga stores the step state, attempt ID, result, next retry, and compensation progress in a durable coordinator. Choreography distributes transitions among event consumers; it removes one code owner but makes global state reconstruction and cycle prevention harder. Neither style is automatically more available: the relevant question is whether every transition and message is durable and idempotent.
 
 Use semantic locks, reservations, version checks, or rereads to limit the isolation anomalies caused by visible intermediate state. Put irreversible actions late when possible, and define an operator-owned terminal path when compensation cannot restore the original business state.
 

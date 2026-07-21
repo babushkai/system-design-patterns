@@ -315,7 +315,7 @@ Loss-based senders usually discover a bottleneck by increasing in-flight data un
 
 In datacenters, synchronized many-to-one responses can fill a shallow switch queue faster than end hosts react. ECN-based controls such as DCTCP, pacing, fan-out limits, and response desynchronization address different parts of that incast problem. Host transport tuning cannot recover packets discarded by an already-overrun switch queue.
 
-### What BBR does—and does not claim
+### What BBR does and does not claim
 
 BBR models a path using delivery-rate and RTT observations and attempts to operate near an estimated bandwidth-delay product. Current BBRv3 work also responds to packet loss; describing BBR as “ignoring loss” is incorrect. The algorithm deliberately probes, so queue, loss, and coexistence behavior must be measured with the actual bottleneck.
 
@@ -621,7 +621,7 @@ Handshakes and health checks fit below the effective tunnel MTU, while data pack
 
 ### UDP blocked and HTTP/3 silently falls back
 
-A client has cached H3 availability, but a VPN or enterprise firewall drops UDP. Depending on client racing and fallback behavior, the request eventually uses H2/TCP and succeeds. Error rate stays flat while connect latency and mobile tail latency change. Alert on protocol attempt, success, fallback reason, and fallback delay by network class—not only the final protocol.
+A client has cached H3 availability, but a VPN or enterprise firewall drops UDP. Depending on client racing and fallback behavior, the request eventually uses H2/TCP and succeeds. Error rate stays flat while connect latency and mobile tail latency change. Alert on protocol attempt, success, fallback reason, and fallback delay by network class, not only the final protocol.
 
 ### Migration reaches the wrong backend
 
@@ -772,11 +772,11 @@ The test passes only when the chosen hypothesis is visible in transport state an
 
 ## Related Patterns
 
-- [DNS and Connection Management](./13-dns-and-connection-management.md) — resolver behavior, address selection, connection pooling, draining, and invisible ceilings
-- [Load Balancing](./01-load-balancing.md) — L4/L7 boundaries, affinity, and QUIC connection-ID routing
-- [CDN Architecture](./04-cdn-architecture.md) — regional termination and last-mile protocol deployment
-- [Backpressure](./07-backpressure.md) — bounded application queues and overload control
-- [Retries, Timeouts, and Hedging](./10-retries-timeouts-hedging.md) — deadline budgets and ambiguous transport outcomes
-- [Idempotency](../01-foundations/08-idempotency.md) — durable effect deduplication
-- [Encryption](../10-security/06-encryption.md) — certificate, key, and rotation policy
-- [Polling, SSE, and WebSockets](../07-real-time/01-polling.md) — long-lived connection behavior
+- [DNS and Connection Management](./13-dns-and-connection-management.md): resolver behavior, address selection, connection pooling, draining, and invisible ceilings
+- [Load Balancing](./01-load-balancing.md): L4/L7 boundaries, affinity, and QUIC connection-ID routing
+- [CDN Architecture](./04-cdn-architecture.md): regional termination and last-mile protocol deployment
+- [Backpressure](./07-backpressure.md): bounded application queues and overload control
+- [Retries, Timeouts, and Hedging](./10-retries-timeouts-hedging.md): deadline budgets and ambiguous transport outcomes
+- [Idempotency](../01-foundations/08-idempotency.md): durable effect deduplication
+- [Encryption](../10-security/06-encryption.md): certificate, key, and rotation policy
+- [Polling, SSE, and WebSockets](../07-real-time/01-polling.md): long-lived connection behavior

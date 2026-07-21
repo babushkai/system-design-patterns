@@ -2,7 +2,7 @@
 
 A consistency model is a contract over histories: given concurrent invocations, responses, failures, and replication, which results may a client observe? “Strong,” “eventual,” and a database consistency-level name are not adequate specifications. The contract must name its scope, ordering relation, failure outcome, and whether it covers one object, a session, or a transaction.
 
-Scope: client-observable models—linearizable, sequential, causal, PRAM/session, bounded-staleness, and eventual/convergent behavior—their composition, mechanisms, and verification. [CAP Theorem](./03-cap-theorem.md) applies linearizability to one partitioned read/write object. [ACID Transactions](./01-acid-transactions.md) owns database isolation and invariant enforcement; [Conflict Resolution](../02-distributed-databases/04-conflict-resolution.md) owns merge algebra and CRDT mechanics.
+This chapter defines client-observable models, including linearizable, sequential, causal, PRAM/session, bounded-staleness, and eventual/convergent behavior, and explains their composition, mechanisms, and verification. [CAP Theorem](./03-cap-theorem.md) applies linearizability to one partitioned read/write object. [ACID Transactions](./01-acid-transactions.md) owns database isolation and invariant enforcement; [Conflict Resolution](../02-distributed-databases/04-conflict-resolution.md) owns merge algebra and CRDT mechanics.
 
 ## Start with histories, not product labels
 
@@ -29,7 +29,7 @@ Some guarantees imply others for the same object and operation set, but the usef
 
 ### Linearizability: one legal order that respects real time
 
-A history is linearizable if its completed operations—and a permissible completion of some pending operations—can be placed in a legal sequential order that:
+A history is linearizable if its completed operations (and a permissible completion of some pending operations) can be placed in a legal sequential order that:
 
 1. preserves each operation’s result under the object specification; and
 2. preserves real-time precedence between non-overlapping operations.
@@ -109,7 +109,7 @@ Atomic visibility is another obligation: a reader should not see half of a multi
 
 Always attach the model to a scope. “Linearizable database” may mean point operations per key while range indexes, follower reads, and transactions have different contracts. A batch API may read keys at different frontiers. A cache can turn a linearizable source into an eventual endpoint. An external side effect is outside the database history unless it participates through fencing or idempotent workflow state.
 
-Mixing modes creates a new contract rather than preserving the strongest component. A quorum write followed by an eventual follower read may violate read-your-writes. A causal write routed through a consumer that discards its dependency token becomes an ordinary asynchronous write. A strong primary-key lookup and stale secondary index can still produce false negatives. Each path—including retries, background jobs, and failover routing—must propagate the required frontier.
+Mixing modes creates a new contract rather than preserving the strongest component. A quorum write followed by an eventual follower read may violate read-your-writes. A causal write routed through a consumer that discards its dependency token becomes an ordinary asynchronous write. A strong primary-key lookup and stale secondary index can still produce false negatives. Each path (including retries, background jobs, and failover routing) must propagate the required frontier.
 
 Linearizability composes across objects, but multi-object **operations** still need their own sequential specification. Sequential consistency, session guarantees, and causal consistency need shared program/dependency context to compose. When teams independently assign scopes, document where contexts join and where the guarantee ends.
 

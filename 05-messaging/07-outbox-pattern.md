@@ -199,7 +199,7 @@ Illustrative producer database:
 
 Outbox rate is 6,300/s and logical growth about 8.6 MiB/s. Six hours of outage accumulates 136 million rows and roughly 185 GiB logical before table/index/WAL amplification; three replicas plus WAL can multiply primary storage substantially. Preallocate reserve and test catch-up impact.
 
-At 500 rows/batch, steady polling needs 12.6 batches/s. If one worker holds one batch until broker confirmation, p99 80 ms permits only 12.5 batches/s—already near steady rate. Parallel leased batches are needed, but per-key order and database/broker budgets cap concurrency.
+At 500 rows/batch, steady polling needs 12.6 batches/s. If one worker holds one batch until broker confirmation, p99 80 ms permits only 12.5 batches/s, already near the steady rate. Parallel leased batches are needed, but per-key order and database/broker budgets cap concurrency.
 
 To drain the six-hour backlog in three hours while live ingress continues, relay throughput must be `6,300 + 136M/10,800`, about 18,900 events/s. Broker and consumer capacity must support catch-up without overload.
 
@@ -266,4 +266,4 @@ Choose relay and consumer design by answering:
 - [PostgreSQL: Logical Decoding Concepts](https://www.postgresql.org/docs/current/logicaldecoding-explanation.html)
 - [PostgreSQL: Replication Slots](https://www.postgresql.org/docs/current/warm-standby.html#STREAMING-REPLICATION-SLOTS)
 - [AWS Prescriptive Guidance: Transactional Outbox Pattern](https://docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/transactional-outbox.html)
-- [Martin Kleppmann et al.: Online Event Processing—Achieving Consistency Where Distributed Transactions Have Failed](https://doi.org/10.1145/3329672.3329679)
+- [Martin Kleppmann et al.: Online Event Processing: Achieving Consistency Where Distributed Transactions Have Failed](https://doi.org/10.1145/3329672.3329679)

@@ -12,10 +12,10 @@ Evaluate components and end-to-end outcomes separately. For agents, measure envi
 
 LLM systems add four measurement complications beyond deterministic assertions:
 
-- **Non-determinism** — repeated executions and provider-side model revisions can produce different outputs for the same input.
-- **Non-unique valid outputs** — grading becomes a measurement component with its own error profile.
-- **Component attribution** — retrieval, prompts, tools, and models can regress independently; end-to-end scores alone cannot localize the cause. [RAG evaluation](./04-rag-patterns.md) therefore separates retrieval and generation metrics.
-- **Silent regression** — behavior can degrade without crashes or protocol errors; [harness regression suites](./09-harness-engineering.md) make that change observable.
+- **Non-determinism**: repeated executions and provider-side model revisions can produce different outputs for the same input.
+- **Non-unique valid outputs**: ten phrasings of a correct summary may all be valid, so grading becomes a measurement component with its own error profile.
+- **Component attribution**: retrieval, prompts, tools, and models can regress independently; end-to-end scores alone cannot localize the cause. [RAG evaluation](./04-rag-patterns.md) therefore separates retrieval and generation metrics.
+- **Silent regression**: a prompt change can fix one case and break five while every request still succeeds; [harness regression suites](./09-harness-engineering.md) make that change observable.
 
 The result is statistical and conditional: “system revision A has estimated loss $L$ on population $P$ under evaluator revision $E$.” Change the population, judge, prompt, tool environment, or model resolution and it is a different experiment.
 
@@ -44,9 +44,9 @@ The **unit of analysis** matters. Repeated prompts from one customer, issues fro
 
 ```mermaid
 graph TD
-    L1["LEVEL 1 — programmatic (run on everything)<br/>schema validates · regex/contains · exact match ·<br/>code compiles, tests pass · latency/cost bounds"]
-    L2["LEVEL 2 — model-graded (run on the suite + samples)<br/>rubric-per-criterion judges · pairwise comparison ·<br/>groundedness vs retrieved context"]
-    L3["LEVEL 3 — human (run on disagreements + high stakes)<br/>domain review · preference labels →<br/>which become judge calibration data"]
+    L1["LEVEL 1: programmatic (run on everything)<br/>schema validates · regex/contains · exact match ·<br/>code compiles, tests pass · latency/cost bounds"]
+    L2["LEVEL 2: model-graded (run on the suite + samples)<br/>rubric-per-criterion judges · pairwise comparison ·<br/>groundedness vs retrieved context"]
+    L3["LEVEL 3: human (run on disagreements + high stakes)<br/>domain review · preference labels →<br/>which become judge calibration data"]
     L1 --> L2 --> L3
     L3 -.->|"labels calibrate"| L2
 ```
@@ -99,7 +99,7 @@ Single-response grading misses what makes agents hard. Add four dimensions:
 3. **Repeated-run reliability.** If per-run success were independent with probability $p$, all $k$ repetitions succeeding has probability $p^k$, while at least one success has probability $1-(1-p)^k$. Real trials can share provider, retrieval, or environment failures, so report empirical repeated-run results and clustered uncertainty rather than relying on independence.
 4. **Efficiency.** Report tokens, currency, actions, accelerator/tool time, human review, and wall-clock per verified success. A higher pass rate can still leave the Pareto frontier if cost or tail latency grows beyond product value.
 
-Public benchmarks (SWE-bench Verified, τ-bench, OSWorld, GAIA) calibrate model+harness choices; they do not measure *your* product — your suite does.
+Public benchmarks (SWE-bench Verified, τ-bench, OSWorld, GAIA) calibrate model+harness choices; they do not measure *your* product. Your suite does.
 
 ## CI Integration and Statistics
 
@@ -119,7 +119,7 @@ Do not spend all evaluation budget on model selection. Repeatedly choosing the b
 
 Calibrate a judge by task slice, not one global agreement number. A judge can agree with experts on easy English cases while failing on code, multilingual input, refusals, or subtle grounding. Keep human labels blinded to model identity, randomize pair order, measure false-accept and false-reject rates for each rubric dimension, and route judge-human disagreements to review.
 
-Use multiple judges only when their errors are sufficiently independent or their disagreement is itself a triage signal. Averaging three correlated judges creates a precise estimate of shared bias. Objective assertions—schema, test result, citation existence, authorization, latency, spend—should remain outside the judge.
+Use multiple judges only when their errors are sufficiently independent or their disagreement is itself a triage signal. Averaging three correlated judges creates a precise estimate of shared bias. Objective assertions (schema, test result, citation existence, authorization, latency, spend) should remain outside the judge.
 
 ### End-to-end versus component attribution
 
@@ -131,7 +131,7 @@ Offline evaluation estimates behavior on a curated population; production observ
 
 Sample online scoring according to volume, evaluator cost, expected defect rate, and detection-delay target. Random samples estimate rates; risk-triggered samples diagnose tails but need weighting before aggregation. Run judges asynchronously when they are not on the serving critical path, and version their evidence package. Monitor judge calibration with blinded human labels because traffic drift can move the judge outside its qualified domain.
 
-Explicit ratings are sparse and selected. Regeneration, abandonment, copy, escalation, and takeover are behavioral proxies with confounding. Delayed ground truth—refund, case resolution, successful deployment—may be more valuable but requires attribution windows and censoring policy. Use randomized online experiments where causal product impact matters; observational drift dashboards cannot identify causality by themselves.
+Explicit ratings are sparse and selected. Regeneration, abandonment, copy, escalation, and takeover are behavioral proxies with confounding. Delayed ground truth (refund, case resolution, successful deployment) may be more valuable but requires attribution windows and censoring policy. Use randomized online experiments where causal product impact matters; observational drift dashboards cannot identify causality by themselves.
 
 Quality SLIs include verified task success, unsupported-claim rate, unsafe-effect rate, correct refusal, human correction, and policy violations, sliced by risk class. Define numerator, denominator, label delay, and missing-label treatment. Burn-rate alerts are useful only when label latency is compatible with incident response.
 
@@ -175,7 +175,7 @@ Choose the dataset before the grader, and the acceptance decision before tuning 
 
 ## Key Takeaways
 
-- An eval is a versioned measurement experiment over a dataset, evaluator, system revision, and environment—not a single score.
+- An eval is a versioned measurement experiment over a dataset, evaluator, system revision, and environment, not a single score.
 - Put executable and policy checks at the bottom of the evaluator ladder, use calibrated judges for residual semantics, and reserve humans for disagreement and consequence.
 - Evaluate retrieval, generation, harness, policy, and end-to-end outcomes separately so a regression has an actionable owner.
 - Report slices, uncertainty, empirical repeated-run reliability, cost per solved task, and tail latency; means hide the failures users experience.
@@ -186,9 +186,9 @@ Choose the dataset before the grader, and the acceptance decision before tuning 
 
 ## References
 
-- [Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena](https://arxiv.org/abs/2306.05685) — the judge-bias catalog (position, verbosity, self-preference)
-- [Your AI Product Needs Evals](https://hamel.dev/blog/posts/evals/) — Hamel Husain; the practitioner's playbook this article compresses
-- [OpenTelemetry GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) — the tracing standard
-- [SWE-bench Verified](https://www.swebench.com/), [τ-bench](https://arxiv.org/abs/2406.12045), [OSWorld](https://os-world.github.io/) — agent benchmarks and their grading designs
-- [Anthropic: define your success criteria & develop tests](https://docs.anthropic.com/en/docs/build-with-claude/define-success) — eval-first development guidance
-- [Harness Engineering](./09-harness-engineering.md) and [RAG Patterns](./04-rag-patterns.md) — where these evals plug into the systems they protect
+- [Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena](https://arxiv.org/abs/2306.05685): the judge-bias catalog (position, verbosity, self-preference)
+- [Your AI Product Needs Evals](https://hamel.dev/blog/posts/evals/): Hamel Husain; the practitioner's playbook this article compresses
+- [OpenTelemetry GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/): the tracing standard
+- [SWE-bench Verified](https://www.swebench.com/), [τ-bench](https://arxiv.org/abs/2406.12045), [OSWorld](https://os-world.github.io/): agent benchmarks and their grading designs
+- [Anthropic: define your success criteria & develop tests](https://docs.anthropic.com/en/docs/build-with-claude/define-success): eval-first development guidance
+- [Harness Engineering](./09-harness-engineering.md) and [RAG Patterns](./04-rag-patterns.md): where these evals plug into the systems they protect

@@ -48,7 +48,7 @@ The pattern fits a stable decomposition whose intermediate artifacts have checka
 
 ### Routing
 
-Classify the input, then dispatch to a specialized prompt, toolset, policy, or model. Routing may reduce cost by assigning simpler cases to cheaper targets, but the achievable split is an observed property of the traffic distribution and router operating point—not a fixed easy/hard percentage.
+Classify the input, then dispatch to a specialized prompt, toolset, policy, or model. Routing may reduce cost by assigning simpler cases to cheaper targets, but the achievable split is an observed property of the traffic distribution and router operating point, not a fixed easy/hard percentage.
 
 ```python
 ROUTES = {
@@ -70,8 +70,8 @@ Routing fits inputs whose classes require materially different tools, policies, 
 
 Two distinct forms:
 
-- **Sectioning** — split independent subtasks, run concurrently, merge. (Review a PR for security, performance, and style in three parallel calls.)
-- **Replication and aggregation** — run the *same* task (N) times, then apply a declared union, quorum, ranking, or adjudication rule. The value depends on error correlation and evaluator quality, while cost grows with every attempt.
+- **Sectioning**: split independent subtasks, run concurrently, merge. (Review a PR for security, performance, and style in three parallel calls.)
+- **Replication and aggregation**: run the *same* task (N) times, then apply a declared union, quorum, ranking, or adjudication rule. The value depends on error correlation and evaluator quality, while cost grows with every attempt.
 
 ```python
 findings = await asyncio.gather(
@@ -168,7 +168,7 @@ Cancellation is a propagated state transition, not process termination. Stop sch
 
 ### Determinism and Replay
 
-Durable engines replay orchestration code to reconstruct decisions. Anything that can vary—wall-clock time, random numbers, model output, a feature flag, routing state—must be recorded as an event rather than recomputed during replay. The model call itself is never replay-deterministic. Persist its provider, model revision or alias resolution, request hash, response, finish condition, usage, and policy decision, then replay the recorded result. New orchestration code must be versioned so an old run does not encounter a branch that did not exist when it started.
+Durable engines replay orchestration code to reconstruct decisions. Anything that can vary (wall-clock time, random numbers, model output, a feature flag, routing state) must be recorded as an event rather than recomputed during replay. The model call itself is never replay-deterministic. Persist its provider, model revision or alias resolution, request hash, response, finish condition, usage, and policy decision, then replay the recorded result. New orchestration code must be versioned so an old run does not encounter a branch that did not exist when it started.
 
 This produces a useful boundary: **orchestration should be deterministic over recorded nondeterministic events**. That invariant is what makes crash recovery testable rather than hopeful.
 
@@ -222,7 +222,7 @@ ReAct, Chain-of-Thought, Tree-of-Thought, self-consistency, and Reflexion expose
 |---|---|---|
 | ReAct (`Thought:/Action:` text) | Interleaved reasoning + tool use via parsed text | Structured tool protocols usually replace text parsing; the observe–act feedback pattern remains. |
 | Chain-of-Thought ("think step by step") | Elicited intermediate reasoning | May be redundant on reasoning-oriented models; explicit concise rationales remain useful when the product requires reviewable decision evidence. |
-| Self-consistency (sample N, vote) | Reliability via diversity | Survives as the voting form of parallelization — applied at the *task* level where verification is hard. |
+| Self-consistency (sample N, vote) | Reliability via diversity | Survives as the voting form of parallelization: applied at the *task* level where verification is hard. |
 | Tree-of-Thought (explicit search) | Explored alternative reasoning paths | External search remains valuable where candidates can be checkpointed, evaluated independently, or distributed. |
 | Reflexion (verbal self-critique across retries) | Revision conditioned on a prior attempt | Useful only when feedback adds evidence or a qualified evaluator; self-critique alone can preserve the original blind spot. |
 
@@ -234,7 +234,7 @@ Do not assume a reasoning scaffold transfers across models, tasks, or tool envir
 
 | Pattern | Control flow | Cost profile | Reach | Use when |
 |---|---|---|---|---|
-| Single call + typed contract | — | One generation | Low | One bounded transformation over supplied context |
+| Single call + typed contract | None | One generation | Low | One bounded transformation over supplied context |
 | Prompt chaining | Code | n× sequential | Low | Stable decomposition, checkable steps |
 | Routing | Code | Classifier plus selected branch | Low | Heterogeneous inputs, capability or cost tiering |
 | Parallel: sectioning | Code | n× concurrent | Medium | Independent subtasks |
@@ -249,7 +249,7 @@ Patterns can compose, but their contracts compose too. A router changes the elig
 
 ## Failure Modes
 
-**Scaffold ossification** occurs when a workflow tuned around one model becomes a ceiling on its successor. A redundant extraction stage can add latency and lose information even after a newer model can perform the full task in one call. Re-run ablations—full workflow versus each simplified variant—during every model or prompt migration. Preserve a stage because it produces measured error containment, not because it appears architecturally sophisticated.
+**Scaffold ossification** occurs when a workflow tuned around one model becomes a ceiling on its successor. A redundant extraction stage can add latency and lose information even after a newer model can perform the full task in one call. Re-run ablations (full workflow versus each simplified variant) during every model or prompt migration. Preserve a stage because it produces measured error containment, not because it appears architecturally sophisticated.
 
 **Grader drift and shared blindness** turn an evaluator into a confidence amplifier. LLM judges can anchor on length, fluent explanations, or the same false premise used by the generator. Calibrate each rubric dimension against blinded human labels, track disagreement by slice, and send objective claims to executable or retrieval-backed verifiers. A grader's `PASS` is an observation with a known error rate, not a proof.
 
@@ -293,9 +293,9 @@ Build the minimum graph that passes offline evaluations and shadow traffic. Then
 
 ## References
 
-- [Building Effective Agents](https://www.anthropic.com/research/building-effective-agents) — Anthropic; the workflow/agent taxonomy this article follows
-- [DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning](https://arxiv.org/abs/2501.12948) — how reasoning got internalized
-- [ReAct: Synergizing Reasoning and Acting](https://arxiv.org/abs/2210.03629), [Tree of Thoughts](https://arxiv.org/abs/2305.10601), [Reflexion](https://arxiv.org/abs/2303.11366), [Self-Consistency](https://arxiv.org/abs/2203.11171) — the historical scaffolds and what they taught the field
-- [How We Built Our Multi-Agent Research System](https://www.anthropic.com/engineering/built-multi-agent-research-system) — orchestrator–workers at production scale
-- [Don't Build Multi-Agents](https://cognition.ai/blog/dont-build-multi-agents) — Cognition; the context-sharing counterargument
-- [Temporal](https://temporal.io/) — durable execution for long-running workflows
+- [Building Effective Agents](https://www.anthropic.com/research/building-effective-agents): Anthropic; the workflow/agent taxonomy this article follows
+- [DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning](https://arxiv.org/abs/2501.12948): how reasoning got internalized
+- [ReAct: Synergizing Reasoning and Acting](https://arxiv.org/abs/2210.03629), [Tree of Thoughts](https://arxiv.org/abs/2305.10601), [Reflexion](https://arxiv.org/abs/2303.11366), [Self-Consistency](https://arxiv.org/abs/2203.11171): the historical scaffolds and what they taught the field
+- [How We Built Our Multi-Agent Research System](https://www.anthropic.com/engineering/built-multi-agent-research-system): orchestrator–workers at production scale
+- [Don't Build Multi-Agents](https://cognition.ai/blog/dont-build-multi-agents): Cognition; the context-sharing counterargument
+- [Temporal](https://temporal.io/): durable execution for long-running workflows

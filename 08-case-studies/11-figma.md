@@ -2,7 +2,7 @@
 
 ## Scope and Evidence Contract
 
-Evidence labels:
+Claims use three evidence labels:
 
 - **Documented fact** means a claim made in a dated Figma engineering article. The date matters because the architecture changed.
 - **Inference** means a consequence that follows from those facts but is not itself claimed by Figma.
@@ -17,7 +17,7 @@ A browser-based design editor combines workloads that are often separate:
 1. A low-latency local graphics engine must pan, zoom, hit-test, and mutate a large scene.
 2. Concurrent editors must converge on one document state while still seeing their own input immediately.
 3. A hot document needs live session state; a cold document needs durable recovery, not a permanently allocated server.
-4. Metadata—users, teams, projects, comments, permissions, and file records—needs relational queries and transactional islands.
+4. Metadata (users, teams, projects, comments, permissions, and file records) needs relational queries and transactional islands.
 
 The useful invariants are more precise than “real time” or “never lose data”:
 
@@ -145,7 +145,7 @@ The diagram deliberately separates the live document plane from the relational m
 
 ### Illustrative capacity reasoning
 
-Suppose—not as a Figma measurement—that one hot document consumes:
+For an illustrative hot document, assume the following values; these are not Figma measurements:
 
 - 220 MiB for authoritative document and derived indexes,
 - 30 MiB for process/runtime overhead,

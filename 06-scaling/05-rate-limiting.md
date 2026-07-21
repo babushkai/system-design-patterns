@@ -6,7 +6,7 @@ Rate limiting decides whether new work may enter a protected scope. A complete d
 
 Token buckets are the common admission primitive because they express both rate and burst. The distributed challenge is accounting: a linearizable global decision is accurate but adds a dependency to every request; local decisions are available and fast but overshoot unless they spend bounded leases allocated by a global authority. Put cheap local protection in front of shared policy, expose honest retry guidance, and treat policy rollout and counter recovery as production migrations.
 
-Scope: admission and quota accounting. [Circuit Breakers](./06-circuit-breakers.md) own dependency health and in-flight concurrency, [Backpressure](./07-backpressure.md) owns bounded queues and producer signaling, and [Retries, Timeouts, and Hedging](./10-retries-timeouts-hedging.md) owns later attempts.
+Rate limiting governs admission and quota accounting. [Circuit Breakers](./06-circuit-breakers.md) own dependency health and in-flight concurrency, [Backpressure](./07-backpressure.md) owns bounded queues and producer signaling, and [Retries, Timeouts, and Hedging](./10-retries-timeouts-hedging.md) owns later attempts.
 
 ---
 

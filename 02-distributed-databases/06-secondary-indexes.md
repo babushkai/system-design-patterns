@@ -1,8 +1,8 @@
 # Secondary Indexes in Distributed Databases
 
-A primary-key lookup begins with a routing answer: the key identifies a logical partition and therefore a replica set. A query on email, status, location, or event time has no such route unless the system maintains another access path. A distributed secondary index is that path—and another materialized copy whose consistency, placement, recovery, and cost must be designed.
+A primary-key lookup begins with a routing answer: the key identifies a logical partition and therefore a replica set. A query on email, status, location, or event time has no such route unless the system maintains another access path. A distributed secondary index is that path: another materialized copy whose consistency, placement, recovery, and cost must be designed.
 
-Scope: distributed index maintenance and query semantics: local versus global placement, synchronous and asynchronous updates, online backfill, global uniqueness, scatter-gather, and freshness. [B-Trees](../03-storage-engines/01-b-trees.md) owns ordered page structures, [LSM Trees](../03-storage-engines/02-lsm-trees.md) owns the write-buffered storage pipeline, and [Search Index Architecture](../14-search-systems/01-inverted-indexes.md) owns analyzers, postings, relevance, and search-segment internals. [Partitioning Strategies](./05-partitioning-strategies.md) owns the routing map on which all three depend.
+A distributed secondary index must define maintenance and query semantics for local versus global placement, synchronous and asynchronous updates, online backfill, global uniqueness, scatter-gather, and freshness. [B-Trees](../03-storage-engines/01-b-trees.md) owns ordered page structures, [LSM Trees](../03-storage-engines/02-lsm-trees.md) owns the write-buffered storage pipeline, and [Search Index Architecture](../14-search-systems/01-inverted-indexes.md) owns analyzers, postings, relevance, and search-segment internals. [Partitioning Strategies](./05-partitioning-strategies.md) owns the routing map on which all three depend.
 
 ## Query and consistency contract
 
@@ -48,7 +48,7 @@ Normalization is part of the schema. Case folding, collation, Unicode version, t
 
 A **local secondary index** lives with each base partition and covers only rows owned there. Base and index changes can normally commit atomically in one storage-engine transaction. A query containing the primary partition key is targeted; a query without it fans out to every candidate partition.
 
-A **global secondary index** is partitioned by the secondary key, independently of the base table. Equality lookup can target one index partition and then fetch base rows by primary key. The write may touch a base partition plus one index partition—or two index partitions when an indexed value changes. That creates a distributed atomicity choice.
+A **global secondary index** is partitioned by the secondary key, independently of the base table. Equality lookup can target one index partition and then fetch base rows by primary key. The write may touch a base partition plus one index partition, or two index partitions when an indexed value changes. That creates a distributed atomicity choice.
 
 ```mermaid
 flowchart LR
@@ -84,7 +84,7 @@ An equality query routes to the index partition, reads entries in `(index_key, p
 
 For a local index without the base partition key, the coordinator sends the predicate and limit to all relevant partitions, each returns its local top `K`, and the coordinator performs a stable merge. Latency follows the slowest required shard; work grows with fan-out, and `LIMIT 10` does not mean only ten rows are read globally. Hedging or skipping a slow shard changes completeness and must be an API decision.
 
-Pagination uses a cursor containing the normalized sort tuple, primary-key tie-breaker, index/build epoch, and—where promised—snapshot or change frontier. Offset pagination across mutating shards duplicates or skips rows because earlier pages shift. If the referenced build is retired, the service should reject or deliberately translate the cursor rather than continue under different ordering semantics.
+Pagination uses a cursor containing the normalized sort tuple, primary-key tie-breaker, index/build epoch, and (where promised) snapshot or change frontier. Offset pagination across mutating shards duplicates or skips rows because earlier pages shift. If the referenced build is retired, the service should reject or deliberately translate the cursor rather than continue under different ordering semantics.
 
 ### Session freshness
 
@@ -160,7 +160,7 @@ Tests should interleave base commits, key changes, deletes, replay, and backfill
 
 ## Decision framework
 
-Use a local index when writes must remain single-partition and queries already carry the base partition key, or when bounded scatter is acceptable. Use a synchronous global index for targeted reads that require transactional freshness or uniqueness and can afford cross-partition coordination. Use an asynchronous global index when low write latency matters and the product can name its stale-positive and false-negative behavior. Use denormalized query tables when one access pattern deserves an explicit schema and ownership lifecycle. Use a search engine when tokenization, relevance, and text retrieval—not merely alternate routing—are the requirement.
+Use a local index when writes must remain single-partition and queries already carry the base partition key, or when bounded scatter is acceptable. Use a synchronous global index for targeted reads that require transactional freshness or uniqueness and can afford cross-partition coordination. Use an asynchronous global index when low write latency matters and the product can name its stale-positive and false-negative behavior. Use denormalized query tables when one access pattern deserves an explicit schema and ownership lifecycle. Use a search engine when tokenization, relevance, and text retrieval (not merely alternate routing) are the requirement.
 
 Before adding an index, quantify the query it makes cheaper and the writes, bytes, coordination groups, backfill time, and new correctness contract it adds. “Maybe useful later” is especially expensive in a distributed database.
 

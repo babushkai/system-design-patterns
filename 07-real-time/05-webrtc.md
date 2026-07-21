@@ -72,7 +72,7 @@ Important details hide behind this simple flow:
 - **Renegotiation needs serialization.** Track adds/removes, screen sharing, codec changes, and ICE restarts can all request negotiation. Collapse or queue them; uncontrolled negotiation creates state races.
 - **Idempotency still applies.** `join`, `publish_track`, `subscribe`, and `leave` commands need stable request IDs. Signaling delivery and client reconnect are at-least-once.
 
-SDP is a negotiated description, not a database schema to edit with ad hoc string replacement. Keep product intent—"subscribe to Alice's camera at medium quality"—in the control protocol, and let a tested WebRTC implementation construct and apply SDP.
+SDP is a negotiated description, not a database schema to edit with ad hoc string replacement. Keep product intent, such as "subscribe to Alice's camera at medium quality," in the control protocol, and let a tested WebRTC implementation construct and apply SDP.
 
 ---
 
@@ -342,15 +342,15 @@ The final design should name the room authority, ordering/session epochs, signal
 
 ## References
 
-- [W3C WebRTC 1.0](https://www.w3.org/TR/webrtc/) — browser peer-connection, media, data-channel, and statistics APIs
-- [W3C WebRTC Statistics](https://www.w3.org/TR/webrtc-stats/) — interoperable quality and transport metric definitions
-- [RFC 8825: Overview of WebRTC](https://datatracker.ietf.org/doc/html/rfc8825) — architecture and protocol suite
-- [RFC 8829: JavaScript Session Establishment Protocol](https://datatracker.ietf.org/doc/html/rfc8829) — offer/answer and signaling state
-- [RFC 8445: Interactive Connectivity Establishment](https://datatracker.ietf.org/doc/html/rfc8445) — candidate gathering, checks, nomination, and restart
-- [RFC 8838: Trickle ICE](https://datatracker.ietf.org/doc/html/rfc8838) — incremental candidate exchange
-- [RFC 8489: Session Traversal Utilities for NAT](https://datatracker.ietf.org/doc/html/rfc8489) — STUN
-- [RFC 8656: Traversal Using Relays around NAT](https://datatracker.ietf.org/doc/html/rfc8656) — TURN allocations, permissions, channels, and refresh
-- [RFC 7675: STUN Usage for Consent Freshness](https://datatracker.ietf.org/doc/html/rfc7675) — continuing peer consent
-- [RFC 8826: Security Considerations for WebRTC](https://datatracker.ietf.org/doc/html/rfc8826) and [RFC 8827: WebRTC Security Architecture](https://datatracker.ietf.org/doc/html/rfc8827) — threat model and security properties
-- [RFC 8831: WebRTC Data Channels](https://datatracker.ietf.org/doc/html/rfc8831) — SCTP data-channel transport and reliability modes
-- [RFC 9605: Secure Frame (SFrame)](https://datatracker.ietf.org/doc/html/rfc9605) — application end-to-end media encryption through forwarding servers
+- [W3C WebRTC 1.0](https://www.w3.org/TR/webrtc/): browser peer-connection, media, data-channel, and statistics APIs
+- [W3C WebRTC Statistics](https://www.w3.org/TR/webrtc-stats/): interoperable quality and transport metric definitions
+- [RFC 8825: Overview of WebRTC](https://datatracker.ietf.org/doc/html/rfc8825): architecture and protocol suite
+- [RFC 8829: JavaScript Session Establishment Protocol](https://datatracker.ietf.org/doc/html/rfc8829): offer/answer and signaling state
+- [RFC 8445: Interactive Connectivity Establishment](https://datatracker.ietf.org/doc/html/rfc8445): candidate gathering, checks, nomination, and restart
+- [RFC 8838: Trickle ICE](https://datatracker.ietf.org/doc/html/rfc8838): incremental candidate exchange
+- [RFC 8489: Session Traversal Utilities for NAT](https://datatracker.ietf.org/doc/html/rfc8489): STUN
+- [RFC 8656: Traversal Using Relays around NAT](https://datatracker.ietf.org/doc/html/rfc8656): TURN allocations, permissions, channels, and refresh
+- [RFC 7675: STUN Usage for Consent Freshness](https://datatracker.ietf.org/doc/html/rfc7675): continuing peer consent
+- [RFC 8826: Security Considerations for WebRTC](https://datatracker.ietf.org/doc/html/rfc8826) and [RFC 8827: WebRTC Security Architecture](https://datatracker.ietf.org/doc/html/rfc8827): threat model and security properties
+- [RFC 8831: WebRTC Data Channels](https://datatracker.ietf.org/doc/html/rfc8831): SCTP data-channel transport and reliability modes
+- [RFC 9605: Secure Frame (SFrame)](https://datatracker.ietf.org/doc/html/rfc9605): application end-to-end media encryption through forwarding servers

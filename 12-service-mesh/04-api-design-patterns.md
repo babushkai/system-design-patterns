@@ -4,11 +4,11 @@
 
 An API is a distributed compatibility contract among independently deployed producers, consumers, intermediaries, data models, and operators. Its correctness includes more than field names: resource identity, operation semantics, retries, error classification, concurrency, pagination consistency, asynchronous completion, webhook delivery, authorization scope, and migration behavior all become part of the contract.
 
-Model stable resources and explicit state transitions. Make errors machine-actionable. Protect unsafe retries with atomically recorded idempotency. Protect concurrent updates with preconditions. Treat a pagination cursor as a signed, scope-bound continuation capability—not base64-encoded database state. Represent long work as a durable operation resource. Treat webhooks as an at-least-once outbound delivery system with authenticated messages, replay, fairness, and endpoint isolation.
+Model stable resources and explicit state transitions. Make errors machine-actionable. Protect unsafe retries with atomically recorded idempotency. Protect concurrent updates with preconditions. Treat a pagination cursor as a signed, scope-bound continuation capability, not base64-encoded database state. Represent long work as a durable operation resource. Treat webhooks as an at-least-once outbound delivery system with authenticated messages, replay, fairness, and endpoint isolation.
 
 Evolve additively where semantics permit, but do not assume every added field or enum value is harmless. Measure real consumers, compare contracts and behavior, stage adapters, publish deprecation and sunset metadata, and preserve a reversible expand/migrate/contract sequence.
 
-Scope: the public service contract. [Edge Gateway](./02-api-gateway.md) covers edge enforcement and routing; [Idempotency](../01-foundations/08-idempotency.md) covers the general deduplication pattern; [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md) covers client attempt policy.
+This chapter covers the public service contract. [Edge Gateway](./02-api-gateway.md) covers edge enforcement and routing; [Idempotency](../01-foundations/08-idempotency.md) covers the general deduplication pattern; [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md) covers client attempt policy.
 
 ---
 
@@ -290,7 +290,7 @@ For a multi-resource command, one version token may represent a transactional ag
 
 ### Conflict versus precondition failure
 
-Use a precondition failure when the client’s stated version/condition is false. Use a state conflict when the request is current but the domain transition is disallowed—for example, voiding a settled transfer. Keeping them distinct lets clients choose refetch/merge versus workflow correction.
+Use a precondition failure when the client’s stated version/condition is false. Use a state conflict when the request is current but the domain transition is disallowed, for example when voiding a settled transfer. Keeping them distinct lets clients choose refetch/merge versus workflow correction.
 
 ## Pagination as a Continuation Protocol
 
@@ -517,7 +517,7 @@ Unless a stronger protocol is built, promise **at least once**, not exactly once
 - two workers can race after lease expiry; and
 - subscriber endpoints can be slow or inconsistent.
 
-Define ordering scope, if any—often per subject or subscription partition—and make receivers robust to duplicates and out-of-order delivery. Thin events can tell receivers to fetch current state, but that trades payload staleness for an inbound API dependency and authorization requirement.
+Define ordering scope, if any (often per subject or subscription partition), and make receivers robust to duplicates and out-of-order delivery. Thin events can tell receivers to fetch current state, but that trades payload staleness for an inbound API dependency and authorization requirement.
 
 ### Retry, disable, and replay
 
@@ -876,7 +876,7 @@ Choose:
 
 ## Key Takeaways
 
-1. An API contract includes behavior, failure, concurrency, continuation, security, operations, and evolution—not only schema.
+1. An API contract includes behavior, failure, concurrency, continuation, security, operations, and evolution, not only schema.
 2. Model explicit domain transitions when CRUD would hide authorization or side effects.
 3. Stable problem types let clients branch safely while human details evolve.
 4. Idempotency keys require scoped atomic records and reconciliation with the business effect.
@@ -891,18 +891,18 @@ Choose:
 
 ## References
 
-- [RFC 9110: HTTP Semantics](https://www.rfc-editor.org/rfc/rfc9110) — method semantics, conditional requests, status codes, and intermediaries
-- [RFC 9457: Problem Details for HTTP APIs](https://www.rfc-editor.org/rfc/rfc9457) — stable machine-readable error details
-- [RFC 8288: Web Linking](https://www.rfc-editor.org/rfc/rfc8288) — typed links and continuation relations
-- [RFC 9865: Cursor-Based Pagination of SCIM Resources](https://www.rfc-editor.org/rfc/rfc9865) — opaque cursor request/response and query-binding semantics
-- [RFC 9421: HTTP Message Signatures](https://www.rfc-editor.org/rfc/rfc9421) — covered components, signature parameters, and verification
-- [RFC 9745: Deprecation HTTP Response Header](https://www.rfc-editor.org/rfc/rfc9745) — machine-readable deprecation metadata
-- [RFC 8594: Sunset HTTP Header](https://www.rfc-editor.org/rfc/rfc8594) — planned retirement metadata
-- [OpenAPI Specification](https://spec.openapis.org/oas/latest.html) — machine-readable HTTP API description
-- [JSON Schema Draft 2020-12](https://json-schema.org/draft/2020-12) — representation validation and vocabulary
-- [Protocol Buffers: Updating a Message Type](https://protobuf.dev/programming-guides/proto3/#updating) — wire-compatible field evolution
-- [CloudEvents Specification](https://github.com/cloudevents/spec) — interoperable event envelope attributes
-- [Idempotency](../01-foundations/08-idempotency.md) — atomic deduplication, storage, TTL, and failure recovery
-- [Transactional Outbox](../05-messaging/07-outbox-pattern.md) — atomic event publication after a domain transaction
-- [Database Migrations](../15-deployment/03-database-migrations.md) — expand/migrate/contract across service and storage schemas
-- [Edge Gateway](./02-api-gateway.md) — public routing, authentication, authorization, admission, and aggregation
+- [RFC 9110: HTTP Semantics](https://www.rfc-editor.org/rfc/rfc9110): method semantics, conditional requests, status codes, and intermediaries
+- [RFC 9457: Problem Details for HTTP APIs](https://www.rfc-editor.org/rfc/rfc9457): stable machine-readable error details
+- [RFC 8288: Web Linking](https://www.rfc-editor.org/rfc/rfc8288): typed links and continuation relations
+- [RFC 9865: Cursor-Based Pagination of SCIM Resources](https://www.rfc-editor.org/rfc/rfc9865): opaque cursor request/response and query-binding semantics
+- [RFC 9421: HTTP Message Signatures](https://www.rfc-editor.org/rfc/rfc9421): covered components, signature parameters, and verification
+- [RFC 9745: Deprecation HTTP Response Header](https://www.rfc-editor.org/rfc/rfc9745): machine-readable deprecation metadata
+- [RFC 8594: Sunset HTTP Header](https://www.rfc-editor.org/rfc/rfc8594): planned retirement metadata
+- [OpenAPI Specification](https://spec.openapis.org/oas/latest.html): machine-readable HTTP API description
+- [JSON Schema Draft 2020-12](https://json-schema.org/draft/2020-12): representation validation and vocabulary
+- [Protocol Buffers: Updating a Message Type](https://protobuf.dev/programming-guides/proto3/#updating): wire-compatible field evolution
+- [CloudEvents Specification](https://github.com/cloudevents/spec): interoperable event envelope attributes
+- [Idempotency](../01-foundations/08-idempotency.md): atomic deduplication, storage, TTL, and failure recovery
+- [Transactional Outbox](../05-messaging/07-outbox-pattern.md): atomic event publication after a domain transaction
+- [Database Migrations](../15-deployment/03-database-migrations.md): expand/migrate/contract across service and storage schemas
+- [Edge Gateway](./02-api-gateway.md): public routing, authentication, authorization, admission, and aggregation
