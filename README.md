@@ -2,6 +2,22 @@
 
 A hyper-detailed, framework-agnostic repository of system design patterns, concepts, and real-world case studies.
 
+<p align="center">
+  <a href="https://design.babushkai.com/">
+    <img
+      src=".github/assets/system-design-patterns-tour.gif"
+      alt="Animated tour of the System Design Patterns fieldbook, including its domain map, CAP theorem, LSM tree internals, payment architecture, and RAG evidence flow."
+      width="960"
+    />
+  </a>
+</p>
+
+<p align="center">
+  <a href="https://design.babushkai.com/"><strong>Read the interactive fieldbook</strong></a>
+  ·
+  <a href="https://github.com/babushkai/system-design-patterns/releases/latest">Download PDF or EPUB</a>
+</p>
+
 > "Most system design resources are unorganized and overly simple. This repository aims to change that."
 
 ## Philosophy
