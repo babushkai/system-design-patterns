@@ -361,7 +361,7 @@ Select the weakest coordination that still satisfies the entitlement and error c
 - IETF, [RFC 1363: A Proposed Flow Specification](https://www.rfc-editor.org/rfc/rfc1363.html), for the token-bucket interval bound.
 - IETF, [RFC 2697: A Single Rate Three Color Marker](https://www.rfc-editor.org/rfc/rfc2697.html).
 - IETF, [RFC 6585: Additional HTTP Status Codes](https://www.rfc-editor.org/rfc/rfc6585.html), including 429.
-- IETF, [RFC 9333: RateLimit Fields for HTTP](https://www.rfc-editor.org/rfc/rfc9333.html).
+- IETF, [RateLimit header fields for HTTP (draft-ietf-httpapi-ratelimit-headers)](https://datatracker.ietf.org/doc/draft-ietf-httpapi-ratelimit-headers/), an active Internet-Draft, not yet an RFC.
 - Envoy, [Local Rate Limiting](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/other_features/local_rate_limiting).
 - Google SRE, [Handling Overload](https://sre.google/sre-book/handling-overload/).
 - Google SRE, [Addressing Cascading Failures](https://sre.google/sre-book/addressing-cascading-failures/).
