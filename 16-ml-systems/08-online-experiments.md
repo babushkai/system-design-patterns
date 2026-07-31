@@ -10,7 +10,7 @@ An online experiment estimates what assigning a production change caused, for a 
 
 Offline metrics answer performance on a specified dataset; before/after dashboards combine treatment with seasonality, product changes, and external events. Observational causal methods can identify effects under additional assumptions, but ordinary production logs record realized actions and outcomes rather than the missing potential outcome under another policy. Randomization creates a concurrent comparison whose assignment mechanism is known.
 
-Random assignment makes treatment independent of pre-treatment characteristics *in expectation*. A finite realized sample is not identical across arms; chance imbalance remains and is represented by uncertainty intervals. Under correct assignment, no interference, consistent treatment, and complete outcome handling, the difference in outcomes identifies a causal effect for the randomized population. Randomization is powerful because it makes those assumptions inspectable—not because every observed difference is automatically causal.
+Random assignment makes treatment independent of pre-treatment characteristics *in expectation*. A finite realized sample is not identical across arms; chance imbalance remains and is represented by uncertainty intervals. Under correct assignment, no interference, consistent treatment, and complete outcome handling, the difference in outcomes identifies a causal effect for the randomized population. Randomization is powerful because it makes those assumptions inspectable, not because every observed difference is automatically causal.
 
 This matters acutely for ML because deployment changes both decisions and future data. A model may improve logged-data ranking accuracy yet reduce long-term satisfaction, or pass canary latency guardrails while degrading outcomes. [Deployment rollouts](./06-model-deployment-rollouts.md) control exposure; the experiment estimates the effect of that exposure. Keeping those responsibilities separate prevents operational health from being misreported as product value.
 
@@ -180,7 +180,7 @@ p = 2 * stats.norm.sf(abs(z))
 ci = (effect - 1.96*se, effect + 1.96*se)   # report the interval, not just the verdict
 ```
 
-CUPED, the variance-reduction workhorse, is a four-line addition to this — it subtracts each user's *pre-experiment* behavior, which the treatment cannot have caused, so its variance is pure noise being removed:
+CUPED, the variance-reduction workhorse, is a four-line addition to this: it subtracts each user's *pre-experiment* behavior, which the treatment cannot have caused, so its variance is pure noise being removed:
 
 ```python
 # x = same metric per user, measured in the weeks BEFORE assignment
@@ -233,17 +233,17 @@ Security and privacy are measurement properties. Experiment IDs in client logs c
 
 ## Network Effects and Interference: When Randomization Breaks
 
-User-level randomization rests on a hidden assumption from causal inference called SUTVA — the *stable unit treatment value assumption* — which says one unit's outcome depends only on its own treatment, not on anyone else's. In many of the most valuable systems, this assumption is simply false, and ignoring it produces confidently wrong results.
+User-level randomization rests on a hidden assumption from causal inference called SUTVA (the *stable unit treatment value assumption*), which says one unit's outcome depends only on its own treatment, not on anyone else's. In many of the most valuable systems, this assumption is simply false, and ignoring it produces confidently wrong results.
 
-Interference appears wherever units share a resource or influence each other. In a two-sided **marketplace**, a treatment that makes treated buyers more aggressive consumes inventory that control buyers can no longer book — the treatment effect bleeds into control through the shared supply, and the measured difference understates or distorts the true effect. In a **social network**, a feature that makes treated users post more changes the feed of their control friends. In **ride-sharing or ads**, treatment and control bid for the same finite drivers or ad slots. In every case, randomizing by user violates SUTVA because the control group is no longer an untouched counterfactual; it has been contaminated by the treatment it was supposed to be compared against.
+Interference appears wherever units share a resource or influence each other. In a two-sided **marketplace**, a treatment that makes treated buyers more aggressive consumes inventory that control buyers can no longer book: the treatment effect bleeds into control through the shared supply, and the measured difference understates or distorts the true effect. In a **social network**, a feature that makes treated users post more changes the feed of their control friends. In **ride-sharing or ads**, treatment and control bid for the same finite drivers or ad slots. In every case, randomizing by user violates SUTVA because the control group is no longer an untouched counterfactual; it has been contaminated by the treatment it was supposed to be compared against.
 
-The architectural responses change the unit of randomization to restore independence. **Cluster randomization** assigns whole groups — geographic regions, social communities, supply markets — to a single arm, so interference happens *within* a cluster (where everyone shares a treatment) rather than *across* the experimental boundary. **Switchback experiments** randomize over *time* instead of users, flipping an entire market between control and treatment in alternating windows, which is the standard design for marketplaces where spatial clusters still leak. Both buy validity at a steep cost in power, because the effective sample size is the number of clusters or time-blocks, not the number of users — a few dozen regions, not a few million people. The engineering judgment is to detect when interference is plausible and accept the power penalty, because a high-powered measurement of the wrong quantity is worthless.
+The architectural responses change the unit of randomization to restore independence. **Cluster randomization** assigns whole groups (geographic regions, social communities, supply markets) to a single arm, so interference happens *within* a cluster (where everyone shares a treatment) rather than *across* the experimental boundary. **Switchback experiments** randomize over *time* instead of users, flipping an entire market between control and treatment in alternating windows, which is the standard design for marketplaces where spatial clusters still leak. Both buy validity at a steep cost in power, because the effective sample size is the number of clusters or time-blocks, not the number of users: a few dozen regions, not a few million people. The engineering judgment is to detect when interference is plausible and accept the power penalty, because a high-powered measurement of the wrong quantity is worthless.
 
 ---
 
 ## Heterogeneous Effects: A Positive Average Can Hide a Harmed Segment
 
-The headline of an experiment is an average treatment effect, and an average is a summary that can conceal as much as it reveals. A model change that improves the aggregate metric by 1% may be improving the experience for the majority while actively harming a minority — new users, a particular locale, a specific device class, a high-risk tenant, cold-start items with little history. The average ships; the harmed segment is discovered in a support escalation weeks later.
+The headline of an experiment is an average treatment effect, and an average is a summary that can conceal as much as it reveals. A model change that improves the aggregate metric by 1% may be improving the experience for the majority while actively harming a minority: new users, a particular locale, a specific device class, a high-risk tenant, cold-start items with little history. The average ships; the harmed segment is discovered in a support escalation weeks later.
 
 Predeclare slices tied to the product and harm model, then report effects and uncertainty for them even when the aggregate is positive. Many post-hoc slices create false discoveries and low power, while aggregate randomization does not guarantee precise balance inside every small slice. Hierarchical models, multiplicity control, and follow-up confirmation can improve inference. [ML risk governance](./09-ml-risk-governance.md) determines which protected or vulnerable-group limits bind and what insufficient evidence means; the experiment platform supplies traceable estimates rather than inventing legal thresholds.
 
@@ -302,7 +302,7 @@ The characteristic ways experiments mislead recur across organizations, and nami
 
 **Pseudo-replication** counts millions of clicks as independent even though assignment occurred across hundreds of markets or users. The point estimate may be reasonable while the interval is far too narrow. Aggregate or use cluster-robust inference at the randomization unit.
 
-**Forged or asymmetric exposure** lets client bugs—or an adversary—emit treatment events without delivery, manufacturing both SRM and effect. Server-verifiable delivery tokens, schema validation, and arm-symmetric logging make the evidence chain tamper-resistant.
+**Forged or asymmetric exposure** lets client bugs (or an adversary) emit treatment events without delivery, manufacturing both SRM and effect. Server-verifiable delivery tokens, schema validation, and arm-symmetric logging make the evidence chain tamper-resistant.
 
 ---
 
@@ -328,26 +328,26 @@ Finally, bind operations to inference. Safety guardrails may stop at any time. A
 ## Key Takeaways
 
 1. Randomization makes treatment independent of pre-treatment characteristics in expectation; causal interpretation still requires correct assignment, a defined estimand, consistency, and controlled interference.
-2. The platform is a measurement system — assignment, exposure logging, metrics pipeline, integrity layer, decision rule — not a traffic split. Each stage can silently invalidate the result.
+2. The platform is a measurement system (assignment, exposure logging, metrics pipeline, integrity layer, decision rule), not a traffic split. Each stage can silently invalidate the result.
 3. Treat assignment as a versioned distributed-systems contract: canonical identity, specified hashing, immutable bucket maps, stable allocation epochs, and no cache or configuration leakage.
 4. Randomize at the finest unit that plausibly contains carryover and spillovers, then analyze at that unit; if interference crosses randomized units, redesign or bound the estimand.
 5. Assignment-level SRM is a gating integrity failure; exposure imbalance can also reveal treatment-dependent delivery and must be diagnosed rather than mislabeled.
 6. Statistics are design constraints: size for adequate power, never peek at a fixed-horizon test, correct for multiple comparisons, and run long enough to outlast novelty effects.
 7. Pre-register one guarded primary metric; guardrails block wins that break latency, revenue, or trust, and defend against metric hacking.
 8. Interference breaks SUTVA in marketplaces and social systems; cluster and switchback designs restore validity at a real cost in power.
-9. A positive average can hide a harmed segment — slice analysis is a required stage and a governance obligation, not an optional drill-down.
+9. A positive average can hide a harmed segment: slice analysis is a required stage and a governance obligation, not an optional drill-down.
 10. Metric contracts, late-data revisions, cluster-aware inference, authenticated exposure, and privacy controls are part of causal correctness, not reporting details.
 
 ---
 
 ## References
 
-1. [Trustworthy Online Controlled Experiments: A Practical Guide to A/B Testing](https://www.cambridge.org/core/books/trustworthy-online-controlled-experiments/6A3B263E7114E81B95669A95B219C1D8) — Kohavi, Tang & Xu, 2020
-2. [Controlled Experiments on the Web: Survey and Practical Guide](https://ai.stanford.edu/~ronnyk/2009controlledExperimentsOnTheWebSurvey.pdf) — Kohavi et al., 2009
-3. [Diagnosing Sample Ratio Mismatch in Online Controlled Experiments](https://www.exp-platform.com/Documents/2019_KDD_SampleRatioMismatch.pdf) — Fabijan et al., KDD 2019
-4. [Overlapping Experiment Infrastructure: More, Better, Faster Experimentation](https://research.google/pubs/overlapping-experiment-infrastructure-more-better-faster-experimentation/) — Tang et al., Google, 2010
-5. [Improving the Sensitivity of Online Controlled Experiments by Utilizing Pre-Experiment Data (CUPED)](https://www.exp-platform.com/Documents/2013-02-CUPED-ImprovingSensitivityOfControlledExperiments.pdf) — Deng et al., 2013
-6. [Always Valid Inference: Continuous Monitoring of A/B Tests](https://arxiv.org/abs/1512.04922) — Johari, Pekelis & Walsh, 2017
-7. [Detecting Network Effects: Randomizing Over Randomized Experiments](https://www.kdd.org/kdd2017/papers/view/detecting-network-effects-randomizing-over-randomized-experiments) — Saint-Jacques et al., LinkedIn, KDD 2017
-8. [It's All A/Bout Testing: The Netflix Experimentation Platform](https://netflixtechblog.com/its-all-a-bout-testing-the-netflix-experimentation-platform-4e1ca458c15) — Netflix, 2016
-9. [Experiments at Airbnb](https://medium.com/airbnb-engineering/experiments-at-airbnb-e2db3abf39e7) — Airbnb Engineering
+1. [Trustworthy Online Controlled Experiments: A Practical Guide to A/B Testing](https://www.cambridge.org/core/books/trustworthy-online-controlled-experiments/6A3B263E7114E81B95669A95B219C1D8): Kohavi, Tang & Xu, 2020
+2. [Controlled Experiments on the Web: Survey and Practical Guide](https://ai.stanford.edu/~ronnyk/2009controlledExperimentsOnTheWebSurvey.pdf): Kohavi et al., 2009
+3. [Diagnosing Sample Ratio Mismatch in Online Controlled Experiments](https://www.exp-platform.com/Documents/2019_KDD_SampleRatioMismatch.pdf): Fabijan et al., KDD 2019
+4. [Overlapping Experiment Infrastructure: More, Better, Faster Experimentation](https://research.google/pubs/overlapping-experiment-infrastructure-more-better-faster-experimentation/): Tang et al., Google, 2010
+5. [Improving the Sensitivity of Online Controlled Experiments by Utilizing Pre-Experiment Data (CUPED)](https://www.exp-platform.com/Documents/2013-02-CUPED-ImprovingSensitivityOfControlledExperiments.pdf): Deng et al., 2013
+6. [Always Valid Inference: Continuous Monitoring of A/B Tests](https://arxiv.org/abs/1512.04922): Johari, Pekelis & Walsh, 2017
+7. [Detecting Network Effects: Randomizing Over Randomized Experiments](https://www.kdd.org/kdd2017/papers/view/detecting-network-effects-randomizing-over-randomized-experiments): Saint-Jacques et al., LinkedIn, KDD 2017
+8. [It's All A/Bout Testing: The Netflix Experimentation Platform](https://netflixtechblog.com/its-all-a-bout-testing-the-netflix-experimentation-platform-4e1ca458c15): Netflix, 2016
+9. [Experiments at Airbnb](https://medium.com/airbnb-engineering/experiments-at-airbnb-e2db3abf39e7): Airbnb Engineering

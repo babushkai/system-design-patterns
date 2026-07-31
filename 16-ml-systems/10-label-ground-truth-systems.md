@@ -2,19 +2,19 @@
 
 ## TL;DR
 
-A label system is the part of an ML platform that turns messy real-world outcomes into the ground truth used for training, evaluation, monitoring, experimentation, and governance. It is not a CSV of labels and it is not a human annotation UI. It is a production data system with a harder correctness problem than most databases: the value it stores is a delayed, probabilistic, policy-shaped claim about what actually happened. The central design challenge is **preserving the decision context until truth arrives**. A prediction made today may receive its label seconds later, weeks later, or never; when the label finally appears, the system must join it back to the exact prediction, model version, feature values, exposure, policy, and action that produced the outcome. If that join is wrong, every downstream metric is wrong. A model trained on bad labels is not learning the world; it is learning the label pipeline's bugs.
+A label system publishes versioned claims about outcomes for training, evaluation, monitoring, experiments, and governance. Correctness depends on preserving decision context so delayed truth can be joined to the exact prediction, release, feature snapshot, exposure, policy, and action, while missing truth remains explicit. A bad join corrupts every downstream metric and model.
 
 ---
 
-## Why Labels Are a System, Not a Column
+## Label Contract and Delayed Truth
 
-It is tempting to treat labels as ordinary data: a table with `entity_id`, `timestamp`, and `label`. That view is too small. A label is an interpretation of an outcome under a definition, collected through a process, attached to a prior prediction, and used to decide whether a model is good. Every piece of that sentence hides systems work.
+A label is an interpretation of an outcome under a versioned definition, collected through a specific process, attached to a prior decision, and reused to judge future models. Each field carries identity, timing, policy, and provenance requirements.
 
 A fraud transaction is not labeled fraudulent the moment the transaction occurs. It may be labeled after a chargeback, after a manual investigation, after a merchant dispute, or after a risk team's rule says the evidence is strong enough. A recommendation is not labeled positive merely because the user clicked; the click might be accidental, position-biased, or followed by immediate abandonment. A medical model may receive a diagnosis code months later, and the code itself may be incomplete because billing workflows shape what gets recorded. In each case the label is not an objective fact emitted by the universe. It is the output of a collection process with latency, bias, missingness, and policy embedded inside it.
 
 The engineering implication is severe: **label quality bounds model quality**. Better model code cannot recover from a label pipeline that joins outcomes to the wrong prediction, silently drops hard cases, or changes the definition of the target halfway through a training window. This is the ML version of a database invariant: downstream correctness is impossible if the upstream ground truth is corrupt.
 
-A useful test: if someone asks why `model_v42` had 8% lower recall than `model_v41` last month, can the platform reconstruct not just the predictions but the labels used to score them — their definitions, arrival times, sources, annotators or outcome events, and correction history? If not, the team has labels, but not a label system.
+A useful test: if someone asks why `model_v42` had 8% lower recall than `model_v41` last month, can the platform reconstruct not just the predictions but the labels used to score them: their definitions, arrival times, sources, annotators or outcome events, and correction history? If not, the team has labels, but not a label system.
 
 ---
 
@@ -130,7 +130,7 @@ flowchart LR
     PROV --> PROXY["Early-warning proxy metrics"]
 ```
 
-For positive-event maturity, define `F_+(d) = P(D \le d \mid Y=1, eventual observation)`, where `D` is observation delay. A window with `F_+(d)=0.9` has observed about 90% of eventually observed positives under that conditioning population; it says nothing by itself about positives that are never observable. Estimate delay, eventual-observation probability, and missingness by source, action, and slice. When outcomes remain right-censored, survival analysis, inverse-probability-of-censoring weights, or explicit bounds are more honest than coercing open cases to negative. Competing events—chargeback, refund, account closure—also need a contract because one event can preclude observation of another.
+For positive-event maturity, define `F_+(d) = P(D \le d \mid Y=1, eventual observation)`, where `D` is observation delay. A window with `F_+(d)=0.9` has observed about 90% of eventually observed positives under that conditioning population; it says nothing by itself about positives that are never observable. Estimate delay, eventual-observation probability, and missingness by source, action, and slice. When outcomes remain right-censored, survival analysis, inverse-probability-of-censoring weights, or explicit bounds are more honest than coercing open cases to negative. Competing events (chargeback, refund, account closure) also need a contract because one event can preclude observation of another.
 
 The failure mode is reading immature labels as final truth. A fraud canary after two hours has measured operational health and perhaps proxies, not mature fraud loss. Every metric should expose observation horizon, fraction mature, censoring rule, and knowledge cutoff.
 
@@ -200,7 +200,7 @@ The key design choice is the **measurement policy**. It specifies reviewer quali
 
 Gold tasks and expert-audited samples calibrate reviewer and workflow quality, but gold sets can leak, age, and encode the same policy bias as production labels. Rotate them, stratify by difficulty and slice, and keep some blind. Agreement statistics such as Cohen's kappa or Krippendorff's alpha describe consistency under particular prevalence and assumptions; they do not establish correctness or learnability by themselves.
 
-Kappa is worth computing by hand once, because the naive alternative — raw percent agreement — systematically flatters the labeling process. Two reviewers label 200 items for "policy violation," where violations are rare:
+Kappa is worth computing by hand once, because the naive alternative (raw percent agreement) systematically flatters the labeling process. Two reviewers label 200 items for "policy violation," where violations are rare:
 
 ```text
                     Reviewer B: yes   Reviewer B: no
@@ -249,9 +249,9 @@ Many production systems do not start with clean ground truth. They start with we
 
 A weak label has three properties that must be explicit:
 
-1. **Coverage** — which examples it labels.
-2. **Precision** — how often positive weak labels are truly positive.
-3. **Bias** — which regions of the input space it over- or under-represents.
+1. **Coverage**: which examples it labels.
+2. **Precision**: how often positive weak labels are truly positive.
+3. **Bias**: which regions of the input space it over- or under-represents.
 
 For example, user reports are useful abuse labels but biased toward content seen by many users and toward categories users recognize as reportable. Clicks are useful recommendation labels but biased by position and presentation. A legacy rule can bootstrap fraud labels but encodes the exact blind spots the new model is supposed to exceed.
 
@@ -318,7 +318,7 @@ There are three common join patterns:
 | Entity + time window | User churn label joins to last subscription-risk prediction before renewal | Window boundary errors |
 | Exposure + outcome | Recommendation click joins to shown item and position | Position and visibility bias |
 
-Direct IDs should be engineered wherever possible. If the product action creates an outcome later—transaction, moderation decision, application, impression—carry the decision or exposure ID into downstream event streams. The ID proves correlation, not causal attribution: a purchase after several recommendations may relate to multiple exposures, and a default outcome follows an approval policy as well as a score. The label contract must name the attribution rule and estimand.
+Direct IDs should be engineered wherever possible. If the product action creates an outcome later (transaction, moderation decision, application, impression), carry the decision or exposure ID into downstream event streams. The ID proves correlation, not causal attribution: a purchase after several recommendations may relate to multiple exposures, and a default outcome follows an approval policy as well as a score. The label contract must name the attribution rule and estimand.
 
 When only entity-time joins are possible, the window must be part of the label definition contract. "User churned" may label the prediction made at subscription renewal, the last prediction before cancellation, or every weekly prediction in the 30 days before cancellation. These are different targets. An implicit window is a hidden label definition, and hidden definitions become unreproducible metrics.
 
@@ -452,7 +452,7 @@ The trust boundary is the snapshot manifest. It pins the label contract and reso
 1. Labels are not a column; they are delayed, policy-shaped claims about reality, produced by a system with latency, bias, missingness, and corrections.
 2. The label is the supervised model's specification. If the label definition is vague or unstable, the model faithfully learns the wrong target.
 3. The prediction log is the join anchor: capture model version, feature references, action, policy, experiment, and context at decision time or it cannot be reconstructed later.
-4. Label delay determines architecture. Metrics need observation horizon, maturity fraction, censoring rule, and knowledge cutoff—not just a label value.
+4. Label delay determines architecture. Metrics need observation horizon, maturity fraction, censoring rule, and knowledge cutoff, not just a label value.
 5. Negative labels are harder than positives because they often mean "no positive event by the deadline"; premature negatives are a major source of silent training corruption.
 6. Selective labels create feedback-loop bias: the system observes outcomes under actions its policy took. Randomized or otherwise identified exploration can create supported counterfactual evidence; human review adds adjudicated evidence or proxy labels, not the unchosen action's realized outcome.
 7. Human labeling is a measurement system with correlated error. Agreement is not correctness; preserve individual evidence, use independent audits, and model ambiguity explicitly.
@@ -466,13 +466,13 @@ The trust boundary is the snapshot manifest. It pins the label contract and reso
 
 ## References
 
-1. [Hidden Technical Debt in Machine Learning Systems](https://proceedings.neurips.cc/paper_files/paper/2015/file/86df7dcfd896fcaf2674f757a2463eba-Paper.pdf) — Sculley et al., 2015
-2. [Data Cascades in High-Stakes AI](https://research.google/pubs/data-cascades-in-high-stakes-ai/) — Sambasivan et al., CHI 2021
-3. [Datasheets for Datasets](https://arxiv.org/abs/1803.09010) — Gebru et al., 2018
-4. [Model Cards for Model Reporting](https://arxiv.org/abs/1810.03993) — Mitchell et al., 2019
-5. [Snorkel: Rapid Training Data Creation with Weak Supervision](https://arxiv.org/abs/1711.10160) — Ratner et al., VLDB 2017
-6. [Learning from Delayed Outcomes via Proxies with Applications to Recommender Systems](https://arxiv.org/abs/2010.08942) — delayed feedback and proxy-label framing
-7. [Selective Labels and Deferential Fairness](https://arxiv.org/abs/1809.05699) — selective labels in high-stakes decision systems
-8. [Trustworthy Online Controlled Experiments](https://www.cambridge.org/core/books/trustworthy-online-controlled-experiments/6A3B263E7114E81B95669A95B219C1D8) — Kohavi, Tang & Xu, 2020
-9. [Maximum Likelihood Estimation of Observer Error-Rates Using the EM Algorithm](https://www.jstor.org/stable/2346806) — Dawid & Skene, 1979
-10. [Survival Analysis: A Self-Learning Text](https://link.springer.com/book/10.1007/978-1-4419-6646-9) — Kleinbaum & Klein; censoring foundations
+1. [Hidden Technical Debt in Machine Learning Systems](https://proceedings.neurips.cc/paper_files/paper/2015/file/86df7dcfd896fcaf2674f757a2463eba-Paper.pdf): Sculley et al., 2015
+2. [Data Cascades in High-Stakes AI](https://research.google/pubs/data-cascades-in-high-stakes-ai/): Sambasivan et al., CHI 2021
+3. [Datasheets for Datasets](https://arxiv.org/abs/1803.09010): Gebru et al., 2018
+4. [Model Cards for Model Reporting](https://arxiv.org/abs/1810.03993): Mitchell et al., 2019
+5. [Snorkel: Rapid Training Data Creation with Weak Supervision](https://arxiv.org/abs/1711.10160): Ratner et al., VLDB 2017
+6. [Learning from Delayed Outcomes via Proxies with Applications to Recommender Systems](https://arxiv.org/abs/2010.08942): delayed feedback and proxy-label framing
+7. [Selective Labels and Deferential Fairness](https://arxiv.org/abs/1809.05699): selective labels in high-stakes decision systems
+8. [Trustworthy Online Controlled Experiments](https://www.cambridge.org/core/books/trustworthy-online-controlled-experiments/6A3B263E7114E81B95669A95B219C1D8): Kohavi, Tang & Xu, 2020
+9. [Maximum Likelihood Estimation of Observer Error-Rates Using the EM Algorithm](https://www.jstor.org/stable/2346806): Dawid & Skene, 1979
+10. [Survival Analysis: A Self-Learning Text](https://link.springer.com/book/10.1007/978-1-4419-6646-9): Kleinbaum & Klein; censoring foundations

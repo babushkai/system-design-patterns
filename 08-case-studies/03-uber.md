@@ -1,1012 +1,309 @@
-# Uber System Design
+# Uber: Evidence, Inference, and a Real-Time Marketplace Reference Design
 
-## TL;DR
+Ride fulfillment applies distributed-systems correctness to a physical world that keeps moving while packets are delayed. Driver location is an estimate, an offer is not an assignment, and payment must follow an authoritative trip lifecycle. Public sources describe several generations, not every current service.
 
-Uber matches riders with nearby drivers in real-time, handling millions of location updates per second. Key challenges include geospatial indexing for efficient proximity queries, dynamic pricing (surge), ETA calculation, and payment processing. The architecture uses a cell-based location service, event-driven dispatch, and a robust trip state machine.
+Claims are labeled:
 
----
+- **Documented**: stated in a dated Uber engineering post, paper, repository, or company report.
+- **Inference**: follows from documented constraints but is not a published implementation detail.
+- **Reference design**: a proposed Uber-like system, not a claim about Uber production.
 
-## Core Requirements
+## Evidence Boundary and Dated Scale
 
-### Functional Requirements
-- Request a ride (pickup/dropoff locations)
-- Match with nearby drivers
-- Real-time driver tracking
-- Fare estimation and dynamic pricing
-- Trip management (start, end, cancel)
-- Payments processing
-- Rating system
-- Driver/rider history
+| Dated source | Documented fact | Boundary |
+|---|---|---|
+| Project Mezzanine, July 2015 | Uber moved core trip data from a single PostgreSQL instance to an append-only, sharded MySQL-backed store after mirrored writes, backfill, query replay, and validation | Historical migration, not today's complete storage stack |
+| Ringpop post, February 2016 | Uber's Geospatial service held active vehicle locations in sharded in-memory workers using membership, consistent hashing, and forwarding | Does not prove the present location architecture |
+| H3 post, June 2018 | Uber open-sourced a hierarchical hexagonal index used for marketplace analysis and optimization | H3 is an index, not a dispatch algorithm |
+| Fulfillment rearchitecture, July 2021 | The platform reported more than one million concurrent users, billions of trips per year, more than ten thousand cities, and billions of database transactions per day; it used statecharts and a transaction coordinator | Scale and architecture are a 2021 snapshot |
+| Fulfillment on Spanner, September 2021 | Uber described Cloud Spanner as storage for the rebuilt Fulfillment Platform to obtain transactional consistency and horizontal scale | Not every Uber workload uses Spanner |
+| Reinforcement-learning matching post, July 2025 | Uber reported deployment of a value-function signal in matching in more than 400 cities | Does not expose the full matching objective or allocation system |
 
-### Non-Functional Requirements
-- Low latency matching (< 1 second)
-- Handle 1M+ concurrent drivers
-- 10M+ location updates/minute
-- High availability (99.99%)
-- Accurate ETA estimation
-- Strong payment consistency
+Do not combine these snapshots into an “Uber today” diagram; the reference architecture declares its own assumptions.
 
----
+## Workload and Requirements
 
-## High-Level Architecture
+The marketplace has several clocks:
+
+- Provider devices send noisy, delayed, and sometimes duplicated location updates.
+- Consumers request quotes and trips against a rapidly changing supply set.
+- Matching computes offers while providers move, go offline, or accept other work.
+- Fulfillment state drives navigation, safety, pricing, receipts, support, and downstream finance.
+- Maps, ETA, pricing, fraud, and notifications are dependencies, not the trip authority.
+
+An **explicit reference-design contract**:
+
+| Operation | Correctness requirement | Availability/degradation policy |
+|---|---|---|
+| Update provider location | Keep the newest accepted sample for a provider epoch; reject implausible or older samples | Missing updates age out rather than remain “available” forever |
+| Request quote | Bind price/eligibility inputs and expiry to a quote ID | Return fewer products or a wider estimate if optional models fail |
+| Request trip | Create one durable fulfillment intent per idempotency key | Do not dispatch until intent is committed |
+| Offer work | An offer has a lease, version, target provider, and expiry | Expired offers cannot win |
+| Accept offer | At most one provider becomes assigned for a fulfillment leg | Contention may reject a late acceptance |
+| Advance trip | Only legal state transitions under the current entity version commit | Retry the command; never skip validation |
+| Complete/cancel | Produce one authoritative terminal outcome and auditable adjustments | Downstream billing can catch up from events |
+
+Location and ETA favor freshness; assignment and trip state favor consistency. Treating both with one consistency model creates either stale matching or double assignment.
+
+## State, Authority, and Invariants
+
+| State | Reference-design authority | Lifetime/consistency |
+|---|---|---|
+| Provider session | Fulfillment store, keyed by provider session ID | Strong per session |
+| Latest provider location | Regional ephemeral location index plus sequence checkpoint | Bounded-stale and expiring |
+| Consumer intent/quote | Quote and fulfillment stores | Immutable quote inputs; versioned intent |
+| Offer | Offer store or fulfillment entity | Leased, versioned, idempotent |
+| Assignment | Fulfillment state machine | Strong per fulfillment leg |
+| Trip lifecycle | Fulfillment state machine and event log | Strong ordered transitions per trip |
+| ETA/route | Versioned derived estimate | Recomputable and explicitly timestamped |
+| Price/fare | Versioned quote plus adjustment ledger | Auditable; never inferred from displayed UI alone |
+| Marketplace features | Stream/batch feature stores | Derived, versioned, bounded-stale |
+
+Core invariants:
+
+1. One fulfillment leg has at most one active assignment epoch.
+2. A provider session can accept only work compatible with its current availability version.
+3. A location update with an older device sequence or session epoch cannot replace a newer one.
+4. Trip-state transitions are legal edges in a versioned statechart, not arbitrary field updates.
+5. Every charge, payout, cancellation fee, and adjustment references immutable trip and policy versions.
+6. A retry carries the same command identity; duplicates return the prior result or re-evaluate safely.
+7. Derived ETA, map, and marketplace outputs cannot mutate trip authority directly.
+
+**Documented (2021):** Uber's Fulfillment rearchitecture says it used hierarchical statecharts for fulfillment entities, a Business Transaction Coordinator for multi-entity writes, and an ORM over ACID storage. This is direct evidence that explicit lifecycle modeling replaced scattered implicit state in that generation.
+
+## Data Plane and Control Plane
 
 ```mermaid
-graph TD
-    RiderApp["Rider App"] --> APIGateway["API Gateway"]
-    DriverApp["Driver App"] --> APIGateway
-
-    APIGateway --> TripSvc["Trip Service"]
-    APIGateway --> LocationSvc["Location Service"]
-    APIGateway --> MatchSvc["Match Service"]
-    APIGateway --> PricingSvc["Pricing Service"]
-    APIGateway --> PaymentSvc["Payment Service"]
-
-    LocationSvc --> GeoIndex["Geospatial Index<br/>(Cell-based)"]
-    MatchSvc --> GeoIndex
-
-    TripSvc --> TripStore[("Trip Store<br/>(Cassandra)")]
-    PricingSvc --> PriceCache[("Price Cache<br/>(Redis)")]
-    PaymentSvc --> PaymentGW[("Payment Gateway")]
+flowchart LR
+    PD[Provider device] --> LE[Location edge]
+    LE --> LI[(Regional location index)]
+    CD[Consumer device] --> API[Marketplace API]
+    API --> Q[Quote service]
+    API --> F[Fulfillment command service]
+    F --> FS[(Authoritative fulfillment store)]
+    F --> EL[Event log]
+    F --> M[Matching coordinator]
+    M --> LI
+    M --> ETA[Routing and ETA]
+    M --> O[Offer service]
+    O --> PD
+    EL --> B[Billing, safety, support, analytics]
 ```
 
----
-
-## Location Service
-
-### Cell-Based Geospatial Indexing
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                        Cell-Based Geolocation                           │
-│                                                                         │
-│   The world is divided into cells using Google S2 or Uber H3           │
-│                                                                         │
-│   ┌─────┬─────┬─────┬─────┬─────┬─────┬─────┬─────┐                    │
-│   │     │     │     │     │     │     │     │     │                    │
-│   │ C1  │ C2  │ C3  │ C4  │ C5  │ C6  │ C7  │ C8  │                    │
-│   │     │     │  🚗 │     │     │     │     │     │                    │
-│   ├─────┼─────┼─────┼─────┼─────┼─────┼─────┼─────┤                    │
-│   │     │     │     │     │     │     │     │     │                    │
-│   │ C9  │ C10 │ C11 │ C12 │ C13 │ C14 │ C15 │ C16 │                    │
-│   │     │  🚗 │     │  📍 │  🚗 │     │     │     │                    │
-│   ├─────┼─────┼─────┼─────┼─────┼─────┼─────┼─────┤                    │
-│   │     │     │     │     │     │     │     │     │                    │
-│   │ C17 │ C18 │ C19 │ C20 │ C21 │ C22 │ C23 │ C24 │                    │
-│   │     │     │     │     │ 🚗  │     │     │     │                    │
-│   └─────┴─────┴─────┴─────┴─────┴─────┴─────┴─────┘                    │
-│                                                                         │
-│   📍 = Rider requesting ride in cell C12                               │
-│   🚗 = Available drivers                                                │
-│                                                                         │
-│   Search: C12 + neighbors (C3, C11, C13, C21, etc.)                    │
-│   Find drivers: C3, C10, C13, C21                                      │
-│                                                                         │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-```go
-package main
-
-import (
-	"context"
-	"fmt"
-	"math"
-	"sort"
-	"strconv"
-	"sync"
-	"time"
-
-	"github.com/go-redis/redis/v8"
-	"github.com/uber/h3-go/v4"
-)
-
-// DriverLocation represents a driver's real-time position and status.
-type DriverLocation struct {
-	DriverID  string
-	Lat       float64
-	Lng       float64
-	Heading   float64
-	Speed     float64
-	Timestamp float64
-	Status    string  // "available", "on_trip", "offline"
-	Distance  float64 // populated during nearby search
-}
-
-// LocationService manages driver locations using an H3 hexagonal grid backed by Redis.
-type LocationService struct {
-	rdb         *redis.Client
-	resolution  int
-	locationTTL time.Duration
-	mu          sync.RWMutex
-}
-
-// NewLocationService creates a LocationService with resolution 9 (~174 m edge).
-func NewLocationService(rdb *redis.Client) *LocationService {
-	return &LocationService{
-		rdb:         rdb,
-		resolution:  9,
-		locationTTL: 60 * time.Second,
-	}
-}
-
-// cellID returns the H3 cell index for the given coordinates.
-func (s *LocationService) cellID(lat, lng float64) h3.Cell {
-	return h3.LatLngToCell(h3.NewLatLng(lat, lng), s.resolution)
-}
-
-// UpdateLocation stores a driver's position and manages cell membership.
-func (s *LocationService) UpdateLocation(ctx context.Context, loc DriverLocation) error {
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-
-	cell := s.cellID(loc.Lat, loc.Lng)
-	cellStr := cell.String()
-
-	// Get previous cell
-	prevCell, _ := s.rdb.HGet(ctx, fmt.Sprintf("driver:%s", loc.DriverID), "cell").Result()
-
-	pipe := s.rdb.TxPipeline()
-
-	// Remove from old cell if changed
-	if prevCell != "" && prevCell != cellStr {
-		pipe.SRem(ctx, fmt.Sprintf("cell:%s", prevCell), loc.DriverID)
-	}
-
-	// Add to new cell
-	pipe.SAdd(ctx, fmt.Sprintf("cell:%s", cellStr), loc.DriverID)
-
-	// Store driver location data
-	pipe.HSet(ctx, fmt.Sprintf("driver:%s", loc.DriverID), map[string]interface{}{
-		"lat":       loc.Lat,
-		"lng":       loc.Lng,
-		"heading":   loc.Heading,
-		"speed":     loc.Speed,
-		"status":    loc.Status,
-		"cell":      cellStr,
-		"timestamp": loc.Timestamp,
-	})
-
-	// Set TTL (driver offline if no update)
-	pipe.Expire(ctx, fmt.Sprintf("driver:%s", loc.DriverID), s.locationTTL)
-
-	_, err := pipe.Exec(ctx)
-	return err
-}
-
-// FindNearbyDrivers returns available drivers within radiusKm, sorted by distance.
-func (s *LocationService) FindNearbyDrivers(ctx context.Context, lat, lng, radiusKm float64, limit int) ([]DriverLocation, error) {
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-
-	center := s.cellID(lat, lng)
-	ringSize := s.calculateRingSize(radiusKm)
-	cells := h3.GridDisk(center, ringSize)
-
-	// Collect unique driver IDs from all cells
-	driverSet := make(map[string]struct{})
-	for _, c := range cells {
-		members, err := s.rdb.SMembers(ctx, fmt.Sprintf("cell:%s", c.String())).Result()
-		if err != nil {
-			continue
-		}
-		for _, id := range members {
-			driverSet[id] = struct{}{}
-		}
-	}
-
-	// Get driver details and filter by status
-	var drivers []DriverLocation
-	for driverID := range driverSet {
-		data, err := s.rdb.HGetAll(ctx, fmt.Sprintf("driver:%s", driverID)).Result()
-		if err != nil || len(data) == 0 {
-			continue
-		}
-		if data["status"] != "available" {
-			continue
-		}
-		dLat, _ := strconv.ParseFloat(data["lat"], 64)
-		dLng, _ := strconv.ParseFloat(data["lng"], 64)
-		heading, _ := strconv.ParseFloat(data["heading"], 64)
-		speed, _ := strconv.ParseFloat(data["speed"], 64)
-		ts, _ := strconv.ParseFloat(data["timestamp"], 64)
-
-		dist := haversine(lat, lng, dLat, dLng)
-		if dist > radiusKm {
-			continue
-		}
-		drivers = append(drivers, DriverLocation{
-			DriverID:  driverID,
-			Lat:       dLat,
-			Lng:       dLng,
-			Heading:   heading,
-			Speed:     speed,
-			Timestamp: ts,
-			Status:    "available",
-			Distance:  dist,
-		})
-	}
-
-	sort.Slice(drivers, func(i, j int) bool {
-		return drivers[i].Distance < drivers[j].Distance
-	})
-	if len(drivers) > limit {
-		drivers = drivers[:limit]
-	}
-	return drivers, nil
-}
-
-// calculateRingSize determines the H3 k-ring needed to cover the given radius.
-func (s *LocationService) calculateRingSize(radiusKm float64) int {
-	const hexEdgeKm = 0.174 // average edge at resolution 9
-	k := int(radiusKm / hexEdgeKm / 2)
-	if k < 1 {
-		return 1
-	}
-	return k
-}
-
-// haversine returns the great-circle distance in km between two lat/lng pairs.
-func haversine(lat1, lng1, lat2, lng2 float64) float64 {
-	const R = 6371.0 // Earth's radius in km
-	dLat := (lat2 - lat1) * math.Pi / 180
-	dLng := (lng2 - lng1) * math.Pi / 180
-	rLat1 := lat1 * math.Pi / 180
-	rLat2 := lat2 * math.Pi / 180
-
-	a := math.Sin(dLat/2)*math.Sin(dLat/2) +
-		math.Cos(rLat1)*math.Cos(rLat2)*math.Sin(dLng/2)*math.Sin(dLng/2)
-	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
-	return R * c
-}
-```
-
----
-
-## Matching Service
-
-```go
-package main
-
-import (
-	"context"
-	"sort"
-	"time"
-
-	"golang.org/x/sync/errgroup"
-)
-
-// MatchStrategy determines how candidates are ranked.
-type MatchStrategy int
-
-const (
-	MatchNearest    MatchStrategy = iota // sort by distance
-	MatchFastestETA                      // sort by ETA
-	MatchBestRated                       // sort by rating, then ETA
-)
-
-// RideRequest represents a rider's request for a trip.
-type RideRequest struct {
-	RequestID   string
-	RiderID     string
-	PickupLat   float64
-	PickupLng   float64
-	DropoffLat  float64
-	DropoffLng  float64
-	VehicleType string // "uberx", "uberxl", "black"
-}
-
-// MatchResult holds scoring information for a candidate driver.
-type MatchResult struct {
-	DriverID     string
-	ETASeconds   int
-	DistanceKm   float64
-	DriverRating float64
-}
-
-// ETAServiceIface is the interface used by MatchingService for ETA lookups.
-type ETAServiceIface interface {
-	GetETA(ctx context.Context, oLat, oLng, dLat, dLng float64) (*ETAResult, error)
-}
-
-// DriverServiceIface provides driver metadata.
-type DriverServiceIface interface {
-	GetRating(ctx context.Context, driverID string) (float64, error)
-	FilterByVehicle(ctx context.Context, drivers []DriverLocation, vehicleType string) ([]DriverLocation, error)
-}
-
-// DispatchServiceIface offers a trip to a driver and waits for acceptance.
-type DispatchServiceIface interface {
-	OfferTrip(ctx context.Context, driverID string, req RideRequest, etaSec int, timeout time.Duration) (bool, error)
-}
-
-// MatchingService matches riders with optimal drivers.
-type MatchingService struct {
-	location     *LocationService
-	eta          ETAServiceIface
-	driver       DriverServiceIface
-	dispatch     DispatchServiceIface
-	matchTimeout time.Duration
-	maxETAMin    int
-}
-
-// NewMatchingService creates a MatchingService.
-func NewMatchingService(loc *LocationService, eta ETAServiceIface, drv DriverServiceIface, disp DispatchServiceIface) *MatchingService {
-	return &MatchingService{
-		location:     loc,
-		eta:          eta,
-		driver:       drv,
-		dispatch:     disp,
-		matchTimeout: 30 * time.Second,
-		maxETAMin:    15,
-	}
-}
-
-// FindMatch finds and dispatches the best matching driver.
-func (m *MatchingService) FindMatch(ctx context.Context, req RideRequest, strategy MatchStrategy) (*MatchResult, error) {
-	ctx, cancel := context.WithTimeout(ctx, m.matchTimeout)
-	defer cancel()
-
-	// 1. Find nearby available drivers
-	nearby, err := m.location.FindNearbyDrivers(ctx, req.PickupLat, req.PickupLng, 5.0, 20)
-	if err != nil || len(nearby) == 0 {
-		return nil, err
-	}
-
-	// 2. Filter by vehicle type
-	eligible, err := m.driver.FilterByVehicle(ctx, nearby, req.VehicleType)
-	if err != nil || len(eligible) == 0 {
-		return nil, err
-	}
-
-	// 3. Calculate ETAs for all eligible drivers in parallel
-	candidates, err := m.calculateETAs(ctx, eligible, req.PickupLat, req.PickupLng)
-	if err != nil {
-		return nil, err
-	}
-
-	// 4. Rank candidates
-	rankCandidates(candidates, strategy)
-
-	// 5. Try to dispatch to drivers in order
-	for _, c := range candidates {
-		if c.ETASeconds > m.maxETAMin*60 {
-			continue
-		}
-		accepted, err := m.dispatch.OfferTrip(ctx, c.DriverID, req, c.ETASeconds, 15*time.Second)
-		if err != nil {
-			continue
-		}
-		if accepted {
-			return &c, nil
-		}
-	}
-	return nil, nil
-}
-
-// calculateETAs fetches ETAs for all drivers concurrently using errgroup.
-func (m *MatchingService) calculateETAs(ctx context.Context, drivers []DriverLocation, destLat, destLng float64) ([]MatchResult, error) {
-	type indexedResult struct {
-		idx    int
-		result MatchResult
-	}
-
-	g, gCtx := errgroup.WithContext(ctx)
-	ch := make(chan indexedResult, len(drivers))
-
-	for i, d := range drivers {
-		i, d := i, d
-		g.Go(func() error {
-			eta, err := m.eta.GetETA(gCtx, d.Lat, d.Lng, destLat, destLng)
-			if err != nil || eta == nil {
-				return nil // skip this driver, not fatal
-			}
-			rating, _ := m.driver.GetRating(gCtx, d.DriverID)
-			ch <- indexedResult{idx: i, result: MatchResult{
-				DriverID:     d.DriverID,
-				ETASeconds:   eta.DurationSeconds,
-				DistanceKm:   eta.DistanceKm,
-				DriverRating: rating,
-			}}
-			return nil
-		})
-	}
-	_ = g.Wait()
-	close(ch)
-
-	results := make([]MatchResult, 0, len(drivers))
-	for r := range ch {
-		results = append(results, r.result)
-	}
-	return results, nil
-}
-
-// rankCandidates sorts candidates in place according to the given strategy.
-func rankCandidates(candidates []MatchResult, strategy MatchStrategy) {
-	switch strategy {
-	case MatchNearest:
-		sort.Slice(candidates, func(i, j int) bool {
-			return candidates[i].DistanceKm < candidates[j].DistanceKm
-		})
-	case MatchFastestETA:
-		sort.Slice(candidates, func(i, j int) bool {
-			return candidates[i].ETASeconds < candidates[j].ETASeconds
-		})
-	case MatchBestRated:
-		sort.Slice(candidates, func(i, j int) bool {
-			if candidates[i].DriverRating != candidates[j].DriverRating {
-				return candidates[i].DriverRating > candidates[j].DriverRating
-			}
-			return candidates[i].ETASeconds < candidates[j].ETASeconds
-		})
-	}
-}
-```
-
----
-
-## Trip State Machine
-
-```mermaid
-stateDiagram-v2
-    [*] --> REQUESTED
-    REQUESTED --> MATCHING
-    REQUESTED --> CANCELLED : cancel
-
-    MATCHING --> MATCHED
-    MATCHING --> NO_MATCH : no driver
-
-    MATCHED --> DRIVER_EN_ROUTE
-
-    DRIVER_EN_ROUTE --> ARRIVED : driver arrives
-    DRIVER_EN_ROUTE --> CANCELLED : cancel
-
-    ARRIVED --> IN_TRIP : rider pickup
-    ARRIVED --> CANCELLED : cancel
-
-    IN_TRIP --> COMPLETED : arrive at dest
-    IN_TRIP --> CANCELLED : cancel
-
-    COMPLETED --> [*]
-    CANCELLED --> [*]
-    NO_MATCH --> [*]
-```
-
-```go
-package main
-
-import (
-	"context"
-	"errors"
-	"fmt"
-	"time"
-
-	"github.com/google/uuid"
-)
-
-// TripState represents the lifecycle state of a trip.
-type TripState int
-
-const (
-	TripRequested    TripState = iota // initial request
-	TripMatching                      // searching for driver
-	TripMatched                       // driver assigned
-	TripDriverEnRoute                 // driver heading to pickup
-	TripArrived                       // driver at pickup
-	TripInTrip                        // ride in progress
-	TripCompleted                     // ride finished
-	TripCancelled                     // rider or driver cancelled
-	TripNoMatch                       // no driver found
-)
-
-// String returns the event-friendly name for a TripState.
-func (s TripState) String() string {
-	return [...]string{
-		"requested", "matching", "matched", "driver_en_route",
-		"arrived", "in_trip", "completed", "cancelled", "no_match",
-	}[s]
-}
-
-// transitions is the explicit map of valid state transitions.
-var transitions = map[TripState][]TripState{
-	TripRequested:     {TripMatching, TripCancelled},
-	TripMatching:      {TripMatched, TripNoMatch, TripCancelled},
-	TripMatched:       {TripDriverEnRoute, TripCancelled},
-	TripDriverEnRoute: {TripArrived, TripCancelled},
-	TripArrived:       {TripInTrip, TripCancelled},
-	TripInTrip:        {TripCompleted},
-	TripCompleted:     {},
-	TripCancelled:     {},
-	TripNoMatch:       {TripRequested}, // retry
-}
-
-var (
-	ErrTripNotFound      = errors.New("trip not found")
-	ErrInvalidTransition = errors.New("invalid state transition")
-)
-
-// Trip holds the full trip record persisted in Cassandra.
-type Trip struct {
-	TripID      string
-	RiderID     string
-	DriverID    string
-	State       TripState
-	PickupLat   float64
-	PickupLng   float64
-	DropoffLat  float64
-	DropoffLng  float64
-	VehicleType string
-	FareEstimate float64
-	FareActual   float64
-	CreatedAt    time.Time
-	StartedAt    time.Time
-	CompletedAt  time.Time
-}
-
-// TripStoreIface abstracts the persistence layer (Cassandra via gocql).
-type TripStoreIface interface {
-	Save(ctx context.Context, trip *Trip) error
-	Get(ctx context.Context, tripID string) (*Trip, error)
-}
-
-// EventBusIface publishes domain events (Kafka via confluent-kafka-go).
-type EventBusIface interface {
-	Publish(ctx context.Context, topic string, payload interface{}) error
-}
-
-// PaymentServiceIface handles charges and cancellation fees.
-type PaymentServiceIface interface {
-	Charge(ctx context.Context, riderID string, amount float64) error
-	ChargeCancellation(ctx context.Context, trip *Trip) error
-}
-
-// FareMeterIface starts metering for an active trip.
-type FareMeterIface interface {
-	Start(ctx context.Context, trip *Trip) error
-	CalculateFinal(ctx context.Context, trip *Trip) (float64, error)
-}
-
-// TripService manages the trip lifecycle with an explicit state machine.
-type TripService struct {
-	store    TripStoreIface
-	events   EventBusIface
-	payment  PaymentServiceIface
-	fare     FareMeterIface
-}
-
-// NewTripService creates a TripService.
-func NewTripService(store TripStoreIface, events EventBusIface, pay PaymentServiceIface, fare FareMeterIface) *TripService {
-	return &TripService{store: store, events: events, payment: pay, fare: fare}
-}
-
-// CreateTrip persists a new trip in the REQUESTED state.
-func (s *TripService) CreateTrip(ctx context.Context, req RideRequest, fareEstimate float64) (*Trip, error) {
-	trip := &Trip{
-		TripID:       uuid.NewString(),
-		RiderID:      req.RiderID,
-		State:        TripRequested,
-		PickupLat:    req.PickupLat,
-		PickupLng:    req.PickupLng,
-		DropoffLat:   req.DropoffLat,
-		DropoffLng:   req.DropoffLng,
-		VehicleType:  req.VehicleType,
-		FareEstimate: fareEstimate,
-		CreatedAt:    time.Now(),
-	}
-	if err := s.store.Save(ctx, trip); err != nil {
-		return nil, err
-	}
-	_ = s.events.Publish(ctx, "trip.created", trip)
-	return trip, nil
-}
-
-// Transition moves a trip to newState, enforcing the state machine.
-func (s *TripService) Transition(ctx context.Context, tripID string, newState TripState, opts map[string]interface{}) (*Trip, error) {
-	trip, err := s.store.Get(ctx, tripID)
-	if err != nil {
-		return nil, ErrTripNotFound
-	}
-
-	if !isValidTransition(trip.State, newState) {
-		return nil, fmt.Errorf("%w: %s -> %s", ErrInvalidTransition, trip.State, newState)
-	}
-
-	oldState := trip.State
-	trip.State = newState
-
-	// Handle state-specific side effects
-	if err := s.handleTransition(ctx, trip, oldState, newState, opts); err != nil {
-		return nil, err
-	}
-
-	if err := s.store.Save(ctx, trip); err != nil {
-		return nil, err
-	}
-	_ = s.events.Publish(ctx, fmt.Sprintf("trip.%s", newState), trip)
-	return trip, nil
-}
-
-func isValidTransition(from, to TripState) bool {
-	for _, allowed := range transitions[from] {
-		if allowed == to {
-			return true
-		}
-	}
-	return false
-}
-
-func (s *TripService) handleTransition(ctx context.Context, trip *Trip, oldState, newState TripState, opts map[string]interface{}) error {
-	switch newState {
-	case TripMatched:
-		if id, ok := opts["driver_id"].(string); ok {
-			trip.DriverID = id
-		}
-	case TripInTrip:
-		trip.StartedAt = time.Now()
-		return s.fare.Start(ctx, trip)
-	case TripCompleted:
-		trip.CompletedAt = time.Now()
-		actual, err := s.fare.CalculateFinal(ctx, trip)
-		if err != nil {
-			return err
-		}
-		trip.FareActual = actual
-		return s.payment.Charge(ctx, trip.RiderID, trip.FareActual)
-	case TripCancelled:
-		if oldState == TripDriverEnRoute || oldState == TripArrived {
-			return s.payment.ChargeCancellation(ctx, trip)
-		}
-	}
-	return nil
-}
-```
-
----
-
-## Dynamic Pricing (Surge)
-
-```go
-package main
-
-import (
-	"context"
-	"fmt"
-	"strconv"
-	"time"
-
-	"github.com/go-redis/redis/v8"
-	"github.com/uber/h3-go/v4"
-)
-
-// SurgeData captures a point-in-time surge calculation.
-type SurgeData struct {
-	Multiplier   float64
-	DemandCount  int
-	SupplyCount  int
-	CalculatedAt time.Time
-}
-
-// SurgePricingService calculates dynamic surge multipliers based on local supply/demand.
-type SurgePricingService struct {
-	rdb            *redis.Client
-	location       *LocationService
-	minMultiplier  float64
-	maxMultiplier  float64
-	surgeThreshold float64
-	cacheTTL       time.Duration
-}
-
-// NewSurgePricingService creates a SurgePricingService.
-func NewSurgePricingService(rdb *redis.Client, loc *LocationService) *SurgePricingService {
-	return &SurgePricingService{
-		rdb:            rdb,
-		location:       loc,
-		minMultiplier:  1.0,
-		maxMultiplier:  5.0,
-		surgeThreshold: 1.5,
-		cacheTTL:       60 * time.Second,
-	}
-}
-
-// GetSurgeMultiplier returns the current surge multiplier for a location and vehicle type.
-func (s *SurgePricingService) GetSurgeMultiplier(ctx context.Context, lat, lng float64, vehicleType string) (float64, error) {
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-
-	cell := s.location.cellID(lat, lng)
-	cacheKey := fmt.Sprintf("surge:%s:%s", cell, vehicleType)
-
-	// Check cache
-	if cached, err := s.rdb.Get(ctx, cacheKey).Result(); err == nil {
-		if v, err := strconv.ParseFloat(cached, 64); err == nil {
-			return v, nil
-		}
-	}
-
-	// Calculate surge
-	multiplier, err := s.calculateSurge(ctx, cell, vehicleType)
-	if err != nil {
-		return s.minMultiplier, err
-	}
-
-	// Cache result
-	s.rdb.Set(ctx, cacheKey, strconv.FormatFloat(multiplier, 'f', 4, 64), s.cacheTTL)
-
-	return multiplier, nil
-}
-
-func (s *SurgePricingService) calculateSurge(ctx context.Context, cell h3.Cell, vehicleType string) (float64, error) {
-	demand, err := s.getDemand(ctx, cell.String(), vehicleType)
-	if err != nil {
-		return s.minMultiplier, err
-	}
-
-	supply, err := s.getSupply(ctx, cell, vehicleType)
-	if err != nil {
-		return s.minMultiplier, err
-	}
-
-	if supply == 0 {
-		return s.maxMultiplier, nil
-	}
-
-	ratio := float64(demand) / float64(supply)
-	if ratio < s.surgeThreshold {
-		return s.minMultiplier, nil
-	}
-
-	// Linear scaling between threshold and max
-	multiplier := 1.0 + (ratio-s.surgeThreshold)*0.5
-	if multiplier > s.maxMultiplier {
-		multiplier = s.maxMultiplier
-	}
-	if multiplier < s.minMultiplier {
-		multiplier = s.minMultiplier
-	}
-	return multiplier, nil
-}
-
-func (s *SurgePricingService) getDemand(ctx context.Context, cellID, vehicleType string) (int64, error) {
-	key := fmt.Sprintf("demand:%s:%s", cellID, vehicleType)
-	now := time.Now().Unix()
-	window := int64(300) // 5 minutes
-
-	count, err := s.rdb.ZCount(ctx, key, strconv.FormatInt(now-window, 10), strconv.FormatInt(now, 10)).Result()
-	return count, err
-}
-
-func (s *SurgePricingService) getSupply(ctx context.Context, cell h3.Cell, vehicleType string) (int, error) {
-	cells := h3.GridDisk(cell, 1)
-	total := 0
-
-	for _, c := range cells {
-		members, err := s.rdb.SMembers(ctx, fmt.Sprintf("cell:%s", c.String())).Result()
-		if err != nil {
-			continue
-		}
-		for _, driverID := range members {
-			data, err := s.rdb.HGetAll(ctx, fmt.Sprintf("driver:%s", driverID)).Result()
-			if err != nil || len(data) == 0 {
-				continue
-			}
-			if data["status"] == "available" && data["vehicle_type"] == vehicleType {
-				total++
-			}
-		}
-	}
-	return total, nil
-}
-
-// RecordRequest logs a ride request for demand tracking using a Redis sorted set.
-func (s *SurgePricingService) RecordRequest(ctx context.Context, lat, lng float64, vehicleType string) error {
-	cell := s.location.cellID(lat, lng)
-	key := fmt.Sprintf("demand:%s:%s", cell, vehicleType)
-	now := float64(time.Now().Unix())
-
-	pipe := s.rdb.TxPipeline()
-	pipe.ZAdd(ctx, key, &redis.Z{Score: now, Member: strconv.FormatFloat(now, 'f', 0, 64)})
-	pipe.ZRemRangeByScore(ctx, key, "-inf", strconv.FormatFloat(now-600, 'f', 0, 64))
-	pipe.Expire(ctx, key, 600*time.Second)
-	_, err := pipe.Exec(ctx)
-	return err
-}
-```
-
----
-
-## ETA Service
-
-```go
-package main
-
-import (
-	"context"
-	"encoding/json"
-	"fmt"
-	"time"
-
-	"github.com/go-redis/redis/v8"
-	"golang.org/x/sync/singleflight"
-)
-
-// ETAResult holds the routing result returned by GetETA.
-type ETAResult struct {
-	DurationSeconds int     `json:"duration_seconds"`
-	DistanceKm      float64 `json:"distance_km"`
-	RoutePolyline   string  `json:"route_polyline"`
-}
-
-// RoutingClientIface abstracts the external routing engine.
-type RoutingClientIface interface {
-	GetRoute(ctx context.Context, oLat, oLng, dLat, dLng float64) (*ETAResult, error)
-}
-
-// TrafficServiceIface provides real-time traffic adjustment factors.
-type TrafficServiceIface interface {
-	GetFactor(ctx context.Context, oLat, oLng, dLat, dLng float64) (float64, error)
-}
-
-// ETAService calculates estimated time of arrival using a routing engine,
-// traffic adjustments, and a Redis cache with coordinate rounding.
-type ETAService struct {
-	routing  RoutingClientIface
-	traffic  TrafficServiceIface
-	rdb      *redis.Client
-	cacheTTL time.Duration
-	sfGroup  singleflight.Group
-}
-
-// NewETAService creates an ETAService with a 30-second cache TTL.
-func NewETAService(routing RoutingClientIface, traffic TrafficServiceIface, rdb *redis.Client) *ETAService {
-	return &ETAService{
-		routing:  routing,
-		traffic:  traffic,
-		rdb:      rdb,
-		cacheTTL: 30 * time.Second,
-	}
-}
-
-// GetETA returns the ETA between two points, using cache and singleflight
-// to deduplicate concurrent requests for the same origin/destination pair.
-func (s *ETAService) GetETA(ctx context.Context, oLat, oLng, dLat, dLng float64) (*ETAResult, error) {
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-
-	key := s.cacheKey(oLat, oLng, dLat, dLng)
-
-	// Check cache
-	if cached, err := s.rdb.Get(ctx, key).Result(); err == nil {
-		var result ETAResult
-		if json.Unmarshal([]byte(cached), &result) == nil {
-			return &result, nil
-		}
-	}
-
-	// Deduplicate concurrent identical lookups with singleflight keyed by cache key
-	v, err, _ := s.sfGroup.Do(key, func() (interface{}, error) {
-		route, err := s.routing.GetRoute(ctx, oLat, oLng, dLat, dLng)
-		if err != nil {
-			return nil, err
-		}
-
-		factor, err := s.traffic.GetFactor(ctx, oLat, oLng, dLat, dLng)
-		if err != nil {
-			return nil, err
-		}
-
-		result := &ETAResult{
-			DurationSeconds: int(float64(route.DurationSeconds) * factor),
-			DistanceKm:      route.DistanceKm,
-			RoutePolyline:   route.RoutePolyline,
-		}
-
-		// Cache result
-		if data, err := json.Marshal(result); err == nil {
-			s.rdb.Set(ctx, key, data, s.cacheTTL)
-		}
-		return result, nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return v.(*ETAResult), nil
-}
-
-// cacheKey rounds coordinates to ~100 m precision for cache efficiency.
-func (s *ETAService) cacheKey(oLat, oLng, dLat, dLng float64) string {
-	return fmt.Sprintf("eta:%.3f,%.3f:%.3f,%.3f", oLat, oLng, dLat, dLng)
-}
-```
-
----
-
-## Key Metrics & Scale
-
-| Metric | Value |
-|--------|-------|
-| Active riders | 100M+ monthly |
-| Active drivers | 5M+ |
-| Trips per day | 15M+ |
-| Location updates/sec | 1M+ |
-| Match latency | < 1 second |
-| Cities | 10,000+ |
-
----
-
-## Key Takeaways
-
-1. **Cell-based geospatial**: H3/S2 hexagonal grid enables O(1) cell lookup, O(neighbors) for proximity search
-
-2. **Driver location in Redis**: In-memory for speed; TTL handles offline detection automatically
-
-3. **Supply/demand dynamic pricing**: Real-time surge calculation based on local supply/demand ratios
-
-4. **State machine for trips**: Explicit state transitions ensure consistency and enable event-driven architecture
-
-5. **ETA caching with rounding**: Round coordinates for cache efficiency; traffic adjustment applied at read time
-
-6. **Dispatch with timeout**: Offer trips to drivers sequentially with acceptance timeout; move to next on timeout
-
----
-
-## Production Insights
-
-### DISCO Location Pipeline
-
-Uber's DISCO (Dispatch Optimization) system ingests driver locations through a
-multi-stage pipeline: **WebSocket → Kafka → LocationStore**. Drivers hold a
-persistent WebSocket connection to the nearest edge POP. Each location update is
-published to a partitioned Kafka topic (keyed by driver ID for ordering), then
-consumed by the LocationStore writers that fan out into per-cell Redis sets.
-
-At peak, this pipeline sustains **1 M+ location updates per second** globally.
-Back-pressure is handled at the Kafka layer — if the LocationStore consumers
-fall behind, Kafka retains the events and consumers catch up without dropping
-connections. The WebSocket gateway performs client-side throttling (one update
-per second max) and server-side deduplication (discard if H3 cell unchanged).
-
-### Ghost Car Problem
-
-A well-known production issue: when a driver's phone loses connectivity, their
-last-known position remains in Redis until the key TTL expires (60 s default).
-During that window the rider app renders a "ghost car" that appears available
-but cannot be dispatched. Mitigations:
-
-- **Heartbeat-based TTL**: reduce the Redis key TTL to match the WebSocket
-  ping/pong interval (typically 10 s). If no heartbeat arrives, the driver key
-  expires faster.
-- **Dispatch-time liveness check**: before offering a trip, the dispatch service
-  sends a lightweight RPC to the driver's gateway POP. If the POP reports the
-  socket is dead, the driver is removed from the cell set immediately.
-- **Client-side staleness indicator**: the rider app dims cars whose
-  `timestamp` field is older than 15 s, setting user expectations before match.
-
-### Geofence R-Tree Index
-
-Uber maintains tens of thousands of geofences (airports, city boundaries, surge
-zones, restricted areas). These polygons are indexed in an in-memory R-tree per
-service instance, rebuilt from a Kafka compacted topic on startup. When a ride
-request arrives, the service performs a point-in-polygon query against the
-R-tree to determine applicable rules (airport surcharge, regulatory caps, etc.).
-
-The R-tree lookup is O(log n) and sub-microsecond for the typical dataset size
-(~50 k polygons). Updates propagate through Kafka so all instances converge
-within seconds of a geofence change in the admin tool.
-
-### Singleflight for ETA Collapse
-
-When a popular pickup location triggers dozens of simultaneous ride requests
-(e.g., concert venue, stadium exit), each request fans out ETA calculations
-to the same set of nearby drivers. Without deduplication, N requests × M
-drivers = N×M routing calls — most of which share identical origin/destination
-pairs after coordinate rounding.
-
-`singleflight.Group` collapses these redundant calls. The key is the rounded
-cache key (same key used for Redis), so only one in-flight routing RPC is made
-per unique origin/destination pair. Subsequent callers block and receive the
-same result. Combined with the 30-second Redis cache, this reduces routing
-backend load by 5–10× during demand spikes.
-
-Key implementation detail: the singleflight group is **not** global — it lives
-on each ETAService instance. Because requests are load-balanced across many
-service instances, the collapse ratio is per-instance. The Redis cache layer
-provides cross-instance deduplication.
+The **data plane** ingests locations, creates quotes and intents, retrieves candidates, computes offers, commits assignment and trip transitions, and emits events.
+
+The **control plane** manages city/product policy, geofence and H3 resolution versions, model rollout, shard/region placement, capacity quotas, statechart schema, experiment assignment, routing graph versions, and failover authority. A control-plane outage should pin signed known-good configuration and stop risky policy changes; it should not erase active trips.
+
+Configuration is safety-critical. A city-level rule change can affect eligibility, price, or legal behavior. Version it, stage it, audit it, and bind each quote/trip transition to the evaluated version.
+
+## Location Ingestion and Spatial Indexing
+
+**Documented historical design (2016):** Uber said its Geospatial service kept active vehicle locations in memory because the state was fleeting. Ringpop supplied SWIM-style membership, consistent hashing, and request forwarding so workers could own partitions and rebalance as membership changed.
+
+**Documented (2018):** H3 maps latitude/longitude at a resolution into hierarchical hexagonal cells and supports neighborhood operations. Uber described using it for analysis and marketplace optimization. It does not establish that every live dispatch query simply scans an H3 ring.
+
+An **explicit reference-design update flow**:
+
+1. Authenticate the device and bind it to a provider-session epoch.
+2. Validate timestamp, monotonic device sequence, accuracy radius, speed, and plausible displacement.
+3. Map the sample to a versioned spatial cell and route by `(city, cell_partition)`.
+4. Compare-and-set the latest record only if `(session_epoch, device_sequence)` is newer.
+5. Update cell membership, removing the previous cell entry idempotently.
+6. Append a sampled or compacted location event for ETA, safety, and analytics according to retention policy.
+7. Expire the provider from matching if no acceptable update arrives within the product's measured freshness bound.
+
+Keep accuracy and age with the coordinate. “Nearest” without uncertainty can prefer a GPS outlier. Candidate retrieval should expand cells until it meets a quality/work budget, then score road travel time and marketplace value; straight-line distance is only a coarse filter.
+
+During ownership changes, either transfer a checkpoint plus buffered delta or allow short dual reads while fencing writes by partition epoch. Consistent hashing limits moved keys, but it does not transfer state or prevent stale owners by itself.
+
+## Quote, Match, and Assignment Flows
+
+### Quote
+
+The quote path is an **explicit reference design**:
+
+1. Normalize pickup/drop-off and bind map/geofence versions.
+2. Retrieve eligible product and provider-supply aggregates.
+3. Compute route/ETA candidates under an end-to-end deadline.
+4. Evaluate a versioned pricing policy and return a signed quote ID with expiry and assumptions.
+5. Persist only the compact quote contract needed for later verification; high-volume diagnostic features can go to a separate event stream.
+
+**Documented historical evidence (2015):** Uber described an evolution from external/open routing engines plus a learned ETA adjustment to its Gurafu routing engine and Flux traffic data. It reported that the production path targeted fast route calculations and compared ETA with actual arrival using Kafka logs. This establishes iterative, measured ETA engineering, not the current algorithm.
+
+### Candidate generation and offer
+
+An **explicit reference design** uses a two-stage marketplace decision:
+
+- Retrieve providers from expanding spatial/time cells, filtering session freshness, product eligibility, capacity, and safety constraints.
+- Score a bounded set using pickup ETA, acceptance likelihood, provider fairness, consumer wait, downstream marketplace balance, and uncertainty.
+
+The objective is multi-party and time-dependent. A greedy nearest-provider rule can increase future imbalance; a global optimizer can miss its latency budget. Use a bounded optimization window, publish its objective/version, and keep a simple eligible-nearest fallback.
+
+**Documented (2025):** Uber described a DQN-inspired value-function signal incorporated into matching and reported deployment in more than 400 cities. **Inference:** a learned future-value signal complements rather than replaces eligibility and assignment invariants.
+
+### Assignment
+
+The assignment commit is the consistency boundary:
+
+1. Create offer `(offer_id, trip_id, provider_session, assignment_epoch, expires_at)`.
+2. Deliver it through a retryable channel; delivery is not acceptance.
+3. On acceptance, atomically verify offer lease, trip version, and provider availability version.
+4. Commit the trip-provider assignment and advance both entities, or use a transaction coordinator with a recoverable intent.
+5. Emit the authoritative assignment event after commit.
+6. Revoke losing offers; late acceptances observe the committed winner and fail safely.
+
+Do not use a distributed lock without a fenced state version. A paused client can resume after a lease expires and otherwise overwrite the new owner.
+
+## Fulfillment Lifecycle and Eventing
+
+A **reference statechart** might contain:
+
+`requested → matching → assigned → provider_arriving → pickup_ready → in_progress → completed`
+
+with explicit cancellation and failure substates. This is illustrative, not Uber's private state enumeration.
+
+Each transition command includes expected entity version, actor, location/time evidence, policy version, and idempotency key. The commit produces an ordered event such as `TripTransitioned(trip_id, from, to, entity_version, event_id)`.
+
+Downstream billing, receipt, safety, support, notification, and analytics consumers own their projections and retry independently. A transactional outbox prevents a committed transition from losing its event. Consumers that require order partition by trip ID; global order is unnecessary and expensive. See [Message Ordering](../05-messaging/03-message-ordering.md) and [Event Sourcing](../05-messaging/05-event-sourcing.md).
+
+**Documented historical storage (2016):** Schemaless used immutable cells keyed by row, column, and reference key; buffered writes and sharded indexes supported trip storage. **Documented evolution (2021):** Uber described Docstore as a multi-model database with partition-level strict serializability, transactions, materialized views, and CDC. These are different generations, not simultaneous universal truths.
+
+## Partitioning and Illustrative Capacity
+
+These numbers are **illustrative assumptions**, not Uber measurements:
+
+- 3,000,000 online providers at peak.
+- One accepted location sample every 4 seconds.
+- 160 bytes per normalized in-memory record including identifiers, coordinate, accuracy, sequence, and index overhead.
+- 120,000 quote/match requests/s at peak.
+- 24 spatial partitions consulted per match after routing and expansion.
+- 10,000 authoritative trip-transition writes/s at peak.
+
+Location ingress is `3,000,000 / 4 = 750,000 updates/s`. Keeping only the latest normalized record requires about `458 MiB` raw (`3,000,000 × 160 B`) before hash/index allocator overhead and replicas. Replicating every raw location indefinitely would be far more expensive: at only 100 bytes/event, ingress is about `6.0 TiB/day` before replication and compression. Retention and compaction are architectural decisions.
+
+Naively scattering each match to 24 partitions creates `2.88 million partition queries/s`. Coarse supply summaries, request routing, and adaptive cell expansion reduce scatter. Capacity must model cell skew around airports, stations, concerts, and storms; a global mean is useless.
+
+If each trip transition averages 3 KiB across canonical row, indexes, and log before replication, 10,000/s produces about `2.4 TiB/day`. The critical constraint may be transactional write IOPS and hot city partitions rather than bytes.
+
+| State | Primary partition | Why | Skew response |
+|---|---|---|---|
+| Latest location | City plus virtual spatial shard | Local retrieval | Split dense cells and time-slice rebalance |
+| Provider session | Provider/session ID | Serialize availability | Cache route to authority |
+| Trip/fulfillment | Trip ID | Ordered state transitions | Many virtual shards; no city-wide leader |
+| Offers | Trip ID or provider ID by commit query | Resolve winner efficiently | Maintain query-specific index |
+| Events | Trip ID | Preserve per-trip order | Partition count independent of storage shards |
+| ETA graph | Region and graph version | Locality and atomic rollout | Immutable version plus delta overlays |
+
+See [Capacity Planning](../01-foundations/10-capacity-planning.md), [Partitioning Strategies](../02-distributed-databases/05-partitioning-strategies.md), and [Secondary Indexes](../02-distributed-databases/06-secondary-indexes.md).
+
+## Concrete Failure Trace: Stale Location Produces Competing Offers
+
+This is a **reference-design failure trace**, not a documented Uber incident.
+
+1. A provider crosses from spatial partition A to B while A's owner is isolated from the membership control plane.
+2. B accepts sequence 901, but the stale A owner continues advertising sequence 897.
+3. Two consumer requests retrieve the same provider from different partitions.
+4. Both matching workers send offers because candidate retrieval treated presence as assignment authority.
+5. The provider accepts one; the other request repeatedly retries acceptance after a timeout.
+6. Without an assignment epoch and conditional commit, both trips could appear assigned.
+
+The safe design has layered defenses:
+
+- Location membership carries provider-session and partition epochs; readers discard stale owners.
+- Candidate retrieval may be approximate, but acceptance performs a strong conditional write against provider availability and trip version.
+- Offers expire and carry stable IDs; retry returns the committed outcome.
+- Membership uncertainty shrinks eligibility or falls back to a slower authoritative lookup.
+- Reconciliation scans detect one provider referenced by multiple active assignments and page before pickup.
+- Metrics separate “offer delivered,” “accept attempted,” and “assignment committed.”
+
+This illustrates a general rule: an approximate index can propose candidates, but it cannot own scarce-resource allocation.
+
+## Multi-Region and Regional Authority
+
+Physical marketplaces are naturally regional, but global identity, travel, support, and finance cross boundaries.
+
+An **explicit reference design** assigns live fulfillment to a home region chosen by pickup market and an authority epoch:
+
+- Location ingestion, matching, and active-trip commands stay near that market.
+- Identity, payment tokens, risk signals, and product configuration replicate under their own consistency and residency contracts.
+- Active trip state replicates to a paired recovery region with a declared RPO.
+- A failover coordinator fences the previous region before issuing a higher authority epoch.
+- Devices include observed authority/version on commands and reconnect to the promoted region.
+- Completed-trip events flow to global finance and analytics through idempotent consumers.
+
+A city cannot fail over safely merely because compute is available elsewhere. The destination also needs map/config versions, live provider reconnection, database write authority, notification routes, payment dependencies, and headroom. See [Multi-Region Architecture](../06-scaling/09-multi-region-architecture.md).
+
+## Operations, Security, and Observability
+
+Observe the physical outcome, not just RPC health:
+
+- Location accepted/rejected by reason, age distribution, sequence regressions, cell skew, and ownership epoch mismatch.
+- Quote coverage, route/model/config version, ETA error versus actual arrival, and fallback rate.
+- Candidate count by stage, scatter width, optimization latency, offer delivery, acceptance, expiry, and committed-assignment rate.
+- Illegal transition attempts, optimistic-concurrency conflicts, outbox age, and consumer lag by trip lifecycle.
+- Pickup wait, cancellation, rematch, duplicate-offer, and “assigned provider unavailable” rates.
+- Regional authority, replication position, recovery headroom, and device reconnect rate.
+
+Trace IDs must join device sample, quote, request, trip, offer, assignment epoch, and transition event without putting raw precise location into broadly accessible logs.
+
+Security and privacy requirements include:
+
+- Mutual service identity and device-bound provider sessions.
+- Encryption of precise location and payment data, with separate access purposes and retention.
+- Coarse location for broad analytics; precise location only where fulfillment or safety requires it.
+- Signed, expiring offers and commands resistant to replay.
+- Audited override paths for safety/support; no direct database edits to trip state.
+- Rate limits by actor, device, market, action cost, and target, plus synthetic-location and collusion detection.
+- Data-residency classification carried into logs, backups, features, and disaster-recovery copies.
+
+## Evolution and Migration
+
+Uber's sources document an instructive sequence: a PostgreSQL bottleneck; the 2014 Mezzanine/Schemaless migration described in 2015–2016; Ringpop-based application partitioning; H3 as a reusable spatial index; and a 2021 Fulfillment rewrite with statecharts, ACID storage, and a controlled product migration.
+
+**Documented (2015):** Mezzanine changed trip IDs to UUIDs, backfilled, mirrored writes, replayed queries in the background, validated results, and switched reads after incremental refactoring. **Documented (2021):** the Fulfillment rewrite says every product and city migrated with support from more than 100 engineers across more than 30 teams.
+
+A reusable migration plan is:
+
+1. Introduce a compatibility API and explicit statechart around the old authority.
+2. Allocate stable IDs and versions before data movement.
+3. Backfill immutable history with checksums and source positions.
+4. Mirror commands/events while one store remains authoritative.
+5. Shadow-read transition eligibility and resulting state, not just row equality.
+6. Move one market/product cohort with automatic rollback gates.
+7. Reconcile active trips before each cohort and drain old in-flight work.
+8. Stop old writes, hold rollback history, then remove compatibility code.
+
+This is covered generally in [Database Migrations](../15-deployment/03-database-migrations.md) and [Migration Strategies](../15-deployment/06-migration-strategies.md).
+
+## Verification and Design Lessons
+
+Verify with deterministic state-machine tests, property-based command reordering, and market-shaped load:
+
+- Older and duplicate location samples never replace newer state.
+- Two simultaneous acceptances yield one assignment winner.
+- Every legal transition is reachable and every illegal transition is rejected.
+- Event replay reconstructs the same fulfillment state and downstream ledger.
+- A stale spatial owner cannot commit an assignment.
+- Dense-cell failure sheds approximate queries without losing active trips.
+- Regional promotion fences the previous writer and clients converge on the new epoch.
+- ETA/model fallback is observable and cannot bypass eligibility or safety.
+
+The reusable lessons are:
+
+1. Keep ephemeral location indexes separate from authoritative allocation state.
+2. Make offers leased proposals and assignment a conditional durable commit.
+3. Encode business lifecycle as a versioned statechart with idempotent commands.
+4. Model spatial skew and scatter, not only global request rate.
+5. Bind quotes, routes, and transitions to configuration/model versions for auditability.
+6. Migrate physical-world systems market by market with in-flight draining and reconciliation.
+
+## Primary Sources
+
+- Uber Engineering, [“Project Mezzanine: The Great Migration”](https://www.uber.com/us/en/blog/mezzanine-codebase-data-migration/), July 2015.
+- Uber Engineering, [“ETA Phone Home: How Uber Engineers an Efficient Route”](https://www.uber.com/us/en/blog/engineering-routing-engine/), November 2015.
+- Uber Engineering, [“Designing Schemaless, Uber Engineering's Scalable Datastore Using MySQL”](https://www.uber.com/us/en/blog/schemaless-part-one-mysql-datastore/), January 2016.
+- Uber Engineering, [“How Ringpop from Uber Engineering Helps Distribute Your Application”](https://www.uber.com/us/en/blog/ringpop-open-source-nodejs-library/), February 2016.
+- Uber Engineering, [“H3: Uber's Hexagonal Hierarchical Spatial Index”](https://www.uber.com/us/en/blog/h3/), June 2018.
+- Uber Engineering, [“Uber's Fulfillment Platform: Ground-up Re-architecture”](https://www.uber.com/us/en/blog/fulfillment-platform-rearchitecture/), July 2021.
+- Uber Engineering, [“Building Uber's Fulfillment Platform for Planet-Scale using Google Cloud Spanner”](https://www.uber.com/us/en/blog/building-ubers-fulfillment-platform/), September 2021.
+- Uber Engineering, [“Reinforcement Learning for Modeling Marketplace Balance”](https://www.uber.com/us/en/blog/reinforcement-learning-for-modeling-marketplace-balance/), July 2025.

@@ -21,13 +21,13 @@ A logical request usually contains the following layers, though provider seriali
 6. current user turn     per-request               user-authorized content
 ```
 
-These are logical components, not a universal wire order: a provider may carry schema or tool configuration outside the model-visible token sequence. Within the rendered sequence, **stability order**—placing reusable material before volatile material where semantics permit—determines [prefix-reuse economics](./08-context-management.md); a changed token invalidates reuse after that boundary. **Trust order** preserves provenance: operator configuration, user intent, tool observations, and retrieved evidence have different authority even when one serialized request contains all of them. The compiler makes those labels legible to the model, while policy enforcement remains outside the request.
+These are logical components, not a universal wire order: a provider may carry schema or tool configuration outside the model-visible token sequence. Within the rendered sequence, **stability order** (placing reusable material before volatile material where semantics permit) determines [prefix-reuse economics](./08-context-management.md); a changed token invalidates reuse after that boundary. **Trust order** preserves provenance: operator configuration, user intent, tool observations, and retrieved evidence have different authority even when one serialized request contains all of them. The compiler makes those labels legible to the model, while policy enforcement remains outside the request.
 
 Instruction altitude trades underspecification against an untestable prose state machine. Vague goals leave policy and failure behavior to model inference; a large hierarchy of special cases creates overlapping branches whose priority, coverage, and migration behavior are unclear. State the goal, hard constraints, output contract, and failure behavior in prose, but move enumerable transitions into orchestration, exact invariants into code or schemas, and nuanced distinctions into evaluated examples.
 
 Two structural tools are useful when they are tested on the target model:
 
-- **Delimiters**—XML-style tags (`<documents>`, `<user_query>`, `<rules>`) or typed content blocks—make boundaries legible and protect the renderer from accidental structural ambiguity. They do not neutralize hostile instructions or create a security boundary.
+- **Delimiters** (XML-style tags (`<documents>`, `<user_query>`, `<rules>`) or typed content blocks) make boundaries legible and protect the renderer from accidental structural ambiguity. They do not neutralize hostile instructions or create a security boundary.
 - **Few-shot examples** demonstrate distinctions that are difficult to specify in prose. Curate them as a weighted part of the behavior program: cover decision boundaries, retain provenance, version policy-dependent examples, and measure the token and bias cost. For output syntax, prefer constrained structure and spend examples on judgment.
 
 ## Prompt Compilation and Request Identity
@@ -123,7 +123,7 @@ The request compiler preserves trust labels and structural boundaries. For examp
 </documents>
 ```
 
-Demarcation reduces structural ambiguity but remains a model-level signal. Instruction-hierarchy training, content transformations, and classifiers may reduce attack success on a qualified test set; they do not create authority. The surrounding architecture must remain safe when the model follows hostile content: attenuated capabilities, separate secret and execution domains, authorization at the effect boundary, output/data-loss controls, and human authority for high-impact actions. System prompts contain no secrets because confidentiality of model-visible text is not a security control. [Harness Engineering](./09-harness-engineering.md) owns those controls; this chapter owns preserving provenance through compilation and testing the hostile-content path with the exact request tuple.
+Demarcation reduces structural ambiguity but remains a model-level signal. Instruction-hierarchy training, content transformations, and classifiers may reduce attack success on qualified tests; they do not grant authority. The architecture must remain safe when the model follows hostile content by using attenuated capabilities, separated secret and execution domains, effect-boundary authorization, data-loss controls, and human approval for high-impact actions. Never place secrets in system prompts. [Harness Engineering](./09-harness-engineering.md) covers these controls; prompt compilation must preserve provenance and test hostile content against the exact request tuple.
 
 ---
 
@@ -139,7 +139,7 @@ Automated prompt optimization is a search procedure over the same release artifa
 
 ## Testing Prompt Programs
 
-Prompt tests have two layers. **Compiler tests** are deterministic: template variables, message order, escaping, canonical hashes, token budgets, tool-schema compatibility, and cache-prefix stability. Store rendered snapshots carefully—usually as hashes plus redacted fixtures—so tests do not turn sensitive production inputs into repository artifacts.
+Prompt tests have two layers. **Compiler tests** are deterministic: template variables, message order, escaping, canonical hashes, token budgets, tool-schema compatibility, and cache-prefix stability. Store rendered snapshots carefully (usually as hashes plus redacted fixtures) so tests do not turn sensitive production inputs into repository artifacts.
 
 **Behavior tests** are statistical. A case specifies input state, acceptable properties, forbidden behavior, evidence or tool expectations, and the slice it represents. Run multiple samples when decoding or provider behavior is stochastic. Report pass-rate confidence intervals and paired deltas against the current production pair `(model, prompt)`, rather than declaring a new prompt better from a handful of examples.
 
@@ -172,7 +172,7 @@ Online experiments need outcome metrics and guardrails. Engagement alone can rew
 
 **Untracked prompt drift.** Dashboard edits, no versioning, no eval gate; quality changes with no audit trail. Defense: prompts in VCS, eval-gated deploys, resolved-prompt logging.
 
-**Example rot.** Few-shot examples embodying last quarter's policy, silently teaching outdated behavior. Defense: examples are test cases — owned, reviewed, and updated with policy.
+**Example rot.** Few-shot examples embodying last quarter's policy, silently teaching outdated behavior. Defense: examples are test cases: owned, reviewed, and updated with policy.
 
 **Injection via the side door.** The chat input is sanitized while the RAG pipeline feeds the model raw hostile documents with tool access live. Defense: privilege separation per content-trust level; delimiter hygiene; red-team the document path.
 
@@ -214,19 +214,19 @@ Choose few-shot examples when the desired distinction is easier to demonstrate t
 3. Allocate reasoning effort like any other test-time resource; externalize plans only when they provide durable state, parallelism, or independent verification.
 4. Constrained decoding guarantees representable syntax within a supported subset; deterministic and semantic validators still own correctness.
 5. Tool names, descriptions, schemas, and error observations are model inputs that shape selection; version and evaluate them with the rest of the request tuple.
-6. Prompt-injection impact is bounded by architecture—privilege separation, approval gates, and data/authority provenance—while delimiters and detection remain fallible signals.
+6. Prompt-injection impact is bounded by architecture (privilege separation, approval gates, and data/authority provenance), while delimiters and detection remain fallible signals.
 7. The eval set is the durable asset: models and prompts both change; graded cases are what make each request tuple qualifiable.
 
 ---
 
 ## References
 
-1. [Chain-of-Thought Prompting Elicits Reasoning in Large Language Models](https://arxiv.org/abs/2201.11903) — Wei et al., 2022
-2. [Claude Prompt Engineering Overview](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/overview) — Anthropic
-3. [GPT-5 / Reasoning Model Prompting Guide](https://platform.openai.com/docs/guides/reasoning-best-practices) — OpenAI
-4. [Structured Outputs](https://platform.openai.com/docs/guides/structured-outputs) — OpenAI; [Structured Outputs — Anthropic](https://platform.claude.com/docs/en/build-with-claude/structured-outputs)
-5. [The Instruction Hierarchy: Training LLMs to Prioritize Privileged Instructions](https://arxiv.org/abs/2404.13208) — Wallace et al., 2024
-6. [Prompt Injection: What's the Worst That Can Happen?](https://simonwillison.net/series/prompt-injection/) — Willison (lethal trifecta, design-level defenses)
-7. [Defending Against Indirect Prompt Injection (Spotlighting)](https://arxiv.org/abs/2403.14720) — Hines et al., 2024
-8. [DSPy: Compiling Declarative Language Model Calls into Self-Improving Pipelines](https://arxiv.org/abs/2310.03714) — Khattab et al., 2023
-9. [Writing Effective Tools for Agents](https://www.anthropic.com/engineering/writing-tools-for-agents) — Anthropic, 2025
+1. [Chain-of-Thought Prompting Elicits Reasoning in Large Language Models](https://arxiv.org/abs/2201.11903): Wei et al., 2022
+2. [Claude Prompt Engineering Overview](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/overview): Anthropic
+3. [GPT-5 / Reasoning Model Prompting Guide](https://platform.openai.com/docs/guides/reasoning-best-practices): OpenAI
+4. [Structured Outputs](https://platform.openai.com/docs/guides/structured-outputs): OpenAI; [Structured Outputs: Anthropic](https://platform.claude.com/docs/en/build-with-claude/structured-outputs)
+5. [The Instruction Hierarchy: Training LLMs to Prioritize Privileged Instructions](https://arxiv.org/abs/2404.13208): Wallace et al., 2024
+6. [Prompt Injection: What's the Worst That Can Happen?](https://simonwillison.net/series/prompt-injection/): Willison (lethal trifecta, design-level defenses)
+7. [Defending Against Indirect Prompt Injection (Spotlighting)](https://arxiv.org/abs/2403.14720): Hines et al., 2024
+8. [DSPy: Compiling Declarative Language Model Calls into Self-Improving Pipelines](https://arxiv.org/abs/2310.03714): Khattab et al., 2023
+9. [Writing Effective Tools for Agents](https://www.anthropic.com/engineering/writing-tools-for-agents): Anthropic, 2025

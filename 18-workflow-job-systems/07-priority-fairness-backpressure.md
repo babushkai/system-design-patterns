@@ -2,170 +2,410 @@
 
 ## TL;DR
 
-A shared job system is a contended resource, and contended resources fail in predictable ways: one noisy tenant or one flood of low-value work starves everyone else, and a system that accepts work faster than it can finish it grows an unbounded backlog until it collapses. Priority, fairness, and backpressure are the three mechanisms that keep a shared worker pool healthy. **Priority** decides what jumps the queue, at the risk of starving low-priority work and inverting through held resources. **Fairness** — weighted fair queueing, fair-share scheduling, per-tenant quotas — guarantees every tenant a proportional slice so no single producer monopolizes capacity. **Backpressure** makes the system push back when it cannot keep up, through bounded queues, load shedding, and signals that slow producers down, rather than absorbing work it can never complete. The whole problem is the quality-of-service problem of a multi-tenant cluster, identical in structure to scheduling a shared GPU fleet — only the resource being contended is execution slots instead of accelerators.
+A shared job scheduler is a resource-allocation control plane, not a FIFO with priority labels. Admission decides whether the system can promise useful execution; ordering selects the next eligible job; placement matches it to compatible capacity; execution control leases, preempts, or cancels the running attempt. Strict priority can starve; round robin ignores cost; weighted fair queueing and deficit round robin allocate consumed service; dominant-resource fairness extends allocation across resource types. Apply backpressure at admission, charge retries to the original tenant and class budget, and operate against queue-age SLOs with a gaming-resistant cost model and failover-safe accounting.
 
 ---
 
-## The Shared Queue Is a Contended Resource
+## Scope: Scheduling Policy for Durable Work
 
-The moment a job queue stops serving one application and starts serving many tenants and many priorities, scheduling policy stops being an implementation detail and becomes a product feature. A single FIFO queue feeding a single worker pool is perfectly adequate until two things become true at once: the work is heterogeneous in value, and the producers are independent. When both hold, the queue becomes a contended resource, and a contended resource without a governing policy degrades in ways that are entirely predictable and almost always discovered in production.
+Scheduling policy covers priority, fair share, quotas, admission, placement, and preemption among defined job classes and tenants.
 
-The reason is structural. Workers are finite; jobs are not equal. Some jobs are on the critical path of a user-visible request — a password reset email, a checkout confirmation — and a minute of delay is a defect. Others are batch maintenance that no human is waiting on. Some tenants pay for stronger guarantees; some downstream dependencies enforce strict rate limits; some items are retries that should wait behind fresh work rather than crowd it out. A scheduler that treats all of these identically is making a policy decision by omission, and the default policy — first come, first served — happens to be the one that lets bulk work bury urgent work and lets one tenant's flood drown the rest.
+- [Background Jobs and Worker Pools](02-background-jobs-worker-pools.md) covers job lifecycle, dispatch, and worker execution.
+- [General Backpressure](../06-scaling/07-backpressure.md) covers end-to-end overload propagation in request and data paths.
+- [Rate Limiting](../06-scaling/05-rate-limiting.md) covers generic token/leaky-bucket algorithms at service boundaries.
+- [Multi-Tenant Isolation](../06-scaling/12-multi-tenancy.md) and [Cell-Based Architecture](../06-scaling/11-cell-based-architecture.md) cover broader placement and blast-radius boundaries.
+- [ML Training Pipelines](../16-ml-systems/05-training-pipelines.md) covers GPU-specific gang scheduling and checkpoint economics.
 
-Priority, fairness, and backpressure are not three independent features; they are three answers to three distinct failure questions about the same contended resource. *What should run next when the queue is non-empty?* is priority. *How do we stop one producer from consuming the whole resource?* is fairness. *What do we do when work arrives faster than we can finish it?* is backpressure. A mature shared job system needs all three, because each one, deployed alone, fails in a way the other two would have caught.
+Here, backpressure is narrower: should a durable-work system accept another job, defer it to a known future window, or reject it because the promised completion time is already impossible?
 
 ---
 
-## Priority Scheduling and Its Two Hazards
+## State the Scheduler Contract
 
-The most intuitive policy is strict priority: maintain ordered lanes, and always drain the highest non-empty lane before touching a lower one. High-value work jumps ahead of low-value work, latency-sensitive jobs are insulated from bulk backlogs, and the implementation is trivial. Strict priority is the right starting point precisely because it is simple and its intent is obvious. It also carries two hazards that have sunk real systems, and both must be designed against rather than discovered.
+One queue cannot express the policy. A schedulable job needs stable metadata:
 
-The first hazard is **starvation**. Under strict priority, a lower lane runs only when every higher lane is empty. If a high-priority producer never stops — a tenant that enqueues a steady stream of urgent jobs, a retry storm that keeps refilling the top lane — the low-priority lanes wait forever. The work is not lost; it is indefinitely deferred, which is operationally the same thing. The standard defense is **aging** (also called priority escalation): a job's effective priority rises the longer it waits, so a low-priority job that has sat for an hour eventually outranks fresh high-priority arrivals and is guaranteed to run. Aging converts an unbounded wait into a bounded one. A minimal, well-behaved aging rule boosts priority in discrete steps capped at a ceiling, so urgent work still wins under normal load but nothing waits past its deadline:
-
-```text
-effective_priority = base_priority + min(max_boost, floor(wait_seconds / aging_interval) * boost_step)
+```yaml
+job_id: 01J...
+tenant_id: tenant-42
+class: interactive
+base_priority: 80
+enqueue_sequence: 918337
+not_before: 2026-07-18T12:00:00Z
+deadline: 2026-07-18T12:00:15Z
+attempt: 2
+estimated_cost:
+  cpu_seconds: 0.4
+  memory_gib_seconds: 0.2
+  outbound_api_tokens: 1
+requirements:
+  runtime: payments-v7
+  region: eu-west
+checkpointable: false
 ```
 
-The second hazard is **priority inversion**, and it is subtler because it does not look like a scheduling bug at all. Inversion happens when a low-priority job holds a resource that a high-priority job needs — a lock, a connection from a small pool, an exclusive lease — and a medium-priority job that needs neither preempts the low-priority holder. The high-priority job is now blocked behind a low-priority one that cannot make progress because something irrelevant keeps jumping ahead of it. The canonical case study is NASA's **Mars Pathfinder (1997)**: the lander began experiencing total system resets on the Martian surface because a high-priority bus-management task blocked on a mutex held by a low-priority meteorological task, while medium-priority tasks ran in between and prevented the low-priority task from releasing the mutex; a watchdog timer interpreted the stall as a hang and reset the spacecraft. The fix, uploaded to Mars, was *priority inheritance* — temporarily lifting the holder's priority to that of the highest waiter so it runs, releases, and unblocks. The lesson for a job system is that strict priority over the queue is not enough; any shared dependency a job acquires while running can re-introduce inversion, and the mitigation is to size and isolate those dependencies (dedicated concurrency pools per dependency) so a low-priority job cannot pin a resource a high-priority job is waiting on.
+The scheduler's durable state includes logical queue membership, quota/debt counters, reservations, dispatch lease/epoch, and terminal outcome. Do not infer tenant or priority from an untrusted payload at dequeue time.
 
-A third, quieter danger is having **too many priority levels**. Each additional level is a promise that the system can meaningfully distinguish that gradation under load, and most cannot. Operators cannot reason about a twelve-level scheme, every team lobbies for the top tier, and the levels collapse into "important" and "everything else" anyway. Three to five levels — roughly *interactive*, *standard*, *bulk*, and a *best-effort* floor — is almost always enough, and fewer levels with clear semantics beat many levels nobody trusts.
+Useful invariants are testable:
 
----
+1. **Bounded admission:** accepted outstanding work per class/tenant never exceeds its configured work or age envelope.
+2. **No double ownership:** at most one current dispatch epoch is authoritative for a job; stale attempts cannot commit effects.
+3. **Share guarantee:** over a declared measurement interval and while demand exists, each eligible tenant receives at least its configured service share, subject to resource feasibility.
+4. **Urgency reserve:** critical work has reserved capacity or a bounded preemption path; it does not depend on every lower class becoming idle.
+5. **No unbounded starvation:** an eligible non-best-effort job eventually gains service when its required resource is available.
+6. **Retry conservation:** retries and speculative attempts are charged to the same logical workload budget; failure cannot create free demand.
+7. **Policy monotonicity:** lowering a tenant's entitlement cannot increase its admitted or scheduled share under the same demand/capacity state.
 
-## Head-of-Line Blocking
-
-Even with priority and aging, a single queue has a structural weakness: **head-of-line blocking**. If the item at the front of a queue is slow, stuck, or part of one giant tenant's backlog, everything behind it waits, regardless of how cheap or urgent those trailing items are. The term comes from networking — a packet at the head of a switch buffer blocking the line behind it — and the dynamics are identical in a job system. One tenant enqueues fifty thousand items; a single FIFO queue now serves that tenant's pile-up before anyone else's first job, and every other tenant experiences an outage caused by a workload they have nothing to do with.
-
-The fix is to stop sharing one line. **Multiple queues** — per-tenant queues, per-priority lanes, or sharded queues keyed on tenant or job type — let the scheduler interleave across queues so one queue's backlog cannot stall the others. The scheduler then round-robins or weight-selects among non-empty queues, and a tenant with fifty thousand items competes for its *share* of worker time rather than seizing the front of the only line. This is the same insight that drives sharded request routing and shuffle sharding: physical separation of work streams bounds the blast radius of any single stream's misbehavior. The cost is more queues to manage and a scheduler that must choose among them, which is exactly the choice that fairness governs.
-
----
-
-## Fairness: From Strict Priority to Weighted Shares
-
-Priority answers "what is most important?" Fairness answers a different question: "given that no tenant's work is worthless, how do we divide finite capacity proportionally?" The distinction matters because strict priority and fairness pull in opposite directions. Strict priority says *drain the top lane completely first*; fairness says *never let any lane go entirely unserved, even while higher-value work exists*. A shared multi-tenant system needs both: priority within a tenant's allotment, fairness across tenants.
-
-The foundational algorithm is **Weighted Fair Queueing (WFQ)**, introduced by Demers, Keshav, and Shenker in 1989 as a packet-scheduling discipline and since adapted to nearly every shared scheduler. WFQ assigns each queue a weight and serves them so that, over any interval, each receives throughput proportional to its weight — a tenant with weight 3 gets three times the worker-seconds of a tenant with weight 1, but the weight-1 tenant is *never* starved to zero. Because real jobs vary wildly in cost (a fifty-millisecond email versus a ten-minute video transcode), practical schedulers prefer **Deficit Round Robin** (Shreedhar and Varghese, 1995), which charges each queue by the actual cost of the work it dequeues rather than by job count, so a tenant submitting a few expensive jobs cannot consume more than its share by hiding cost behind a low item count. **Earliest Deadline First** is the right discipline when jobs carry real deadlines, but it thrashes badly when deadline estimates are wrong, so it belongs only where deadlines are trustworthy.
-
-Layered on top of weighted scheduling are **per-tenant quotas**: hard or soft caps on the rate or concurrency a tenant may consume, regardless of how empty the system is. Quotas impose a ceiling where weights impose a ratio; together they guarantee both that a tenant gets at least its share (weight) and that it cannot exceed its allotment and starve a burst from someone else (quota). Fairness, critically, does not mean equal throughput — a paying tenant legitimately gets more than a free one. It means no tenant can consume unbounded shared capacity without an explicit policy decision granting it.
-
-This is precisely the **multi-tenant cluster** problem described for shared GPU fleets in [training pipelines](../16-ml-systems/05-training-pipelines.md): a GPU cluster serving a fraud team, a recommendations team, and a swarm of experimenters uses fair-share scheduling with per-team weights, quotas on GPU-hours, and preemption of low-priority experiments by high-priority production runs. A job queue serving many tenants is the same problem with a different contended resource — execution slots instead of accelerators — and the same mechanisms apply unchanged. **Google's Borg** (Verma et al., 2015) makes this concrete at scale: production-priority and batch-priority bands share one fleet, batch work runs in the slack left by production work, and high-priority tasks *preempt* low-priority ones to reclaim capacity — safe only because the preempted batch work is checkpointable and re-runnable. Preemption is the cluster-scheduling analog of aging in reverse: instead of promoting starved work, it demotes and evicts low-value work to make room for high-value work that just arrived.
+“High priority usually runs first” is not a contract. Define the interval, reserve, maximum queue age, and exceptions such as unavailable resource shapes.
 
 ---
 
-## Backpressure: Pushing Back Before Collapse
-
-Priority and fairness decide how to allocate a busy system. Backpressure addresses a different and more dangerous regime: what happens when work arrives faster than the workers can finish it. The intuition that a queue "absorbs" bursts is correct only for transient bursts. For a sustained imbalance, a queue does not absorb load — it *defers* it, and the deferral grows without bound.
-
-The governing law is **Little's Law** (John Little, 1961): in any stable queuing system, the average number of items in the system equals the average arrival rate times the average time each item spends in the system (`L = λ × W`). Rearranged, the average wait is queue length divided by service rate. The decisive consequence is the stability condition: if the arrival rate λ exceeds the service rate μ, there is *no* steady state — queue length grows linearly forever, wait time grows with it, and the only thing that stops the growth is the system running out of memory or the queue hitting a bound. A queue is not a solution to λ > μ; it is a way to convert an overload into a latency debt that compounds until something breaks. The single most important number to monitor on a job queue is therefore not its length but its *trend*: a steadily rising backlog is the unambiguous signature of λ > μ, and no amount of priority reshuffling fixes it, because reordering a growing queue changes who waits, not whether the system is overloaded.
-
-Backpressure is the set of mechanisms that enforce λ ≤ μ rather than pretending it holds. The first is the **bounded queue**: a queue with a hard capacity that refuses new work when full. An unbounded queue is an unbounded liability; bounding it converts silent latency growth into an explicit, observable rejection at the moment overload begins. The second is **load shedding** — when the queue is full or the system is unhealthy, reject or drop low-value work so that high-value work still completes. For user-facing operations, rejecting a request immediately with a `Retry-After` is almost always better than accepting a job that will complete hours late; a fast, honest "no" preserves the system, while a slow "yes" destroys it. The third is **producer-side signaling**: propagating the pressure back to whoever is enqueueing so they slow down, whether through a **token bucket** that meters admission, a `429`/`Retry-After` response, or a blocking enqueue that stalls the producer when the queue is full. The essential design rule is that *backpressure must affect enqueueing, not just dequeuing*. A system that only throttles its workers while accepting everything at the front door is still accepting work it cannot finish; the backlog simply moves from the worker to the queue, and Little's Law catches up regardless. These mechanisms are developed in depth under [backpressure](../06-scaling/07-backpressure.md), [rate limiting](../06-scaling/05-rate-limiting.md), and the broader [load-shedding and retry](../06-scaling/10-retries-timeouts-hedging.md) patterns; in a job system they are applied at the admission boundary.
+## Control Plane and Data Path
 
 ```mermaid
 flowchart LR
-    P["Producer"] --> A{"Within quota and queue bounded?"}
-    A -->|"yes"| Q["Accept job"]
-    A -->|"soft limit"| D["Defer / schedule later"]
-    A -->|"over limit / full"| R["Reject with Retry-After"]
-    Q --> S["Scheduler"]
-    S --> W["Worker pool"]
+    P[Producers] --> A[Admission and quota ledger]
+    A -->|accepted| Q[Partitioned logical queues]
+    A -->|defer/reject| P
+    Q --> S[Scheduler replicas]
+    C[Capacity and worker inventory] --> S
+    S --> R[Dispatch reservation plus epoch]
+    R --> W[Workers]
+    W --> E[Effect commit boundary]
+    W --> H[Heartbeat and cost usage]
+    H --> S
+    O[Policy controller] --> A
+    O --> S
 ```
 
-Backpressure also has a defensive subtlety unique to job systems: **retry amplification**. When a downstream dependency slows, failed jobs are retried, and naive retries multiply the load on the already-struggling dependency at exactly the wrong moment, turning a brownout into an outage. Retries must therefore be treated as lower-priority work that waits behind fresh jobs, must back off exponentially, and must be capped — otherwise the retry path becomes a self-sustaining flood that the backpressure mechanisms were meant to prevent.
+The **data path** is admission → durable enqueue → eligibility → reservation → worker lease → effect commit → accounting. The **control plane** versions tenant weights, priority reserves, resource pools, queue bounds, and cost estimators.
+
+Policy publication needs an epoch. A scheduler evaluates one decision under one policy version and records that version with the dispatch. During rollout, two scheduler replicas may run different code, but they must interpret the same durable policy schema or refuse leadership. A malformed policy must fail to a safe prior version, not reset every tenant to unlimited share.
+
+### Centralized versus distributed scheduling
+
+A centralized logical scheduler has a complete view of demand and capacity, making global fairness easier. Its throughput and availability are control-plane concerns; shard by queue/tenant while keeping a consistent quota ledger or hierarchical allocation.
+
+Distributed “power of two choices” or probe-based schedulers reduce central bottlenecks but make exact global fairness and placement harder. Local decisions operate on stale worker state and can collide. Use them for short, homogeneous work where approximate placement is acceptable; retain authoritative admission and quota accounting outside the probes.
 
 ---
 
-## Isolation and Bulkheading
+## Admission: Reject Work Before It Becomes Useless
 
-Fairness divides a shared pool proportionally; isolation goes further and refuses to share at all where the blast radius justifies the cost. The **bulkhead** pattern — named for the watertight compartments that keep a hull breach from flooding an entire ship — separates workloads into independent pools or queues so a runaway workload is contained within its compartment. A tenant whose jobs deadlock, a job type that exhausts database connections, an integration that triggers a retry storm: each is bounded to its own pool and cannot consume the capacity the rest of the system depends on.
+Durability does not make overload safe. If accepted work arrives faster than effective service, durable backlog grows until deadlines expire, storage fills, or recovery becomes impractical.
 
-The trade-off is utilization versus containment. Perfect isolation — a dedicated pool per tenant — wastes capacity, because each pool must be sized for that tenant's peak while sitting idle the rest of the time, and the idle slack cannot be lent to a busy neighbor. Full sharing maximizes utilization but couples every tenant's fate to every other's. The pragmatic middle ground is to isolate by *risk class* rather than by tenant: a shared pool for the many small, well-behaved tenants governed by fairness and quotas, plus dedicated pools for the few workloads whose failure modes are severe enough to justify reserved capacity — the largest tenants, the jobs that hold scarce external resources, the work that must never be starved by anyone. This mirrors Borg's separation of production and batch pools and the GPU cluster's separation of production from experimental workloads: isolate where the blast radius is unacceptable, share where fairness suffices.
+For class $i$ with arrival rate $\lambda_i$, mean service demand $E[S_i]$, and $c_i$ equivalent service slots, offered utilization is:
+
+$$
+\rho_i = \frac{\lambda_i E[S_i]}{c_i}
+$$
+
+A steady state requires effective utilization below 1 with headroom for variance, retries, maintenance, and failures. The exact safe target is workload-specific; publishing one universal percentage would hide service-time variance and resource coupling.
+
+Admission evaluates more than queue length:
+
+- oldest and predicted start/completion time by class;
+- outstanding estimated work units, not only job count;
+- current service rate under the required resource shape;
+- tenant quota and burst balance;
+- deadline and `not_before` window;
+- downstream dependency budgets;
+- failure/maintenance reserve;
+- duplicate logical command state.
+
+For a FIFO-like class with sustainable drain rate $\mu$ work units/s and queued work $B$, a first estimate of queue delay is $B/\mu$. Reject or defer when predicted completion exceeds the job's deadline or class maximum age. A 10,000-item queue may be harmless when jobs take 1 ms and disastrous when they take 30 seconds.
+
+### Admission outcomes are product semantics
+
+Return one of:
+
+- **accepted:** durable job ID plus declared service class/deadline semantics;
+- **deferred:** a reservation/window is durable and does not require the producer to pollute the immediate queue;
+- **rejected retryable:** no durable work was accepted; include a bounded retry hint;
+- **rejected final:** quota, invalid class, impossible deadline, or policy denial.
+
+If a timeout leaves the producer unsure whether enqueue committed, resolve by stable job/command ID before retrying. Otherwise overload creates duplicate durable jobs.
 
 ---
 
-## Tuning: Levels, Weights, and Bounds
+## Priority: Urgency With an Explicit Budget
 
-The three mechanisms are only as good as the numbers chosen for them, and the tuning is where most shared job systems get into trouble.
+Strict priority always serves the highest non-empty class. It is appropriate only when lower work may legitimately receive zero capacity during sustained high-priority demand. That is rare outside true best effort.
 
-**Priority levels** should be few and semantically distinct — interactive, standard, bulk, best-effort — because every level the system cannot meaningfully schedule under load is a level that erodes trust in the whole scheme. Resist the pressure to add a level for every stakeholder; the right answer to "my work is special" is usually a quota or a weight, not a new tier.
+Prefer one of three bounded designs:
 
-**Weights** encode the proportional shares tenants are entitled to and should map to something real — contract tier, paid capacity, business criticality — not to whoever complained most recently. Weights are ratios, so their absolute values do not matter; what matters is that they sum to a defensible allocation and that the lowest weight still guarantees a non-zero share.
+### Reserved capacity plus borrowing
 
-**Queue bounds** are the hardest and most consequential number, because they encode where the system chooses to fail. Little's Law gives the discipline: a bound should be set so that, at the maximum tolerable wait time W and the known service rate μ, the queue's worst-case length stays under the bound (`bound ≈ μ × W_max`). A bound much larger than this is not generous — it is a guarantee that, under overload, jobs sit in the queue far longer than they are useful before anyone notices. A correctly sized bound makes the queue reject work at roughly the moment that accepting it would violate the latency SLO, which is exactly when rejection is the right answer.
+Reserve a fraction or fixed number of slots for urgent work. When urgent demand is absent, lower classes borrow the reserve; borrowers are preemptible or stop receiving new leases when urgent work arrives. This gives urgency a capacity guarantee without permanently idling the reserve.
 
-A useful instrumentation set follows directly from these mechanisms: queue age and depth per priority and per tenant, share of worker-seconds consumed per tenant (to verify weights are being honored), admission rejections and deferrals, starvation counts, priority-inversion incidents, downstream-pressure throttles, and the backlog *trend* that signals λ > μ before the queue overflows.
+### Weighted priority bands
+
+Allocate service across bands by weights, then schedule priority within each band's allocation. Critical work receives a high share, but standard work retains a floor. This is easier to reason about than unbounded aging across dozens of numeric priorities.
+
+### Deadlines and slack
+
+Where deadlines are real and execution estimates credible, schedule by earliest deadline or least slack:
+
+$$
+slack = deadline - now - estimated\ remaining\ service
+$$
+
+A negative slack job cannot meet its promise; running it ahead of feasible work may reduce total useful completions. The product must decide whether to drop, downgrade, or run late.
+
+### Aging
+
+Aging increases effective priority with wait time to bound starvation. It is a fallback for classes without hard deadlines, not a substitute for a guaranteed share. Cap the boost and preserve tenant quotas; otherwise a large old backlog can suddenly become an “urgent” flood.
+
+### Preemption is a protocol
+
+Preemption is safe only if execution supports it:
+
+1. scheduler issues a higher dispatch epoch or cancellation;
+2. worker stops accepting new subwork;
+3. checkpoint is durably published if supported;
+4. external effects are committed or abandoned through an idempotent boundary;
+5. resource reservation is released;
+6. remaining work re-enters with charged checkpoint/preemption cost.
+
+Killing a process is not safe preemption when it may have completed an unrecorded payment or holds a non-fenced lease.
+
+---
+
+## Fairness: Charge Service, Not Items
+
+Round robin gives each queue one job per turn. If tenant A submits 10 ms jobs and tenant B submits 10 minute jobs, equal turns are not equal service. Fair scheduling needs a cost unit.
+
+### Weighted fair queueing
+
+In ideal generalized processor sharing, backlogged tenant $i$ receives fraction $w_i / \sum_j w_j$ of the service. Packet-style weighted fair queueing approximates this by assigning virtual finish times. For job $k$ of tenant $i$ with estimated cost $L_i^k$:
+
+$$
+F_i^k = \max(F_i^{k-1}, V(a_i^k)) + \frac{L_i^k}{w_i}
+$$
+
+where $V(a)$ is system virtual time at arrival. Schedule the smallest eligible finish value. This makes high weight advance faster and large jobs pay more virtual time.
+
+Non-preemptive long jobs still block a worker once started, so the approximation is coarse when job sizes vary widely. Partition resource classes, limit maximum slice duration, or make long work checkpointable.
+
+### Deficit round robin
+
+Deficit round robin (DRR) is often simpler:
+
+1. each active tenant receives quantum proportional to its weight;
+2. a job may dispatch when estimated cost fits the tenant's deficit;
+3. dispatch subtracts cost; unused deficit carries forward;
+4. tenant rotates to the back of the active list.
+
+Carrying deficit lets a tenant eventually run a job larger than one quantum without letting large jobs become free. Correct estimates remain critical.
+
+### Multi-resource fairness
+
+Jobs consume vectors: CPU, memory, GPU, disk bandwidth, licenses, or downstream concurrency. Equal CPU seconds can still let one tenant monopolize GPUs. Dominant-resource fairness compares each tenant's largest normalized share and schedules the tenant with the smallest weighted dominant share, subject to feasible placement.
+
+No scalar cost perfectly captures every bottleneck. Use hierarchical policy:
+
+```text
+global tenant entitlement
+  -> resource-pool entitlement (GPU, CPU-large-memory, external-API)
+      -> class priority
+          -> job ordering
+```
+
+This prevents a tenant from evading a global quota by spreading demand across pools.
+
+---
+
+## Cost Estimation and Gaming Resistance
+
+Schedulers must estimate cost before execution and learn actual cost afterward. Inputs can include job type, input size, historical quantiles, declared resources, and downstream operations. Charge actual usage when measurable; reconcile reservation versus actual at completion.
+
+Protect the estimator:
+
+- never trust a tenant's declared cost without bounds;
+- use conservative cold-start defaults for new job types;
+- cap one dispatch slice and quarantine repeated underestimation;
+- include failed, canceled, retry, speculative, and checkpoint work in usage;
+- version estimators and record prediction error by job class;
+- avoid using protected/sensitive payload values as metric labels.
+
+If a job estimates one token and consumes 1,000, it has borrowed from every other tenant. Debt can reduce later share, but debt alone cannot recover an SLO already broken; isolate or terminate severe overruns.
+
+---
+
+## Placement, Head-of-Line Blocking, and Fragmentation
+
+A globally fair order can be physically impossible. The next tenant may require a GPU, region, runtime, or 64 GiB contiguous memory unavailable now. If the scheduler waits only for that job, compatible work behind it stalls.
+
+Use **eligibility queues** or indexed logical queues by resource shape, then choose fairly among tenants with feasible work. Preserve the tenant's global entitlement across shapes. Backfilling can run a smaller job in a temporary gap only if it will finish/checkpoint before a reservation needed by higher policy.
+
+Gang-scheduled jobs need multiple units simultaneously. Partial allocation wastes capacity and can deadlock when several gangs each hold some units. Reserve atomically or queue until the full set is available.
+
+Placement fragmentation is observable: free resources exist but no pending job fits. Track free capacity by shape, pending demand by shape, reservation age, and packing efficiency. Autoscaling on total queue depth misses this mismatch.
+
+---
+
+## Retry and Speculation Budgets
+
+A retry is not a new entitlement. It inherits tenant, class, logical job identity, deadline, and cost ledger. Usually it should not jump ahead of fresh work unless the remaining deadline makes that policy explicit.
+
+Set budgets at multiple levels:
+
+- attempts per logical job;
+- retry work units per tenant/class/window;
+- concurrent attempts per downstream dependency;
+- speculation copies per logical job;
+- fleet-wide failure reserve.
+
+When a dependency slows, reduce admission and retry concurrency for jobs that use it. A generic worker-capacity signal may look healthy while the dependency's safe concurrency is exhausted.
+
+Speculative execution can cut stragglers but doubles work until a winner commits. Charge both copies, use one effect-commit key, and cancel losers through the dispatch epoch. Never speculate non-idempotent external effects.
+
+---
+
+## Scheduler High Availability and Dispatch Safety
+
+Scheduler replicas may fail between reserving and dispatching, or dispatching and recording the worker acknowledgment. Durable state transitions should be explicit:
+
+```text
+QUEUED -> RESERVED(epoch 41, expires T) -> RUNNING(epoch 41)
+       -> SUCCEEDED | FAILED | CANCELED
+```
+
+On scheduler failover, a new controller may reclaim an expired reservation with epoch 42. A late worker from epoch 41 can still run, so the effect sink or job state transition must reject its stale epoch. Heartbeats improve recovery speed but do not fence old attempts; [Leases, Heartbeats, and Recovery](08-leases-heartbeats-recovery.md) owns that protocol.
+
+Quota accounting must also survive controller failover. Reconstructing usage only from live workers loses reservations and briefly over-allocates. Persist reservations in the authoritative scheduler store or rebuild them from an append-only decision log before issuing new work.
 
 ---
 
 ## Failure Modes
 
-The characteristic failures of shared job systems recur across organizations, and naming them is most of preventing them.
+### Priority flood starves standard work
 
-**Starvation** is low-priority work that never runs because a higher lane never drains. The symptom is old jobs that are technically queued but functionally abandoned; the defense is aging and guaranteed minimum shares so every lane is served eventually.
+A producer marks every job urgent. Strict priority keeps standard queues non-empty for hours. Authenticate class assignment, reserve a bounded urgent share, enforce tenant urgent quotas, and alert on sustained reserve occupancy.
 
-**Priority inversion** is a high-priority job blocked behind a low-priority one that holds a shared resource — the Mars Pathfinder failure. The symptom is unexplained stalls of important work while the system looks busy elsewhere; the defense is priority inheritance on locks and dedicated concurrency pools for scarce dependencies so a low-priority job cannot pin what a high-priority job needs.
+### One giant job buys a cheap queue position
 
-**Head-of-line blocking** is one slow or oversized item at the front of a shared queue stalling everything behind it. The symptom is a tenant-specific or job-type-specific backlog causing a system-wide slowdown; the defense is per-tenant or sharded queues that interleave instead of one line that serializes.
+Round robin counts jobs, so a ten-hour job receives the same charge as a ten-millisecond job. It pins a worker and destroys fairness. Schedule/charge estimated service or resource-time, isolate long jobs, and reconcile actual usage.
 
-**Unbounded queue growth** is the overload failure: λ exceeds μ, the backlog grows linearly, latency compounds, and the system eventually collapses or runs out of memory. The symptom is a steadily rising queue depth that no reordering fixes; the defense is bounded queues, load shedding, and producer-side backpressure that enforces λ ≤ μ at the door.
+### Retry storm receives fresh quota
 
-**The noisy neighbor** is one tenant's flood consuming capacity the rest depend on, whether from a bug, a backfill, or a bad actor. The symptom is correlated latency for unrelated tenants; the defense is per-tenant quotas, weighted fairness, and isolation of high-risk workloads into their own pools.
+Attempts are enqueued as new jobs, each receiving normal burst tokens. A downstream outage multiplies admitted work. Preserve logical identity and charge retry/speculation to the original tenant and retry budget.
 
-**Retry amplification** is failed work multiplying load on an already-struggling dependency. The symptom is a brownout escalating into an outage as retries pile on; the defense is lower-priority retry lanes, exponential backoff, and retry caps.
+### Stale scheduler double-dispatches
+
+Two scheduler leaders issue attempts after a partition. Both workers complete an external effect. Use a majority/epoch authority for scheduling ownership and an effect boundary keyed by logical job plus dispatch fencing where possible.
+
+### Cost estimator can be gamed
+
+Tenants underdeclare memory/API cost and dominate constrained resources. Reconcile predicted versus actual, apply conservative bounds/debt, and isolate repeated offenders. Entitlement inputs are authorization policy.
+
+### Preemption cannot make progress
+
+Urgent work arrives, but all workers run non-checkpointable long jobs. A “preemptible” label in the scheduler cannot recover resources safely. Keep a real urgent reserve or require bounded slices/checkpoints for borrowed capacity.
+
+### Fair globally, unfair at one bottleneck
+
+CPU share looks correct while one tenant consumes every database connection. Model constrained downstream slots as a resource pool with its own entitlement/admission, not an invisible worker detail.
+
+---
+
+## Observability and Policy Evidence
+
+Measure service received, not just queue contents:
+
+- admitted, rejected, deferred, and expired work units by tenant/class/reason;
+- oldest age, predicted start/completion, and deadline-miss rate;
+- offered load, completed useful work, retries, speculation, and canceled work;
+- worker-seconds/resource-seconds consumed versus configured weighted share;
+- dominant share by constrained resource and unused capacity by shape;
+- priority reserve occupancy, borrowing, preemptions, checkpoint time, and lost work;
+- cost estimate error distribution and underestimation offenders;
+- scheduler decision/dispatch latency, reservation age, epoch conflicts, and stale completions;
+- downstream admission/concurrency pressure per dependency;
+- policy version and rollout cohort.
+
+Queue depth must be partitioned by cost/resource class to be meaningful. High-cardinality tenant metrics can be kept in an aggregate ledger with top-offender sampling rather than unbounded telemetry labels.
+
+For an incident, retain the decision record: eligible candidates, policy version, quota balances, capacity snapshot, chosen job, estimate, and dispatch epoch. Without it, operators can see unfairness but cannot prove why the scheduler made the choice.
+
+---
+
+## Rollout, Migration, and Verification
+
+### Introduce policy without changing execution first
+
+1. classify tenants/classes and collect cost/age telemetry under FIFO;
+2. run the new scheduler in shadow mode, recording decisions without dispatch;
+3. compare predicted shares, starvation bounds, and deadline outcomes;
+4. canary a small tenant/pool with conservative quotas and a fallback policy version;
+5. enable actual-cost reconciliation before expanding;
+6. test scheduler failover and stale dispatches;
+7. roll out by resource pool, retaining a kill switch to the last safe policy.
+
+Changing weights moves contractual capacity. Version it, audit it, and communicate it like an API/SLO change.
+
+### Deterministic policy tests
+
+Use a simulated clock and worker fleet. Assert:
+
+- weighted service converges within a declared error bound under continuous demand;
+- a small tenant progresses during a large-tenant flood;
+- strict urgent demand cannot exceed its reserve/quota unless explicitly borrowing;
+- varied job sizes do not make item-count fairness pass falsely;
+- infeasible head jobs do not block compatible jobs forever;
+- attempts, retries, and speculation conserve quota;
+- policy/controller restart preserves reservations and debt;
+- stale dispatch epochs cannot commit completion/effects;
+- estimator underreporting triggers bounds without starving innocent tenants;
+- lost workers, dependency slowdown, and capacity removal cause admission to contract.
+
+Property-based tests can generate arrival/service traces and check invariants over every prefix. Replay production decision logs through both old and candidate scheduler versions before rollout.
 
 ---
 
 ## Decision Framework
 
-The right scheduling architecture is keyed on three variables: the number of independent tenants, the degree of SLA differentiation among workloads, and the acceptable blast radius when one workload misbehaves.
+| Workload | Scheduling starting point |
+|---|---|
+| One trusted producer, homogeneous short jobs | Bounded FIFO with deadline/age rejection |
+| Urgent plus batch in one domain | Reserved priority bands with borrowing and bounded slices |
+| Many tenants, one dominant resource | Weighted fair queueing or DRR with quota ledger |
+| Heterogeneous CPU/memory/GPU constraints | Hierarchical pools plus dominant-resource accounting |
+| Hard deadlines with credible service estimates | Deadline/slack policy with infeasible-job rejection |
+| Long checkpointable work | Fair allocation plus safe preemption/backfill |
+| Non-checkpointable external effects | Admission reserve; avoid kill-based preemption |
 
-If there is effectively **one tenant and uniform work** — an internal system where all jobs are equally valuable and producers are cooperative — a **single bounded FIFO queue** is correct. Adding priority lanes or fairness here is complexity with no payoff; the only non-negotiable is that the queue be *bounded*, because even a single producer can overload a worker pool.
+Before production, answer:
 
-If there is one tenant but **clearly differentiated work** — latency-sensitive jobs alongside bulk batch work — use **priority lanes with aging**. A small number of strict-priority lanes insulates urgent work from backlogs, and aging guarantees the bulk lanes are not starved. This is the right step up the moment some jobs are user-facing and others are not.
-
-If there are **multiple independent tenants sharing one pool**, the FIFO and simple-priority models both fail to the noisy neighbor, and you need **per-tenant fair queueing**: weighted fair shares or deficit round robin across per-tenant queues, plus quotas, plus aging within each tenant's lanes. This is the point at which scheduling becomes a genuine quality-of-service system, and it is where most shared platforms should land.
-
-If a tenant's misbehavior or a workload's failure mode carries an **unacceptable blast radius** — a few large customers whose floods would drown everyone, or jobs holding scarce external resources — escalate to **multi-tenant isolation**: dedicated pools or queues for the high-risk workloads, bulkheaded from the shared fair-queued pool that serves the long tail. The cost is lower utilization; the benefit is that no single workload can take down the platform. Reserve full isolation for the cases where the blast radius, not merely the unfairness, is what you cannot tolerate.
-
-Across all four levels, backpressure is not optional and not a level you graduate into — every shared queue must be bounded and must push back at admission, because every one of them is subject to Little's Law.
+1. What unit is charged: job, CPU-second, dominant share, downstream slot?
+2. Which class may legitimately starve, and for how long?
+3. What capacity is reserved and what can borrow it?
+4. At what predicted age/deadline does admission stop?
+5. Are retries/speculation conserved under the same budget?
+6. Can stale scheduler/worker epochs commit an effect?
+7. How are inaccurate or malicious cost declarations contained?
+8. What evidence proves the scheduler honored the policy?
 
 ---
 
 ## Key Takeaways
 
-1. A shared job queue is a contended resource; without a governing policy it fails predictably to starvation, head-of-line blocking, noisy neighbors, and unbounded growth.
-2. Priority, fairness, and backpressure answer three distinct questions — what runs next, how capacity is divided, and what happens under overload — and a mature system needs all three.
-3. Strict priority starves low-priority work; aging (priority escalation) converts an unbounded wait into a bounded one without sacrificing urgency under normal load.
-4. Priority inversion — a low-priority job holding a resource a high-priority job needs — sank Mars Pathfinder in 1997; defend against it with priority inheritance and isolated concurrency pools for scarce dependencies.
-5. One slow or oversized item blocks everything behind it in a single queue; per-tenant or sharded queues let the scheduler interleave and bound the blast radius.
-6. Fairness means proportional shares, not equal throughput; weighted fair queueing and deficit round robin guarantee every tenant a slice while quotas cap any one tenant — the same fair-share problem as a shared GPU cluster, applied to execution slots.
-7. Little's Law makes overload unambiguous: when arrival rate exceeds service rate there is no steady state, and a rising backlog trend — not queue length — is the signal.
-8. Backpressure must act at admission, not just at the worker; bound the queue, shed low-value load, and signal producers to slow down, because a system that accepts work it cannot finish only relocates the failure.
-9. Use few priority levels, map weights to something real, and size queue bounds from `μ × W_max` so the queue rejects work exactly when accepting it would break the SLO.
-10. Choose the architecture by tenant count, SLA differentiation, and blast radius: single FIFO, then priority lanes, then per-tenant fair queueing, then full isolation — but bound and backpressure every one of them.
+1. Admission, ordering, placement, and execution control are separate scheduler decisions.
+2. Priority needs a capacity budget; otherwise urgency becomes starvation policy.
+3. Fairness must charge service/resource cost, not item count.
+4. Multi-resource workloads need hierarchical or dominant-share accounting.
+5. Backpressure rejects work when useful completion is impossible; durable queueing cannot repeal capacity.
+6. Retries, speculation, and failed attempts consume entitlement and must not amplify quota.
+7. Scheduler failover needs durable reservations and epochs; heartbeats alone do not fence stale workers.
+8. Queue age, useful completed work, and received share are stronger signals than raw depth.
 
 ---
 
 ## References
 
-1. [Analysis and Simulation of a Fair Queueing Algorithm](https://dl.acm.org/doi/10.1145/75247.75248) — Demers, Keshav & Shenker, 1989 (Weighted Fair Queueing)
-2. [Efficient Fair Queueing Using Deficit Round Robin](https://dl.acm.org/doi/10.1145/217391.217453) — Shreedhar & Varghese, 1995
-3. [What Really Happened on Mars Pathfinder](https://www.cs.unc.edu/~anderson/teach/comp790/papers/mars_pathfinder_long_version.html) — Mike Jones / Glenn Reeves account, 1997 (priority inversion and inheritance)
-4. [Large-scale cluster management at Google with Borg](https://research.google/pubs/pub43438/) — Verma et al., 2015 (priority bands, preemption, shared pools)
-5. [A Proof for the Queuing Formula: L = λW](https://www.jstor.org/stable/167570) — John D. C. Little, 1961
-6. [Stop Rate Limiting! Capacity Management Done Right](https://www.youtube.com/watch?v=m64SWl9bfvk) — Jon Moore, 2017 (backpressure and admission control)
-7. [Using load shedding to avoid overload](https://aws.amazon.com/builders-library/using-load-shedding-to-avoid-overload/) — Amazon Builders' Library
-8. [Workload isolation using shuffle-sharding](https://aws.amazon.com/builders-library/workload-isolation-using-shuffle-sharding/) — Amazon Builders' Library (blast-radius containment)
-
----
-
-## Related Patterns
-
-- [Background Jobs and Worker Pools](./02-background-jobs-worker-pools.md)
-- [Retry, Idempotency, and Compensation](./06-retry-idempotency-compensation.md)
-- [Leases, Heartbeats, and Recovery](./08-leases-heartbeats-recovery.md)
-- [Rate Limiting](../06-scaling/05-rate-limiting.md)
-- [Backpressure](../06-scaling/07-backpressure.md)
-- [Multi-Tenancy Patterns](../06-scaling/12-multi-tenancy.md)
-- [Cell-Based Architecture and Shuffle Sharding](../06-scaling/11-cell-based-architecture.md)
-- [Message Queues](../05-messaging/01-message-queues.md)
-- [Multi-Tenant Training Clusters](../16-ml-systems/05-training-pipelines.md)
+- A. Demers, S. Keshav, and S. Shenker, [*Analysis and Simulation of a Fair Queueing Algorithm*](https://dl.acm.org/doi/10.1145/75247.75248), SIGCOMM, 1989.
+- M. Shreedhar and George Varghese, [*Efficient Fair Queueing Using Deficit Round Robin*](https://dl.acm.org/doi/10.1145/217391.217453), SIGCOMM, 1995.
+- Ali Ghodsi et al., [*Dominant Resource Fairness: Fair Allocation of Multiple Resource Types*](https://www.usenix.org/conference/nsdi11/dominant-resource-fairness-fair-allocation-multiple-resource-types), NSDI, 2011.
+- Abhishek Verma et al., [*Large-scale Cluster Management at Google with Borg*](https://research.google/pubs/large-scale-cluster-management-at-google-with-borg/), EuroSys, 2015.
+- Kay Ousterhout et al., [*Sparrow: Distributed, Low Latency Scheduling*](https://people.eecs.berkeley.edu/~matei/papers/2013/sosp_sparrow.pdf), SOSP, 2013.
+- John D. C. Little, [*A Proof for the Queuing Formula: L = λW*](https://doi.org/10.1287/opre.9.3.383), Operations Research, 1961.
+- Jeff Dean and Luiz André Barroso, [*The Tail at Scale*](https://research.google/pubs/the-tail-at-scale/), Communications of the ACM, 2013.

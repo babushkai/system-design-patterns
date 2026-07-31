@@ -1,832 +1,135 @@
-# Bigtable: A Distributed Storage System for Structured Data
-
-## Paper Overview
-
-**Authors:** Fay Chang et al. (Google)  
-**Published:** OSDI 2006  
-**Context:** Google's internal storage for web indexing, Google Earth, Google Finance
-
-## TL;DR
-
-Bigtable is a distributed storage system for managing structured data at petabyte scale. It provides a **sparse, distributed, persistent multi-dimensional sorted map** indexed by `(row, column, timestamp)`. Key innovations include **tablets** for horizontal scaling, **SSTable-based storage** with in-memory buffering, **single-row transactions** without full ACID, and integration with **GFS and Chubby** for storage and coordination. Bigtable influenced virtually all modern NoSQL databases.
-
----
-
-## Problem Statement
-
-Google needed storage for:
-- **Web indexing**: Crawled pages, links, anchor text (petabytes)
-- **Google Earth**: Satellite imagery at multiple resolutions
-- **Google Finance**: Time-series stock data
-- **Personalization**: User preferences across products
-
-Requirements:
-- Petabyte scale, billions of rows
-- High throughput for batch processing
-- Low latency for interactive serving
-- Self-managing, automatic scaling
-- Integration with MapReduce
-
----
-
-## Data Model
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                    Bigtable Data Model                                   │
-│                                                                          │
-│   (row_key, column_key, timestamp) → value                              │
-│                                                                          │
-│   ┌──────────────────────────────────────────────────────────────────┐  │
-│   │   Example: Web Table                                              │  │
-│   │                                                                   │  │
-│   │   Row Key: Reversed URL (com.google.www)                         │  │
-│   │                                                                   │  │
-│   │   ┌────────────────┬──────────────────┬──────────────────────┐   │  │
-│   │   │    Row Key     │   contents:html  │   anchor:cnn.com     │   │  │
-│   │   │                │                  │   anchor:nyt.com     │   │  │
-│   │   ├────────────────┼──────────────────┼──────────────────────┤   │  │
-│   │   │                │ t=5: "<html>..." │ t=9: "CNN"           │   │  │
-│   │   │ com.google.www │ t=3: "<html>..." │ t=8: "click here"    │   │  │
-│   │   │                │ t=1: "<html>..." │                      │   │  │
-│   │   ├────────────────┼──────────────────┼──────────────────────┤   │  │
-│   │   │ com.cnn.www    │ t=6: "<html>..." │ t=5: "CNN Home"      │   │  │
-│   │   └────────────────┴──────────────────┴──────────────────────┘   │  │
-│   │                                                                   │  │
-│   │   Key Properties:                                                │  │
-│   │   - Rows sorted lexicographically                               │  │
-│   │   - Column families: contents, anchor                           │  │
-│   │   - Columns: contents:html, anchor:cnn.com                      │  │
-│   │   - Multiple versions per cell (timestamped)                    │  │
-│   │   - Sparse: no storage for empty cells                          │  │
-│   └──────────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-### Key Design Choices
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│   Rows:                                                                 │
-│   - Arbitrary string (up to 64KB)                                      │
-│   - Single-row transactions (atomic read-modify-write)                 │
-│   - Sorted by row key (locality for range scans)                       │
-│                                                                          │
-│   Column Families:                                                      │
-│   - Groups of columns with common properties                           │
-│   - Unit of access control                                             │
-│   - Created at schema time (not dynamic)                               │
-│   - Example: "anchor" family, "contents" family                        │
-│                                                                          │
-│   Columns:                                                              │
-│   - Format: family:qualifier                                           │
-│   - Qualifiers can be created dynamically                              │
-│   - Example: anchor:cnn.com, anchor:nytimes.com                        │
-│                                                                          │
-│   Timestamps:                                                           │
-│   - 64-bit integers (microseconds or user-defined)                     │
-│   - Multiple versions per cell                                         │
-│   - Garbage collection: keep last N versions or versions newer than T  │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## Architecture
-
-```mermaid
-graph TD
-    subgraph Clients
-        C1[Client +<br/>Bigtable Library]
-        C2[Client +<br/>Bigtable Library]
-    end
-
-    subgraph TabletServers["Tablet Servers<br/>Each manages 10-1000 tablets, each tablet 100-200 MB"]
-        TS1[Tablet Server]
-        TS2[Tablet Server]
-        TS3[Tablet Server ...]
-    end
-
-    C1 --> TS1
-    C1 --> TS2
-    C2 --> TS2
-    C2 --> TS3
-
-    TS1 --> Chubby[Chubby<br/>Locking]
-    TS1 --> Master[Master<br/>Tablet Assignment]
-    TS1 --> GFS[("GFS<br/>Persistent Storage")]
-    TS2 --> Chubby
-    TS2 --> Master
-    TS2 --> GFS
-    TS3 --> Chubby
-    TS3 --> Master
-    TS3 --> GFS
-```
-
----
-
-## Tablets
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                    Tablet: Unit of Distribution                          │
-│                                                                          │
-│   A tablet is a contiguous range of rows                                │
-│                                                                          │
-│   ┌──────────────────────────────────────────────────────────────────┐  │
-│   │   Table: webtable                                                 │  │
-│   │                                                                   │  │
-│   │   ┌────────────────────────────────────────────────────────────┐ │  │
-│   │   │ Tablet 1: rows [aaa...] to [com.facebook...]              │ │  │
-│   │   │ Tablet 2: rows [com.google...] to [com.yahoo...]          │ │  │
-│   │   │ Tablet 3: rows [com.youtube...] to [org.apache...]        │ │  │
-│   │   │ Tablet 4: rows [org.wikipedia...] to [zzz...]             │ │  │
-│   │   └────────────────────────────────────────────────────────────┘ │  │
-│   │                                                                   │  │
-│   │   As tablets grow, they split:                                   │  │
-│   │   Tablet 2 → Tablet 2a [com.google...] to [com.twitter...]      │  │
-│   │              Tablet 2b [com.uber...] to [com.yahoo...]          │  │
-│   │                                                                   │  │
-│   └──────────────────────────────────────────────────────────────────┘  │
-│                                                                          │
-│   Benefits:                                                             │
-│   - Fine-grained load balancing (move tablets between servers)         │
-│   - Efficient recovery (only restore failed tablet, not whole table)   │
-│   - Parallel processing (distribute tablets across cluster)            │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-### Tablet Location
-
-```mermaid
-graph TD
-    L0["Level 0: Chubby File<br/>/bigtable/root_tablet_location"]
-    L1["Level 1: Root Tablet<br/>(METADATA table)<br/>Points to all METADATA tablets"]
-    L2["Level 2: Other METADATA Tablets<br/>Row: table name + end row key<br/>Value: tablet server location"]
-    L3["Level 3: User Tablets<br/>Actual user data"]
-
-    L0 --> L1
-    L1 --> L2
-    L2 --> L3
-```
-
-> Client caches tablet locations; cache invalidated on miss.
-> 3 network round trips for cold cache, 0 for warm cache.
-
----
-
-## SSTable Storage Format
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                    SSTable (Sorted String Table)                         │
-│                                                                          │
-│   Immutable, sorted file of key-value pairs                             │
-│                                                                          │
-│   ┌──────────────────────────────────────────────────────────────────┐  │
-│   │                     SSTable File                                  │  │
-│   │                                                                   │  │
-│   │   ┌─────────────────────────────────────────────────────────┐    │  │
-│   │   │                   Data Blocks                            │    │  │
-│   │   │   ┌───────────┐ ┌───────────┐ ┌───────────┐             │    │  │
-│   │   │   │  Block 0  │ │  Block 1  │ │  Block 2  │ ...         │    │  │
-│   │   │   │  64KB     │ │  64KB     │ │  64KB     │             │    │  │
-│   │   │   │ (sorted   │ │ (sorted   │ │ (sorted   │             │    │  │
-│   │   │   │  k-v pairs)│ │  k-v pairs)│ │  k-v pairs)│            │    │  │
-│   │   │   └───────────┘ └───────────┘ └───────────┘             │    │  │
-│   │   └─────────────────────────────────────────────────────────┘    │  │
-│   │                                                                   │  │
-│   │   ┌─────────────────────────────────────────────────────────┐    │  │
-│   │   │                   Index Block                            │    │  │
-│   │   │   Block 0: key "aaa" at offset 0                        │    │  │
-│   │   │   Block 1: key "bbb" at offset 65536                    │    │  │
-│   │   │   Block 2: key "ccc" at offset 131072                   │    │  │
-│   │   │   ...                                                    │    │  │
-│   │   └─────────────────────────────────────────────────────────┘    │  │
-│   │                                                                   │  │
-│   │   ┌─────────────────────────────────────────────────────────┐    │  │
-│   │   │                   Bloom Filter                           │    │  │
-│   │   │   Fast "key might exist" / "key definitely doesn't"     │    │  │
-│   │   └─────────────────────────────────────────────────────────┘    │  │
-│   │                                                                   │  │
-│   │   ┌─────────────────────────────────────────────────────────┐    │  │
-│   │   │                   Footer                                 │    │  │
-│   │   │   Offset to index block, bloom filter                   │    │  │
-│   │   └─────────────────────────────────────────────────────────┘    │  │
-│   └──────────────────────────────────────────────────────────────────┘  │
-│                                                                          │
-│   Read path:                                                            │
-│   1. Load index into memory (small)                                     │
-│   2. Binary search index for block containing key                       │
-│   3. Load and search that one block                                     │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## Tablet Serving
-
-```mermaid
-graph TD
-    subgraph WritePath["Write Path"]
-        W1[1. Check authorization] --> W2[2. Write to commit log<br/>append to GFS]
-        W2 --> W3[3. Insert into memtable<br/>sorted in-memory buffer]
-        W3 --> Mem["Memtable<br/>Red-black tree or skip list<br/>When full, frozen and flushed to SSTable"]
-    end
-
-    subgraph ReadPath["Read Path — Merge View"]
-        MemR[Memtable] --> MI[Merge Iterator]
-        ImmMem[Immutable Memtable] --> MI
-        SST1[("SSTable 1")] --> MI
-        SST2[("SSTable 2")] --> MI
-        SST3[("SSTable 3")] --> MI
-        MI --> Result[Result]
-    end
-```
-
-### Implementation
-
-```python
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Iterator, Tuple
-import time
-from sortedcontainers import SortedDict
-
-@dataclass
-class Cell:
-    value: bytes
-    timestamp: int
-
-@dataclass
-class ColumnFamily:
-    name: str
-    columns: Dict[str, List[Cell]] = field(default_factory=dict)
-    max_versions: int = 3
-
-
-class Memtable:
-    """
-    In-memory sorted buffer for recent writes.
-    Implemented as sorted map.
-    """
-    
-    def __init__(self, max_size_bytes: int = 64 * 1024 * 1024):
-        self.data: SortedDict = SortedDict()  # row_key -> {cf -> {col -> [cells]}}
-        self.size_bytes = 0
-        self.max_size = max_size_bytes
-        self.frozen = False
-    
-    def put(
-        self,
-        row_key: str,
-        column_family: str,
-        column: str,
-        value: bytes,
-        timestamp: Optional[int] = None
-    ):
-        """Insert or update a cell"""
-        if self.frozen:
-            raise Exception("Memtable is frozen")
-        
-        if timestamp is None:
-            timestamp = int(time.time() * 1000000)
-        
-        if row_key not in self.data:
-            self.data[row_key] = {}
-        
-        if column_family not in self.data[row_key]:
-            self.data[row_key][column_family] = {}
-        
-        if column not in self.data[row_key][column_family]:
-            self.data[row_key][column_family][column] = []
-        
-        cell = Cell(value=value, timestamp=timestamp)
-        self.data[row_key][column_family][column].append(cell)
-        
-        # Sort by timestamp descending (newest first)
-        self.data[row_key][column_family][column].sort(
-            key=lambda c: c.timestamp, 
-            reverse=True
-        )
-        
-        self.size_bytes += len(row_key) + len(column_family) + len(column) + len(value) + 8
-    
-    def get(
-        self,
-        row_key: str,
-        column_family: Optional[str] = None,
-        column: Optional[str] = None,
-        max_versions: int = 1
-    ) -> Optional[Dict]:
-        """Get cells for a row"""
-        if row_key not in self.data:
-            return None
-        
-        row_data = self.data[row_key]
-        
-        if column_family and column_family in row_data:
-            if column and column in row_data[column_family]:
-                return {column_family: {column: row_data[column_family][column][:max_versions]}}
-            return {column_family: row_data[column_family]}
-        
-        return row_data
-    
-    def scan(
-        self,
-        start_row: str,
-        end_row: str
-    ) -> Iterator[Tuple[str, Dict]]:
-        """Scan rows in range"""
-        for row_key in self.data.irange(start_row, end_row, inclusive=(True, False)):
-            yield row_key, self.data[row_key]
-    
-    def is_full(self) -> bool:
-        return self.size_bytes >= self.max_size
-    
-    def freeze(self):
-        """Freeze memtable for flushing"""
-        self.frozen = True
-
-
-class SSTableWriter:
-    """Writes memtable to SSTable file format"""
-    
-    def __init__(self, file_path: str, block_size: int = 64 * 1024):
-        self.file_path = file_path
-        self.block_size = block_size
-        self.index_entries = []
-        self.bloom_filter = BloomFilter(expected_items=100000)
-    
-    def write(self, memtable: Memtable):
-        """Write memtable to SSTable file"""
-        with open(self.file_path, 'wb') as f:
-            current_block = []
-            current_block_size = 0
-            block_offset = 0
-            first_key_in_block = None
-            
-            for row_key, row_data in memtable.data.items():
-                # Serialize row
-                row_bytes = self._serialize_row(row_key, row_data)
-                
-                # Add to bloom filter
-                self.bloom_filter.add(row_key)
-                
-                # Check if we need new block
-                if current_block_size + len(row_bytes) > self.block_size and current_block:
-                    # Write current block
-                    block_data = b''.join(current_block)
-                    f.write(block_data)
-                    
-                    # Record in index
-                    self.index_entries.append((first_key_in_block, block_offset))
-                    
-                    block_offset += len(block_data)
-                    current_block = []
-                    current_block_size = 0
-                    first_key_in_block = None
-                
-                if first_key_in_block is None:
-                    first_key_in_block = row_key
-                
-                current_block.append(row_bytes)
-                current_block_size += len(row_bytes)
-            
-            # Write last block
-            if current_block:
-                block_data = b''.join(current_block)
-                f.write(block_data)
-                self.index_entries.append((first_key_in_block, block_offset))
-                block_offset += len(block_data)
-            
-            # Write index
-            index_offset = block_offset
-            f.write(self._serialize_index())
-            
-            # Write bloom filter
-            bloom_offset = f.tell()
-            f.write(self.bloom_filter.serialize())
-            
-            # Write footer
-            f.write(self._serialize_footer(index_offset, bloom_offset))
-
-
-class SSTableReader:
-    """Reads from SSTable file"""
-    
-    def __init__(self, file_path: str):
-        self.file_path = file_path
-        self.index = []
-        self.bloom_filter = None
-        self._load_metadata()
-    
-    def _load_metadata(self):
-        """Load index and bloom filter into memory"""
-        with open(self.file_path, 'rb') as f:
-            # Read footer
-            f.seek(-16, 2)  # Last 16 bytes
-            footer = f.read(16)
-            index_offset, bloom_offset = struct.unpack('QQ', footer)
-            
-            # Load index
-            f.seek(index_offset)
-            index_data = f.read(bloom_offset - index_offset)
-            self.index = self._parse_index(index_data)
-            
-            # Load bloom filter
-            f.seek(bloom_offset)
-            bloom_data = f.read()
-            bloom_data = bloom_data[:-16]  # Exclude footer
-            self.bloom_filter = BloomFilter.deserialize(bloom_data)
-    
-    def get(self, row_key: str) -> Optional[Dict]:
-        """Get a row from SSTable"""
-        # Check bloom filter first
-        if not self.bloom_filter.might_contain(row_key):
-            return None
-        
-        # Binary search index for block
-        block_idx = self._find_block(row_key)
-        if block_idx < 0:
-            return None
-        
-        # Read and search block
-        block = self._read_block(block_idx)
-        return self._search_block(block, row_key)
-    
-    def _find_block(self, row_key: str) -> int:
-        """Binary search to find block containing key"""
-        left, right = 0, len(self.index) - 1
-        result = -1
-        
-        while left <= right:
-            mid = (left + right) // 2
-            if self.index[mid][0] <= row_key:
-                result = mid
-                left = mid + 1
-            else:
-                right = mid - 1
-        
-        return result
-
-
-class TabletServer:
-    """
-    Manages multiple tablets.
-    Handles reads, writes, and compaction.
-    """
-    
-    def __init__(self, server_id: str, gfs_client, chubby_client):
-        self.server_id = server_id
-        self.gfs = gfs_client
-        self.chubby = chubby_client
-        self.tablets: Dict[str, Tablet] = {}
-    
-    def load_tablet(self, tablet_id: str, metadata: dict):
-        """Load a tablet from GFS"""
-        tablet = Tablet(
-            tablet_id=tablet_id,
-            start_row=metadata['start_row'],
-            end_row=metadata['end_row'],
-            sstable_files=metadata['sstables'],
-            gfs_client=self.gfs
-        )
-        
-        # Replay commit log
-        tablet.replay_log(metadata['commit_log'])
-        
-        self.tablets[tablet_id] = tablet
-    
-    def write(
-        self,
-        tablet_id: str,
-        row_key: str,
-        mutations: List[dict]
-    ):
-        """Write to a tablet"""
-        tablet = self.tablets[tablet_id]
-        
-        # Write to commit log first (durability)
-        log_entry = self._create_log_entry(row_key, mutations)
-        tablet.commit_log.append(log_entry)
-        
-        # Apply to memtable
-        for mutation in mutations:
-            tablet.memtable.put(
-                row_key=row_key,
-                column_family=mutation['cf'],
-                column=mutation['column'],
-                value=mutation['value'],
-                timestamp=mutation.get('timestamp')
-            )
-        
-        # Check if memtable needs flushing
-        if tablet.memtable.is_full():
-            self._flush_memtable(tablet)
-    
-    def read(
-        self,
-        tablet_id: str,
-        row_key: str,
-        columns: Optional[List[str]] = None
-    ) -> Optional[Dict]:
-        """Read from a tablet"""
-        tablet = self.tablets[tablet_id]
-        
-        # Merge from all sources
-        result = {}
-        
-        # Check memtable (newest)
-        mem_result = tablet.memtable.get(row_key)
-        if mem_result:
-            result = self._merge_results(result, mem_result)
-        
-        # Check immutable memtable
-        if tablet.immutable_memtable:
-            imm_result = tablet.immutable_memtable.get(row_key)
-            if imm_result:
-                result = self._merge_results(result, imm_result)
-        
-        # Check SSTables (oldest to newest)
-        for sstable in tablet.sstables:
-            sst_result = sstable.get(row_key)
-            if sst_result:
-                result = self._merge_results(result, sst_result)
-        
-        return result if result else None
-    
-    def _flush_memtable(self, tablet: 'Tablet'):
-        """Flush memtable to SSTable"""
-        # Freeze current memtable
-        tablet.memtable.freeze()
-        tablet.immutable_memtable = tablet.memtable
-        tablet.memtable = Memtable()
-        
-        # Write to SSTable in background
-        sstable_path = f"{tablet.tablet_id}_{time.time()}.sst"
-        writer = SSTableWriter(sstable_path)
-        writer.write(tablet.immutable_memtable)
-        
-        # Add to tablet's SSTables
-        tablet.sstables.append(SSTableReader(sstable_path))
-        tablet.immutable_memtable = None
-        
-        # Clear commit log
-        tablet.commit_log.clear()
-```
-
----
-
-## Compaction
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                    Compaction Types                                      │
-│                                                                          │
-│   Minor Compaction:                                                     │
-│   - Convert memtable to SSTable                                         │
-│   - Frees memory                                                        │
-│   - Reduces commit log                                                  │
-│                                                                          │
-│   Merging Compaction:                                                   │
-│   - Merge multiple SSTables into one                                    │
-│   - Reduces number of files to check on read                           │
-│   - Reclaims space from deletions                                       │
-│                                                                          │
-│   Major Compaction:                                                     │
-│   - Merge ALL SSTables into single SSTable                             │
-│   - Removes all deleted data and old versions                          │
-│   - Most expensive, done periodically                                   │
-│                                                                          │
-│   ┌──────────────────────────────────────────────────────────────────┐  │
-│   │   Before Merging:                                                 │  │
-│   │   SST1: [(a,1), (b,1), (c,1)]                                    │  │
-│   │   SST2: [(a,2), (d,1)]         a has newer version in SST2       │  │
-│   │   SST3: [(b, DELETE), (e,1)]   b is deleted                      │  │
-│   │                                                                   │  │
-│   │   After Major Compaction:                                        │  │
-│   │   SST: [(a,2), (c,1), (d,1), (e,1)]                              │  │
-│   │                                                                   │  │
-│   │   - Old version of 'a' removed                                   │  │
-│   │   - 'b' deleted entirely                                         │  │
-│   │   - Space reclaimed                                              │  │
-│   └──────────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## Locality Groups
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                    Locality Groups                                       │
-│                                                                          │
-│   Column families can be grouped into locality groups                   │
-│   Each locality group stored in separate SSTable                        │
-│                                                                          │
-│   ┌──────────────────────────────────────────────────────────────────┐  │
-│   │   Example: Web crawl table                                        │  │
-│   │                                                                   │  │
-│   │   Locality Group 1: "contents"                                   │  │
-│   │   - Column family: contents                                      │  │
-│   │   - Large, read infrequently                                     │  │
-│   │   - Stored on disk                                               │  │
-│   │                                                                   │  │
-│   │   Locality Group 2: "metadata"                                   │  │
-│   │   - Column families: language, checksum, links                   │  │
-│   │   - Small, read frequently                                       │  │
-│   │   - Cached in memory                                             │  │
-│   │                                                                   │  │
-│   │   Benefits:                                                      │  │
-│   │   - Read language without loading contents                       │  │
-│   │   - Better cache utilization                                     │  │
-│   │   - Different compression for different types                    │  │
-│   │                                                                   │  │
-│   └──────────────────────────────────────────────────────────────────┘  │
-│                                                                          │
-│   Options per locality group:                                           │
-│   - In-memory (for small, frequently accessed data)                    │
-│   - Compression algorithm (none, gzip, snappy)                         │
-│   - Bloom filter settings                                              │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## Master Operations
-
-```python
-class BigtableMaster:
-    """
-    Master server responsibilities:
-    - Tablet assignment to servers
-    - Detecting tablet server failures
-    - Load balancing tablets
-    - Schema changes
-    """
-    
-    def __init__(self, chubby_client):
-        self.chubby = chubby_client
-        self.tablet_servers: Dict[str, TabletServerInfo] = {}
-        self.tablet_assignments: Dict[str, str] = {}  # tablet_id -> server_id
-        
-        # Acquire master lock in Chubby
-        self.master_lock = self.chubby.acquire("/bigtable/master")
-    
-    def assign_tablet(self, tablet_id: str):
-        """Assign an unassigned tablet to a server"""
-        # Find server with least load
-        target_server = self._find_least_loaded_server()
-        
-        # Update METADATA table
-        self._update_metadata(tablet_id, target_server)
-        
-        # Notify tablet server
-        self._send_assignment(target_server, tablet_id)
-        
-        self.tablet_assignments[tablet_id] = target_server
-    
-    def monitor_tablet_servers(self):
-        """Monitor tablet server health via Chubby"""
-        # Each tablet server holds exclusive lock on file in Chubby
-        # Lock directory: /bigtable/servers/{server_id}
-        
-        while True:
-            for server_id, info in list(self.tablet_servers.items()):
-                lock_path = f"/bigtable/servers/{server_id}"
-                
-                if not self.chubby.file_exists(lock_path):
-                    # Server lost its lock - it's dead
-                    self._handle_server_failure(server_id)
-            
-            time.sleep(1)
-    
-    def _handle_server_failure(self, server_id: str):
-        """Reassign tablets from failed server"""
-        # Find tablets assigned to failed server
-        tablets_to_reassign = [
-            tid for tid, sid in self.tablet_assignments.items()
-            if sid == server_id
-        ]
-        
-        # Remove server from active set
-        del self.tablet_servers[server_id]
-        
-        # Reassign each tablet
-        for tablet_id in tablets_to_reassign:
-            del self.tablet_assignments[tablet_id]
-            self.assign_tablet(tablet_id)
-    
-    def split_tablet(self, tablet_id: str, split_key: str):
-        """Split a tablet that has grown too large"""
-        current_server = self.tablet_assignments[tablet_id]
-        
-        # Create two new tablet entries in METADATA
-        new_tablet_id_1 = f"{tablet_id}_a"
-        new_tablet_id_2 = f"{tablet_id}_b"
-        
-        # Old tablet: [start, end) → [start, split_key) and [split_key, end)
-        
-        # Update METADATA
-        self._create_tablet_metadata(new_tablet_id_1, start_row, split_key)
-        self._create_tablet_metadata(new_tablet_id_2, split_key, end_row)
-        
-        # Assign tablets (may go to different servers for load balance)
-        self.assign_tablet(new_tablet_id_1)
-        self.assign_tablet(new_tablet_id_2)
-```
-
----
-
-## Optimizations
-
-### Bloom Filters
-
-```
-Avoid disk reads for non-existent keys
-
-┌──────────────────────────────────────────────────────────────────┐
-│ Before:                                                          │
-│   Read "xyz" → check every SSTable → not found                  │
-│   Cost: Multiple disk reads                                      │
-│                                                                  │
-│ After:                                                           │
-│   Read "xyz" → bloom filter says "definitely not" → skip file   │
-│   Cost: In-memory bit check                                      │
-│                                                                  │
-│ False positive rate ~1% with 10 bits per key                    │
-└──────────────────────────────────────────────────────────────────┘
-```
-
-### Block Cache
-
-```
-Two-level caching:
-1. Scan cache: For sequential reads (MapReduce)
-2. Block cache: For random reads (serving)
-
-Trade-off configurable per table based on workload
-```
-
-### Commit Log Optimization
-
-```
-┌──────────────────────────────────────────────────────────────────┐
-│ Problem:                                                         │
-│   Separate log per tablet → many concurrent writes to GFS       │
-│                                                                  │
-│ Solution:                                                        │
-│   Single log per tablet server, interleaved entries             │
-│                                                                  │
-│ Recovery complexity:                                             │
-│   Sort log by (tablet, sequence) → parallel replay per tablet   │
-└──────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## Real-World Usage at Google
-
-| Application | Data Size | Notes |
-|-------------|-----------|-------|
-| Google Analytics | 200 TB | Click stream data |
-| Google Earth | 70 TB | Satellite imagery |
-| Personalized Search | 4 PB | User indices |
-| Crawl | 800 TB | Web pages |
-| Orkut | 9 TB | Social graph |
-
----
-
-## Influence and Legacy
-
-### Direct Descendants
-- **Apache HBase** - Open source Bigtable implementation
-- **Apache Cassandra** - Combined Bigtable data model with Dynamo distribution
-
-### Concepts Adopted
-- SSTable format (RocksDB, LevelDB)
-- LSM-tree storage (most modern databases)
-- Tablet-based sharding
-- Column families
-- Multi-version timestamps
-
----
-
-## Key Takeaways
-
-1. **Simple data model, complex implementation** - Sparse map with timestamps is easy to understand, powerful in practice.
-
-2. **Single-row transactions sufficient** - Most applications don't need cross-row ACID.
-
-3. **SSTables + memtables = LSM tree** - Write-optimized storage with good read performance.
-
-4. **Locality groups optimize access patterns** - Separate storage for different column families.
-
-5. **Tablets enable fine-grained scaling** - Move, split, and replicate at tablet granularity.
-
-6. **Bloom filters essential for sparse data** - Avoid disk reads for absent keys.
-
-7. **Build on reliable components** - GFS for storage, Chubby for coordination.
-
-8. **Compression and caching are critical** - Trade CPU for I/O at this scale.
+# Bigtable (OSDI 2006): Evidence-First Paper Analysis
+
+Bigtable's central move is to expose **physical locality as part of the data model**. Rows are globally ordered by an application-chosen key; contiguous ranges become independently assignable tablets; column families determine storage and access-control boundaries. That bargain enables enormous sparse tables, but makes schema design a placement decision rather than a purely logical one.
+
+## Publication identity and boundary
+
+- **Paper:** *Bigtable: A Distributed Storage System for Structured Data*
+- **Authors:** Fay Chang, Jeffrey Dean, Sanjay Ghemawat, Wilson C. Hsieh, Deborah A. Wallach, Mike Burrows, Tushar Chandra, Andrew Fikes, and Robert E. Gruber
+- **Venue and version:** 7th USENIX Symposium on Operating Systems Design and Implementation (OSDI), 2006, pages 205–218
+- **System described:** Google's production Bigtable implementation built on GFS, Chubby, SSTables, and Google's cluster-management infrastructure
+
+The paper is a 2006 system snapshot. It is not documentation for the later Google Cloud Bigtable product, Apache HBase, or Cassandra. Those systems share ideas but differ in replication, consensus, APIs, compaction, and operations.
+
+This chapter examines how the paper composes [Data Modeling](../02-distributed-databases/10-data-modeling.md), [LSM Trees](../03-storage-engines/02-lsm-trees.md), and [SSTables and Compaction](../03-storage-engines/03-sstables-compaction.md).
+
+## Problem and workload shape
+
+Google needed one storage substrate for very different applications: web indexing, satellite imagery, per-user histories, analytics, and batch pipelines. A relational schema and distributed joins were not the goal. The desired workload combined:
+
+- petabyte-scale sparse records;
+- high-throughput sequential scans and random keyed access;
+- dynamic columns and multiple timestamped versions;
+- application control over co-location and memory residency;
+- thousands of storage machines, with failures treated as normal;
+- both latency-sensitive serving and throughput-oriented MapReduce jobs.
+
+The paper deliberately excludes a full relational model, SQL query planning, arbitrary secondary indexes, and transactions across rows. Clients serialize their own structured values and choose row keys that encode the access pattern.
+
+## Logical state and invariants
+
+Section 2 defines Bigtable as a sparse, distributed, persistent multidimensional sorted map:
+
+`(row string, column string, timestamp int64) -> uninterpreted byte string`
+
+Each dimension carries a system consequence.
+
+### Rows define order and atomicity
+
+Rows are lexicographically ordered. Every read or write of data under one row key is atomic, even across column families. A range of adjacent rows is the unit from which a **tablet** is formed. Therefore a key such as reversed host name can place pages from one domain near each other, while a timestamp-first key can create a hot append edge. Key design is load distribution, scan efficiency, and failure-domain sizing at once.
+
+The atomicity boundary is one row. If an invariant spans two row keys, the published interface does not supply the transaction needed to protect it.
+
+### Column families are declared storage boundaries
+
+A column name has `family:qualifier` form. Families are created administratively and expected to remain few; qualifiers can be dynamic. Access control, compression choices, memory placement, and locality groups operate at family granularity. This is why “schemaless” is misleading: value structure is opaque, but families and their storage policies form a real schema.
+
+### Timestamps create cell versions
+
+Each cell can contain multiple versions ordered by 64-bit timestamp. The client may supply the timestamp or use real time. Per-family garbage-collection policy can retain the most recent `n` versions or versions newer than a duration. A timestamp orders versions of one cell; the paper does not turn wall-clock timestamps into a global transaction order.
+
+## System decomposition
+
+The architecture in Sections 4 and 5 separates metadata control from data serving.
+
+- **Client library:** locates tablets and talks directly to tablet servers.
+- **Master:** assigns tablets, detects tablet-server changes, balances load, garbage-collects GFS files, and coordinates schema operations.
+- **Tablet server:** owns roughly tens to thousands of tablets, serves their reads/writes, and splits tablets that grow.
+- **GFS:** durably stores commit logs and immutable SSTables.
+- **Chubby:** provides master election, tablet-server liveness locks, schema files, access-control data, and the root of tablet-location metadata.
+
+User data never passes through the master. Clients cache tablet locations, so most requests avoid it. The master is a control-plane authority, not a data-plane proxy.
+
+### Tablet location hierarchy
+
+Section 5.1 uses three levels. A Chubby file points to the root tablet; the root tablet points to tablets in the `METADATA` table; those metadata tablets contain user-tablet locations. The root tablet is never split. The client caches resolved locations and walks the hierarchy only after a cache miss or stale entry.
+
+The hierarchy avoids one giant central map while retaining an authoritative root. It also establishes a dependency chain: Chubby and metadata availability are required to discover uncached locations, though cached clients can continue direct communication for known tablets.
+
+## Write, read, and compaction paths
+
+A valid mutation is appended to the tablet server's GFS commit log, then inserted into an in-memory sorted **memtable**. Group commit amortizes the cost of small writes. A read merges the memtable with the tablet's immutable SSTables. Because each source is sorted, range merging is efficient.
+
+The paper describes three compaction scales:
+
+1. **Minor compaction:** freeze a memtable, start a new one, and write the frozen state as an SSTable. This bounds memory and recovery-log replay.
+2. **Merging compaction:** combine several SSTables and the memtable to bound read amplification.
+3. **Major compaction:** rewrite all SSTables for a tablet, removing deleted entries rather than carrying tombstones forward.
+
+These processes run beside foreground traffic. They trade write and background I/O for fast sequential writes and immutable files. See [Bloom Filters](../03-storage-engines/05-bloom-filters.md) for the probabilistic filter Bigtable optionally builds per locality group to avoid disk reads for absent row/column pairs.
+
+Locality groups place selected column families in separate SSTables, so a query need not read unrelated families. Groups can be compressed or pinned in memory. Two caches serve different reuse patterns: a scan cache stores returned key/value results; a block cache stores SSTable blocks fetched from GFS.
+
+## Assignment, failure, and recovery
+
+Each tablet is assigned to exactly one tablet server at a time. On startup, a server creates a uniquely named Chubby file and holds its exclusive lock. If it loses the Chubby session, it stops serving. The master confirms loss by acquiring that lock, deletes the server file so the old process cannot return as an owner, and reassigns its tablets. This is fencing through an external lease service, not failure detection alone.
+
+A new master acquires a Chubby master lock, finds live servers, asks them which tablets they own, scans metadata, and assigns anything missing. A master restart does not itself revoke tablet-server assignments.
+
+Persistent tablet state consists of SSTable references plus redo points. A replacement server reads SSTable indexes and rebuilds the memtable by replaying committed log entries after those points. Normal operation uses one interleaved commit log per tablet server to improve group commit, which makes recovery more difficult: many replacement servers could reread the same large log. Section 6 solves that by sorting log entries by `(table, row, sequence)` in parallel so each tablet's mutations become contiguous.
+
+For planned tablet movement, the source performs a minor compaction, stops serving, then performs a final small compaction. The destination can load SSTables without replaying the old server's log. Tablet splitting also exploits immutability: children initially share the parent's SSTables rather than rewriting them.
+
+The paper's lessons section is unusually candid. Real failures included memory and network corruption, clock skew, hung machines, extended partitions, and bugs in both the system and dependencies, not only clean crash-stop failures. The authors emphasize checksums and avoiding assumptions about rarely exercised recovery paths.
+
+## Quantitative evidence in context
+
+Section 7 used clusters of 1, 50, 250, and 500 tablet servers plus an equal number of clients. Each benchmark read or wrote about 1 GB of 1,000-byte values per tablet server; the in-memory random-read test used 100 MB per server. Other jobs shared the machine pool, so results include some interference.
+
+- On one tablet server, random disk reads achieved 1,212 values/s. Each 1,000-byte lookup fetched a 64 KB SSTable block from GFS, producing about 75 MB/s of underlying traffic and exposing block/read amplification.
+- Figure 6 reports per-server rates at 1 and 500 servers: random reads fell from 1,212 to 241 values/s; in-memory random reads from 10,811 to 6,250; random writes from 8,850 to 2,000; scans from 15,385 to 7,843. Aggregate throughput still rose by more than 100 times across the 500-fold scale-out, but not linearly.
+- The authors attribute the per-server decline to shared 1 Gbit links, load imbalance, and competing processes. Random disk reads scaled worst: about 100 times in aggregate for 500 times the servers.
+
+Production observations complement the microbenchmarks. As of August 2006, the paper reports 388 non-test clusters and about 24,500 tablet servers. Fourteen busy clusters totaling 8,069 servers handled more than 1.2 million requests/s, about 741 MB/s incoming RPC traffic, and 16 GB/s outgoing. Table 2 lists, among other examples, a roughly 200 TB Google Analytics raw-click table compressed to 14% of original size and a roughly 70 TB uncompressed Google Earth imagery table. These are point-in-time deployment facts, not capacity guarantees.
+
+## Assumptions and limitations
+
+- Clients must know their access paths in advance and encode locality into row keys.
+- One-row atomicity cannot protect cross-row invariants.
+- A poor row-key distribution can create hot tablets; splitting cannot divide one indivisible hot row.
+- Reads may merge several SSTables, while compaction consumes substantial background I/O.
+- GFS and Chubby supply durability, leases, and critical metadata; Bigtable's properties depend on theirs.
+- No SQL optimizer, relational constraints, or automatic general-purpose secondary indexes are described.
+- The benchmark does not compare equivalent systems, cost, tail latency, or multi-region consistency.
+
+## Design lineage, without conflation
+
+Later wide-column stores retained ordered partition keys, sparse dynamic qualifiers, memtable/SSTable write paths, Bloom filters, and compaction. They changed important boundaries: some use replicated consensus per range, different compaction strategies, or different consistency APIs. A recognizable storage shape does not imply Bigtable's exact failure or transaction semantics.
+
+Google's [Spanner paper](./04-spanner.md) addresses a different requirement: synchronous replication and transactions across rows and locations. It retains range partitioning and a structured schema but adds Paxos groups, MVCC timestamps, two-phase commit, and TrueTime. That progression shows the cost of moving from “scale keyed access” to “scale externally consistent transactions.”
+
+## Review questions for a Bigtable-like design
+
+1. Does the row key distribute writes while preserving the scans the application needs?
+2. Which invariant fits inside one row, and what protects the rest?
+3. Which column families are read together, compressed together, and authorized together?
+4. How much read amplification is acceptable before compaction, and what capacity is reserved for it?
+5. Can metadata and lease dependencies recover without creating two owners for a range?
+6. Does a tablet split relieve the actual hot spot, or is one row/key still dominant?
+7. Are benchmark results reported with block size, cache state, value size, topology, and background load?
+
+## Primary sources
+
+- [Chang et al., *Bigtable: A Distributed Storage System for Structured Data* (OSDI 2006), official Google Research PDF](https://storage.googleapis.com/gweb-research2023-media/pubtools/4443.pdf)
+- [Google Research publication record for Bigtable](https://research.google/pubs/bigtable-a-distributed-storage-system-for-structured-data/)
+- [Corbett et al., *Spanner: Google's Globally-Distributed Database* (OSDI 2012)](https://www.usenix.org/system/files/conference/osdi12/osdi12-final-16.pdf)

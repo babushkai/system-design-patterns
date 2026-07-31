@@ -1,860 +1,257 @@
-# Vector Search
+# Vector Retrieval Systems
 
-## TL;DR
+Vector retrieval searches a learned geometric representation rather than a term vocabulary. The embedding model, preprocessing, distance function, index build, metadata snapshot, deletion state, and query path jointly define the neighborhood; changing any one can change results without changing the API.
 
-Vector search finds similar items by comparing high-dimensional embeddings rather than matching keywords. Text, images, and other data are converted to dense vectors using ML models, then searched using approximate nearest neighbor (ANN) algorithms like HNSW or IVF. This enables semantic search that understands meaning, not just exact terms.
+Dense retrieval covers vector generation, approximate-nearest-neighbor (ANN) structures, filtered ANN, sharding, recall/latency/cost trade-offs, and embedding/index migration. [Lexical Query Execution](02-full-text-search.md) covers lexical retrieval; [Ranking and Evaluation](04-ranking-algorithms.md) covers candidate fusion, learned reranking, and product-quality evaluation.
 
----
+## Workload and service contract
 
-## The Problem Vector Search Solves
+Define the retrieval operation in terms a caller can verify:
 
-### Keyword Search Limitations
-
-```
-Query: "affordable accommodation near the beach"
-
-Keyword matching finds:
-  ✓ "affordable beach accommodation available"
-  ✗ "budget hotel by the ocean"          (no word overlap)
-  ✗ "cheap seaside lodging"              (synonyms not matched)
-  ✗ "inexpensive place to stay on coast" (semantic match, no keywords)
-
-Vector search finds ALL of these because it understands meaning.
-```
-
-### Semantic Understanding
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Embedding Space                               │
-│                                                                 │
-│     "king" ─────────────────┐                                   │
-│                             │ similar direction                 │
-│     "queen" ────────────────┘                                   │
-│                                                                 │
-│     "man" ──────────────────┐                                   │
-│                             │ similar direction                 │
-│     "woman" ─────────────────┘                                  │
-│                                                                 │
-│     Famous relationship: king - man + woman ≈ queen             │
-│                                                                 │
-│     Embeddings capture semantic relationships                   │
-└─────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## How Vector Search Works
-
-### End-to-End Pipeline
-
-```mermaid
-graph TD
-    subgraph INDEXING TIME
-        DOC["Document:<br/>The hotel is near the beach with ocean views"] --> EM1["Embedding Model<br/>(e.g., BERT)"]
-        EM1 --> VEC["Vector: [0.12, -0.45, 0.78, ..., 0.23]<br/>(768 dims)"]
-        VEC --> VI[("Vector Index<br/>(HNSW, IVF)")]
-    end
-
-    subgraph QUERY TIME
-        QRY["Query: seaside lodging"] --> EM2["Same Embedding Model"]
-        EM2 --> QVEC["Query Vector: [0.15, -0.42, 0.81, ..., 0.19]"]
-        QVEC --> ANN["ANN Search"]
-        ANN --> TOPK["Top K similar docs"]
-    end
-```
-
-### Distance Metrics
-
-```python
-import numpy as np
-
-def cosine_similarity(a, b):
-    """
-    Measures angle between vectors (most common for text)
-    Range: -1 (opposite) to 1 (identical)
-    """
-    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
-
-def euclidean_distance(a, b):
-    """
-    Measures straight-line distance
-    Range: 0 (identical) to infinity
-    """
-    return np.linalg.norm(a - b)
-
-def dot_product(a, b):
-    """
-    Measures alignment (used when vectors are normalized)
-    Higher = more similar
-    """
-    return np.dot(a, b)
-
-# Example
-doc_vector = np.array([0.12, -0.45, 0.78, 0.23])
-query_vector = np.array([0.15, -0.42, 0.81, 0.19])
-
-print(f"Cosine: {cosine_similarity(doc_vector, query_vector):.4f}")  # 0.9987
-print(f"Euclidean: {euclidean_distance(doc_vector, query_vector):.4f}")  # 0.0707
-print(f"Dot Product: {dot_product(doc_vector, query_vector):.4f}")  # 0.8366
-
-# Which to use?
-# - Cosine: Text embeddings (magnitude doesn't matter)
-# - Euclidean: When absolute distances matter
-# - Dot Product: Normalized vectors, recommendation systems
-```
-
----
-
-## Embedding Models
-
-### Text Embeddings
-
-```python
-from sentence_transformers import SentenceTransformer
-
-# Popular models for semantic search
-model = SentenceTransformer('all-MiniLM-L6-v2')  # Fast, 384 dims
-# model = SentenceTransformer('all-mpnet-base-v2')  # Better quality, 768 dims
-
-documents = [
-    "The hotel is near the beach with ocean views",
-    "Budget accommodation by the seaside",
-    "Luxury resort on the coast",
-    "Mountain cabin in the woods"
-]
-
-# Generate embeddings
-embeddings = model.encode(documents)
-print(f"Shape: {embeddings.shape}")  # (4, 384)
-
-# Search
-query = "affordable place to stay near water"
-query_embedding = model.encode(query)
-
-# Find most similar
-from sklearn.metrics.pairwise import cosine_similarity
-similarities = cosine_similarity([query_embedding], embeddings)[0]
-
-for doc, score in sorted(zip(documents, similarities), key=lambda x: -x[1]):
-    print(f"{score:.4f}: {doc}")
-
-# Output:
-# 0.7823: Budget accommodation by the seaside
-# 0.7156: The hotel is near the beach with ocean views
-# 0.6892: Luxury resort on the coast
-# 0.2341: Mountain cabin in the woods
-```
-
-### OpenAI Embeddings
-
-```python
-from openai import OpenAI
-
-client = OpenAI()
-
-def get_embedding(text, model="text-embedding-3-small"):
-    """
-    OpenAI embedding models:
-    - text-embedding-3-small: 1536 dims, cheaper
-    - text-embedding-3-large: 3072 dims, better quality
-    - text-embedding-ada-002: Legacy, 1536 dims
-    """
-    response = client.embeddings.create(
-        input=text,
-        model=model
-    )
-    return response.data[0].embedding
-
-# Batch embedding
-def get_embeddings_batch(texts, model="text-embedding-3-small"):
-    response = client.embeddings.create(
-        input=texts,
-        model=model
-    )
-    return [item.embedding for item in response.data]
-
-# Cost consideration
-# text-embedding-3-small: $0.00002 / 1K tokens
-# 1M documents × 500 tokens avg = 500M tokens = $10
-```
-
-### Multi-Modal Embeddings
-
-```python
-# CLIP: Images and text in same embedding space
-from transformers import CLIPProcessor, CLIPModel
-from PIL import Image
-
-model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
-processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
-
-# Embed image
-image = Image.open("beach_hotel.jpg")
-inputs = processor(images=image, return_tensors="pt")
-image_embedding = model.get_image_features(**inputs)
-
-# Embed text
-inputs = processor(text="hotel near the beach", return_tensors="pt")
-text_embedding = model.get_text_features(**inputs)
-
-# Now can search images with text queries!
-similarity = cosine_similarity(
-    image_embedding.detach().numpy(),
-    text_embedding.detach().numpy()
-)[0][0]
-```
-
----
-
-## Approximate Nearest Neighbor (ANN) Algorithms
-
-### Why Approximate?
-
-```
-Exact K-NN:
-  For each query, compare to ALL vectors
-  Time: O(n × d) where n = vectors, d = dimensions
-  
-  1 billion vectors × 768 dimensions = 768 billion operations
-  At 10B ops/sec = 77 seconds per query
-  
-  UNACCEPTABLE for real-time search
-
-Approximate K-NN:
-  Trade accuracy for speed
-  Time: O(log n) or O(√n) depending on algorithm
-  
-  Typically 95-99% recall at 1000x speedup
-```
-
-### HNSW (Hierarchical Navigable Small World)
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    HNSW Structure                                │
-│                                                                 │
-│   Layer 2 (sparse):     A ─────────────────── B                 │
-│                         │                     │                 │
-│                         │                     │                 │
-│   Layer 1 (medium):     A ───── C ───── D ─── B                 │
-│                         │       │       │     │                 │
-│                         │       │       │     │                 │
-│   Layer 0 (dense):      A ─ E ─ C ─ F ─ D ─ G ─ B ─ H           │
-│                                                                 │
-│   Search process:                                               │
-│   1. Start at top layer, find closest node                      │
-│   2. Drop to next layer, search neighbors                       │
-│   3. Repeat until layer 0                                       │
-│   4. Local search in dense graph                                │
-│                                                                 │
-│   Complexity: O(log n) average case                             │
-└─────────────────────────────────────────────────────────────────┘
-
-Key parameters:
-  M: Number of connections per node (typically 16-64)
-  ef_construction: Search depth during build (higher = better index, slower build)
-  ef_search: Search depth during query (higher = better recall, slower query)
-```
-
-### IVF (Inverted File Index)
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    IVF Structure                                 │
-│                                                                 │
-│   Step 1: Cluster vectors into buckets (using k-means)          │
-│                                                                 │
-│   ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐           │
-│   │Cluster 0│  │Cluster 1│  │Cluster 2│  │Cluster 3│  ...      │
-│   │ • • •   │  │  • •    │  │ • • • • │  │   • •   │           │
-│   │  • •    │  │ • • •   │  │  • •    │  │  • • •  │           │
-│   └─────────┘  └─────────┘  └─────────┘  └─────────┘           │
-│                                                                 │
-│   Step 2: At query time                                         │
-│   1. Find nearest cluster centroids (nprobe clusters)           │
-│   2. Only search vectors in those clusters                      │
-│   3. Return top K from searched subset                          │
-│                                                                 │
-│   Parameters:                                                   │
-│   nlist: Number of clusters (typically √n to 4√n)              │
-│   nprobe: Clusters to search (higher = better recall)          │
-│                                                                 │
-│   Example: 1M vectors, nlist=1000, nprobe=10                   │
-│   Search only 10K vectors instead of 1M = 100x speedup         │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### Algorithm Comparison
-
-```
-┌────────────────┬────────────────┬────────────────┬────────────────┐
-│ Algorithm      │ Build Time     │ Query Time     │ Memory         │
-├────────────────┼────────────────┼────────────────┼────────────────┤
-│ Flat (exact)   │ O(n)           │ O(n × d)       │ O(n × d)       │
-│ IVF            │ O(n × k)       │ O(nprobe × n/k)│ O(n × d)       │
-│ HNSW           │ O(n × log n)   │ O(log n)       │ O(n × M × d)   │
-│ PQ             │ O(n × d)       │ O(n × d/m)     │ O(n × m)       │
-│ IVF-PQ         │ O(n × k + d)   │ O(nprobe × n/k)│ O(n × m)       │
-└────────────────┴────────────────┴────────────────┴────────────────┘
-
-Recommendations:
-• < 100K vectors: Flat or HNSW
-• 100K - 10M vectors: HNSW (if memory allows) or IVF
-• > 10M vectors: IVF-PQ or HNSW with PQ compression
-• Memory constrained: PQ variants
-• High recall required: HNSW with high ef_search
-```
-
----
-
-## Product Quantization (PQ)
-
-### Compressing Vectors
-
-```
-Original vector (768 floats × 4 bytes = 3KB):
-[0.12, -0.45, 0.78, 0.23, 0.56, -0.34, ..., 0.91]  (768 dimensions)
-
-Product Quantization:
-1. Split into subvectors (e.g., 96 subvectors of 8 dims each)
-2. For each subspace, cluster into 256 centroids (1 byte ID)
-3. Store centroid IDs instead of actual values
-
-Compressed vector (96 bytes):
-[23, 156, 89, 201, 45, 178, ..., 67]  (96 subvector IDs)
-
-Compression: 3KB → 96 bytes = 32x reduction
-
-┌─────────────────────────────────────────────────────────────────┐
-│                    PQ Compression                                │
-│                                                                 │
-│   Original:  [──8 dims──][──8 dims──][──8 dims──]...(×96)       │
-│                    │           │           │                    │
-│                    ▼           ▼           ▼                    │
-│              ┌─────────┐ ┌─────────┐ ┌─────────┐                │
-│              │256 codes│ │256 codes│ │256 codes│ (codebooks)    │
-│              └────┬────┘ └────┬────┘ └────┬────┘                │
-│                   │           │           │                     │
-│   Compressed:   [23]       [156]        [89]     ...(×96)       │
-│                                                                 │
-│   Distance calculation uses lookup tables                       │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### Implementation
-
-```python
-import faiss
-import numpy as np
-
-# Sample data
-d = 768  # dimensions
-n = 1000000  # vectors
-vectors = np.random.random((n, d)).astype('float32')
-
-# IVF-PQ index
-nlist = 1000  # clusters
-m = 96  # subquantizers
-nbits = 8  # bits per subquantizer (256 codes)
-
-quantizer = faiss.IndexFlatL2(d)
-index = faiss.IndexIVFPQ(quantizer, d, nlist, m, nbits)
-
-# Train and add
-index.train(vectors)
-index.add(vectors)
-
-# Search
-index.nprobe = 10  # search 10 clusters
-query = np.random.random((1, d)).astype('float32')
-distances, indices = index.search(query, k=10)
-
-# Memory comparison
-flat_memory = n * d * 4 / 1e9  # ~3 GB
-pq_memory = n * m / 1e9  # ~0.1 GB
-print(f"Flat: {flat_memory:.1f} GB, PQ: {pq_memory:.1f} GB")
-```
-
----
-
-## Vector Databases
-
-### Architecture Overview
-
-```mermaid
-graph TD
-    API["API Layer<br/>REST/gRPC endpoints<br/>Query parsing, validation<br/>Authentication, rate limiting"]
-    API --> QE["Query Engine<br/>Vector similarity search (ANN)<br/>Metadata filtering<br/>Hybrid search (vector + keyword)<br/>Re-ranking"]
-    QE --> IL["Index Layer<br/>HNSW / IVF / PQ indexes<br/>Sharding and replication<br/>Index updates, compaction"]
-    IL --> SL[("Storage Layer<br/>Vector data (raw or compressed)<br/>Metadata storage<br/>WAL for durability")]
-```
-
-### Pinecone Example
-
-```python
-from pinecone import Pinecone
-
-# Initialize
-pc = Pinecone(api_key="your-api-key")
-index = pc.Index("semantic-search")
-
-# Upsert vectors with metadata
-index.upsert(vectors=[
-    {
-        "id": "doc1",
-        "values": [0.12, -0.45, 0.78, ...],  # 1536 dims
-        "metadata": {
-            "title": "Beach Hotel Guide",
-            "category": "travel",
-            "price_range": "budget",
-            "rating": 4.5
-        }
-    },
-    # ... more vectors
-])
-
-# Query with metadata filter
-results = index.query(
-    vector=[0.15, -0.42, 0.81, ...],
-    top_k=10,
-    filter={
-        "category": {"$eq": "travel"},
-        "price_range": {"$in": ["budget", "mid-range"]},
-        "rating": {"$gte": 4.0}
-    },
-    include_metadata=True
-)
-```
-
-### Weaviate Example
-
-```python
-import weaviate
-
-client = weaviate.Client("http://localhost:8080")
-
-# Create schema with vectorizer
-client.schema.create_class({
-    "class": "Document",
-    "vectorizer": "text2vec-openai",  # Auto-embed on insert
-    "moduleConfig": {
-        "text2vec-openai": {
-            "model": "text-embedding-3-small"
-        }
-    },
-    "properties": [
-        {"name": "content", "dataType": ["text"]},
-        {"name": "category", "dataType": ["string"]},
-        {"name": "rating", "dataType": ["number"]}
-    ]
-})
-
-# Insert (auto-embedded)
-client.data_object.create({
-    "content": "Beautiful beach hotel with ocean views",
-    "category": "travel",
-    "rating": 4.5
-}, "Document")
-
-# Hybrid search (vector + keyword)
-result = client.query.get("Document", ["content", "category"]) \
-    .with_hybrid(query="seaside accommodation", alpha=0.5) \
-    .with_where({
-        "path": ["rating"],
-        "operator": "GreaterThan",
-        "valueNumber": 4.0
-    }) \
-    .with_limit(10) \
-    .do()
-```
-
-### Comparison
-
-```
-┌──────────────┬────────────────┬────────────────┬────────────────┐
-│ Feature      │ Pinecone       │ Weaviate       │ Milvus         │
-├──────────────┼────────────────┼────────────────┼────────────────┤
-│ Deployment   │ Managed only   │ Self/Managed   │ Self/Managed   │
-│ Hybrid Search│ Basic filter   │ Native BM25+   │ Native         │
-│ Auto-embed   │ No             │ Yes            │ No             │
-│ Scale        │ Billions       │ Millions       │ Billions       │
-│ Index Types  │ Proprietary    │ HNSW           │ IVF,HNSW,DiskANN│
-│ Open Source  │ No             │ Yes            │ Yes            │
-└──────────────┴────────────────┴────────────────┴────────────────┘
-```
-
----
-
-## Hybrid Search
-
-### Why Hybrid?
-
-```
-Pure Vector Search weaknesses:
-- Misses exact keyword matches (product IDs, names)
-- May not respect user's explicit terms
-- Newer/rare terms not well embedded
-
-Pure Keyword Search weaknesses:
-- No semantic understanding
-- Requires exact term overlap
-- Word order matters too much
-
-Hybrid combines the best of both:
-- Keyword precision + Semantic recall
-- Explicit matches boosted
-- Graceful degradation
-```
-
-### Reciprocal Rank Fusion (RRF)
-
-```python
-def reciprocal_rank_fusion(results_lists, k=60):
-    """
-    Combine multiple result lists using RRF
-    
-    RRF score = Σ 1 / (k + rank_i)
-    
-    k is a constant (typically 60) to prevent high-ranked
-    documents from dominating
-    """
-    scores = {}
-    
-    for results in results_lists:
-        for rank, doc_id in enumerate(results, 1):
-            if doc_id not in scores:
-                scores[doc_id] = 0
-            scores[doc_id] += 1 / (k + rank)
-    
-    # Sort by combined score
-    return sorted(scores.keys(), key=lambda x: scores[x], reverse=True)
-
-# Example
-bm25_results = ["doc1", "doc3", "doc5", "doc2", "doc4"]
-vector_results = ["doc2", "doc1", "doc4", "doc6", "doc3"]
-
-# RRF scores:
-# doc1: 1/(60+1) + 1/(60+2) = 0.0164 + 0.0161 = 0.0325
-# doc2: 1/(60+4) + 1/(60+1) = 0.0156 + 0.0164 = 0.0320
-# doc3: 1/(60+2) + 1/(60+5) = 0.0161 + 0.0154 = 0.0315
-
-hybrid_results = reciprocal_rank_fusion([bm25_results, vector_results])
-# ["doc1", "doc2", "doc3", "doc4", "doc5", "doc6"]
-```
-
-### Linear Combination
-
-```python
-def hybrid_search(query, bm25_index, vector_index, alpha=0.5):
-    """
-    Combine BM25 and vector scores with linear interpolation
-    
-    final_score = alpha * vector_score + (1 - alpha) * bm25_score
-    
-    alpha = 1.0: Pure vector search
-    alpha = 0.0: Pure BM25
-    alpha = 0.5: Equal weight
-    """
-    # Get BM25 scores (normalized 0-1)
-    bm25_results = bm25_index.search(query)
-    bm25_scores = normalize_scores(bm25_results)
-    
-    # Get vector scores (cosine similarity already 0-1)
-    query_vector = embed(query)
-    vector_results = vector_index.search(query_vector)
-    vector_scores = {doc_id: score for doc_id, score in vector_results}
-    
-    # Combine
-    combined = {}
-    all_docs = set(bm25_scores.keys()) | set(vector_scores.keys())
-    
-    for doc_id in all_docs:
-        bm25 = bm25_scores.get(doc_id, 0)
-        vector = vector_scores.get(doc_id, 0)
-        combined[doc_id] = alpha * vector + (1 - alpha) * bm25
-    
-    return sorted(combined.items(), key=lambda x: -x[1])
-
-# Tuning alpha:
-# - High-intent queries (product names): lower alpha (more BM25)
-# - Exploratory queries: higher alpha (more semantic)
-# - A/B test to find optimal alpha
-```
-
-### Elasticsearch with Vectors
-
-```json
-// Dense vector field mapping
-{
-  "mappings": {
-    "properties": {
-      "content": { "type": "text" },
-      "content_vector": {
-        "type": "dense_vector",
-        "dims": 768,
-        "index": true,
-        "similarity": "cosine"
-      }
-    }
-  }
+```text
+VectorSearchRequest {
+  query_vector | query_object
+  embedding_space
+  required_filter
+  top_k
+  candidate_budget
+  deadline
+  snapshot_policy
 }
 
-// Hybrid query with RRF
-{
-  "retriever": {
-    "rrf": {
-      "retrievers": [
-        {
-          "standard": {
-            "query": {
-              "match": {
-                "content": "seaside accommodation"
-              }
-            }
-          }
-        },
-        {
-          "knn": {
-            "field": "content_vector",
-            "query_vector": [0.15, -0.42, 0.81, ...],
-            "k": 10,
-            "num_candidates": 100
-          }
-        }
-      ],
-      "rank_window_size": 100,
-      "rank_constant": 60
-    }
-  }
+VectorSearchResponse {
+  candidates[] { document_id, distance, source_version }
+  embedding_space
+  index_generation
+  filter_snapshot
+  approximation_policy
+  partial
 }
 ```
 
----
+`embedding_space` is a versioned contract containing model artifact digest, preprocessing, output dimension, normalization, and distance function. A vector without that identity is unsafe data: two arrays with the same dimension can belong to incompatible spaces.
 
-## Scaling Vector Search
+Specify separate service objectives for query embedding latency, ANN search latency, end-to-end source-to-vector freshness, deletion visibility, candidate recall against a declared oracle, availability, and rebuild time. ANN recall is a distribution over a workload and parameter set, not a permanent property of the product name.
 
-### Sharding Strategies
+The caller also needs exact semantics for filters and failure. Does `top_k=20` mean 20 authorized matches if they exist, or up to 20 after an approximate search? Is a timed-out shard omitted, retried, or fatal? Does a deleted object disappear immediately from retrieval, or within a freshness bound? These are API decisions.
 
-```mermaid
-graph TD
-    subgraph "Option 1: Random/Hash Sharding"
-        Q1[Query] --> RS0["Shard 0<br/>Doc 0, 3"]
-        Q1 --> RS1["Shard 1<br/>Doc 1, 4"]
-        Q1 --> RS2["Shard 2<br/>Doc 2, 5"]
-    end
+## State and invariants
 
-    subgraph "Option 2: Cluster-based Sharding"
-        Q2[Query] -.-> CS0["Shard 0<br/>Tech Cluster"]
-        Q2 -.-> CS1["Shard 1<br/>Sports Cluster"]
-        Q2 -.-> CS2["Shard 2<br/>Travel Cluster"]
-    end
+A vector collection contains more than vectors:
+
+| State | Purpose |
+|---|---|
+| canonical object and source version | authoritative identity and replay |
+| embedding vector | learned representation tied to an embedding-space version |
+| ANN structure | graph, coarse partitions, compressed codes, or exact matrix |
+| metadata/filter index | tenant, authorization, type, time, and product filters |
+| liveness state | tombstones and superseded source versions |
+| build manifest | training sample, parameters, codebook/model digests, checkpoints |
+| serving manifest | shards, replicas, generation, compatibility policy |
+
+Enforce these invariants:
+
+**Space consistency.** A search compares only vectors whose embedding-space and distance contracts are compatible. Compatibility is explicit, never inferred only from dimension.
+
+**Monotonic object version.** A delayed embedding for source version 31 cannot overwrite version 32. A deletion tombstone participates in the same version ordering.
+
+**Filter-before-disclosure.** Unauthorized or tenant-incompatible candidates never appear in results, counts, debug traces, or shared caches. If post-filtering is used internally, the system must keep searching until it satisfies the contract or reports incompleteness; returning forbidden candidates and trimming them at an outer layer is not acceptable.
+
+**Generation closure.** A serving manifest references an ANN structure, metadata snapshot, vector payloads, and tombstones that describe the same logical generation or a documented consistency window.
+
+**Reproducible build.** The manifest records enough input checkpoints, artifact digests, seeds, and parameters to explain and rebuild an index. Approximate structures may differ physically under concurrency, but their lineage must not be mysterious.
+
+## Data plane and control plane
+
+The **data plane** consumes versioned source objects, batches inference, stores embeddings, updates or rebuilds ANN structures, applies tombstones, executes filtered searches, and returns candidates. Online query embedding is part of this path when callers send raw objects.
+
+The **control plane** registers embedding spaces, approves model artifacts, chooses ANN family and parameters, assigns shards, publishes manifests, coordinates backfills and dual reads, and manages tenant quotas. It should publish immutable versioned snapshots; serving a last-known-good manifest is safer than partially applying a model or codebook update.
+
+The indexing flow is normally asynchronous:
+
+```text
+source commit
+  -> durable change event(object_id, source_version, payload_ref)
+  -> preprocessing and embedding inference
+  -> immutable embedding record(space, object_id, source_version, vector)
+  -> ANN/index mutation or batch build
+  -> metadata and tombstone reconciliation
+  -> atomic serving-generation publication
 ```
 
-```
-Random: Query goes to ALL shards, merge results
-  ✓ Even distribution
-  ✗ Every query hits every shard
+Inference and indexing have independent retry semantics. Record a deterministic work identity such as `(space, object_id, source_version)`. A retry may recompute the vector, but only the greatest valid source version becomes live.
 
-Cluster: Query routed to relevant shards only
-  ✓ Fewer shards per query
-  ✗ Uneven distribution, cross-cluster queries slow
+## Exact search as oracle and fallback
 
-Recommendation: Start with random, optimize later
-```
+For `N` vectors of dimension `D`, exact dense search computes every distance, roughly proportional to `N * D`. It is simple, supports arbitrary post-hoc filters if the filtered set is known, and provides the ground truth used to measure ANN candidate recall. SIMD, accelerators, and batching can make exact search competitive for small collections or large offline batches.
 
-### GPU Acceleration
+Maintain an exact evaluation path over a representative sample even when production uses ANN. Without an oracle, a latency improvement can silently be a recall regression. Exact search can also be the operational fallback for a small tenant, a newly created partition, or a heavily selective filter whose eligible set is tiny.
 
-```python
-import faiss
+Distance choice is part of model training and serving. Cosine similarity on normalized vectors is equivalent in ordering to dot product; Euclidean distance is not interchangeable with either for arbitrary vectors. Normalize consistently and test it. An accidental query-only normalization changes neighborhoods while every request remains syntactically valid.
 
-# CPU index
-cpu_index = faiss.IndexFlatL2(768)
-cpu_index.add(vectors)
+## ANN index families
 
-# Move to GPU
-gpu_resource = faiss.StandardGpuResources()
-gpu_index = faiss.index_cpu_to_gpu(gpu_resource, 0, cpu_index)
+### Navigable proximity graphs
 
-# Search on GPU (10-50x faster for large batches)
-distances, indices = gpu_index.search(queries, k=10)
+HNSW constructs a multilayer graph. Upper sparse layers guide a query toward the relevant region; the dense bottom layer performs a best-first neighborhood exploration. The main controls are graph connectivity, construction search effort, and query exploration effort. Increasing them generally consumes more build time, memory, or query work in exchange for better recall, but the response depends on the corpus.
 
-# Multi-GPU
-gpu_resources = [faiss.StandardGpuResources() for _ in range(4)]
-gpu_index = faiss.index_cpu_to_all_gpus(cpu_index)
+Graph indexes provide strong low-latency single-query performance when the graph and vectors fit the memory hierarchy. Costs include pointer-heavy memory, expensive construction, difficult physical compaction, and deletion/update maintenance. Inserts alter graph topology; a steady stream of tombstones can degrade routing before live-vector percentage looks alarming. Periodic rebuild is part of the lifecycle.
 
-# When to use GPU:
-# - Batch queries (>100 queries at once)
-# - Very large indexes (>10M vectors)
-# - Low latency requirements
-# 
-# CPU is often better for:
-# - Single queries
-# - Memory-constrained environments
-# - HNSW indexes (less GPU benefit)
-```
+### Inverted file indexes
 
-### Caching Strategies
+IVF trains coarse centroids, assigns each vector to one or more cells, then searches the most promising cells. Query work depends on probed cells and their population. Skew matters: a centroid containing a disproportionate share of traffic or vectors becomes a latency hot spot. Training samples must represent the serving distribution, including languages, tenants, and new catalog regions.
 
-```python
-from functools import lru_cache
-import hashlib
+IVF is naturally batch-oriented and works well with compression, but new distributions can outgrow the codebook. Measure residual error and per-cell population over time. “Same number of centroids” does not mean the same quality after a corpus shift.
 
-class VectorSearchCache:
-    def __init__(self, vector_db, cache_size=10000):
-        self.vector_db = vector_db
-        self.query_cache = {}  # query_hash -> results
-        self.embedding_cache = {}  # text -> vector
-    
-    def search(self, query_text, top_k=10, filters=None):
-        # Cache key from query + filters
-        cache_key = self._make_cache_key(query_text, top_k, filters)
-        
-        if cache_key in self.query_cache:
-            return self.query_cache[cache_key]
-        
-        # Get or compute embedding
-        if query_text in self.embedding_cache:
-            query_vector = self.embedding_cache[query_text]
-        else:
-            query_vector = self.embed(query_text)
-            self.embedding_cache[query_text] = query_vector
-        
-        # Search
-        results = self.vector_db.search(
-            vector=query_vector,
-            top_k=top_k,
-            filters=filters
-        )
-        
-        self.query_cache[cache_key] = results
-        return results
-    
-    def _make_cache_key(self, query, top_k, filters):
-        key_str = f"{query}|{top_k}|{sorted(filters.items()) if filters else ''}"
-        return hashlib.md5(key_str.encode()).hexdigest()
+### Product quantization and compressed search
 
-# Cache considerations:
-# - Query distribution is often Zipfian (some queries very popular)
-# - Embedding cache saves expensive API calls
-# - Invalidate on index updates
-# - TTL for freshness requirements
-```
+Product quantization divides a vector into subspaces and represents each with a learned codeword. Search uses compact codes and precomputed distance tables; optional reranking reads full-precision vectors for the best compressed candidates. Compression reduces memory and bandwidth while introducing quantization error.
 
----
+The full contract includes subspace layout, codebooks, training data, distance convention, and whether original vectors remain available. Codebooks are generation-specific. Reusing codes with a different codebook is silent corruption, not a low-quality fallback.
 
-## Evaluation Metrics
+### Storage-aware structures
 
-### Recall@K
+Disk-oriented graph designs keep a compact navigation representation in memory and fetch candidate vector pages from local SSD. They trade memory for I/O and rely on locality, caching, and bounded random reads. This can make a larger corpus feasible, but tail latency now depends on device queues and cache temperature. Recovery traffic and compaction can contend directly with queries.
 
-```python
-def recall_at_k(retrieved, relevant, k):
-    """
-    What fraction of relevant items are in top K results?
-    
-    recall@k = |retrieved@k ∩ relevant| / |relevant|
-    """
-    retrieved_at_k = set(retrieved[:k])
-    relevant_set = set(relevant)
-    
-    return len(retrieved_at_k & relevant_set) / len(relevant_set)
+Choose an ANN family from measured batch size, update rate, filter distribution, vector count and dimension, memory budget, local storage, target recall, and rebuild window. Corpus size alone is not a decision rule.
 
-# Example
-relevant = ["doc1", "doc2", "doc3"]  # Ground truth
-retrieved = ["doc1", "doc4", "doc2", "doc5", "doc3"]  # ANN results
+## Filtered ANN is a query-planning problem
 
-print(f"Recall@1: {recall_at_k(retrieved, relevant, 1)}")  # 0.33
-print(f"Recall@3: {recall_at_k(retrieved, relevant, 3)}")  # 0.67
-print(f"Recall@5: {recall_at_k(retrieved, relevant, 5)}")  # 1.0
+A metadata filter can be applied in several places:
 
-# ANN quality often measured as Recall@K vs exact search
-# 95%+ recall is typically acceptable
-```
+1. **Pre-filter**: enumerate eligible IDs, then exact-search or use a filter-aware ANN structure.
+2. **Traversal filter**: allow graph navigation through all nodes but admit only eligible nodes to results.
+3. **Strict traversal restriction**: traverse only eligible nodes, which can disconnect the graph and destroy recall.
+4. **Post-filter**: retrieve ANN candidates and discard ineligible ones, increasing the candidate budget until enough remain.
+5. **Physical partition**: build separate indexes by tenant, region, category, or time.
 
-### QPS vs Recall Tradeoff
+No one strategy dominates. If 50% of vectors are eligible, post-filtering may be fine. If 0.001% are eligible, it may inspect an enormous candidate set and still return too few. Physical partitioning gives strong isolation and narrow search but creates tiny indexes, skew, and operational overhead. Filter-aware graphs add complexity and can couple index shape to changing metadata.
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│   Recall                                                         │
-│   100% ─┬─────────────────────────────────────●                 │
-│         │                           ●                            │
-│    95% ─┼───────────────●                                        │
-│         │          ●                                             │
-│    90% ─┼─────●                                                  │
-│         │  ●                                                     │
-│    80% ─┼●                                                       │
-│         └─┬─────┬─────┬─────┬─────┬─────┬─────► QPS             │
-│           0   1K    5K   10K   20K   50K  100K                   │
-│                                                                 │
-│   Tuning parameters affect this tradeoff:                       │
-│   • HNSW ef_search: higher = better recall, lower QPS           │
-│   • IVF nprobe: higher = better recall, lower QPS               │
-│                                                                 │
-│   Find the sweet spot for your use case                         │
-└─────────────────────────────────────────────────────────────────┘
-```
+Estimate selectivity before choosing a path. Use filter-index cardinalities, per-partition stats, and learned execution feedback. For sparse eligible sets, exact search over enumerated IDs may beat ANN. The planner should expose whether the returned set is complete under the chosen candidate budget.
 
----
+Authorization is not an ordinary optional filter. A system may traverse forbidden nodes internally if its isolation model allows it, but it must not expose their payloads, IDs, distances, counts, cache entries, or trace attributes. For strict tenant boundaries, physically separate indexes and encryption domains may be simpler to audit.
 
-## Best Practices
+## Sharding and distributed top-k
 
-### Embedding Best Practices
+Hash sharding balances vector counts and broadcasts each unconstrained query. Semantic partitioning routes to a subset of clusters but risks routing error: the true neighbor may live in a cell the router does not probe. Tenant partitioning narrows authorization and blast radius but inherits tenant skew. Time partitioning helps retention and freshness but makes historical queries fan out.
 
-```
-1. Choose the right model
-   □ Domain-specific models for specialized content
-   □ Multilingual models for international content
-   □ Same model for indexing and querying
-   
-2. Preprocessing
-   □ Chunk long documents (512-1024 tokens typical)
-   □ Include context in chunks (overlap or summaries)
-   □ Clean text (remove boilerplate, normalize)
-   
-3. Fine-tuning
-   □ Contrastive fine-tuning on your data
-   □ Use user click data if available
-   □ Evaluate on held-out test set
-```
+Each shard returns local candidates; the coordinator merges distances only when they share an embedding space, distance definition, and score transformation. If some shards run the old space and others the new one, raw distance comparison is invalid. Dual-space migration should query and rank each space separately, then compare through a controlled fusion or shadow evaluation, not mix vectors in one ANN structure.
 
-### Index Tuning
+Distributed ANN compounds approximation:
 
-```
-1. Start simple
-   □ Flat index for < 100K vectors
-   □ HNSW for < 10M vectors
-   □ IVF-PQ for larger scales
+- the router may omit a relevant shard;
+- the shard ANN may omit a neighbor;
+- per-shard candidate truncation may omit a globally top candidate;
+- filtering may discard candidates after the budget is spent;
+- a downstream reranker cannot recover any omitted object.
 
-2. Tune parameters
-   □ HNSW: Start M=16, ef=64, increase as needed
-   □ IVF: nlist = sqrt(n), nprobe = nlist/10
-   □ Benchmark on representative queries
+Measure recall at each boundary. A single end-to-end metric diagnoses little.
 
-3. Monitor and iterate
-   □ Track recall vs exact search
-   □ Monitor p99 latency
-   □ Re-tune as data grows
-```
+## Embedding and index migration
 
-### Production Checklist
+An embedding-model update is a full data migration even when the output dimension stays constant. Use distinct immutable spaces, such as `catalog_title@7` and `catalog_title@8`:
 
-```
-□ Embedding versioning (model changes break similarity)
-□ Index backup and recovery
-□ Graceful degradation (fallback to keyword search)
-□ Query timeout handling
-□ Rate limiting on embedding API calls
-□ Cost monitoring (embeddings + storage + compute)
-□ A/B testing framework for relevance changes
-```
+1. register `v8` with artifact digest, preprocessing, dimension, normalization, distance, and access policy;
+2. embed a frozen evaluation corpus and compare exact-neighbor structure plus downstream quality;
+3. backfill source objects at pinned versions while streaming later changes into both spaces;
+4. build and validate a complete `v8` ANN generation;
+5. shadow production queries, recording candidate overlap, exact recall, latency, filter completeness, and downstream outcome metrics;
+6. canary reads by stable, domain-separated assignment;
+7. switch the serving policy atomically;
+8. retain `v7` for a bounded rollback period, then stop dual indexing and delete it according to retention policy.
 
----
+Do not update vectors in place while serving the old model. A half-migrated space has no coherent geometry. Dual writes from request handlers are also fragile; project both spaces from one durable source stream with independent checkpoints.
+
+Deletion must cover every active and rollback space. Privacy erasure workflows need a registry of derived locations plus proof of completion; retiring `v7` later cannot be the first time its forgotten vector is discovered.
+
+## Capacity and cost model
+
+Use measurements from the actual vector and filter distributions. Consider an illustrative collection:
+
+- 120 million live objects;
+- 768 float32 dimensions;
+- two serving replicas;
+- graph/index overhead measured at 45% of raw vector bytes;
+- 15,000 peak searches/s, broadcast to 12 shards;
+- average measured shard CPU service time 1.1 ms at the selected recall point;
+- 3,000 object updates/s;
+- 25% temporary space reserve for tombstones and rebuild activity.
+
+Raw vectors require `120M * 768 * 4` bytes, about 343 GiB. With measured 45% graph/metadata overhead, one corpus copy is about 497 GiB. With 25% lifecycle reserve, it is about 621 GiB per replica, or 1.21 TiB for two replicas before snapshots and embedding records. If original vectors are stored separately for reranking, include them rather than assuming the ANN footprint already covers both.
+
+Broadcast traffic is `15,000 * 12 = 180,000` shard searches/s. At 1.1 ms mean measured CPU time, demand is 198 CPU-seconds/s. At 50% target utilization, plan about 396 logical cores for this component before query embedding, coordination, filtering, and failure reserve. If a selective-filter path increases exploration by eight times at p99, admission and per-class pools must reflect that distribution.
+
+Embedding throughput must exceed updates plus backfill. If one inference worker sustains a measured 320 objects/s at the chosen batch/shape, steady updates need at least 10 fully utilized workers. At a safer 60% target utilization they need 16. A 120-million-object migration completed in seven days requires an additional average `120M / 604,800`, about 199 objects/s, plus retry and skew margin. The model shows whether migration is compute- or index-build-bound; benchmark both.
+
+## Concrete failure trace: mixed embedding spaces
+
+A team deploys model `v8`, which happens to emit the same 768 dimensions as `v7`. The online query service switches first, while 70% of stored vectors remain `v7`. The ANN API validates only dimension, so it accepts `v8` queries against a geometrically mixed graph. Latency and health checks remain green, but relevant-item recall collapses and differs by shard according to backfill progress.
+
+The containment action is to route queries back to the complete `v7` manifest. Repair builds `v8` as a separate physical generation, rejects cross-space writes at the storage boundary, and activates it only after reconciliation proves source-version coverage. Telemetry must attach embedding space to query, vector record, index generation, cache key, and trace; otherwise the incident looks like an unexplained relevance shift.
+
+## Operations, observability, and repair
+
+Observe each embedding space and filter class separately:
+
+- source-to-embedding and embedding-to-searchable lag;
+- embedding failures, batch utilization, model digest, and input-shape distribution;
+- live vectors, tombstones, stale source versions, and unindexed records;
+- graph degree/connectivity, IVF cell population, codebook residual error, and rebuild age;
+- candidates visited, pages read, filter selectivity, post-filter survival, and incomplete top-k rate;
+- exact-versus-ANN recall on a stable and a fresh evaluation sample;
+- query embedding, queue, ANN, filter, fetch, and coordinator latency;
+- shard fan-out, partial results, retries, cache temperature, and device queue depth;
+- migration coverage and dual-space disagreement.
+
+Repair APIs should be first-class: re-embed one object/version, reconcile a partition, rebuild a shard from a source checkpoint, verify a manifest, drain a corrupt replica, and prove deletion across spaces. Avoid ad hoc mutation of graph internals; rebuild from immutable vector records when possible.
+
+Autoscaling solely on QPS is weak because work varies with exploration parameters, filter selectivity, batch size, and cache state. Scale or admit from queue time, visited-node/page distributions, device and CPU saturation, and freshness backlog. Recovery and rebuild need explicit bandwidth budgets so they do not erase query headroom.
+
+## Security and privacy
+
+Embeddings can retain sensitive attributes and support inference or membership attacks; they are not anonymous merely because humans cannot read them directly. Apply source-equivalent access control, encryption, retention, residency, backup, and deletion policy. Minimize payloads used for embedding and record their provenance.
+
+Authenticate model and codebook publication. Verify artifact digests and restrict which service can write each embedding space. An attacker who can insert many crafted vectors can manipulate neighborhoods or exhaust graph construction. Rate-limit mutations, validate dimensions and finite numeric values, cap object fan-out, and monitor distribution drift and anomalous density.
+
+Cache keys include tenant, embedding-space version, normalized request/input digest, filter policy, and index generation where consistency requires it. A shared cache keyed only by query text is both semantically wrong and a data-isolation risk.
+
+## Verification strategy
+
+- **Contract tests** reject dimension-compatible but space-incompatible vectors and stale source versions.
+- **Oracle tests** compare ANN with exact search on stratified query sets, reporting recall by locale, tenant, filter selectivity, and freshness.
+- **Property tests** verify metric/normalization behavior and deterministic manifest validation.
+- **Filter tests** compare every execution strategy with exact eligible-set search and probe all disclosure channels.
+- **Migration tests** replay concurrent update/delete events during backfill and prove both spaces converge to the same source-version set.
+- **Fault tests** kill builders before publication, corrupt codebooks, delay metadata snapshots, partition shards, and exhaust storage.
+- **Load tests** combine production query batches, rare selective filters, ingestion, rebuild, and cold-cache recovery.
+- **Drift tests** monitor embedding norms, nearest-neighbor distances, cell populations, and downstream judgments across model and corpus versions.
+
+The benchmark artifact must include the dataset/checkpoint, query sample, filter distribution, hardware, concurrency, build and search parameters, and exact oracle definition. A recall/latency point without those details is not portable evidence.
+
+## Decision framework
+
+Use vector retrieval when semantic or multimodal similarity adds measurable candidate coverage that lexical and structured retrieval cannot provide. Do not add it solely because embeddings are available.
+
+Choose the architecture in this order:
+
+1. define embedding-space identity, source versioning, deletion, and authorization semantics;
+2. build exact-search quality and performance baselines;
+3. measure vector count, dimension, update rate, filter selectivity, query batching, and recall needs;
+4. benchmark multiple ANN families on the real distribution and hardware;
+5. model memory, CPU/I/O, fan-out, rebuild time, and dual-space migration reserve;
+6. design filtered execution and incomplete-result semantics;
+7. automate recall, drift, lineage, and source/index reconciliation;
+8. prove a model migration and rollback before relying on continuous updates.
+
+Approximation is safe when its error is measured, scoped, and reversible. Unversioned geometry is not.
 
 ## References
 
-- [Efficient and robust approximate nearest neighbor search using HNSW](https://arxiv.org/abs/1603.09320)
-- [Product Quantization for Nearest Neighbor Search](https://ieeexplore.ieee.org/document/5432202)
-- [Faiss Wiki](https://github.com/facebookresearch/faiss/wiki)
-- [Pinecone Learning Center](https://www.pinecone.io/learn/)
-- [Sentence Transformers Documentation](https://www.sbert.net/)
-- [OpenAI Embeddings Guide](https://platform.openai.com/docs/guides/embeddings)
+- [Yu. A. Malkov and D. A. Yashunin: Efficient and Robust Approximate Nearest Neighbor Search Using Hierarchical Navigable Small World Graphs](https://arxiv.org/abs/1603.09320)
+- [Hervé Jégou, Matthijs Douze, and Cordelia Schmid: Product Quantization for Nearest Neighbor Search](https://doi.org/10.1109/TPAMI.2010.57)
+- [Jeff Johnson, Matthijs Douze, and Hervé Jégou: Billion-scale Similarity Search with GPUs](https://arxiv.org/abs/1702.08734)
+- [Ruiqi Guo et al.: Accelerating Large-Scale Inference with Anisotropic Vector Quantization](https://proceedings.mlr.press/v119/guo20h.html)
+- [Suhas Jayaram Subramanya et al.: DiskANN: Fast Accurate Billion-point Nearest Neighbor Search on a Single Node](https://papers.nips.cc/paper/2019/hash/09853c7fb1d3f8ee67a61b6bf4a7f8e6-Abstract.html)
+- [FAISS Documentation](https://faiss.ai/)
+- [Apache Lucene: Vector Search](https://lucene.apache.org/core/10_1_0/core/org/apache/lucene/search/knn/package-summary.html)
+- [NIST AI Risk Management Framework](https://www.nist.gov/itl/ai-risk-management-framework)

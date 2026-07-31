@@ -2,9 +2,9 @@
 
 ## TL;DR
 
-A multi-agent system is a distributed system whose workers happen to make probabilistic, context-dependent decisions. The hard problems are therefore not agent personas or conversational prompts. They are work decomposition, state ownership, message semantics, concurrency control, failure isolation, admission control, provenance, and determining whether the extra calls buy independent information.
+Treat a multi-agent system as a distributed system with probabilistic, context-dependent workers. Its design hinges on work decomposition, state ownership, message semantics, concurrency control, failure isolation, admission control, provenance, and whether extra calls add independent information.
 
-A robust starting topology inside one trust domain is an orchestrator with read-only workers. The orchestrator owns the goal, dependency graph, budgets, authoritative state, and final commit; workers explore bounded subproblems and return typed evidence. Multiple writers require enforced disjoint write sets or explicit concurrency control. Debate or aggregation buys evidence only when branches add meaningfully different information or failure modes—five correlated samples do not constitute five independent experts.
+A robust starting topology inside one trust domain is an orchestrator with read-only workers. The orchestrator owns the goal, dependency graph, budgets, authoritative state, and final commit; workers explore bounded subproblems and return typed evidence. Multiple writers require enforced disjoint write sets or explicit concurrency control. Debate or aggregation buys evidence only when branches add meaningfully different information or failure modes: five correlated samples do not constitute five independent experts.
 
 Multi-agent execution is justified when the task contains parallel information acquisition or separable deliverables whose value exceeds duplicated context, coordination, synthesis, and tail-latency costs. It is usually the wrong answer for one tightly coupled code change, one coherent document, a latency-sensitive interaction, or any decision without a reliable verifier.
 
@@ -31,7 +31,7 @@ V_{multi} = \Delta Q \cdot V_{outcome}
             - E[L_{failure}],
 $$
 
-where $\Delta Q$ is the measured quality improvement over the best single-agent baseline, $\Delta T$ is useful wall-clock reduction, and $E[L_{failure}]$ includes the expected loss from inconsistent or unauthorized actions. The system is worthwhile only when this quantity is positive on the actual workload distribution—not when an impressive best-case trace exists.
+where $\Delta Q$ is the measured quality improvement over the best single-agent baseline, $\Delta T$ is useful wall-clock reduction, and $E[L_{failure}]$ includes the expected loss from inconsistent or unauthorized actions. The system is worthwhile only when this quantity is positive on the actual workload distribution, not when an impressive best-case trace exists.
 
 ### Workload shape matters
 
@@ -66,7 +66,7 @@ flowchart TD
     C -->|insufficient evidence| O
 ```
 
-This topology centralizes goal interpretation and commit authority. The orchestrator creates a dependency graph, assigns bounded work, and decides whether a worker result satisfies its contract. Workers return claims, evidence references, uncertainty, actions attempted, and unresolved questions—not their entire transcript.
+This topology centralizes goal interpretation and commit authority. The orchestrator creates a dependency graph, assigns bounded work, and decides whether a worker result satisfies its contract. Workers return claims, evidence references, uncertainty, actions attempted, and unresolved questions, not their entire transcript.
 
 The orchestrator is both a bottleneck and a consistency boundary. Scale it by separating deterministic scheduling from model-based planning: code tracks node state, leases, deadlines, and budgets; a model proposes decomposition or replanning at explicit decision points. Requiring the model to rediscover the whole run state on every scheduling decision is expensive and makes replay unstable.
 
@@ -88,7 +88,7 @@ Version schemas, validate at boundaries, and retain source provenance so a later
 
 In a blackboard system, workers observe and contribute to shared structured state. This works for opportunistic search or constraint solving when partial results are independently useful. It fails when the blackboard is treated as a mutable text blob.
 
-Model the board as typed records with immutable revisions. A contribution contains a stable ID, author, base revision, claims, evidence, affected entities, and status. Writes use compare-and-swap or append-only events. A controller selects which pending contribution to evaluate next and prevents every worker from waking on every update—a feedback pattern that otherwise creates quadratic call growth.
+Model the board as typed records with immutable revisions. A contribution contains a stable ID, author, base revision, claims, evidence, affected entities, and status. Writes use compare-and-swap or append-only events. A controller selects which pending contribution to evaluate next and prevents every worker from waking on every update: a feedback pattern that otherwise creates quadratic call growth.
 
 ### Peer-to-peer and federated agents
 
@@ -255,7 +255,7 @@ An agent is not a principal merely because it has a name. Authority derives from
 
 Treat worker messages, retrieved documents, peer-agent cards, and tool output as untrusted data. None may modify system policy, grant capabilities, or alter destination routing through natural-language instructions. Validate schemas, enforce egress and resource allowlists, and isolate execution for untrusted code or files.
 
-Cross-agent privacy requires field-level data classification. A task packet should include only necessary fields; secrets remain in a tool-side vault and are referenced by opaque handles. Logs and traces must redact model inputs, tool arguments, and artifacts according to tenant and retention policy. Immutable provenance does not justify retaining sensitive content indefinitely—retain hashes and deletion tombstones where full payload retention is prohibited.
+Cross-agent privacy requires field-level data classification. A task packet should include only necessary fields; secrets remain in a tool-side vault and are referenced by opaque handles. Logs and traces must redact model inputs, tool arguments, and artifacts according to tenant and retention policy. Immutable provenance does not justify retaining sensitive content indefinitely: retain hashes and deletion tombstones where full payload retention is prohibited.
 
 Approvals bind to the action digest, resource version, principal, and expiry. A reviewer approving “send this draft” does not authorize a worker to change the recipient or regenerate the body afterward. Policy is re-evaluated at commit because privileges and external state may change during a long run.
 
@@ -346,19 +346,19 @@ Then define ownership, logical identities, message delivery, budget propagation,
 - Multi-agent design is distributed-systems design: ownership, consistency, delivery, leases, backpressure, and recovery dominate personas.
 - Parallelize independent reads freely; serialize coupled writes unless write sets and integration contracts are enforceably separate.
 - Delegation is lossy context compression. Exchange typed task and evidence packets with provenance, not raw conversational summaries.
-- A scheduler—not an unconstrained model—admits dynamic tasks and subdivides deadlines, spend, tokens, tools, and concurrency.
+- A scheduler (not an unconstrained model) admits dynamic tasks and subdivides deadlines, spend, tokens, tools, and concurrency.
 - At-least-once messaging, stale attempts, uncertain side effects, and cancellation leakage must be normal states in the design.
 - Consensus helps only when errors or evidence are sufficiently independent; agreement is not ground truth.
 - Evaluate every multi-agent topology against an equal-budget single-agent baseline and keep only complexity with measured marginal value.
 
 ## References
 
-- [How We Built Our Multi-Agent Research System](https://www.anthropic.com/engineering/built-multi-agent-research-system) — orchestrator–worker research architecture and token economics
-- [Don't Build Multi-Agents](https://cognition.ai/blog/dont-build-multi-agents) — the context-sharing and coherence counterargument
-- [AutoGen: Enabling Next-Gen LLM Applications](https://arxiv.org/abs/2308.08155) — multi-agent conversation framework
-- [MetaGPT: Meta Programming for Multi-Agent Collaborative Framework](https://arxiv.org/abs/2308.00352) — role- and artifact-oriented collaboration
-- [Improving Factuality and Reasoning in Language Models through Multiagent Debate](https://arxiv.org/abs/2305.14325) — debate as an inference strategy
-- [Model Context Protocol specification](https://modelcontextprotocol.io/specification/) — agent-to-tool/context interoperability
-- [Agent2Agent Protocol specification](https://a2a-protocol.org/latest/specification/) — inter-agent task and artifact exchange
-- [Designing Data-Intensive Applications](https://dataintensive.net/) — logs, replication, consistency, and distributed coordination foundations
-- [Temporal documentation: durable execution](https://docs.temporal.io/) — replay, activities, retries, signals, and workflow versioning
+- [How We Built Our Multi-Agent Research System](https://www.anthropic.com/engineering/built-multi-agent-research-system): orchestrator–worker research architecture and token economics
+- [Don't Build Multi-Agents](https://cognition.ai/blog/dont-build-multi-agents): the context-sharing and coherence counterargument
+- [AutoGen: Enabling Next-Gen LLM Applications](https://arxiv.org/abs/2308.08155): multi-agent conversation framework
+- [MetaGPT: Meta Programming for Multi-Agent Collaborative Framework](https://arxiv.org/abs/2308.00352): role- and artifact-oriented collaboration
+- [Improving Factuality and Reasoning in Language Models through Multiagent Debate](https://arxiv.org/abs/2305.14325): debate as an inference strategy
+- [Model Context Protocol specification](https://modelcontextprotocol.io/specification/): agent-to-tool/context interoperability
+- [Agent2Agent Protocol specification](https://a2a-protocol.org/latest/specification/): inter-agent task and artifact exchange
+- [Designing Data-Intensive Applications](https://dataintensive.net/): logs, replication, consistency, and distributed coordination foundations
+- [Temporal documentation: durable execution](https://docs.temporal.io/): replay, activities, retries, signals, and workflow versioning

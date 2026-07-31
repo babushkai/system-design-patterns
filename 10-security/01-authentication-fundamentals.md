@@ -1,757 +1,279 @@
-# Authentication Fundamentals
+# Authentication Systems
 
 ## TL;DR
 
-Authentication verifies identity ("who are you?"). The challenge in distributed systems is doing this securely without sharing credentials everywhere, while handling session management at scale.
+Authentication is a distributed state machine, not a password check. A production design must bind an identity to one or more authenticators, issue a revocable session, propagate authentication results without spreading long-lived credentials, survive regional and dependency failures, and make recovery at least as strong as normal sign-in. The central trade-off is between **online authority** (immediate revocation, one more dependency on every request) and **locally verifiable assertions** (lower latency and wider availability, bounded staleness until expiry). Make that staleness bound explicit; do not describe signed tokens as “stateless” and then quietly add deny-lists, refresh-token rows, key registries, and account-status lookups.
 
 ---
 
-## The Problem Authentication Solves
+## The Security Contract
 
-In a monolithic application, authentication is simple:
+Authentication establishes that a claimant currently controls an authenticator bound to an account. It does **not** decide what that account may do; that belongs to [authorization](./07-authorization-patterns.md). It also does not prove a real-world identity unless an identity-proofing process established that binding.
 
+Begin with invariants, not protocols:
+
+1. **Credential isolation.** Raw passwords, private keys, recovery codes, and refresh tokens reach only the component that must verify them. Downstream services receive a bounded assertion, never the original credential.
+2. **Unambiguous binding.** A successful ceremony binds one account, one authenticator, one client context, and one challenge. Challenges are unpredictable, single-use, short-lived, and scoped to the intended operation.
+3. **Replay resistance.** Reusing a captured proof must either fail or have a deliberately bounded value. A password is replayable; a WebAuthn assertion is challenge- and origin-bound; a bearer access token remains replayable until it expires or is revoked.
+4. **Revocation has a deadline.** “The user is disabled now” must translate into a measurable maximum time before every enforcement point rejects the account.
+5. **Recovery cannot bypass assurance.** An account protected by a passkey but recoverable through an unchecked email or support call has the assurance of that recovery path.
+6. **Security transitions are atomic.** Password changes, authenticator removal, global logout, and recovery completion advance a security version so concurrently issued sessions cannot survive on stale state.
+7. **Failures do not silently weaken policy.** A risk engine outage, stale replica, or unavailable audit sink has a named fail-open, fail-closed, or degraded behavior for each operation class.
+
+Passwords, passkeys, sessions, OAuth, and federation are mechanisms for satisfying them.
+
+---
+
+## State and Ownership
+
+The identity authority should own a small, explicit state model. A representative account record contains:
+
+```text
+Account
+  account_id             immutable internal identifier
+  status                 pending | active | recovery_pending | locked | disabled
+  security_version       monotonic epoch for global invalidation
+  authenticators[]       id, type, public metadata, state, enrolled_at
+  recovery_methods[]     method, verified_at, risk class
+  failed_attempt_state   counters or a pointer to abuse-control state
+  policy                 required assurance, allowed recovery paths
+  changed_at             authoritative state-change time
 ```
-1. User sends username + password
-2. Server checks against database
-3. Server creates session, stores in memory
-4. Server returns session cookie
-5. Subsequent requests include cookie
-```
 
-In distributed systems, this breaks down:
+Passwords are represented by a verifier record containing the algorithm, parameters, salt, and derived value. Passkeys store a credential identifier and public key; the private key stays in the authenticator. Refresh tokens should be represented by a one-way digest plus a token-family identifier, generation, expiry, client binding, and status. Never store a bearer refresh token in recoverable plaintext.
+
+The `security_version` is a fencing token for authentication state. Sessions and assertions carry the version observed at issuance. A global logout, credential compromise, account disable, or sensitive recovery increments it. An enforcement point that performs an online check rejects older versions immediately; an offline verifier rejects them only after its assertion expires unless it receives a revocation update.
+
+### The planes
 
 ```mermaid
-graph TD
-    User --> LB[Load Balancer]
-    LB --> S1["Server1<br/>(Session)"]
-    LB --> S2["Server2<br/>(???)"]
-    LB --> S3["Server3<br/>(???)"]
+flowchart LR
+    C[Client] --> E[Authentication Edge]
+    E --> V[Credential Verifier]
+    V --> I[(Identity Authority)]
+    E --> R[Risk and Abuse Control]
+    E --> S[Session and Token Service]
+    S --> SS[(Session / Refresh State)]
+    E --> A[(Append-only Security Audit)]
+    S --> P[Policy Enforcement Points]
+
+    CP[Policy and Key Control Plane] --> E
+    CP --> S
+    CP --> P
 ```
 
-```
-Problem: Session created on Server1, but next
-request goes to Server2 which has no session
-```
+- The **credential plane** enrolls and verifies authenticators. It handles the most sensitive inputs and should have the narrowest interface.
+- The **session plane** exchanges a successful ceremony for an opaque session or bounded assertion, rotates refresh credentials, and enforces revocation.
+- The **policy plane** distributes accepted issuers, key sets, assurance rules, client metadata, and security epochs.
+- The **recovery plane** changes authenticator bindings under stricter workflow and audit rules.
+- The **audit plane** records security decisions without becoming a store for credentials or full bearer tokens.
+
+Separating the planes prevents a generic application service from becoming a password verifier, token issuer, recovery authority, and policy database at once.
 
 ---
 
-## Session Management Strategies
+## Authentication as a Transaction
 
-### Strategy 1: Sticky Sessions
+A login is a transaction with externally visible effects:
 
-Load balancer routes all requests from same user to same server.
+1. Resolve the account without revealing whether the submitted identifier exists.
+2. Load the authoritative account status and credential metadata.
+3. Verify the proof using a bounded worker pool; password hashing is intentionally expensive and therefore an admission-controlled resource.
+4. Evaluate abuse signals and the assurance required for this operation. A valid password may still require a passkey or another factor.
+5. Atomically record the successful ceremony, reset or advance relevant attempt state, and create a session or refresh-token family.
+6. Return the client credential only after its authoritative record exists.
+7. Append a redacted audit event and publish derived security signals asynchronously.
 
-```
-Implementation: Hash(user_id) → server
+If step 5 commits but the response is lost, the client may retry. The retry must not create an unbounded number of live refresh-token families. Use a short-lived ceremony identifier as an idempotency key, or allow multiple sessions deliberately and expose them for user review.
 
-Pros:
-- Simple implementation
-- No shared state needed
-
-Cons:
-- Uneven load distribution
-- Server failure loses all sessions
-- Horizontal scaling is difficult
-```
-
-### Strategy 2: Centralized Session Store
-
-All servers share a session store (Redis, Memcached).
-
-```mermaid
-graph TD
-    Client -->|session_id cookie| Server
-    Server -->|lookup| Redis[("Redis<br/>Cluster")]
-    Redis -->|Session data| Server
-```
-
-```python
-# Session lookup on every request
-def authenticate_request(request):
-    session_id = request.cookies.get('session_id')
-    if not session_id:
-        return None
-    
-    # Hit Redis for every authenticated request
-    session_data = redis.get(f"session:{session_id}")
-    if not session_data:
-        return None
-    
-    return json.loads(session_data)
-```
-
-**Trade-offs:**
-- Pro: Any server can handle any request
-- Con: Redis becomes single point of failure
-- Con: Added latency for every request
-- Con: Redis must scale with request rate, not user count
-
-### Strategy 3: Stateless Tokens (JWT)
-
-Encode session data in the token itself. Server validates without storage lookup.
-
-```mermaid
-graph TD
-    Client -->|"Authorization: Bearer JWT"| Server["Server<br/>Validates signature locally<br/>No external lookup needed"]
-```
-
-**Trade-offs:**
-- Pro: No session storage needed
-- Pro: Scales infinitely
-- Con: Cannot revoke tokens before expiry
-- Con: Token size increases with claims
+Failure counters require equally careful semantics. A read-then-increment sequence against an eventually consistent replica is bypassable under concurrency. Updates must be atomic at the chosen enforcement scope. At the same time, a fixed account lockout lets an attacker deny service to a victim. Production abuse control therefore combines per-account, per-network, per-device, and fleet-wide signals with progressive delay or step-up authentication rather than relying on a single threshold.
 
 ---
 
-## Password Storage
+## Authenticator Lifecycle
 
-### Never Store Plain Passwords
+Authentication security is mostly lifecycle management: enrollment, use, replacement, compromise, recovery, and deletion.
 
-```python
-# WRONG - attacker dumps database, gets all passwords
-password_hash = hashlib.sha256(password).hexdigest()
+### Password verifiers
 
-# WRONG - rainbow table attack
-password_hash = hashlib.sha256(password + "static_salt").hexdigest()
+Use a maintained library to apply a purpose-built password-hashing function, normally Argon2id, scrypt, or bcrypt. Store the algorithm and parameters with every verifier. Calibrate cost against the slowest supported production tier and the capacity reserved for authentication; a universal work factor or millisecond target ages badly as hardware and traffic change.
 
-# CORRECT - unique salt per user, slow hash function
-import bcrypt
-password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=12))
-```
+Password verification consumes a scarce resource. If peak login traffic is $Q$ attempts/s and one verification consumes $t$ CPU-seconds, the unconstrained CPU demand is approximately:
 
-### Why Bcrypt/Argon2?
+$$
+\text{cores} \approx Q \times t
+$$
 
-1. **Salted**: Each hash includes random salt
-2. **Slow**: Configurable work factor
-3. **CPU-intensive**: Resists GPU attacks (Argon2 is also memory-hard)
+That is before retries, bot traffic, or failover. Put verification behind concurrency admission, reserve capacity for legitimate recovery and administrator access, and shed abusive traffic before paying the hash cost. Rehash on a successful login when the stored algorithm or parameters fall behind current policy.
 
-```python
-# Verification
-def verify_password(stored_hash, provided_password):
-    return bcrypt.checkpw(
-        provided_password.encode(),
-        stored_hash.encode()
-    )
-```
+A server-side pepper can reduce the usefulness of a database-only compromise, but it creates a key-management dependency. Version it, keep it in a managed secret or key system, design rotation, and document whether losing it makes every password unverifiable.
 
-### Work Factor Selection
+### Passkeys and WebAuthn
 
-| Work Factor | Time per Hash | Attempts/sec (attacker) |
-|-------------|---------------|-------------------------|
-| 10          | ~100ms        | 10                      |
-| 12          | ~400ms        | 2.5                     |
-| 14          | ~1.6s         | 0.6                     |
+WebAuthn replaces a replayable shared secret with a public-key credential scoped to a relying-party identifier. The server creates a fresh challenge; the authenticator signs the challenge and ceremony data; the server verifies the signature, challenge, origin, relying-party binding, and required user-verification flags.
 
-Choose factor that takes 250-500ms on your hardware.
+The system still has design choices:
+
+- **Synced or device-bound credentials.** Synced passkeys improve recovery and multi-device use; device-bound authenticators offer different provenance and administrative control.
+- **Discoverable credentials.** They enable username-less sign-in but require clear account-selection and privacy behavior.
+- **Attestation.** It is useful only when policy truly depends on authenticator provenance; collecting it without a requirement adds complexity and privacy cost.
+- **Enrollment authorization.** Adding a new authenticator is a privileged security transition. Require a recent high-assurance ceremony and notify existing channels.
+
+Do not make passkey login strong and then leave authenticator removal or account recovery protected by a weaker single factor.
+
+### Additional factors and step-up
+
+TOTP is a shared-secret proof and remains phishable. SMS is also exposed to account takeover in the delivery channel. They can be useful compatibility factors, but phishing-resistant authenticators should protect high-impact operations where practical.
+
+Store TOTP seeds encrypted, rate-limit verification, tolerate only the clock window required by measured drift, and reject replay of an already accepted time step. Store backup codes as one-way verifiers and consume them atomically. “MFA enabled” is not a sufficient model: record which factors were used, when the ceremony occurred, and the resulting assurance so an operation can demand a recent step-up.
 
 ---
 
-## Multi-Factor Authentication (MFA)
+## Session Architecture
 
-### Something You Know + Something You Have
+After authentication, the system needs a credential suitable for repeated requests. Three common designs occupy different points on the revocation/availability trade-off.
 
-```
-Factor 1: Password (knowledge)
-Factor 2: One of:
-  - TOTP code from authenticator app (possession)
-  - SMS code (possession) - weaker, SIM swap attacks
-  - Hardware key like YubiKey (possession)
-  - Biometric (inherence)
-```
+| Design | Request path | Revocation | Main failure boundary |
+|---|---|---|---|
+| Opaque server session | Random identifier; online session lookup | Immediate when the authority is reachable | Session store latency and availability |
+| Short-lived signed access token | Local signature and claim validation | Bounded by token lifetime unless an online epoch/deny check is added | Key/config staleness and bearer replay |
+| Opaque or signed token with introspection | Online authority check, often cached | Near-immediate within cache TTL | Introspection service and cache coherence |
 
-### TOTP Implementation
+### Opaque sessions
 
-```python
-import pyotp
-import time
+Generate at least 128 bits of unpredictable entropy, store only the identifier digest when practical, and send the identifier in a `Secure`, `HttpOnly` cookie with an explicit `SameSite`, domain, path, idle timeout, and absolute lifetime. Regenerate it when authentication state changes. Avoid broad parent-domain cookies unless every subdomain is inside the same trust boundary.
 
-# Setup: Generate secret, show QR code to user
-secret = pyotp.random_base32()  # Store encrypted in DB
-totp = pyotp.TOTP(secret)
-provisioning_uri = totp.provisioning_uri(
-    name="user@example.com",
-    issuer_name="MyApp"
-)
-# Convert provisioning_uri to QR code for user to scan
+The authoritative session record should include account ID, security version, creation and expiry times, last meaningful use, client metadata needed for security decisions, and revocation state. Sliding expiry is a write-amplification decision: updating every request may overwhelm the store. Common alternatives are coarse-grained touch intervals or a short cache backed by a durable absolute-expiry record.
 
-# Verification
-def verify_totp(user_secret, provided_code):
-    totp = pyotp.TOTP(user_secret)
-    # valid_window allows for clock drift
-    return totp.verify(provided_code, valid_window=1)
+### Access and refresh credentials
+
+A signed access token is not truly stateless. Correct operation still depends on issuer metadata, verification keys, audience policy, clock bounds, account state, and often refresh-token state. Keep access tokens narrowly scoped and short enough that their worst-case revocation delay is acceptable.
+
+Refresh-token rotation is a compare-and-swap state transition:
+
+```text
+family F, generation 7, ACTIVE
+  client presents generation 7
+  transaction: mark 7 USED; create generation 8 ACTIVE
+  retry with generation 7 after commit => REUSE DETECTED
+  response: revoke family F and require authentication
 ```
 
-### TOTP Internals
+The service must distinguish a network retry from theft without creating two active descendants. An idempotency record tied to the refresh request can return the already-created generation through a protected response channel; otherwise conservative family revocation is safer.
 
-```
-TOTP = HMAC-SHA1(secret, floor(time / 30))
+Sender-constrained credentials reduce bearer replay but introduce client-key lifecycle and recovery. Audience restriction and least privilege remain necessary even when a token is sender-constrained.
 
-Time:    1704067200  1704067230  1704067260
-Code:    847293      159462      738291
-         ◄─── 30s ──►◄─── 30s ──►
-```
+### Logout semantics
+
+“Logout” is ambiguous. Define separate operations:
+
+- **Local logout:** remove the credential from this client and revoke this session.
+- **Account-wide logout:** increment the account security version and revoke every refresh-token family.
+- **Federated logout:** also coordinate with the identity provider and relying parties; partial completion is expected and must be visible.
+- **Compromise response:** revoke sessions, rotate affected credentials or signing keys, preserve evidence, and force recovery at an appropriate assurance level.
 
 ---
 
-## Passkeys (WebAuthn / FIDO2)
+## Capacity and Multi-Region Design
 
-Passkeys are the modern default for new authentication systems: public-key credentials bound to your origin, unlocked by the device's biometric/PIN, and **phishing-resistant by construction** — there is no shared secret to steal (the server stores only a public key) and the browser will not exercise a credential for the wrong origin, which kills lookalike-domain phishing and credential stuffing in one move.
+Session capacity is driven by active sessions, record size, replication, and headroom, not registered users. For an illustrative workload with two million active sessions, 1.2 KiB per stored record, replication factor two, and a 70% target occupancy:
 
-```mermaid
-sequenceDiagram
-    participant U as User (device + biometric)
-    participant B as Browser
-    participant S as Server
+$$
+\text{memory} \approx \frac{2{,}000{,}000 \times 1.2\ \text{KiB} \times 2}{0.70}
+\approx 6.7\ \text{GiB}
+$$
 
-    Note over U,S: Registration
-    S->>B: challenge + rp.id (your domain) + user info
-    B->>U: create credential? (Face ID / PIN)
-    U->>B: keypair generated in authenticator
-    B->>S: public key + credential ID (+ optional attestation)
-    Note over U,S: Login
-    S->>B: challenge
-    B->>U: user verification (biometric)
-    U->>B: signature over challenge + origin + flags
-    B->>S: assertion — verify signature, origin, counter
-```
+Allocator overhead, indexes, expiration metadata, replicas during failover, and refresh-token records require additional measured headroom. Request load matters independently: 150,000 authenticated requests/s with online validation on 70% of requests creates 105,000 session reads/s before retries or regional failover.
 
-Design decisions that matter in production:
+For multi-region systems, choose authority explicitly:
 
-- **Synced vs device-bound.** Consumer passkeys sync via platform keychains (iCloud Keychain, Google Password Manager) — recovery rides the platform account, which is what makes passwordless viable for consumers. Device-bound keys (security keys, enterprise policies) trade that convenience for stricter provenance; choose per audience, and only request **attestation** when you genuinely need to verify authenticator models (enterprise/regulated) — for consumer flows, skip it.
-- **Discoverable credentials** enable username-less login (the authenticator lists matching accounts); pair with `autocomplete="webauthn"` conditional UI so the browser offers passkeys inline in the username field.
-- **Server-side checks are few but mandatory:** verify the signature against the stored public key, the `origin`/`rpId`, the challenge freshness (single-use, short TTL), the user-verification flag if you require it, and store the signature counter where provided.
-- **Rollout reality:** ship passkeys *alongside* passwords first (register on next successful login; prompt upgrade), instrument adoption, and treat account recovery as the real attack surface — a passkey-protected account that falls back to email-reset is only as strong as the reset flow. Keep [MFA](#multi-factor-authentication-mfa) for the password population during the transition; passkeys subsume the second factor (possession + biometric in one ceremony).
+- **Home-region sessions** keep one writer per account or session family. Remote requests pay a lookup or use a bounded cache, but rotation and revocation have one serialization point.
+- **Region-local sessions** reduce latency but make global logout and compromise response a replicated invalidation problem. Define maximum propagation delay and behavior during partition.
+- **Locally verified access tokens** keep the request path available during authority outages, but disabled accounts remain accepted until expiry unless enforcement points receive a trustworthy revocation stream.
+
+Signing-key distribution is a control plane. Verifiers cache a versioned key set; issuers overlap old and new keys during rotation; removal waits for the maximum token lifetime plus clock and distribution margins. An emergency rotation needs a separately tested fast path. A verifier that cannot refresh keys should continue only within an explicit stale-key window, not forever.
 
 ---
 
-## Brute Force Protection
+## Recovery Is a Privileged Workflow
 
-### Rate Limiting
+Recovery changes the binding between a person and an account, so model it as a durable, observable workflow rather than a special login endpoint.
 
-```python
-from redis import Redis
-import time
+1. Create a recovery case with an opaque identifier and risk classification.
+2. Gather proofs appropriate to the account’s assurance and value.
+3. Apply delay and out-of-band notification when immediate recovery would create unacceptable takeover risk.
+4. Require independent approval for administrator-assisted recovery of sensitive accounts.
+5. Atomically bind the new authenticator, invalidate recovery artifacts, increment `security_version`, and revoke existing sessions according to policy.
+6. Retain a privacy-conscious audit trail and make the change visible to the account owner.
 
-def check_login_rate_limit(username, ip_address):
-    redis = Redis()
-    
-    # Rate limit by username (prevents credential stuffing)
-    user_key = f"login_attempts:user:{username}"
-    user_attempts = redis.incr(user_key)
-    redis.expire(user_key, 900)  # 15 minute window
-    
-    # Rate limit by IP (prevents distributed attacks)
-    ip_key = f"login_attempts:ip:{ip_address}"
-    ip_attempts = redis.incr(ip_key)
-    redis.expire(ip_key, 3600)  # 1 hour window
-    
-    if user_attempts > 5:
-        return False, "Too many attempts for this account"
-    if ip_attempts > 20:
-        return False, "Too many attempts from this IP"
-    
-    return True, None
-```
-
-### Progressive Delays
-
-```python
-def get_delay_after_failures(failure_count):
-    """Exponential backoff with jitter"""
-    if failure_count < 3:
-        return 0
-    
-    base_delay = min(2 ** (failure_count - 2), 300)  # Max 5 minutes
-    jitter = random.uniform(0, base_delay * 0.1)
-    return base_delay + jitter
-```
-
-### Account Lockout
-
-```
-Attempt 1-3: Normal
-Attempt 4-5: CAPTCHA required
-Attempt 6-10: 15-minute soft lock
-Attempt 11+: Account locked, email notification
-```
+Email links and SMS codes are bearer credentials. Store digests, make them single-use, bind them to the intended action, and expire them quickly. Do not let support staff bypass technical controls through an unlogged database edit.
 
 ---
 
-## Credential Stuffing Defense
+## Failure Modes
 
-Attackers use breached password databases to try credentials on other sites.
+| Failure | Unsafe response | Designed response |
+|---|---|---|
+| Session store unavailable | Accept an unknown opaque session | Fail closed for privileged operations; optionally use a deliberately bounded read cache for lower-risk traffic |
+| Identity replica lags after disable | Issue a new session from stale account state | Issue only from the authoritative write region or require a fresh security epoch |
+| Risk service times out | Silently skip required step-up | Use operation-specific policy: fail closed for high-impact actions, conservative degraded rules for ordinary login |
+| Password-hash pool saturates | Queue without bound and exhaust the service | Admission control, per-source shaping, bounded queues, and reserved recovery capacity |
+| Signing-key distribution stalls | Trust unknown keys or cache forever | Reject unknown key IDs; apply a finite stale-key policy for already trusted keys and alert |
+| Refresh response is lost | Create a new descendant on every retry | Idempotent rotation or family-reuse detection with a forced ceremony |
+| Regional partition | Both regions mutate one token family | Single-writer ownership or fenced generations; make reduced functionality explicit |
+| Audit sink is unavailable | Block every login indefinitely or drop all evidence | Durable local buffering with backpressure thresholds and a defined fail policy for sensitive operations |
+| Recovery notification fails | Complete silently | Keep the security change valid if policy allows, but raise a high-priority delivery incident and provide another owner-visible channel |
 
-### Detection Signals
-
-```python
-def calculate_risk_score(request, user):
-    score = 0
-    
-    # New device
-    if not is_known_device(user, request.device_fingerprint):
-        score += 30
-    
-    # Unusual location
-    if not is_usual_location(user, request.ip_address):
-        score += 25
-    
-    # Unusual time
-    if not is_usual_time(user, datetime.now()):
-        score += 15
-    
-    # Failed attempts recently
-    score += min(get_recent_failures(user) * 10, 30)
-    
-    return score
-
-def handle_login(request, user, password_valid):
-    risk_score = calculate_risk_score(request, user)
-    
-    if password_valid:
-        if risk_score > 50:
-            # Require step-up authentication
-            return require_mfa(user)
-        return success()
-    else:
-        if risk_score > 70:
-            # Likely automated attack
-            return temporary_block()
-        return invalid_credentials()
-```
-
-### Have I Been Pwned Integration
-
-```python
-import hashlib
-import requests
-
-def is_password_breached(password):
-    """Check against Have I Been Pwned API (k-anonymity)"""
-    sha1 = hashlib.sha1(password.encode()).hexdigest().upper()
-    prefix, suffix = sha1[:5], sha1[5:]
-    
-    # Send only prefix to API
-    response = requests.get(
-        f"https://api.pwnedpasswords.com/range/{prefix}"
-    )
-    
-    # Check if our suffix is in results
-    for line in response.text.splitlines():
-        hash_suffix, count = line.split(':')
-        if hash_suffix == suffix:
-            return True, int(count)
-    
-    return False, 0
-```
+Test these with fault injection at transaction boundaries: after credential verification but before session commit, after commit but before response, during refresh rotation, during security-version propagation, and while keys rotate. A happy-path login test proves almost none of the distributed properties.
 
 ---
 
-## Session Security
+## Observability Without Credential Leakage
 
-### Secure Cookie Attributes
+Record ceremony ID, account pseudonym, authenticator class, achieved assurance, decision, reason category, policy version, security version, region, dependency latency, and session-family event. Never log passwords, TOTP seeds, full assertions, cookies, authorization codes, or bearer tokens. Hashing a low-entropy token is not sufficient redaction if the token can be guessed.
 
-```python
-response.set_cookie(
-    'session_id',
-    value=session_id,
-    httponly=True,     # Not accessible via JavaScript
-    secure=True,       # Only sent over HTTPS
-    samesite='Lax',    # CSRF protection
-    max_age=86400,     # 24 hours
-    domain='.example.com',
-    path='/'
-)
-```
+Operational signals should separate:
 
-### Session Fixation Prevention
+- user-visible success and latency by ceremony type;
+- invalid proofs from dependency and policy failures;
+- password-hash queue saturation;
+- refresh reuse and global-revocation propagation delay;
+- recovery creation, abandonment, approval, and reversal;
+- key-set age and verifier refresh failures;
+- notification delivery for high-risk security changes.
 
-```python
-def login(user, password):
-    if not verify_password(user, password):
-        return error()
-    
-    # CRITICAL: Generate new session ID after authentication
-    # Prevents attacker from setting session ID before login
-    old_session_id = request.cookies.get('session_id')
-    new_session_id = generate_secure_session_id()
-    
-    if old_session_id:
-        redis.delete(f"session:{old_session_id}")
-    
-    redis.setex(
-        f"session:{new_session_id}",
-        86400,
-        json.dumps({'user_id': user.id})
-    )
-    
-    return response.set_cookie('session_id', new_session_id)
-```
-
-### Session Hijacking Prevention
-
-```python
-def validate_session(request):
-    session = get_session(request)
-    if not session:
-        return None
-    
-    # Validate fingerprint hasn't changed
-    current_fingerprint = generate_fingerprint(request)
-    if session['fingerprint'] != current_fingerprint:
-        # Possible session hijacking
-        invalidate_session(session['id'])
-        log_security_event('session_fingerprint_mismatch', session)
-        return None
-    
-    return session
-
-def generate_fingerprint(request):
-    """Create fingerprint from stable request attributes"""
-    components = [
-        request.headers.get('User-Agent', ''),
-        request.headers.get('Accept-Language', ''),
-        # Don't include IP - changes with mobile/VPN
-    ]
-    return hashlib.sha256('|'.join(components).encode()).hexdigest()[:16]
-```
+Aggregate attack telemetry without turning it into an account-enumeration or cross-tenant privacy leak. Access to authentication traces is itself privileged.
 
 ---
 
-## Authentication Flows
+## Decision Framework
 
-### Standard Login Flow
+Choose an opaque online session when immediate revocation, simple browser semantics, and centralized policy outweigh the extra lookup. Choose short-lived signed access tokens when many independent services or intermittent authority connectivity make local verification valuable and the bounded revocation delay is acceptable. Add introspection or security-epoch checks when the risk requires fresher status; recognize that this moves the design back toward online authority.
 
-```mermaid
-sequenceDiagram
-    participant Client
-    participant Server
-    participant Auth as Auth Svc
-    participant DB
+Prefer passkeys for new interactive authentication when the client ecosystem supports them. Retain password and compatible factors only with an explicit migration and recovery design. Use federation when another identity authority should own the ceremony, but validate issuer, audience, redirect, nonce, and client binding; federation moves the trust boundary rather than removing it.
 
-    Client->>Server: POST /login (user, pass)
-    Server->>Auth: Verify
-    Auth->>DB: Get user
-    DB-->>Auth: User record
-    Auth->>Auth: bcrypt verify
-    Auth-->>Server: Result
-    Server->>Server: Create session
-    Server-->>Client: Set-Cookie
-```
-
-### Token Refresh Flow
-
-```
-Access Token:  Short-lived (15 min)
-Refresh Token: Long-lived (7 days), stored securely
-```
-
-```mermaid
-sequenceDiagram
-    participant Client
-    participant Server
-
-    Client->>Server: Request + expired token
-    Server-->>Client: 401 Unauthorized
-    Client->>Server: POST /refresh + refresh_token
-    Server->>Server: Validate refresh token
-    Server->>Server: Generate new access token
-    Server-->>Client: New access token
-    Client->>Server: Retry original request
-```
+The final architecture should be explainable in four sentences: who owns authenticator state, who can issue a session, how every verifier decides, and how quickly compromise or disable reaches every verifier. If any answer is “eventually” without a bound, the authentication contract is incomplete.
 
 ---
 
-## Single Sign-On (SSO) Overview
-
-### Why SSO?
-
-```
-Without SSO:
-User has credentials for: Email, CRM, HR System, Wiki, etc.
-- Password fatigue → weak passwords
-- Admin nightmare → provision/deprovision everywhere
-
-With SSO:
-User has one identity, accesses all systems
-- One strong password + MFA
-- Central access control
-- Single audit log
-```
-
-### SSO Protocols
-
-| Protocol | Use Case | Token Format |
-|----------|----------|--------------|
-| SAML 2.0 | Enterprise, legacy | XML |
-| OAuth 2.0 | API authorization | JSON (JWT) |
-| OpenID Connect | Modern authentication | JWT |
-| LDAP/Kerberos | Internal/on-prem | Tickets |
-
----
-
-## Trade-offs Summary
-
-| Approach | Scalability | Revocation | Complexity |
-|----------|-------------|------------|------------|
-| Server Sessions | Low (sticky) | Instant | Low |
-| Centralized Store | Medium | Instant | Medium |
-| Stateless Tokens | High | Difficult | Medium |
-| Hybrid (short JWT + refresh) | High | Near-instant | High |
-
----
-
-## Security Checklist
-
-```
-□ Passwords hashed with bcrypt/Argon2 (cost factor ≥ 12)
-□ HTTPS everywhere (HSTS enabled)
-□ Secure cookie attributes (HttpOnly, Secure, SameSite)
-□ Session regeneration on authentication state change
-□ Rate limiting on authentication endpoints
-□ Account lockout after failed attempts
-□ MFA available (ideally required)
-□ Breached password detection
-□ Session timeout and absolute expiry
-□ Audit logging of authentication events
-```
-
----
-
-## Session Management at Scale
-
-The strategies above cover the basics, but production systems face deeper challenges when managing millions of concurrent sessions across distributed infrastructure.
-
-### Stateful Sessions: Server-Side Session Store
-
-In a stateful model, the server holds all session data. The client only carries an opaque session ID (typically in a cookie). This gives the server full control over session lifecycle.
-
-**Redis as session store — key design:**
-
-```
-Key:    session:{session_id}
-Value:  {"user_id": "u_abc", "roles": ["admin"], "ip": "10.0.1.5", "created_at": 1710000000}
-TTL:    1800  (30 minutes — sliding expiration)
-```
-
-On every authenticated request, the server performs `GET session:{session_id}` and resets the TTL if the session is still valid. This sliding window means idle sessions expire, but active sessions stay alive.
-
-**Sticky sessions via load balancer** work by hashing a cookie or IP to pin a user to a specific backend. AWS ALB uses `AWSALB` cookie; NGINX uses `ip_hash` or `hash $cookie_session_id`. The risk: if that backend goes down, the session is lost. Sticky sessions are a crutch — prefer a shared store.
-
-**Distributed session store with Redis Cluster:**
-
-- Partition sessions across Redis Cluster nodes using hash slots
-- Key format `session:{session_id}` naturally distributes across slots
-- Set TTL equal to your session timeout (e.g., 1800s for 30 min)
-- Use `SET ... EX` (atomic set-with-expiry) to avoid orphaned keys
-- Monitor memory usage: 1 million sessions at ~1 KB each ≈ 1 GB
-
-### Stateless Sessions: JWT-Based
-
-In a stateless model, the token itself carries all claims. No server-side storage, no Redis lookup. The server validates the signature and checks `exp` — that's it.
-
-**The revocation problem:** you cannot invalidate a JWT before it expires. If a user logs out or an admin revokes access, the token remains valid until `exp`. Mitigations include short expiry windows and token deny-lists (which reintroduce state).
-
-### Hybrid: Short-Lived JWT + Refresh Token in DB
-
-This is the production-grade pattern most teams converge on:
-
-```
-Access Token (JWT):   15-minute expiry, stateless validation
-Refresh Token:        7-day expiry, stored in database, revocable
-```
-
-- Access token is verified locally (no DB hit on every request)
-- Refresh token is checked against DB only during refresh (infrequent)
-- Revocation: delete the refresh token row — access token dies within 15 min
-- Refresh token rotation: issue a new refresh token on each use, invalidate the old one (detects token theft if the old one is reused)
-
-### Session Fixation Attacks
-
-**Attack flow:** the attacker obtains a valid session ID (e.g., from a URL parameter or by setting a cookie on a subdomain), tricks the victim into authenticating with that session ID, then hijacks the now-authenticated session.
-
-**Prevention:** always regenerate the session ID immediately after successful authentication. Destroy the old session. This is a one-line fix that prevents an entire class of attacks. Most frameworks do this automatically if configured correctly — verify yours does.
-
-**Additional defenses:**
-- Reject session IDs that were not issued by the server
-- Bind sessions to a client fingerprint (User-Agent + Accept-Language)
-- Set `SameSite=Lax` or `Strict` on session cookies to limit cross-origin attacks
-
----
-
-## Password Storage
-
-> This section expands on the hashing fundamentals above with operational guidance for production systems.
-
-### Hash Algorithm Selection
-
-| Algorithm | Type | Memory-Hard | Recommended |
-|-----------|------|-------------|-------------|
-| MD5 | Fast hash | No | **Never** — ~10 billion hashes/sec on GPU |
-| SHA-256 | Fast hash | No | **Never** — designed for speed, not passwords |
-| bcrypt | Adaptive | No | **Yes** — cost factor 12+ (≈400ms) |
-| scrypt | Adaptive | Yes | **Yes** — tunable CPU + memory cost |
-| Argon2id | Adaptive | Yes | **Preferred** — winner of Password Hashing Competition |
-
-**Why not MD5/SHA-256?** They are engineered to be fast. A modern GPU can compute billions of SHA-256 hashes per second. Password hashing must be deliberately slow to make brute force impractical.
-
-### Salt and Pepper
-
-**Salt** — a unique random value generated per user, stored alongside the hash in the database. Prevents rainbow table attacks and ensures identical passwords produce different hashes.
-
-```
-stored = "$argon2id$v=19$m=65536,t=3,p=4$<salt>$<hash>"
-         ──────── algorithm params ──────  salt   hash
-```
-
-**Pepper** — an application-level secret (e.g., from environment variable or HSM), applied before hashing: `hash(pepper + password, salt)`. The pepper is NOT stored in the database. If the DB is compromised but the app server is not, the attacker cannot crack hashes without the pepper.
-
-### Hash Algorithm Migration
-
-When upgrading from bcrypt to Argon2id (or increasing cost factor), you cannot re-hash existing passwords because you don't have them. Strategy:
-
-1. On next successful login, re-hash the plaintext password with the new algorithm
-2. Store the new hash, mark the algorithm version in the user record
-3. For users who never log in again, the old hash remains (still secure, just not optimal)
-
-### Timing Attacks and Constant-Time Comparison
-
-Naive string comparison (`==`) leaks information through timing differences — matching prefixes take longer. An attacker can deduce the hash byte by byte.
-
-**Always use constant-time comparison** for hash verification:
-- Python: `hmac.compare_digest(a, b)`
-- Node.js: `crypto.timingSafeEqual(a, b)`
-- Go: `subtle.ConstantTimeCompare(a, b)`
-
-Established libraries (bcrypt, Argon2) handle this internally, but if you ever compare tokens or hashes manually, use the constant-time variant.
-
----
-
-## Multi-Factor Authentication (MFA)
-
-> This section expands on the MFA fundamentals above with protocol details, factor comparison, and recovery considerations.
-
-### The Three Factor Categories
-
-| Factor | Type | Examples |
-|--------|------|----------|
-| Something you **know** | Knowledge | Password, PIN, security questions |
-| Something you **have** | Possession | Phone (TOTP), hardware key (FIDO2), smart card |
-| Something you **are** | Inherence | Fingerprint, face recognition, iris scan |
-
-True MFA requires factors from at least **two different categories**. Two passwords is not MFA. A password + TOTP code is.
-
-### TOTP Deep Dive (RFC 6238)
-
-TOTP generates a 6-digit code from a shared secret and the current time:
-
-```
-code = HMAC-SHA1(shared_secret, floor(unix_time / 30)) mod 10^6
-```
-
-- **Shared secret**: generated at enrollment, stored encrypted in DB, shown to user as QR code
-- **Time step**: 30 seconds (configurable, but 30s is the standard)
-- **Clock drift tolerance**: accept codes from `T-1`, `T`, `T+1` (±30s window)
-- **Replay prevention**: track the last used time step per user; reject codes from the same or earlier step
-
-**Weakness:** TOTP is phishable. An attacker running a real-time proxy can capture and replay the code before it expires.
-
-### FIDO2 / WebAuthn
-
-FIDO2 (WebAuthn + CTAP2) uses **public key cryptography** — no shared secret between client and server.
-
-```
-Registration:  Browser generates key pair → public key sent to server
-Authentication: Server sends challenge → device signs with private key → server verifies
-```
-
-- **Phishing-resistant**: the signature is bound to the origin (domain), so a phishing site on a different domain cannot replay it
-- **No shared secret**: even if the server is breached, there is nothing to steal
-- **Device-bound**: private key never leaves the authenticator (YubiKey, Touch ID, Windows Hello)
-
-### SMS OTP: The Weakest Factor
-
-SMS-based OTP is vulnerable to:
-- **SIM swap attacks**: attacker social-engineers the carrier to port the victim's number
-- **SS7 interception**: protocol-level interception of SMS messages
-- **Malware**: SMS-stealing malware on the device
-
-Use SMS OTP only as a fallback when no stronger factor is available. NIST SP 800-63B deprecated SMS as a preferred authenticator.
-
-### Backup Codes and Recovery
-
-Backup codes are pre-generated single-use codes (typically 8-10 codes, 8+ characters each) shown to the user at MFA enrollment.
-
-**Storage:** hash each backup code (bcrypt) before storing. When the user submits one, hash and compare. Mark used codes as consumed.
-
-**Recovery flow is the weakest link.** If an attacker can bypass MFA through a recovery flow (e.g., calling support, answering security questions), MFA provides no security. Harden recovery:
-- Require government ID verification for MFA reset
-- Enforce a mandatory waiting period (24-48 hours) with email notification
-- Log and alert on all MFA reset requests
-- Never allow support staff to disable MFA over the phone without identity verification
-
----
-
-## Authentication Anti-Patterns
-
-These are the most common mistakes that undermine authentication security in production systems.
-
-### Rolling Your Own Crypto
-
-Do not implement password hashing, token signing, or session management from scratch. Use established, audited libraries:
-- **Node.js**: passport.js, bcrypt, jose
-- **Python**: Django's auth module, Flask-Login, passlib
-- **Java**: Spring Security, JJWT
-- **Go**: golang.org/x/crypto/bcrypt, gorilla/sessions
-
-Custom implementations almost always have subtle bugs: timing leaks, weak randomness, incorrect padding.
-
-### Storing Sessions in Local Memory
-
-```python
-# Anti-pattern: in-process session store
-sessions = {}  # Lost on restart, not shared across instances
-```
-
-This fails in any multi-instance deployment. Sessions vanish on deploy, and requests routed to a different instance get 401s. Use Redis, Memcached, or a database-backed session store.
-
-### Long-Lived Access Tokens
-
-An access token valid for 30 days means a stolen token gives the attacker 30 days of access. Keep access tokens short-lived (15 minutes or less). Use refresh tokens for session continuity.
-
-### No Rate Limiting on Login Endpoints
-
-Without rate limiting, an attacker can attempt millions of credential combinations. This enables:
-- **Credential stuffing**: trying breached username/password pairs at scale
-- **Brute force**: exhaustively trying passwords for a known username
-
-Rate limit by both username and IP address. See the [Brute Force Protection](#brute-force-protection) section above.
-
-### Trusting Client-Side Validation
-
-Client-side checks (JavaScript form validation, disabled buttons, hidden fields) are trivially bypassed. Every authentication decision must be validated on the server:
-- Password complexity → enforce server-side
-- MFA code verification → always server-side
-- Role/permission checks → never rely on client state
-- Session validity → validate on every request, server-side
-
-### Leaking Information in Error Messages
-
-```
-# Anti-pattern: reveals whether the username exists
-"No account found with email user@example.com"
-"Incorrect password for user@example.com"
-
-# Correct: generic message regardless of failure reason
-"Invalid email or password"
-```
-
-Specific error messages let attackers enumerate valid usernames. Always return the same error for invalid username and invalid password.
+## Key Takeaways
+
+- Authentication is an identity, authenticator, session, and recovery lifecycle with explicit authority and epochs.
+- Local token verification trades online dependency for bounded stale authorization; it does not eliminate state.
+- Refresh rotation, global logout, and authenticator changes are concurrency-sensitive transactions.
+- Password verification and abuse defense need capacity planning and admission control.
+- Recovery and support operations must preserve, or deliberately re-establish, the account’s assurance.
+- Key distribution, revocation propagation, and audit buffering are control-plane problems that require failure tests.
 
 ---
 
 ## References
 
+- [NIST SP 800-63-4: Digital Identity Guidelines](https://pages.nist.gov/800-63-4/)
+- [NIST SP 800-63B-4: Authentication and Authenticator Management](https://pages.nist.gov/800-63-4/sp800-63b.html)
 - [OWASP Authentication Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html)
-- [NIST Digital Identity Guidelines (SP 800-63)](https://pages.nist.gov/800-63-3/)
-- [Have I Been Pwned API](https://haveibeenpwned.com/API/v3)
-- [RFC 6238: TOTP](https://datatracker.ietf.org/doc/html/rfc6238)
+- [W3C Web Authentication Level 3](https://www.w3.org/TR/webauthn-3/)
+- [RFC 9106: Argon2 Memory-Hard Function](https://www.rfc-editor.org/rfc/rfc9106)
+- [RFC 9700: Best Current Practice for OAuth 2.0 Security](https://www.rfc-editor.org/rfc/rfc9700)
+- [RFC 7009: OAuth 2.0 Token Revocation](https://www.rfc-editor.org/rfc/rfc7009)
+- [RFC 7662: OAuth 2.0 Token Introspection](https://www.rfc-editor.org/rfc/rfc7662)

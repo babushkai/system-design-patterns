@@ -1,543 +1,364 @@
 # Horizontal vs Vertical Scaling
 
-## TL;DR
+Scaling is the deliberate change of a system's useful-capacity envelope. “Scale up” and “scale out” describe actuators, not outcomes: a larger machine can remain blocked on a serial lock, and ten more application replicas can overload a database, connection limit, or shared cache. Start with the workload, identify the limiting resource and coordination path, then design a reversible transition that preserves authority while capacity changes.
 
-Vertical scaling (scaling up) adds more power to existing machines—more CPU, RAM, or storage. Horizontal scaling (scaling out) adds more machines to distribute the load. Most modern distributed systems use horizontal scaling for better fault tolerance and cost efficiency, though vertical scaling is simpler and works well for certain workloads.
+A scaling plan must define **scaling dimensions, bottleneck models, and safe manual or planned scale transitions**. [Auto-Scaling](./08-auto-scaling.md) owns metric selection, delayed feedback, hysteresis, stabilization, and controller mechanics. [Database Sharding](./03-database-sharding.md) owns the operational lifecycle for distributing application data, while [Partitioning Strategies](../02-distributed-databases/05-partitioning-strategies.md) owns the underlying key-to-partition primitives.
 
----
+## Primary Evidence and Scope
 
-## The Scaling Problem
+| Primary evidence | What it establishes | Boundary |
+|---|---|---|
+| Amdahl, AFIPS 1967 | For fixed work, the serial fraction bounds speedup from parallel resources | A model, not a capacity forecast without measured fractions |
+| Little, *Operations Research* 1961 | Under stated steady-state assumptions, mean in-system work equals throughput times mean residence time | Means do not describe bursts or tail latency |
+| Gunther, 2008 | A rational scalability model can represent contention and coordination/coherency penalties that eventually reduce throughput | Fit to controlled measurements; coefficients are not architectural constants |
+| Dean and Barroso, *The Tail at Scale* (2013) | Fan-out makes rare component tails common at request level; large services need tail-tolerant techniques | Historical Google examples, not universal latency numbers |
+| Verma et al., Borg paper (EuroSys 2015) | Large-scale scheduling uses admission, resource estimation, priorities, and overcommit rather than equating requested replicas with useful capacity | Historical Borg design |
+| Google SRE book (2016) | Overload, retries, load shifts, and simultaneous change can produce cascading failure | Operational guidance, not a copied threshold policy |
 
-```
-Traffic Growth Over Time:
+## Scaling contract
 
-     Requests/sec
-          │
-     100k │                              ╱
-          │                           ╱
-      50k │                        ╱
-          │                     ╱
-      10k │              ╱─────╱
-          │         ╱───╱
-       1k │    ╱───╱
-          │╱──╱
-          └──────────────────────────────►
-                                        Time
+A scaling proposal is incomplete until it states:
 
-Question: How do we handle 100x traffic growth?
-```
+| Field | Required answer |
+|---|---|
+| **Objective** | Which throughput, latency, queue-age, availability, recovery, or cost target must improve? |
+| **Workload unit** | Request, event, byte, query, model token, connection, tenant, or batch job? |
+| **Cost distribution** | Mean, high percentile, hottest key/tenant, read/write mix, fan-out, and burst envelope? |
+| **Limiting resource** | CPU time, memory capacity/bandwidth, storage IOPS/throughput, network, lock, quota, or dependency? |
+| **Scalable unit** | Thread, process, container, VM, node, replica, partition, cell, region, or algorithm? |
+| **State class** | Durable authority, replicated state, rebuildable projection, cache, local session, or transient in-flight work? |
+| **Transition** | Provision, copy/warm, validate, admit, transfer/fence, drain, retire, and rollback phases? |
+| **Failure target** | Which host, zone, rollout, dependency, or region failure must the new shape survive? |
+| **Economic boundary** | Full cost including headroom, licenses, transfer, storage duplication, and operator effort? |
 
----
+Scaling should improve **goodput** (valid work completed within its contract), not merely requests accepted, threads created, or CPU consumed.
 
-## Vertical Scaling (Scale Up)
+## State, authority, and invariants
 
-```
-Before:                        After:
-┌──────────────────┐          ┌──────────────────┐
-│     Server       │          │     Server       │
-│                  │          │                  │
-│  CPU: 4 cores    │    ───►  │  CPU: 64 cores   │
-│  RAM: 16 GB      │          │  RAM: 512 GB     │
-│  SSD: 500 GB     │          │  SSD: 10 TB NVMe │
-│                  │          │                  │
-└──────────────────┘          └──────────────────┘
-```
+Capacity may be fungible; authority rarely is. A stateless replica still holds connections and in-flight work. A stateful replica may own a lease, log position, partition, or local durable bytes. Separate:
 
-### When Vertical Scaling Works Well
+- **canonical state:** the durable record whose acknowledged updates must survive;
+- **authority metadata:** which instance or partition may accept a write at an epoch;
+- **replicated state:** copies with explicit lag and promotion semantics;
+- **derived state:** indexes and materialized views that can be rebuilt from authority;
+- **warm state:** caches, JIT code, connection pools, and page cache that affect useful capacity;
+- **transient state:** requests, locks, sessions, and work leases that need drain or recovery.
 
-```python
-# Single-threaded workloads benefit from faster CPUs
-class SingleThreadedProcessor:
-    """
-    Vertical scaling helps: Faster CPU = faster processing
-    Examples:
-    - Complex calculations
-    - Sequential data processing
-    - Legacy applications
-    """
-    def process(self, data):
-        result = complex_computation(data)  # CPU-bound
-        return result
+**Reference-design invariants:**
 
-# Memory-intensive workloads
-class InMemoryDatabase:
-    """
-    Vertical scaling helps: More RAM = more data in memory
-    Examples:
-    - Redis with large datasets
-    - In-memory analytics
-    - Caching layers
-    """
-    def __init__(self):
-        self.data = {}  # All data in memory
-    
-    def get(self, key):
-        return self.data.get(key)  # O(1) access
-```
+1. Adding capacity does not create a second unfenced writer for the same authority domain.
+2. Removing capacity stops new admission before terminating owned or in-flight work.
+3. Only ready, warmed, routed, and dependency-connected units count as useful capacity.
+4. Fleet expansion cannot silently multiply a global connection, retry, poll, or rate budget.
+5. The remaining fleet meets admitted demand plus the named failure and rollout margin.
+6. A failed transition has a defined data and routing rollback path, not only an infrastructure rollback.
+7. Metrics remain comparable across old and new shapes; otherwise the transition cannot be judged.
 
-### Vertical Scaling Limits
+## Scaling dimensions
 
-```
-AWS EC2 Instance Sizes (example):
+Horizontal and vertical are two axes in a larger design space.
 
-Instance Type      vCPUs    Memory    Cost/hr
-─────────────────────────────────────────────
-t3.micro              2      1 GB     $0.01
-t3.large              2      8 GB     $0.08
-m5.xlarge             4     16 GB     $0.19
-m5.4xlarge           16     64 GB     $0.77
-m5.24xlarge          96    384 GB     $4.61
-u-24tb1.metal       448   24,576 GB   $218.40  ← Maximum!
+| Dimension | Changes | Gains | New limit or risk |
+|---|---|---|---|
+| **Vertical** | CPU, RAM, memory bandwidth, local storage, NIC, or accelerator per unit | More capacity without distributing authority | Hardware ceiling, restart/migration, larger failure domain, NUMA and contention |
+| **Horizontal replication** | More interchangeable compute/read replicas | Parallel independent work and failure redundancy | Load distribution, shared dependencies, replicated caches/connections |
+| **Horizontal partitioning** | More independent authority domains | Write/storage scale when work names a partition | Routing metadata, skew, cross-partition work, resharding |
+| **Functional decomposition** | Separate workload classes or services | Scale expensive paths independently and isolate overload | Network hops, contracts, distributed transactions, operator surface |
+| **Geographic placement** | More regions/edges | Latency, jurisdiction, and regional resilience | Replication delay, failover authority, data-transfer cost |
+| **Temporal smoothing** | Queue, batch, cache, or precompute | Absorb bursts and improve utilization | Staleness, queue age, storage, delayed failure |
+| **Algorithmic/data-model change** | Less work per operation | Can dominate infrastructure scaling | Product semantics, migration, verification complexity |
 
-                    ┌─────────────────────────────────┐
-                    │  CEILING: Physical limits        │
-                    │  - Max CPU cores per socket      │
-                    │  - Max RAM per motherboard       │
-                    │  - Max I/O bandwidth             │
-                    └─────────────────────────────────┘
+“Stateless” means no durable request authority is local; it does not mean the instance is instantly fungible. Cold caches, connection pools, JIT compilation, model weights, and in-flight work can make a nominally ready replica harmful during its first minutes.
+
+## Bottleneck model before actuator choice
+
+For each request class `j`, measure service demand on resource `r`, `d[j,r]`, and arrival rate `λ[j]`. The mean demand on that resource is:
+
+```text
+D[r] = sum over j of λ[j] × d[j,r]
 ```
 
----
+With `N` equivalent units, per-unit capacity `C[r]`, and planned utilization `u[r]`, a necessary resource bound is:
 
-## Horizontal Scaling (Scale Out)
-
-```mermaid
-graph TD
-    subgraph Before
-        Single["Server<br/>1000 req/s"]
-    end
-
-    subgraph After ["After — 3000 req/s total"]
-        LB[Load Balancer] --> S1["Server 1<br/>1000/s"]
-        LB --> S2["Server 2<br/>1000/s"]
-        LB --> S3["Server 3<br/>1000/s"]
-    end
+```text
+N >= D[r] / (C[r] × u[r])
 ```
 
-### Stateless Services Scale Horizontally
+Compute it for CPU, memory, disk IOPS, disk throughput, network packets and bytes, accelerators, connections, and downstream quotas; the largest bound wins. This is necessary, not sufficient: skew, correlated failure, queues, and serial work reduce effective capacity.
 
-```python
-from flask import Flask, request
-import os
+### Concurrency and queueing
 
-app = Flask(__name__)
+**Documented model, Little 1961.** Under the paper's steady-state assumptions:
 
-# Stateless service - easy to scale horizontally
-@app.route('/api/calculate', methods=['POST'])
-def calculate():
-    data = request.json
-    
-    # No local state - any instance can handle this
-    result = perform_calculation(data)
-    
-    return {"result": result, "server": os.getenv("HOSTNAME")}
-
-# Each instance is identical and interchangeable
-# ┌─────────┐  ┌─────────┐  ┌─────────┐
-# │Instance1│  │Instance2│  │Instance3│
-# │  Code   │  │  Code   │  │  Code   │
-# │  (same) │  │  (same) │  │  (same) │
-# └─────────┘  └─────────┘  └─────────┘
+```text
+mean in-flight work L = throughput λ × mean residence time W
 ```
 
-### Stateful Services Are Harder
+At `20,000 requests/s` and `150 ms` mean end-to-end residence, roughly `3,000` requests are in the system. If a dependency slowdown doubles residence time while arrival rate remains admitted, concurrency doubles even before throughput grows. That consumes memory, threads, sockets, and pool slots; it is why latency is an early capacity signal and an unbounded queue is not capacity.
 
-```python
-# BAD: Stateful service - hard to scale
-class SessionStore:
-    def __init__(self):
-        self.sessions = {}  # Local state!
-    
-    def set_session(self, session_id, data):
-        self.sessions[session_id] = data
-    
-    def get_session(self, session_id):
-        return self.sessions.get(session_id)
+Use [Capacity Planning](../01-foundations/10-capacity-planning.md) for utilization and tail models, and [Backpressure](./07-backpressure.md) for keeping offered work bounded while a transition catches up.
 
-# Problem: User might hit different server each request
-# Request 1 → Server1 (session created here)
-# Request 2 → Server2 (session not found!)
+### Serial work and coordination
 
-# SOLUTION: Externalize state
-import redis
+**Documented model, Amdahl 1967.** For a fixed task with parallel fraction `p`, the model gives idealized speedup on `N` processors:
 
-class ExternalSessionStore:
-    def __init__(self):
-        self.redis = redis.Redis(host='redis-cluster')
-    
-    def set_session(self, session_id, data):
-        self.redis.setex(session_id, 3600, json.dumps(data))
-    
-    def get_session(self, session_id):
-        data = self.redis.get(session_id)
-        return json.loads(data) if data else None
+```text
+S(N) = 1 / ((1 - p) + p/N)
 ```
 
-```mermaid
-graph TD
-    LB[Load Balancer] --> S1["Server 1<br/>Stateless"]
-    LB --> S2["Server 2<br/>Stateless"]
-    LB --> S3["Server 3<br/>Stateless"]
-    S1 --> Redis[("Redis Cluster<br/>Shared State Store")]
-    S2 --> Redis
-    S3 --> Redis
+If 5% is serial, unlimited processors cannot exceed 20× speedup. In services, the serial component may be a lock, one leader, one ordered log, a hot key, schema coordination, or a dependency with fixed quota. Measure it rather than inferring it from low average CPU.
+
+**Documented model, Gunther 2008.** The normalized Universal Scalability Law adds empirical contention and coherency terms:
+
+```text
+C(N) = N / (1 + α(N - 1) + βN(N - 1))
 ```
 
----
+`α` captures contention/serialization and `β` captures pairwise coordination cost in the model. A fitted curve that peaks and falls is evidence that more units increase shared work. It does not identify the mechanism; profiles, lock metrics, traces, and network/storage evidence must do that.
 
-## Database Scaling Strategies
+### Fan-out and tails
 
-### Vertical Scaling (Simpler)
+**Inference from the probability model.** If a request requires all `k` independent branches whose latency CDF is `F(t)`, the optimistic probability that all finish by `t` is `F(t)^k`. With 100 branches each independently within a deadline 99.9% of the time, the request succeeds within it only about `0.999^100 ≈ 90.5%` of the time. Real branches share queues and networks, so independence can be optimistic. Scaling by increasing fan-out may raise throughput while destroying request-tail latency.
 
-```sql
--- Single powerful database server
--- Handles all reads and writes
+## Vertical scaling
 
-CREATE TABLE orders (
-    id BIGINT PRIMARY KEY,
-    user_id INT,
-    amount DECIMAL(10,2),
-    created_at TIMESTAMP
-);
+**Reference design.** Vertical scaling changes capacity within one authority or failure unit. It is often the best first move when:
 
--- Indexes for performance
-CREATE INDEX idx_user_orders ON orders(user_id);
-CREATE INDEX idx_created ON orders(created_at);
+- the software cannot yet partition safely;
+- the working set benefits directly from a larger memory/page cache;
+- a single-threaded or latency-sensitive path benefits from faster cores;
+- local joins and transactions are more valuable than distributed parallelism;
+- the larger shape buys enough runway for a planned architectural migration.
 
--- Upgrade server hardware when needed:
--- More RAM → larger buffer pool
--- Faster SSD → faster I/O
--- More cores → more parallel queries
+Its simplicity is conditional. A 4× larger machine is not a 4× faster system if storage, memory bandwidth, a lock, or downstream quota remains fixed. More cores can expose NUMA distance and synchronization. More RAM lengthens restart, checkpoint, backup, and failover. A larger node also makes one failure remove a larger fraction of fleet capacity.
+
+**Reference design: replica-first vertical transition for durable state:**
+
+1. provision the larger shape as a new replica rather than resize the sole authority in place;
+2. copy from a consistent checkpoint and catch up the change log;
+3. run checksums, query shadows, and performance tests while non-authoritative;
+4. transfer authority through a fenced lease/term change;
+5. retain the old node as rollback capacity until new backups and recovery evidence exist;
+6. drain and retire only after the rollback horizon.
+
+When no replica path exists, the resize is a maintenance event with explicit downtime, backup/restore time, and abort points, not an instantaneous capacity toggle.
+
+## Horizontal scaling
+
+### Independent compute and replicated reads
+
+**Reference design.** Horizontal replication works when an operation can execute on any member without violating authority. The data plane must distribute the actual cost, not only request count; see [Load Balancing](./01-load-balancing.md).
+
+Shared state does not disappear when application servers are replicated. Externalizing sessions moves availability and capacity to the session store. Adding read replicas shifts read load but does not increase one leader's write/commit capacity, and stale reads need an explicit consistency contract. Adding consumers helps only if work can be partitioned and ordering is not global.
+
+Every replica can multiply hidden budgets:
+
+```text
+total possible database connections = replicas × pool size per replica
+total polling rate = replicas × poll rate per replica
+total retry rate = original attempts × attempts allowed by each layer
 ```
 
-### Horizontal Scaling (Read Replicas)
+Define global budgets and allocate shares; do not let instance-local defaults become fleet-wide policy.
 
-```mermaid
-graph TD
-    W[Writes] --> Primary[("Primary<br/>(Writable)")]
-    Primary -->|Replication Stream| R1[("Replica 1<br/>(Read-only)")]
-    Primary -->|Replication Stream| R2[("Replica 2<br/>(Read-only)")]
-    Primary -->|Replication Stream| R3[("Replica 3<br/>(Read-only)")]
-    Reads[Reads] --> R1
-    Reads --> R2
-    Reads --> R3
+### Partitioned authority
+
+Write and storage scale usually require more independent authority domains, not merely more copies. That introduces routing, skew, cross-partition operations, and online movement. Partition addition is one scaling dimension; [Database Sharding](./03-database-sharding.md) covers tenant moves, dual-routing, backfill, cutover, and rollback, while [Partitioning Strategies](../02-distributed-databases/05-partitioning-strategies.md) covers hash, range, and directory primitives.
+
+### Cells and failure containment
+
+One ever-larger homogeneous fleet can make every controller, dependency, and rollout global. [Cell-Based Architecture](./11-cell-based-architecture.md) repeats a bounded stack and assigns tenants to cells, trading spare-capacity overhead and cross-cell complexity for a capped blast radius. Cells are horizontal scale units only when the placement service and global dependencies remain simpler and safer than the cells they coordinate.
+
+## Safe scale transitions
+
+Treat capacity change as a versioned state machine:
+
+~~~mermaid
+stateDiagram-v2
+    [*] --> Planned
+    Planned --> Provisioned
+    Provisioned --> Warmed
+    Warmed --> Admitted
+    Admitted --> Stable: SLO and dependency gates pass
+    Admitted --> RolledBack: gates fail
+    Stable --> Draining: scale in / replacement
+    Draining --> Transferred: work and authority fenced
+    Transferred --> Retired
+    RolledBack --> Retired
+~~~
+
+### Scale-out protocol
+
+1. **Plan:** recalculate every resource and dependency budget at the future fleet size, including rollout overlap.
+2. **Provision:** create instances with the intended binary, configuration, identity, placement, and quotas.
+3. **Warm:** load code/data, establish pools, and validate representative operations without full traffic.
+4. **Admit gradually:** increase routing weight while comparing old and new cohorts by workload class.
+5. **Stabilize:** observe a full demand cycle and the named failure; do not call creation success.
+6. **Rollback:** stop new admission, drain, and remove the cohort without leaving orphan state or multiplied budgets.
+
+### Scale-in protocol
+
+1. prove the remaining fleet has capacity for demand plus failure and rollout headroom;
+2. stop new requests, connections, jobs, and leases to the target;
+3. transfer durable ownership with a new epoch and fence the old owner;
+4. drain or recover in-flight work within a bounded deadline;
+5. verify no directory, queue, replica set, or client still references the target;
+6. retire resources and reclaim credentials, storage, addresses, and reservations.
+
+The transition invariants remain the actuator's safety contract; [Auto-Scaling](./08-auto-scaling.md) adds delayed metrics, stabilization, and controller-conflict handling.
+
+## Capacity and cost example
+
+Consider an API with an illustrative peak of `48,000 requests/s` and measured CPU demand of `3 ms/request` at the production request mix:
+
+```text
+CPU demand = 48,000 × 0.003 = 144 CPU-seconds/second
+useful capacity of one 16-core node at 60% planned CPU = 9.6 CPU-seconds/second
+healthy-fleet minimum = ceil(144 / 9.6) = 15 nodes
+one-node-failure minimum: (N - 1) × 9.6 >= 144, so N = 16
 ```
 
-```python
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-import random
+Now include the dependency. If each request makes `0.55` database queries on average, offered database load is `26,400 queries/s`. If the database's tested safe capacity is `20,000 queries/s`, sixteen or sixty application nodes cannot meet the contract. Reduce queries per request, cache safely, change the data model, or scale the database authority before admitting that peak.
 
-class DatabaseRouter:
-    def __init__(self):
-        self.primary = create_engine('postgresql://primary:5432/db')
-        self.replicas = [
-            create_engine('postgresql://replica1:5432/db'),
-            create_engine('postgresql://replica2:5432/db'),
-            create_engine('postgresql://replica3:5432/db'),
-        ]
-    
-    def get_write_session(self):
-        """All writes go to primary"""
-        Session = sessionmaker(bind=self.primary)
-        return Session()
-    
-    def get_read_session(self):
-        """Reads distributed across replicas"""
-        replica = random.choice(self.replicas)
-        Session = sessionmaker(bind=replica)
-        return Session()
+For state movement, copying `2 TiB` at a foreground-safe effective rate of `80 MiB/s` has a lower bound of about `7.3 hours`:
 
-# Usage
-router = DatabaseRouter()
-
-# Write operation
-with router.get_write_session() as session:
-    order = Order(user_id=123, amount=99.99)
-    session.add(order)
-    session.commit()
-
-# Read operation (can hit any replica)
-with router.get_read_session() as session:
-    orders = session.query(Order).filter_by(user_id=123).all()
+```text
+copy lower bound = 2,097,152 MiB / 80 MiB/s = 26,214 s ≈ 7.3 h
 ```
 
-### Horizontal Scaling (Sharding)
+The real transition also catches writes, verifies checksums, and may be throttled during peaks. Provision duplicate storage and network for that entire interval plus rollback.
 
-```mermaid
-graph TD
-    Router["Shard Router<br/>user_id % 4 = ?"]
-    Router --> S0[("Shard 0<br/>users 0,4,8...")]
-    Router --> S1[("Shard 1<br/>users 1,5,9...")]
-    Router --> S2[("Shard 2<br/>users 2,6,10...")]
-    Router --> S3[("Shard 3<br/>users 3,7,11...")]
+Compare alternatives with a workload-normalized cost model:
+
+```text
+cost per useful request =
+  (compute + storage + transfer + licenses + observability
+   + failure/rollout headroom + migration amortization)
+  / good requests completed within SLO
 ```
 
----
+Vertical price curves, spot availability, and transfer tariffs are volatile. Insert current provider quotes only in a decision record with region, date, commitment, and failure assumptions; do not bake them into an architectural rule.
 
-## Comparison Table
+## Failure traces
 
-| Aspect | Vertical Scaling | Horizontal Scaling |
-|--------|-----------------|-------------------|
-| **Complexity** | Simple | Complex |
-| **Downtime** | Required for upgrade | Zero-downtime possible |
-| **Cost curve** | Exponential | Linear |
-| **Failure impact** | Single point of failure | Fault tolerant |
-| **Maximum capacity** | Hardware limits | Theoretically unlimited |
-| **Data consistency** | Easy (single node) | Complex (distributed) |
-| **Application changes** | Minimal | May require redesign |
-| **Operational overhead** | Low | High |
+### Application scale-out causes a database connection storm
 
----
+1. Forty application replicas each permit 100 database connections: a possible 4,000 connections.
+2. A rollout temporarily doubles replicas before old ones drain.
+3. New processes eagerly fill pools, exceeding the database's connection and memory budget.
+4. Queries slow, request concurrency rises, health checks fail, and the load balancer shifts traffic into a cascade.
 
-## Cost Analysis
+Allocate a global connection budget, start pools lazily, cap rollout overlap, and gate readiness on dependency capacity, not merely process startup.
 
-```
-Vertical Scaling Cost Curve:
+### More workers reduce throughput
 
-Cost ($)
-    │
-    │                                    ╱
-    │                                 ╱──
-    │                              ╱──
-    │                           ╱──
-    │                        ╱──
-    │                    ╱───
-    │               ╱────
-    │         ╱─────
-    │    ╱────
-    │╱───
-    └────────────────────────────────────►
-                                   Capacity
+1. A job fleet doubles workers against one metadata lock or ordered commit path.
+2. Lock wait and invalidation traffic rise faster than useful work.
+3. CPU stays busy, but completion throughput falls and retries add contention.
 
-Cost grows exponentially!
-2x performance ≠ 2x cost (often 3-4x cost)
+Sweep throughput over worker count, fit only as a diagnostic, and profile the serialized path. The remedy may be batching or authority partitioning, not another worker increase.
 
+### Cold replicas steal traffic from warm replicas
 
-Horizontal Scaling Cost Curve:
+1. A scale-out adds nominally ready instances.
+2. Round robin gives them a full share before page cache, JIT, model, or pools are warm.
+3. Their latency triggers retries and passive ejection.
+4. Traffic returns to the old fleet plus retry load, leaving less capacity than before scale-out.
 
-Cost ($)
-    │
-    │                              ╱
-    │                          ╱
-    │                      ╱
-    │                  ╱
-    │              ╱
-    │          ╱
-    │      ╱
-    │  ╱
-    │╱
-    └────────────────────────────────────►
-                                   Capacity
+Separate process health from useful readiness, warm representative state, and ramp weight with rollback gates.
 
-Cost grows linearly (with some overhead)
-2x servers ≈ 2x cost (+ coordination overhead)
-```
+### Scale-in creates two owners
 
-```python
-def calculate_scaling_cost():
-    """Compare costs for 10x capacity increase"""
-    
-    # Vertical: Upgrade from m5.xlarge to m5.24xlarge
-    vertical_before = 0.192 * 24 * 30  # $138/month
-    vertical_after = 4.608 * 24 * 30   # $3,318/month
-    vertical_ratio = vertical_after / vertical_before  # 24x cost!
-    
-    # Horizontal: Add more m5.xlarge instances
-    horizontal_before = 0.192 * 24 * 30        # $138/month (1 instance)
-    horizontal_after = 0.192 * 24 * 30 * 10    # $1,382/month (10 instances)
-    horizontal_overhead = 0.10  # 10% for load balancer, coordination
-    horizontal_total = horizontal_after * (1 + horizontal_overhead)
-    horizontal_ratio = horizontal_total / horizontal_before  # 11x cost
-    
-    return {
-        "vertical_cost_ratio": vertical_ratio,    # 24x
-        "horizontal_cost_ratio": horizontal_ratio  # 11x
-    }
-```
+1. A stateful worker is selected for removal and its partition is copied.
+2. Routing changes, but the old worker's lease remains valid during a network partition.
+3. Old and new workers both acknowledge writes.
 
----
+Authority transfer needs a monotonic term/epoch checked by the storage or commit path. “Removed from discovery” is not a write fence.
 
-## Hybrid Approach
+### Rebalancing consumes the headroom it is meant to create
 
-Most production systems use both strategies:
+1. A storage tier is near its I/O limit, so operators add nodes.
+2. Backfill and replica repair use the same disks and network as foreground work.
+3. Latency rises, retries increase, and catch-up falls further behind.
 
-```mermaid
-graph TD
-    Internet[Internet] --> GLB["Global Load Balancer<br/>(Horizontal — DNS-based)"]
+Reserve and enforce a movement budget, prioritize foreground work, and estimate catch-up under continuous writes before starting. Scaling from zero spare capacity may require temporary vertical or admission relief first.
 
-    GLB --> US_LB
-    GLB --> EU_LB
+## Overload, operations, and migration
 
-    subgraph US ["Region: US"]
-        US_LB[LB] --> US_Web["Web Servers<br/>(Horizontal)"]
-        US_Web --> US_Cache["Cache (Vertical)<br/>256GB RAM"]
-        US_Web --> US_DB[("Database Primary<br/>(Vertical)")]
-    end
+Capacity changes take time. Admission control, [rate limiting](./05-rate-limiting.md), bounded queues, and degraded modes keep the system inside its current envelope while new capacity becomes useful. Retries must use budgets because a failing scale transition is exactly when unbounded extra attempts are most destructive.
 
-    subgraph EU ["Region: EU"]
-        EU_LB[LB] --> EU_Web["Web Servers<br/>(Horizontal)"]
-        EU_Web --> EU_Cache["Cache (Vertical)<br/>256GB RAM"]
-        EU_Web --> EU_DB[("Database Replica")]
-    end
+For a large migration:
 
-    US_DB -->|Replication| EU_DB
-```
+1. establish workload and resource baselines by route/tenant/partition;
+2. benchmark one new unit cold, warm, healthy, and under dependency degradation;
+3. shadow requests or reads to compare correctness and cost without authority;
+4. canary one failure domain and explicitly inject unit loss;
+5. ramp with abort gates on goodput, latency, error, queue, dependency saturation, and cost;
+6. preserve rollback state until the longest state-copy, backup, and client-connection horizon closes;
+7. update capacity models from measured service demand after the migration.
 
-```python
-class HybridScalingStrategy:
-    """
-    Decision framework for when to scale vertically vs horizontally
-    """
-    
-    def recommend_scaling(self, service_type: str, bottleneck: str) -> str:
-        recommendations = {
-            # Stateless services: Scale horizontally
-            ("api", "cpu"): "horizontal",
-            ("api", "memory"): "horizontal",
-            ("worker", "cpu"): "horizontal",
-            
-            # Caches: Often vertical first, then horizontal
-            ("cache", "memory"): "vertical_then_horizontal",
-            ("cache", "cpu"): "horizontal",
-            
-            # Databases: Depends on workload
-            ("database", "reads"): "horizontal_replicas",
-            ("database", "writes"): "vertical_then_shard",
-            ("database", "storage"): "horizontal_sharding",
-            
-            # Message queues: Horizontal by design
-            ("queue", "throughput"): "horizontal_partitions",
-        }
-        
-        return recommendations.get(
-            (service_type, bottleneck),
-            "evaluate_case_by_case"
-        )
-    
-    def scale_decision(self, metrics: dict) -> dict:
-        """Make scaling decision based on current metrics"""
-        
-        if metrics['cpu_usage'] > 80:
-            if metrics['service_type'] == 'stateless':
-                return {
-                    "action": "scale_out",
-                    "add_instances": self._calculate_instances_needed(
-                        metrics['cpu_usage'],
-                        target=60
-                    )
-                }
-            else:
-                return {
-                    "action": "scale_up",
-                    "new_instance_type": self._next_instance_type(
-                        metrics['current_type']
-                    )
-                }
-        
-        if metrics['memory_usage'] > 85:
-            return {
-                "action": "scale_up",
-                "reason": "Memory-bound workloads often benefit from vertical scaling"
-            }
-        
-        return {"action": "no_scaling_needed"}
-```
+Avoid changing instance shape, runtime version, partition function, and traffic policy in one step. If the result changes, those coupled variables make causality and rollback ambiguous.
 
----
+Runbooks need current answers for quota exhaustion, placement failure, image/secret startup failure, cold-capacity rejection, backfill throttling, stuck drains, duplicate authority, dependency saturation, and a scale action that increased cost without goodput.
 
-## Kubernetes Scaling Example
+## Security and governance
 
-```yaml
-# Horizontal Pod Autoscaler (Horizontal Scaling)
-apiVersion: autoscaling/v2
-kind: HorizontalPodAutoscaler
-metadata:
-  name: api-server-hpa
-spec:
-  scaleTargetRef:
-    apiVersion: apps/v1
-    kind: Deployment
-    name: api-server
-  minReplicas: 3
-  maxReplicas: 100
-  metrics:
-  - type: Resource
-    resource:
-      name: cpu
-      target:
-        type: Utilization
-        averageUtilization: 70
-  - type: Resource
-    resource:
-      name: memory
-      target:
-        type: Utilization
-        averageUtilization: 80
-  behavior:
-    scaleDown:
-      stabilizationWindowSeconds: 300
-    scaleUp:
-      stabilizationWindowSeconds: 0
-      policies:
-      - type: Percent
-        value: 100
-        periodSeconds: 15
----
-# Vertical Pod Autoscaler (Vertical Scaling)
-apiVersion: autoscaling.k8s.io/v1
-kind: VerticalPodAutoscaler
-metadata:
-  name: cache-server-vpa
-spec:
-  targetRef:
-    apiVersion: apps/v1
-    kind: Deployment
-    name: cache-server
-  updatePolicy:
-    updateMode: "Auto"
-  resourcePolicy:
-    containerPolicies:
-    - containerName: cache
-      minAllowed:
-        memory: "1Gi"
-        cpu: "500m"
-      maxAllowed:
-        memory: "32Gi"
-        cpu: "8"
-      controlledResources: ["memory"]
-```
+Scaling control can create machines, move data, and multiply spend. Treat it as privileged production authority:
 
----
+- separate permission to propose capacity from permission to transfer data authority;
+- constrain maximum fleet size, region, instance/accelerator class, and cost through reviewed policy;
+- authenticate images, bootstrap configuration, workload identity, and controller updates;
+- revoke credentials and erase local data when units retire;
+- preserve tenant residency and isolation during placement or movement;
+- defend expensive endpoints from cost-amplification and denial-of-wallet attacks;
+- audit who changed limits, desired capacity, movement throttle, and failure headroom.
 
-## Decision Framework
+Horizontal scale also widens the supply-chain and secret-distribution surface. A compromised image deployed to 500 replicas is not safer than one large server.
 
-```mermaid
-graph TD
-    Start([Start]) --> Q1{Is the service<br/>stateless?}
-    Q1 -->|Yes| ScaleH[Scale Horizontally]
-    Q1 -->|No| Q2{Can state be<br/>externalized?}
-    Q2 -->|Yes| Ext[Externalize state,<br/>then scale out]
-    Q2 -->|No| ScaleV[Scale Vertically first]
-    ScaleV --> Q3{Hit hardware<br/>limits?}
-    Q3 -->|Yes| Redesign[Redesign for horizontal]
-    Q3 -->|No| Continue[Continue vertical]
-```
+## Observability and verification
 
----
+Observe offered demand, admitted demand, goodput, and rejected work separately. Then correlate:
 
-## Key Takeaways
+- per-operation CPU time, allocations, disk/network bytes, IOPS, accelerator time, and downstream calls;
+- concurrency, queue depth and age, residence time, and timeout/retry volume;
+- per-unit and per-partition distribution, maximum/median skew, hot tenant/key, and serial lock/leader utilization;
+- desired, provisioned, initialized, ready, routed, and actually busy capacity;
+- cache/page temperature, pool establishment, replication/backfill lag, and drain progress;
+- cost per good request/job/byte and unused failure/rollout headroom;
+- configuration/authority epoch and stale participants.
 
-1. **Start simple with vertical scaling**: For new systems, vertical scaling is simpler and often sufficient initially
+Verification should include:
 
-2. **Plan for horizontal scaling**: Design stateless services from the start to enable easy horizontal scaling later
+- capacity sweeps across unit count and unit size, long enough to expose garbage collection, throttling, compaction, and leaks;
+- production-shaped and adversarial skew, not only uniform requests;
+- cold start, one-unit and one-zone loss, dependency slowdown, and quota denial;
+- scale-out, aborted scale-out, scale-in, authority-transfer crash at every phase, and rollback;
+- multiplied-budget checks for connections, retries, polling, leases, and rate limits;
+- correctness comparison across old and new shapes, including tail and degraded responses.
 
-3. **Externalize state**: Move session data, caches, and shared state to external stores (Redis, databases) to enable horizontal scaling
+## Decision framework
 
-4. **Use both strategies**: Production systems typically use vertical scaling for databases/caches and horizontal scaling for application servers
+1. Which user outcome must improve, and is throughput currently limited by capacity or by correctness/admission policy?
+2. What resource or serial path saturates first at the production workload distribution?
+3. Will a larger unit relieve that resource, or merely enlarge a different idle resource?
+4. Can work execute independently across units, and what state or coordination prevents it?
+5. Does horizontal replication improve writes, reads, compute, or only availability?
+6. What fleet-wide budget multiplies when one more replica starts?
+7. How much warm-up, data movement, and catch-up time precedes useful capacity?
+8. What epoch fences old authority during scale-in or repartitioning?
+9. Does the target shape survive a unit/zone failure and a rollout simultaneously?
+10. Is an algorithmic, caching, batching, queueing, or workload-isolation change cheaper than more infrastructure?
+11. What evidence triggers rollback, and how long must duplicate capacity/state be retained?
+12. Which metrics prove lower cost per good result rather than higher resource consumption?
 
-5. **Consider operational complexity**: Horizontal scaling adds complexity—load balancing, service discovery, distributed coordination
+## Primary references
 
-6. **Monitor cost curves**: Vertical scaling costs grow exponentially; switch to horizontal when the math stops working
-
-7. **Fault tolerance**: Horizontal scaling provides natural redundancy; vertical scaling creates single points of failure
+- [Amdahl, *Validity of the Single Processor Approach to Achieving Large Scale Computing Capabilities* (AFIPS 1967)](https://dl.acm.org/doi/10.1145/1465482.1465560)
+- [Little, *A Proof for the Queuing Formula: L = λW* (Operations Research, 1961)](https://pubsonline.informs.org/doi/10.1287/opre.9.3.383)
+- [Gunther, *A General Theory of Computational Scalability Based on Rational Functions* (2008)](https://arxiv.org/abs/0808.1431)
+- [Dean and Barroso, *The Tail at Scale* (Communications of the ACM, 2013)](https://research.google/pubs/the-tail-at-scale/)
+- [Verma et al., *Large-scale cluster management at Google with Borg* (EuroSys 2015)](https://research.google/pubs/large-scale-cluster-management-at-google-with-borg/)
+- [Google SRE, *Handling Overload* (2016)](https://sre.google/sre-book/handling-overload/)
+- [Google SRE, *Addressing Cascading Failures* (2016)](https://sre.google/sre-book/addressing-cascading-failures/)
+- [Kubernetes, *Horizontal Pod Autoscaling*](https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/)
+- [Kubernetes Autoscaler, *Vertical Pod Autoscaler*](https://github.com/kubernetes/autoscaler/tree/master/vertical-pod-autoscaler)

@@ -1,170 +1,415 @@
 # Capacity Planning and Back-of-the-Envelope Estimation
 
-## TL;DR
+Capacity planning turns a workload contract into a resource, failure-headroom, and lead-time plan. The useful result is not one server count. It is a versioned model that explains which resource binds, which assumptions dominate, what happens during a named failure or rollout, when a hard limit will be reached, and which measurements will recalibrate the plan.
 
-Estimation is the step that comes before every pattern in this book: a few memorized constants (the latency ladder, per-node throughput classes, seconds-per-day), powers-of-ten arithmetic with stated assumptions, and two pieces of queueing math — **Little's law** (`concurrency = throughput × latency`) and the **utilization curve** (latency explodes as you approach saturation, which is *why* the practical ceiling is ~70–80% and why headroom is a feature, not waste). With those, you can size a design in five minutes, kill a bad one in two, and explain mathematically why retry storms, full connection pools, and autoscaling-at-90% all end the same way. Capacity *planning* is the same math run as a process: forecast from leading indicators, hold an explicit headroom policy, and load-test with an open-loop generator past saturation — because closed-loop tests and coordinated omission hide exactly the collapse you're testing for.
+A defensible capacity plan combines **technical demand estimation, resource service-demand models, queueing/headroom reasoning, workload forecasts, failure capacity, benchmark calibration, and exhaustion lead time**. [Auto-Scaling](../06-scaling/08-auto-scaling.md) owns delayed feedback, metrics, controller stability, and safe scale-down. [FinOps and Cost Engineering](../11-observability/06-finops-cost-engineering.md) owns prices, allocation, commitments, showback, and unit economics. [Horizontal vs Vertical Scaling](../06-scaling/02-horizontal-vertical.md) owns capacity-change actuators and transition protocols.
 
----
+## Primary Evidence and Scope
 
-## The Numbers You Memorize
-
-Order-of-magnitude constants, 2026 edition. Precision is not the point — knowing that two designs differ by 100× is.
-
-### The latency ladder
-
-| Operation | Time | Mnemonic |
+| Primary evidence | What it establishes | Boundary |
 |---|---|---|
-| L1 cache reference | ~1 ns | |
-| Main memory reference | ~100 ns | RAM is 100× L1 |
-| Compress 1KB (snappy-class) | ~2 µs | |
-| NVMe SSD random read | ~20–100 µs | SSD is ~1000× RAM |
-| Read 1MB sequentially from memory | ~10–50 µs | |
-| Read 1MB sequentially from NVMe | ~200 µs–1 ms | |
-| Round trip within a datacenter / AZ | ~0.5 ms | the RPC floor |
-| Round trip cross-AZ | ~1–2 ms | |
-| HDD seek | ~2–10 ms | disks are mechanical |
-| Round trip US coast-to-coast | ~60–70 ms | |
-| Round trip US ↔ Europe / US ↔ Asia | ~80–150+ ms | physics; see [Multi-Region](../06-scaling/09-multi-region-architecture.md) |
+| Little, *Operations Research* 1961 | Under stated stationarity/finite-mean conditions, average in-system work is arrival rate times average residence time | An average identity, not a percentile or burst model |
+| Kingman, 1961 | A single-server heavy-traffic approximation relates wait to utilization and arrival/service variability | Approximation with explicit queue assumptions |
+| Schroeder, Wierman, Harchol-Balter, NSDI 2006 | Open and closed workload models can produce radically different response-time results | Study/model results, not a claim that every test is wrong |
+| Dean and Barroso, 2013 | Large fan-out amplifies component latency tails into user-visible request tails | Historical large-service evidence |
+| Google SRE Workbook, NALSD (2018) | Concrete resource arithmetic, assumptions, reliability constraints, and iterative design are part of large-system planning | One published engineering method, not a provider sizing table |
 
-Three conclusions fall straight out of the table: memory beats disk by 10³ (the reason [caching](../04-caching/01-cache-strategies.md) works), one cross-region call costs more than a hundred intra-DC calls (the reason chatty cross-region protocols die), and any request that fans out to N sequential RPCs has a latency floor of N × 0.5ms before anyone does any work (the reason for parallel fan-out and [hedging](../06-scaling/10-retries-timeouts-hedging.md)).
+Static “latency numbers every programmer should know” and generic QPS-per-node tables age quickly and omit workload shape. Use order-of-magnitude arithmetic to find dominant terms, then replace assumptions with measurements from the real software, data, protocol, and failure mode.
 
-### Throughput classes per node
+## Capacity contract
 
-| Component (one well-tuned node) | Order of magnitude |
+Before calculating, define:
+
+| Field | Required answer |
 |---|---|
-| Postgres/MySQL, simple indexed queries | ~5–50K QPS |
-| Redis / in-memory KV | ~100K–1M ops/s |
-| Kafka, per broker | ~100s of MB/s |
-| Stateless API service (JSON, light work) | ~1–10K RPS per core-ish node |
-| NIC | 10–100 Gbps (1.25–12.5 GB/s) |
-| Single TCP+TLS handshake | 1–3 RTTs before byte one |
+| **Useful work** | Successful request, committed event, decoded media minute, token, query, byte, or completed job? |
+| **Demand** | Offered, admitted, retried, rejected, and completed rates, with burst and seasonality? |
+| **Cost distribution** | Mean, percentiles, heavy operations, hottest key/tenant, and payload sizes? |
+| **SLO** | Latency, freshness, loss, recovery, and availability target at which capacity is useful? |
+| **Topology** | Host, zone, region, cell, shard, and shared-dependency constraints? |
+| **Failure/rollout** | Which concurrent unit losses and deployment overlap must be tolerated? |
+| **Growth horizon** | Forecast interval, uncertainty, procurement/quota/migration lead time? |
+| **Degradation** | Which work may queue, shed, approximate, serve stale, or never be dropped? |
+| **Model owner** | Who updates unit costs, forecast inputs, limits, and decisions? |
 
-### Calendar arithmetic
+Separate these rates:
 
-- **1 day ≈ 86,400 s ≈ 10⁵ s** (the single most-used constant)
-- 1 month ≈ 2.6M s; 1 year ≈ 31.5M s ≈ π × 10⁷ s
-- 1M requests/day ≈ **12 RPS average**; 1B/day ≈ 12K RPS
-- Daily-traffic rule: if X million DAU each do Y actions, average RPS ≈ `X × Y × 10` (because 10⁶/10⁵ = 10)
-
----
-
-## The Method
-
-1. **Clarify what you're sizing** — reads or writes, average or peak, steady-state or burst. Most estimation arguments are two people sizing different things.
-2. **Decompose** into the four meters: request rate, storage, bandwidth, memory (cache).
-3. **Round brutally** to powers of ten; keep one significant figure. Track units explicitly — the classic error is a silent KB/MB or bits/bytes slip (network is bits; storage is bytes; factor of 8 has sunk many designs).
-4. **State assumptions out loud** ("assume 1 post per DAU per day, 10 reads per post, 200KB median image"). The assumptions are the review surface; the arithmetic is mechanical.
-5. **Sanity-check from a second direction** — if the answer implies 400 Postgres shards or 0.3 servers, one of your assumptions is the story.
-
-### Worked example: photo-sharing service
-
-> 100M DAU; each posts 0.5 photos/day and views 50; photo median 200KB + 20KB of thumbnails; metadata 1KB/photo; 5-year retention.
-
-```
-Writes:   100M × 0.5 / 10⁵ s        ≈ 500 uploads/s avg   → ×3 peak ≈ 1,500/s
-Reads:    100M × 50  / 10⁵ s        ≈ 50K views/s avg     → ×3 peak ≈ 150K/s
-          read:write ≈ 100:1 → design is read-path-dominated (cache + CDN problem)
-
-Storage:  50M photos/day × 220KB    ≈ 11 TB/day  ≈ 4 PB/year  ≈ 20 PB over 5y
-          → object storage + lifecycle tiers, not a database ([Object Storage](../03-storage-engines/08-object-storage.md))
-Metadata: 50M/day × 1KB ≈ 50 GB/day ≈ 18 TB/year → sharded DB territory in year one
-
-Bandwidth (egress, peak): 150K views/s × 200KB ≈ 30 GB/s ≈ 240 Gbps
-          → CDN is not optional; origin sees only misses ([CDN](../06-scaling/04-cdn-architecture.md))
-
-Cache:    80/20 rule — 20% of today's content serves 80% of reads.
-          Hot set ≈ 20% × (last ~7 days × 11TB) ≈ 15 TB → a small cluster of
-          memory-heavy cache nodes, not "cache everything"
+```text
+offered demand >= admitted demand >= attempted work >= good completed work
 ```
 
-Ten lines, and the architecture's spine is decided: CDN-fronted object storage, a sharded metadata store, a ~15TB cache tier, and a write path that one decent queue absorbs. That's what estimation is *for* — the patterns in the rest of this book are the implementation details of conclusions you reach here.
+Retries can make attempted work exceed admitted logical operations, while errors make goodput smaller. Planning from request attempts alone can reward retry amplification with more machines; planning from goodput alone can hide the offered load that admission must reject.
 
----
+## Model state, control path, and serving path
 
-## Little's Law: The One Formula
+**Reference design:** store a capacity model as reviewed, machine-readable state:
 
-> **L = λ × W** — items in the system = arrival rate × time each spends.
-
-Rearranged, it sizes almost everything concurrent:
-
-- **Server concurrency:** 5,000 RPS × 0.2s latency = **1,000 in-flight requests**. With 200 per node, that's 5 nodes *at zero headroom* — see below for why you provision 8.
-- **Connection pools:** a service doing 2,000 QPS against a DB at 5ms/query holds 2,000 × 0.005 = **10 busy connections**; a pool of 20 covers bursts, a pool of 500 is a misconfiguration that will melt the database during an incident ([connection management](../06-scaling/13-dns-and-connection-management.md)).
-- **Queue depth / consumer sizing:** to drain 10K msg/s at 50ms each you need ≥ 500 concurrent consumers; the backlog when you fall behind grows at (arrival − service) rate, and Little's law converts any backlog into user-visible delay: 1M queued ÷ 10K/s = 100s of lag ([Backpressure](../06-scaling/07-backpressure.md)).
-- It also runs in reverse as a **diagnostic**: if concurrency ballooned but throughput didn't, latency grew — something downstream is slow, and your thread pool is the symptom.
-
-## The Utilization Curve: Why Headroom Exists
-
-For a service with random arrivals, waiting time scales like:
-
-```
-W ≈ S / (1 − ρ)        S = service time, ρ = utilization
-
-ρ:      50%   70%   80%   90%   95%   99%
-W/S:     2×  3.3×    5×   10×   20×  100×
+```text
+model revision and owner
+workload classes and useful-work definitions
+demand history, forecast scenarios, and confidence interval
+per-class resource service-demand distributions
+usable unit capacity and benchmark provenance
+topology, quota, and placement constraints
+failure and rollout scenarios
+headroom policy by resource
+storage retention/replication/index/compaction factors
+lead times and irreversible limits
+observed-vs-predicted error
 ```
 
-Latency versus utilization is a **hockey stick**: the difference between 70% and 90% utilization is not "20% more efficient," it's **3× worse latency**, and variance (real traffic is burstier than the math's best case; heavy-tailed service times make it worse) moves the cliff left. Everything follows:
+The **serving data path** admits and completes work with current capacity. The **capacity control path** collects workload/resource evidence, forecasts, reserves or provisions units, validates readiness, and updates limits. A control-plane forecast failure must not unbound the serving path; admission and backpressure protect the current envelope.
 
-- **The 70–80% ceiling** isn't folklore — it's the knee of the curve. Run hotter and p99 detonates before average CPU looks scary.
-- **Autoscaling must trigger well below the knee** (and scaling takes minutes — during which the curve is doing the 90→99% segment to you).
-- **Retry storms have a formula now:** retries add λ exactly when ρ→1, which divides (1−ρ) toward zero — the [metastable failure](../06-scaling/10-retries-timeouts-hedging.md) mechanism in one fraction.
-- **Headroom is a product feature**: failover capacity ([static stability](../06-scaling/09-multi-region-architecture.md) — a 2-region pair must run ≤50% each), deploy surges, and the gap between "incident" and "blip" all live in (1−ρ).
-- Utilization math is also why **one big queue beats per-node queues** (pooled capacity absorbs variance) and why isolating noisy tenants ([cells, shuffle sharding](../06-scaling/11-cell-based-architecture.md)) is about protecting *everyone else's* ρ.
+~~~mermaid
+flowchart LR
+    B[Business and product drivers] --> F[Demand scenarios]
+    T[Production telemetry] --> U[Measured unit costs]
+    L[Load/failure tests] --> U
+    F --> M[Versioned capacity model]
+    U --> M
+    Q[Quotas, topology, lead time] --> M
+    M --> P[Procure / provision / migrate]
+    P --> V[Warm and validate usable capacity]
+    V --> S[Serving fleet]
+    S --> T
+~~~
 
-### Peak factors
+## Unit discipline and first-pass arithmetic
 
-Provision for peak, pay for average ([FinOps](../11-observability/06-finops-cost-engineering.md)):
+Track dimensions on every quantity. Network rates are commonly bits/s; payload and storage are bytes. Decimal provider units and binary memory/storage units differ. Compression changes bytes but consumes CPU. Replication and index amplification apply at different stages.
 
-| Pattern | Peak ÷ average |
+Useful calendar conversions:
+
+```text
+one day = 86,400 seconds
+average rate = events per interval / interval seconds
+daily bytes = events/s × bytes/event × 86,400
+```
+
+Average is a conservation check, not a peak plan. Preserve at least hourly/minute peaks and burst windows. If 864 million operations/day all arrive in one busy hour, the peak is 240,000/s, not the daily average of 10,000/s.
+
+For each workload class $j$ and resource $r$, let $\lambda_j$ be admitted rate and $d_{j,r}$ measured resource demand per completed operation:
+
+$$
+D_r = \sum_j \lambda_j d_{j,r}
+$$
+
+For $N$ equivalent units, tested resource capacity $C_r$, and planned usable fraction $u_r$:
+
+$$
+N_r \ge \left\lceil \frac{D_r}{C_r u_r} \right\rceil
+$$
+
+Compute CPU time, memory capacity and bandwidth, storage IOPS and throughput, network packets and bytes, accelerator time/memory, open connections, file descriptors, and every downstream quota. The largest topology-feasible result binds. `u[r]` is not a universal percentage; derive it from the measured latency/recovery knee and the required failure margin.
+
+## Concurrency, queues, and variability
+
+### Little's Law
+
+**Documented model, Little 1961:** under its steady-state assumptions,
+
+$$
+L = \lambda W
+$$
+
+If a service completes 12,000 requests/s and mean end-to-end residence time is 250 ms, it contains about 3,000 requests on average. That concurrency consumes request memory, sockets, thread/async state, and downstream pool slots.
+
+Little's Law does not predict latency from utilization and does not describe p99. It can still diagnose coupling: if throughput is flat while in-flight work doubles, residence time doubled somewhere in the boundary.
+
+For a stable queue with arrival rate $\lambda$ and completion rate $\mu>\lambda$, backlog $B$ has an optimistic drain time:
+
+$$
+T_{\mathrm{drain}} \ge \frac{B}{\mu-\lambda}
+$$
+
+Using `B/μ` ignores continuing arrivals. If `λ >= μ`, no finite drain time exists; add useful capacity, reduce admitted work, or change service demand.
+
+### Utilization is nonlinear
+
+For one illustrative M/M/1 queue with mean service time $S$ and utilization $\rho=\lambda S$:
+
+$$
+W = \frac{S}{1-\rho}
+$$
+
+This curve demonstrates the asymptote near saturation; it is not a universal server formula. Real systems have parallel servers, scheduling, batching, finite queues, bursty arrivals, and heavy-tailed work.
+
+Kingman's G/G/1 heavy-traffic approximation makes variability visible:
+
+$$
+W_q \approx \frac{c_a^2+c_s^2}{2}\,\frac{\rho}{1-\rho}\,S
+$$
+
+`ca` and `cs` are coefficients of variation for interarrival and service times. Two systems with equal mean demand and utilization can have very different waits when one receives bursts or highly variable jobs. Measure distributions and isolate expensive classes rather than selecting a target utilization from folklore.
+
+### Fan-out consumes a probability budget
+
+If a request requires all `k` branches and each independently meets a deadline with probability `p`, the optimistic request probability is `p^k`. At `p = 99.9%` and `k = 100`, it is about `90.5%`. Shared racks, networks, and queues make independence optimistic.
+
+Capacity plans include fan-out width, duplicated/hedged requests, cancellation effectiveness, intermediate bytes, and the slowest required branch. [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md) owns attempt budgets and tail mitigation.
+
+## Demand models: distribution, not one multiplier
+
+Build scenarios from drivers such as active tenants, devices, orders, content bytes, model tokens, or scheduled jobs:
+
+```text
+demand = driver count × actions per driver × peak-shape factor × retry/fanout amplification
+```
+
+Keep low/base/high scenarios and the assumptions that distinguish them. Segment by route, tenant cohort, geography, payload class, and day/event type. Report:
+
+- average and chosen peak-window rates;
+- peak duration and ramp slope;
+- hottest tenant/key and correlated groups;
+- launch/event scenarios not present in history;
+- confidence interval and forecast error;
+- demand that will be shed or queued by policy.
+
+A global percentile can hide a deterministic regional opening hour or one customer larger than an entire average cell. Use traces and product calendars alongside statistical forecasting.
+
+**Reference design:** compare forecast to actual at every horizon. Track signed model error `(actual - forecast) / forecast` and recalibrate unit costs separately from business-driver forecast. Otherwise a code regression and user growth are indistinguishable.
+
+## Failure, rollout, and topology headroom
+
+Capacity must fit the surviving topology, not only the healthy total. If each ready unit provides planned useful capacity $c$, peak admitted demand is $D$, the named scenario removes $f$ units, and a rollout removes $r$ more:
+
+$$
+(N-f-r)c \ge D
+$$
+
+This formula assumes demand and units are fungible. Zone affinity, tenant placement, shards, caches, and dependency quotas can make aggregate spare capacity unusable. Validate per failure domain and the hottest placement group.
+
+Examples of explicit scenarios:
+
+- one host and one rollout batch unavailable;
+- one zone lost while another zone is receiving a canary;
+- one cell drained into named destinations;
+- one shard replica rebuilding while compaction runs;
+- one region evacuated only for traffic classes the data plane can safely serve.
+
+[Multi-Region Architecture](../06-scaling/09-multi-region-architecture.md) owns cross-region authority/failover. Here the plan records the resulting surviving-capacity constraint.
+
+## Storage and data-movement model
+
+Size storage in stages:
+
+```text
+logical retained bytes
+× compression/encryption expansion
++ indexes and derived structures
++ metadata, tombstones, and transaction log
+× replica count
++ backup/snapshot overlap
++ compaction/rebuild/migration temporary space
+all divided by planned maximum occupancy
+```
+
+Capacity is invalid if bytes fit but foreground plus compaction, repair, backup, and migration exceed IOPS or throughput. Model read/write amplification and the busiest disk/range, not cluster averages.
+
+For $D$ bytes moved with effective source read $R_s$, network $R_n$, destination write $R_d$, and foreground-safe duty factor $q$:
+
+$$
+T_{\mathrm{copy}} \ge \frac{D}{q\,\min(R_s,R_n,R_d)}
+$$
+
+Catch-up, checksums, indexes, replicas, and continuous writes extend the time. Recovery-point and recovery-time targets therefore consume steady spare bandwidth and temporary storage.
+
+## Network and connection model
+
+For each edge in the request/dataflow graph:
+
+```text
+bytes/s = operations/s × messages/operation × wire bytes/message
+packets/s ≈ bytes/s / measured mean wire packet size
+```
+
+Include protocol headers, TLS, acknowledgements, replication, retries, compression ratio, and cross-zone/region copies. Packets/s can bind before bits/s for small messages.
+
+New-connection rate and mean connection lifetime produce mean active connections through Little's Law. Then size file descriptors, socket memory, TLS handshakes, NAT/conntrack, and load-balancer tables through failure/reconnect bursts. [DNS and Connection Management](../06-scaling/13-dns-and-connection-management.md) owns those lifecycle mechanics.
+
+## Worked example with labeled assumptions
+
+Consider an illustrative regional event-ingestion service.
+
+**Assumptions:**
+
+- peak admitted rate: `75,000 events/s` for four hours;
+- mean payload: `1.4 KiB` after protocol framing;
+- validation CPU demand: `0.35 ms/event` measured at the production mix;
+- 16-core workers, planned at 55% CPU because the measured latency/recovery gate fails above it;
+- tolerate one worker loss plus one worker unavailable for rollout;
+- 30-day retention; data compression factor `0.60`;
+- indexes/metadata add 35% of compressed data;
+- three storage replicas and 25% free-space/repair reserve.
+
+### Compute
+
+```text
+CPU demand = 75,000 × 0.00035 = 26.25 CPU-seconds/second
+useful CPU/worker = 16 × 0.55 = 8.8 CPU-seconds/second
+(N - 2) × 8.8 >= 26.25  =>  N >= 5 workers
+```
+
+This is only the CPU bound. Five workers are insufficient if one hot tenant pins more than 8.8 CPU-seconds/s to one partition or a downstream quota binds first.
+
+### Ingest network
+
+```text
+payload rate = 75,000 × 1.4 KiB = 102.5 MiB/s ≈ 0.86 Gbit/s
+```
+
+Add replication traffic, acknowledgements, encryption overhead, retries, and failover routing before selecting network capacity.
+
+### Storage
+
+```text
+logical/day ≈ 102.5 MiB/s × 86,400 = 8.45 TiB/day
+30-day logical = 253.5 TiB
+compressed + indexes = 253.5 × 0.60 × 1.35 = 205.3 TiB
+three replicas = 615.9 TiB
+with 25% free reserve = 615.9 / 0.75 = 821.2 TiB provisioned
+```
+
+This estimate deliberately exposes the dominant storage term. A real design would decide whether the entire 30-day set needs three hot replicas, whether colder tiers change the model, and whether indexes share the same retention.
+
+### Queue recovery
+
+If a 20-minute dependency outage admits events into a durable queue:
+
+```text
+backlog = 75,000 × 1,200 = 90 million events
+```
+
+At post-recovery completion capacity `105,000/s` while `75,000/s` continues to arrive:
+
+```text
+drain time >= 90,000,000 / (105,000 - 75,000) = 3,000 s = 50 min
+```
+
+The plan must prove storage, consumers, and downstream systems tolerate that recovery rate; “the queue can hold it” is not end-to-end capacity.
+
+## Benchmark and load-test methodology
+
+**Documented, Schroeder et al. 2006:** a closed workload waits for completions before generating more work, while an open workload generates arrivals independently. Under overload, a closed test self-throttles and can substantially understate open-system queues and response times.
+
+A capacity test should:
+
+1. reproduce production route, key/tenant, payload, cache, and dependency distributions;
+2. use open-loop arrivals where users/events do not wait for prior completion;
+3. preserve intended bursts and correct coordinated omission in latency recording;
+4. sweep past the knee to find saturation and the failure mode;
+5. hold long enough to expose garbage collection, compaction, thermal/credit throttling, and leaks;
+6. drop load and verify recovery rather than metastable degradation;
+7. repeat cold/warm, normal/failure, and rollout-overlap states;
+8. record per-operation resource service demands, not only maximum throughput.
+
+A benchmark result includes binary/configuration, hardware, data shape, concurrency, protocol, cache temperature, duration, failure state, and confidence range. “Database does 50k QPS” is not portable evidence.
+
+## Forecast, limits, and lead time
+
+Maintain an exhaustion date for every hard or slow-moving limit:
+
+$$
+T_{\mathrm{limit}} \approx \frac{\text{usable limit}-\text{current peak demand}}{\text{growth rate}}
+$$
+
+Linear extrapolation is only a first alarm. Use scenario forecasts for launches, contracts, regional growth, retention changes, and step-function migrations. Compare exhaustion horizon with:
+
+- quota approval and hardware/accelerator procurement;
+- shard split or tenant-move duration;
+- data copy and index build time;
+- region/cell construction and certification;
+- contract/reservation decision windows;
+- engineering and verification lead time.
+
+Autoscaling handles demand after capacity is available to the actuator. It cannot invent provider quota, split a hot key, shorten a seven-hour state copy, or make a dependency accept more connections. See [Auto-Scaling](../06-scaling/08-auto-scaling.md).
+
+## Specialized failure traces
+
+### Average demand hides a deterministic peak
+
+Daily average needs eight nodes; regional business opening needs twenty-four for 45 minutes. A plan based on daily totals repeatedly overloads at the same time. Preserve time-window and regional distributions, then test the ramp slope and queue recovery.
+
+### Per-node benchmark ignores a shared dependency
+
+One worker sustains 2,000 requests/s in isolation. Fifty workers appear to promise 100,000/s, but each request uses one database query and the database's tested safe limit is 40,000/s. Adding workers multiplies connection pressure and lowers goodput. Model the whole demand graph and cap fleet budgets.
+
+### Closed-loop test reports a false plateau
+
+Virtual users wait for slow responses, so offered rate falls exactly when the service saturates. The chart shows stable errors and modest queues; production's independent arrivals produce an unbounded backlog. Use an open arrival model and report offered versus achieved rate.
+
+### Failover headroom exists in the wrong place
+
+The fleet has 30% global spare CPU, but tenants pinned to zone A cannot be routed to spare zone C because their data is absent. Zone A fails and aggregate dashboards claim capacity remains. Model placement-feasible capacity per authority domain, not global free resources.
+
+### Recovery work causes a second outage
+
+After storage failure, replica rebuild and backlog drain consume the same disks/network as foreground traffic. Retries raise offered work and latency crosses the knee. Reserve separate recovery budgets, throttle maintenance, and verify recovery under continued peak arrivals.
+
+### Forecast is right but quota arrives late
+
+Demand stays inside forecast, yet a required accelerator or address quota has a six-week approval lead and exhaustion is three weeks away. Capacity planning includes supply and organizational lead time; a perfect demand model submitted too late still fails.
+
+## Security and abuse boundaries
+
+Capacity telemetry can reveal customer size, traffic patterns, regions, and commercial events. Apply least privilege, aggregation, retention, and redaction to raw dimensions. Authenticate forecast and limit changes; an attacker or mistaken automation that raises concurrency or fleet maximum can create denial of wallet or overload dependencies.
+
+Plan adversarial demand separately from organic peaks: handshake floods, expensive queries, decompression bombs, hot-key attacks, tenant-created fan-out, and quota probing. Security controls need their own CPU/memory budget and must remain effective when the application is overloaded.
+
+Resource quotas are safety policy, not a substitute for authorization. Audit overrides and give emergency capacity actions bounded scope and expiry.
+
+## Operations, rollout, and reconciliation
+
+Introduce a new model in shadow mode. Compute old and new forecasts for the same history, explain deltas, then use the new model for one reversible capacity decision. Reconcile predicted versus observed demand, resource use, ready capacity, and user SLO after every launch, incident, and architecture change.
+
+Dashboards should show:
+
+- offered/admitted/goodput/rejected rates by workload class;
+- per-operation service demand and mix;
+- peak-window forecast, confidence, and error;
+- ready versus provisioned versus warming capacity;
+- headroom after named host/zone/cell/rollout failures;
+- hottest tenant/key/partition and placement skew;
+- queue age plus modeled drain time;
+- storage occupancy, growth, amplification, repair/migration reserve;
+- hard limits, quotas, and time-to-exhaustion versus lead time;
+- model revision and stale/missing inputs.
+
+Rollback of a capacity-model change means restoring decision authority to the prior model while preserving collected evidence. It does not automatically remove already provisioned stateful capacity; that follows the safe scale-in protocol.
+
+## Verification matrix
+
+| Test | Evidence required |
 |---|---|
-| Global consumer diurnal | 1.5–2.5× |
-| Single-region business hours | 3–5× |
-| Media/social events | 5–20× spikes |
-| Flash sales, ticket drops | 10–100× — pre-warm, queue at the door, [shed](../06-scaling/05-rate-limiting.md) |
-| Synchronized clients (cron at :00, TTL herds) | self-inflicted — add jitter |
+| Unit/dimensional checks | No bits/bytes, seconds/milliseconds, decimal/binary, or replica-factor errors |
+| Conservation | Daily totals reconcile with rate integration and storage growth |
+| Sensitivity | Identify assumptions whose plausible range changes architecture |
+| Workload realism | Route/tenant/key/payload and burst distributions match measured production |
+| Saturation | Knee, rejection mode, queue bound, and recovery are observed |
+| Failure topology | Named host/zone/cell/region loss fits surviving eligible capacity |
+| Stateful recovery | Rebuild/copy/backlog traffic coexists with foreground SLO |
+| Forecast backtest | Error and interval coverage reported by horizon |
+| Supply | Quota/procurement/migration lead time precedes exhaustion with margin |
 
----
+## Decision framework
 
-## Load Testing Without Lying to Yourself
+1. What is the useful-work unit, and how do offered demand, attempts, and goodput differ?
+2. Which workload classes, peaks, hot tenants, and failure-correlated bursts must be represented?
+3. What measured service demand does each class place on each resource and dependency?
+4. Which resource binds first in healthy, rollout, failure, and recovery states?
+5. What queue model is defensible, and how do arrival/service variability change the knee?
+6. Is spare capacity usable by the affected placement/authority domain?
+7. How much temporary storage and bandwidth do compaction, repair, backup, and migration require?
+8. Which assumptions dominate the result, and what measurement will replace each?
+9. When does every quota/hard limit exhaust under low/base/high scenarios versus its lead time?
+10. Does the load test preserve open arrivals, production skew, saturation, and recovery?
 
-The two errors that invalidate most benchmark numbers:
+## Primary references
 
-1. **Closed-loop generators hide collapse.** A closed-loop tool (N virtual users, each waits for a response before sending again) *automatically slows down* when the system slows down — the load adapts to the victim, and you measure a polite system that never sees queueing. Real users are **open-loop**: arrivals don't care about your latency. Test with open-loop, constant-arrival-rate generators (wrk2-style, k6 arrival rates) to see the true curve.
-2. **Coordinated omission.** If the generator stalls during a server pause, it *fails to send* the requests that would have suffered most, then reports the survivors' latencies. A 10s server stall can vanish from p99 entirely. Use tools that correct for it (HdrHistogram-based: wrk2, k6 with correction) and sanity-check: max latency should be visible in the percentiles' tail, not suspiciously absent.
-
-What a real test plan includes: ramp **past saturation** to find the actual knee (the number capacity planning needs), hold at the knee to observe degradation mode (graceful shedding vs collapse), then **drop the load and verify recovery** — a system that stays degraded after the spike has a metastable region that production will find. Test with production-shaped data (hot keys, big tenants, cold caches), and prefer shadow/replayed production traffic for realism ([migration shadowing](../15-deployment/06-migration-strategies.md) uses the same machinery).
-
----
-
-## Capacity Planning as a Process
-
-Estimation sizes the design; planning keeps it sized:
-
-- **Forecast from leading indicators, not resource graphs.** Tie capacity to business metrics (DAU, tenants, orders/day) via your measured unit costs — "each 1M DAU = +120 RPS peak = +2 nodes + 0.4TB cache" — so the plan moves when sales does, not after CPU does.
-- **Write the headroom policy down:** e.g., "every tier ≤ 60% at observed peak; survives one AZ loss and one deploy surge simultaneously; one [cell](../06-scaling/11-cell-based-architecture.md) evacuable at all times." Then alert on *headroom remaining*, not utilization — "weeks until knee at current growth" is the metric that triggers procurement and sharding projects while they're still calm.
-- **Respect lead times.** Autoscaling handles minutes; quota increases, new shards ([resharding is a migration](../15-deployment/03-database-migrations.md)), GPU capacity, and new regions take weeks-to-months. The plan's job is to start those clocks early.
-- **Re-validate the knee quarterly** — code changes move it; the load test from last year describes last year's system.
-
----
-
-## Cheat Sheet
-
-```
-86,400 s/day ≈ 10⁵        1M/day ≈ 12 RPS         1B/day ≈ 12K RPS
-RAM 100ns · NVMe 50µs · DC RTT 0.5ms · region RTT 1ms · continent 80ms
-concurrency = RPS × latency (Little)         pool ≈ λ×W + headroom
-W ≈ S/(1−ρ): 80% → 5×, 90% → 10×             ceiling ≈ 70–80%
-peak = 2–5× average (events: 10×+)           provision peak, pay average
-open-loop load tests; correct coordinated omission; test past the knee + recovery
-```
-
----
-
-## References
-
-- [Latency Numbers Every Programmer Should Know](https://colin-scott.github.io/personal_website/research/interactive_latency.html) — the Dean/Norvig table, kept current and interactive
-- [The SRE Workbook, ch. 12: Non-Abstract Large System Design](https://sre.google/workbook/non-abstract-design/) — estimation as Google teaches it
-- [How NOT to Measure Latency](https://www.infoq.com/presentations/latency-response-time/) — Gil Tene; coordinated omission, the canonical talk
-- [Open Versus Closed: A Cautionary Tale](https://www.usenix.org/legacy/event/nsdi06/tech/full_papers/schroeder/schroeder.pdf) — NSDI '06; why generator loop model changes everything
-- *Systems Performance* (Brendan Gregg) — the USE method and the measurement discipline underneath all of this
-- [wrk2](https://github.com/giltene/wrk2) / [k6 arrival-rate executors](https://grafana.com/docs/k6/latest/using-k6/scenarios/executors/) — open-loop, omission-corrected load generation
+- [Little, *A Proof for the Queuing Formula: L = λW* (Operations Research, 1961)](https://pubsonline.informs.org/doi/10.1287/opre.9.3.383)
+- [Kingman, *The Single Server Queue in Heavy Traffic* (Mathematical Proceedings of the Cambridge Philosophical Society, 1961)](https://doi.org/10.1017/S0305004100036094)
+- [Schroeder, Wierman, and Harchol-Balter, *Open Versus Closed: A Cautionary Tale* (NSDI 2006)](https://www.usenix.org/legacy/event/nsdi06/tech/full_papers/schroeder/schroeder.pdf)
+- [Dean and Barroso, *The Tail at Scale* (Communications of the ACM, 2013)](https://research.google/pubs/the-tail-at-scale/)
+- [Google SRE Workbook, *Introducing Non-Abstract Large System Design* (2018)](https://sre.google/workbook/non-abstract-design/)
+- [Gil Tene, *How NOT to Measure Latency*](https://www.infoq.com/presentations/latency-response-time/)
+- [HdrHistogram, coordinated-omission background and implementation](https://github.com/HdrHistogram/HdrHistogram)

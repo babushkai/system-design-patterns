@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-Offline evaluation is the cheapest place to reject a bad model and the most dangerous place to believe a good-looking one. It measures behavior on a frozen approximation of the world, using labels and splits that may be biased, delayed, leaked, stale, or misaligned with the product objective. The central discipline is to treat evaluation as a measurement system, not a notebook cell: define the decision the metric supports, pin the dataset and split, separate primary metrics from guardrails, evaluate slices, quantify uncertainty, check calibration and thresholds, and never confuse offline improvement with production impact. Offline evaluation answers **"is this candidate worth exposing to live traffic?"** It does not answer **"will this improve the business?"** That final causal question belongs to online experiments.
+Offline evaluation rejects candidates against a pinned dataset; it cannot establish causal product impact. Define the supported decision, population, labels, splits, primary metric, guardrails, slices, uncertainty, calibration, and thresholds before scoring. [Online Experiments](./08-online-experiments.md) covers causal product claims.
 
 ---
 
@@ -12,9 +12,9 @@ Offline evaluation exists because live traffic is expensive and risky. Before a 
 
 The filter has three jobs:
 
-1. **Reject regressions cheaply** — do not spend production risk on candidates that lose on historical data.
-2. **Compare model variants quickly** — choose among architectures, features, hyperparameters, and training windows.
-3. **Prepare deployment decisions** — estimate threshold behavior, calibration, slice risk, and expected operating trade-offs.
+1. **Reject regressions cheaply**: do not spend production risk on candidates that lose on historical data.
+2. **Compare model variants quickly**: choose among architectures, features, hyperparameters, and training windows.
+3. **Prepare deployment decisions**: estimate threshold behavior, calibration, slice risk, and expected operating trade-offs.
 
 The key word is *filter*. Offline evaluation is not proof. It is a necessary but insufficient gate. The offline dataset is historical, logged under old policies, labeled by imperfect processes, and often missing the outcomes the new model would have caused. A candidate can win offline and lose online because the metric measured the wrong objective, the split leaked, the logs were biased by the incumbent model, or the world changed.
 
@@ -77,7 +77,7 @@ label_status                = observed | unresolved | censored | excluded
 
 The evaluation watermark is the latest prediction time for which the required outcome window has closed and late-label policy has been applied. “Evaluate on last week” is invalid if the metric needs a month of outcome. Report both event count and independently sampled unit count after maturity filters; a large row count can still contain little information when many rows belong to the same entity.
 
-Selective labels require a causal argument. A fraud label may be observed mainly for reviewed transactions, and repayment is observed only for approved applicants. Evaluating the candidate on those observed outcomes estimates performance on the incumbent policy's selected population, not on all decisions the candidate would make. Propensity weighting or doubly robust estimators can reduce bias when logging propensities and overlap assumptions are credible, but they can have extreme variance and cannot recover outcomes for actions with no support. The report must name the target population, observation mechanism, overlap diagnostics, and any clipped weights. When support is missing, the honest verdict is “not identifiable offline,” followed by controlled exploration or an online experiment—not a more elaborate metric.
+Selective labels require a causal argument. A fraud label may be observed mainly for reviewed transactions, and repayment is observed only for approved applicants. Evaluating the candidate on those observed outcomes estimates performance on the incumbent policy's selected population, not on all decisions the candidate would make. Propensity weighting or doubly robust estimators can reduce bias when logging propensities and overlap assumptions are credible, but they can have extreme variance and cannot recover outcomes for actions with no support. The report must name the target population, observation mechanism, overlap diagnostics, and any clipped weights. When support is missing, the honest verdict is “not identifiable offline,” followed by controlled exploration or an online experiment, not a more elaborate metric.
 
 ---
 
@@ -220,7 +220,7 @@ A concrete calibration report bins predictions and compares predicted risk to ob
 
 This table is more actionable than a single Brier score. It shows where the probability contract breaks and whether the break occurs near the thresholds that drive decisions. For regulated or financial decisions, calibration should also be reported by pre-declared slices; global calibration can hide a group-specific overestimate or underestimate.
 
-The scalar summary of that table is expected calibration error — the traffic-weighted average of the per-bin gaps — and computing it makes clear how little machinery is involved:
+The scalar summary of that table is expected calibration error (the traffic-weighted average of the per-bin gaps), and computing it makes clear how little machinery is involved:
 
 ```python
 def ece(y_true, y_score, n_bins=10):
@@ -235,9 +235,9 @@ def ece(y_true, y_score, n_bins=10):
     return err
 ```
 
-Note the trap visible in the arithmetic: the huge low-score bin dominates the weighted average, so the headline ECE is 0.017 — "well calibrated" — while the high-score bins that actually drive blocking decisions are off by 12 and 26 points. For decision systems, report ECE *and* the per-bin table restricted to the score region where the policy acts.
+Note the trap visible in the arithmetic: the huge low-score bin dominates the weighted average, so the headline ECE is 0.017 ("well calibrated"), while the high-score bins that actually drive blocking decisions are off by 12 and 26 points. For decision systems, report ECE *and* the per-bin table restricted to the score region where the policy acts.
 
-When calibration is broken but ranking is fine, the fix is a post-hoc recalibrator — a small monotone function fitted on a held-out calibration split (never on training data), shipped as part of the model bundle:
+When calibration is broken but ranking is fine, the fix is a post-hoc recalibrator: a small monotone function fitted on a held-out calibration split (never on training data), shipped as part of the model bundle:
 
 ```python
 from sklearn.isotonic import IsotonicRegression
@@ -247,7 +247,7 @@ calibrator.fit(scores_calib, labels_calib)     # held-out split, not train
 p_calibrated = calibrator.predict(scores_prod)
 ```
 
-Isotonic regression can fit flexible monotone distortions but may overfit when calibration data is sparse in the score region that matters. Platt scaling imposes a smoother logistic shape and can have lower variance when that shape is adequate. There is no universal sample-count crossover: select the method on an untouched calibration/evaluation split using the operating region and slices the policy consumes. Either way the calibrator is a versioned artifact with the same lifecycle as a threshold policy: evaluated by slice, monitored against mature labels, and rolled back with the model. A calibrator fitted under one base rate can become wrong when prevalence changes — which is why the prediction-distribution and delayed-label monitors in [model monitoring](./04-model-monitoring.md) are also the calibrator's health checks.
+Isotonic regression can fit flexible monotone distortions but may overfit when calibration data is sparse in the score region that matters. Platt scaling imposes a smoother logistic shape and can have lower variance when that shape is adequate. There is no universal sample-count crossover: select the method on an untouched calibration/evaluation split using the operating region and slices the policy consumes. Either way the calibrator is a versioned artifact with the same lifecycle as a threshold policy: evaluated by slice, monitored against mature labels, and rolled back with the model. A calibrator fitted under one base rate can become wrong when prevalence changes, which is why the prediction-distribution and delayed-label monitors in [model monitoring](./04-model-monitoring.md) are also the calibrator's health checks.
 
 ---
 
@@ -267,7 +267,7 @@ For recommenders and search systems, a serious offline report should state:
 
 A ranking metric without candidate-set context is incomplete. If the candidate generator changed, ranking evaluation over the old candidate set answers the wrong question.
 
-NDCG, the workhorse, rewards placing high-relevance items early, with a logarithmic position discount — computing one small example removes the mystique:
+NDCG, the workhorse, rewards placing high-relevance items early, with a logarithmic position discount: computing one small example removes the mystique:
 
 ```text
 Query with graded relevances; model ranks items in order [3, 2, 0, 1]  (rel of each shown item)
@@ -278,7 +278,7 @@ IDCG@4 = 3.00 + 1.26 + 0.50 + 0 = 4.76
 NDCG@4 = 4.69 / 4.76 ≈ 0.985
 ```
 
-Two computation conventions silently change results across teams and libraries: whether gains are linear (`rel`) or exponential (`2^rel − 1`), and whether queries with no relevant items are skipped or scored zero. An "NDCG improvement" between two runs that changed convention is a bug, not a result — the evaluation harness should pin both choices in the metric's definition the same way a label definition is versioned.
+Two computation conventions silently change results across teams and libraries: whether gains are linear (`rel`) or exponential (`2^rel − 1`), and whether queries with no relevant items are skipped or scored zero. An "NDCG improvement" between two runs that changed convention is a bug, not a result: the evaluation harness should pin both choices in the metric's definition the same way a label definition is versioned.
 
 ---
 
@@ -383,11 +383,11 @@ Every evaluation needs baselines. The strongest baseline is the current producti
 
 Useful baselines include:
 
-1. **Current production model** — the real incumbent.
-2. **Simple heuristic** — catches overengineered models that barely beat rules.
-3. **Previous training run with same code** — estimates training variance.
-4. **Ablation models** — measure whether a feature group actually helps.
-5. **Oracle-ish upper bound** where available — estimates room for improvement.
+1. **Current production model**: the real incumbent.
+2. **Simple heuristic**: catches overengineered models that barely beat rules.
+3. **Previous training run with same code**: estimates training variance.
+4. **Ablation models**: measure whether a feature group actually helps.
+5. **Oracle-ish upper bound** where available: estimates room for improvement.
 
 The heuristic baseline is underrated. If a complex ML system barely beats "rank by popularity" or "review transactions above amount threshold," it may not justify its operational cost. ML should earn complexity.
 
@@ -395,7 +395,7 @@ The heuristic baseline is underrated. If a complex ML system barely beats "rank 
 
 ## Cost-Sensitive Evaluation
 
-Many production decisions have asymmetric and nonuniform costs. A false positive on a $5 transaction is not the same as a false positive on a $5,000 transaction. A false negative for severe abuse is not the same as a false negative for mild spam.
+Many production decisions have asymmetric and nonuniform costs. A false positive on a USD 5 transaction is not the same as a false positive on a USD 5,000 transaction. A false negative for severe abuse is not the same as a false negative for mild spam.
 
 Cost-sensitive evaluation translates confusion-matrix cells into business impact:
 
@@ -431,7 +431,7 @@ The evaluation set is a high-value secret in any system where teams can iterate 
 
 Promotion evidence should be tamper-evident and attributable: immutable candidate/baseline hashes, evaluation manifest, metric-definition hash, code/runtime digest, report hash, gate policy version, actor or workload identity, and decision timestamp. Protected-attribute slices may require a controlled evaluation service that releases aggregates subject to minimum-count and privacy policy while preserving an audit path for authorized reviewers. This is a separation-of-duties problem, not a reason to omit safety analysis.
 
-An attacker can target the evaluator as well as the model—inject easy examples, suppress hard labels, manipulate weights, or exploit NaN handling so a guardrail disappears. Fail closed on missing required metrics, non-finite values, unexpected population loss, or unsigned inputs. A result with compromised measurement provenance is not “inconclusive”; it is invalid.
+An attacker can target the evaluator as well as the model: inject easy examples, suppress hard labels, manipulate weights, or exploit NaN handling so a guardrail disappears. Fail closed on missing required metrics, non-finite values, unexpected population loss, or unsigned inputs. A result with compromised measurement provenance is not “inconclusive”; it is invalid.
 
 ---
 
@@ -439,12 +439,12 @@ An attacker can target the evaluator as well as the model—inject easy examples
 
 Offline metrics fail to predict online impact for structural reasons:
 
-1. **Logged-policy bias** — the evaluation data was generated by the old model.
-2. **Feedback loops** — the new model changes future data.
-3. **Proxy mismatch** — offline label is not the real product goal.
-4. **Distribution shift** — production traffic has moved.
-5. **Interference** — users/items/markets affect each other.
-6. **Implementation skew** — serving computes features differently.
+1. **Logged-policy bias**: the evaluation data was generated by the old model.
+2. **Feedback loops**: the new model changes future data.
+3. **Proxy mismatch**: offline label is not the real product goal.
+4. **Distribution shift**: production traffic has moved.
+5. **Interference**: users/items/markets affect each other.
+6. **Implementation skew**: serving computes features differently.
 
 This is why offline evaluation should gate exposure, not replace online experiments. The handoff should be explicit:
 
@@ -535,13 +535,13 @@ Offline evaluation that answers these well is a trustworthy gate. Offline evalua
 
 ## References
 
-1. [Rules of Machine Learning: Best Practices for ML Engineering](https://developers.google.com/machine-learning/guides/rules-of-ml) — Zinkevich
-2. [Hidden Technical Debt in Machine Learning Systems](https://proceedings.neurips.cc/paper_files/paper/2015/file/86df7dcfd896fcaf2674f757a2463eba-Paper.pdf) — Sculley et al., 2015
-3. [The ML Test Score: A Rubric for ML Production Readiness](https://research.google/pubs/pub46555/) — Breck et al., 2017
-4. [Data Validation for Machine Learning](https://mlsys.org/Conferences/2019/doc/2019/167.pdf) — Breck et al., 2019
-5. [Trustworthy Online Controlled Experiments](https://www.cambridge.org/core/books/trustworthy-online-controlled-experiments/6A3B263E7114E81B95669A95B219C1D8) — Kohavi, Tang & Xu, 2020
-6. [Offline Evaluation for Recommender Systems](https://dl.acm.org/doi/10.1145/1864708.1864721) — recommender evaluation and bias context
-7. [Model Evaluation, Model Selection, and Algorithm Selection in Machine Learning](https://arxiv.org/abs/1811.12808) — Raschka, 2018
-8. [Counterfactual Risk Minimization: Learning from Logged Bandit Feedback](https://proceedings.mlr.press/v37/swaminathan15.html) — Swaminathan & Joachims, 2015
-9. [Unbiased Learning-to-Rank with Biased Feedback](https://doi.org/10.1145/3018661.3018699) — Joachims, Swaminathan & Schnabel, 2017
+1. [Rules of Machine Learning: Best Practices for ML Engineering](https://developers.google.com/machine-learning/guides/rules-of-ml): Zinkevich
+2. [Hidden Technical Debt in Machine Learning Systems](https://proceedings.neurips.cc/paper_files/paper/2015/file/86df7dcfd896fcaf2674f757a2463eba-Paper.pdf): Sculley et al., 2015
+3. [The ML Test Score: A Rubric for ML Production Readiness](https://research.google/pubs/pub46555/): Breck et al., 2017
+4. [Data Validation for Machine Learning](https://mlsys.org/Conferences/2019/doc/2019/167.pdf): Breck et al., 2019
+5. [Trustworthy Online Controlled Experiments](https://www.cambridge.org/core/books/trustworthy-online-controlled-experiments/6A3B263E7114E81B95669A95B219C1D8): Kohavi, Tang & Xu, 2020
+6. [Offline Evaluation for Recommender Systems](https://dl.acm.org/doi/10.1145/1864708.1864721): recommender evaluation and bias context
+7. [Model Evaluation, Model Selection, and Algorithm Selection in Machine Learning](https://arxiv.org/abs/1811.12808): Raschka, 2018
+8. [Counterfactual Risk Minimization: Learning from Logged Bandit Feedback](https://proceedings.mlr.press/v37/swaminathan15.html): Swaminathan & Joachims, 2015
+9. [Unbiased Learning-to-Rank with Biased Feedback](https://doi.org/10.1145/3018661.3018699): Joachims, Swaminathan & Schnabel, 2017
 10. [Online Experiments](./08-online-experiments.md)

@@ -1,726 +1,297 @@
-# Instagram System Design
+# Instagram: Evidence, Inference, and a Media-System Reference Design
 
-## TL;DR
+Instagram combines durable social state, a large media pipeline, personalized retrieval, and privacy-sensitive delivery. Public sources describe dated slices, not one timeless architecture. Claims use three labels:
 
-Instagram handles 2+ billion monthly active users with a focus on media-heavy content (photos, videos, stories). Key challenges include efficient image/video storage and delivery at scale, personalized feed ranking (not chronological), and handling viral content. The architecture emphasizes CDN distribution, async processing pipelines, and ML-based ranking.
+- **Documented**: stated in a dated Instagram or Meta primary source.
+- **Inference**: a consequence of documented behavior whose implementation is not public.
+- **Reference design**: a proposed Instagram-like architecture, never a statement about Meta's private system.
 
----
+## Evidence Boundary and Dated Scale
 
-## Core Requirements
+| Source snapshot | Supported claim | Boundary |
+|---|---|---|
+| Instagram Engineering, December 2012 | PostgreSQL logical sharding and time/shard/sequence IDs were used in that historical design; the post reported more than 25 photos and 90 likes per second | Not evidence of today's database or rate |
+| Instagram Engineering multi-datacenter migration, 2015 | The migration distinguished global from region-local data and discussed PostgreSQL/Cassandra replication | Not a complete modern regional topology |
+| Meta Engineering, December 2020 | Suggested Posts used candidate generation and selection, embedding/co-occurrence sources, filtering, ranking, and diversification | Not every Feed or Reels pipeline |
+| Meta Engineering, August 2023 | Explore used retrieval, first-stage ranking, second-stage ranking, and final reranking over a pool described as billions of media; the post says hundreds of millions visited Explore daily | A dated product-specific scale statement, not request throughput |
+| Meta Engineering, May 2025 | Instagram operated more than 1,000 ML models across many ranked surfaces and introduced a registry, launch workflow, stability metrics, and SLOs | Model count is dated and does not reveal fleet size |
 
-### Functional Requirements
-- Upload photos and videos
-- Follow/unfollow users
-- News feed (algorithmically ranked)
-- Stories (24-hour ephemeral content)
-- Direct messages
-- Explore/discover content
-- Likes, comments, saves
-- Search (users, hashtags, locations)
+Do not combine scale values from different years into a fictional “current peak.” Capacity work below uses explicit illustrative assumptions instead.
 
-### Non-Functional Requirements
-- High availability (99.99%)
-- Low latency feed loads (< 500ms)
-- Handle 100M+ photos uploaded daily
-- Efficient media storage and delivery
-- Support viral content (sudden spikes)
+## Workload and Product Contract
 
----
+The system has four distinct pressure points:
 
-## High-Level Architecture
+1. **Media ingestion:** bursty, byte-heavy uploads followed by CPU/GPU-heavy derivation.
+2. **Social writes:** posts, follows, likes, comments, saves, blocks, and audience changes.
+3. **Personalized reads:** Feed, Stories, Reels, Explore, profiles, and notifications have different candidate sets and freshness objectives.
+4. **Policy enforcement:** privacy, integrity, copyright, age, geography, deletion, and account status can override a previously materialized candidate.
+
+An **explicit reference-design contract** is:
+
+| Operation | Success means | Permitted degradation |
+|---|---|---|
+| Upload media | Original bytes are checksum-verified and durably associated with an upload reservation | Defer expensive renditions |
+| Publish post | Canonical post and audience version commit exactly once | Feed/search propagation may lag |
+| Read Feed | Results are authorized, cursor-stable, deduplicated, and version-attributed | Fall back to cheaper candidates or chronological ordering |
+| Read Explore/Reels | Results pass integrity policy and identify candidate/model versions | Return fewer results instead of bypassing policy |
+| Story expiry | Expired content is no longer served after the contract's grace bound | Physical deletion may complete later |
+| Delete content | Canonical tombstone immediately dominates every derived copy | Cache/index cleanup is asynchronous |
+
+Define separate SLOs for upload availability, publish acknowledgement, rendition readiness, Feed freshness, ranking availability, and media startup. A fast metadata API cannot compensate for a stalled media origin.
+
+## State, Authority, and Invariants
+
+| State | Reference-design authority | Derived representations |
+|---|---|---|
+| Original media asset | Immutable object store plus asset manifest | Encoded images/videos, thumbnails, CDN copies |
+| Post metadata and lifecycle | Post store keyed by post ID | Profile indexes, feed candidates, search documents |
+| Follow/block/audience edges | Relationship and policy service | Candidate eligibility caches |
+| Interaction event | Append-only interaction log | Counts, ranking features, notifications, analytics |
+| Story lifecycle | Story store with explicit publish and expiry times | Story trays and CDN entries |
+| Recommendation model | Model registry entry plus immutable artifact | Replicated serving instances |
+| Experiment assignment | Experiment authority | Request-local treatment cache |
+
+The invariants are more valuable than a technology list:
+
+1. A published post references only media variants whose manifest is valid.
+2. Original media is immutable; edits create a new version and atomically change the post's pointer.
+3. A block, audience restriction, or deletion can suppress content without waiting for every feed, search, and CDN copy to disappear.
+4. Interaction retries do not multiply durable side effects.
+5. Ranking output records model, feature, candidate-source, and policy versions.
+6. A story's logical expiry is enforced on reads even if physical cleanup is delayed.
+7. Derived counts and recommendations never become authority for billing, access, or deletion.
+
+**Documented (2012):** Instagram's sharded-ID post encoded time, logical shard, and a per-shard sequence into a 64-bit identifier generated inside PostgreSQL. Treat this as historical evidence of locality-aware IDs, not a recommendation to reproduce its exact layout.
+
+## Data Plane and Control Plane
 
 ```mermaid
-graph TD
-    MobileApps[Mobile Apps] --> APIGateway[API Gateway<br/>GraphQL Federation / REST]
-
-    APIGateway --> MediaService[Media Service]
-    APIGateway --> FeedService[Feed Service]
-    APIGateway --> StoryService[Story Service]
-    APIGateway --> SearchService[Search Service]
-    APIGateway --> DMService[DM Service]
-
-    MediaService --> MediaStorage[("Media Storage<br/>(S3)")]
-    FeedService --> FeedCache[("Feed Cache<br/>(Redis)")]
-    StoryService --> StoryCache[("Story Cache<br/>(Redis)")]
-    SearchService --> ElasticSearch[("Elasticsearch")]
-    DMService --> Cassandra[("Cassandra")]
-
-    MediaStorage --> CDN[CDN<br/>Global Edge Distribution]
+flowchart LR
+    C[Mobile client] --> U[Upload edge]
+    U --> O[(Original object store)]
+    U --> M[Asset manifest]
+    M --> X[Scan and transcode workflow]
+    X --> D[(Derived media store)]
+    C --> P[Post command API]
+    P --> S[(Canonical social stores)]
+    P --> L[Event log]
+    L --> F[Feed and feature projections]
+    L --> I[Integrity and search pipelines]
+    R[Read API] --> G[Candidate generation]
+    G --> K[Multi-stage ranking]
+    K --> A[Authorization and integrity filter]
+    A --> C
+    C --> CDN[Media CDN]
+    CDN --> D
 ```
 
----
+The **data plane** handles uploads, post commands, event propagation, candidate retrieval, ranking, policy filtering, and media delivery.
 
-## Media Upload Pipeline
+The **control plane** governs media recipes, model and feature versions, experiment allocation, shard maps, data residency, integrity policy, cache keys, CDN invalidation, quota policy, and regional routing. If it is unavailable, serving uses signed last-known-good versions with bounded lifetime; it must not silently choose an unregistered model or disable policy.
 
-```mermaid
-graph TD
-    MobileApp[Mobile App] -->|1. Request signed upload URL| UploadSvc[Upload Service]
-    UploadSvc -->|Generate signed S3 URL| MobileApp
-    MobileApp -->|2. Direct upload to S3| S3Raw[("S3 Raw Bucket")]
+**Documented (2025):** Meta described an Instagram model registry carrying business purpose, criticality, baseline and holdout model identifiers, with automated monitoring and launch tooling. This is direct evidence that ML metadata and change control are first-class operational state.
 
-    S3Raw -.-> Kafka[Kafka Events]
-    Kafka -.-> Workers[Worker Fleet]
+## Media Upload and Publish Flow
 
-    Workers --> Thumbnails[Generate Thumbnails]
-    Workers --> Metadata[Extract Metadata<br/>EXIF]
-    Workers --> Moderation[Scan Content<br/>Moderation]
+The following is an **explicit reference design**:
 
-    Thumbnails --> ProcessedBucket[("Processed Bucket")]
-    Metadata --> ProcessedBucket
-    Moderation --> ProcessedBucket
+1. The client requests an upload reservation containing actor, media kind, declared size, and checksum.
+2. The edge returns a short-lived, least-privilege upload capability bound to an object key and maximum bytes.
+3. The client uploads in resumable chunks. The object service verifies length and checksum before marking the original complete.
+4. Malware, content-safety, metadata-stripping, and format validation run before publication eligibility.
+5. A workflow produces versioned derivatives: thumbnails, display images, codec/resolution ladders, captions, and preview frames as applicable.
+6. The manifest records each derivative's checksum, dimensions, codec, policy result, and recipe version.
+7. `PublishPost` atomically stores post metadata and an outbox event referencing a ready manifest generation.
+8. Feed, search, feature, moderation, and notification consumers update independently.
 
-    ProcessedBucket --> CDNOrigin[CDN Origin]
-```
+The post acknowledgement need not wait for every optional rendition, but it must not point to missing required bytes. A basic rendition can unblock publish while expensive high-quality variants continue under a workflow deadline.
 
-```python
-import boto3
-import hashlib
-from dataclasses import dataclass
-from typing import List
-import asyncio
+Use immutable URLs or versioned cache keys for media. Purge is a safety mechanism, not the only consistency mechanism: authorization and lifecycle checks belong in signed delivery tokens or an edge authorization step for private content.
 
-@dataclass
-class MediaVariant:
-    name: str
-    width: int
-    height: int
-    quality: int
+## Feed, Stories, and Explore Read Paths
 
-class MediaProcessingService:
-    """Process uploaded media into multiple variants."""
-    
-    VARIANTS = [
-        MediaVariant("thumbnail", 150, 150, 80),
-        MediaVariant("small", 320, 320, 80),
-        MediaVariant("medium", 640, 640, 85),
-        MediaVariant("large", 1080, 1080, 90),
-        MediaVariant("original", 0, 0, 100),  # Keep original
-    ]
-    
-    def __init__(self, s3_client, sqs_client):
-        self.s3 = s3_client
-        self.sqs = sqs_client
-        self.raw_bucket = "instagram-raw"
-        self.processed_bucket = "instagram-processed"
-    
-    async def process_upload(self, media_id: str, s3_key: str):
-        """Process uploaded media."""
-        
-        # Download original
-        original = await self._download(self.raw_bucket, s3_key)
-        
-        # Generate variants in parallel
-        tasks = [
-            self._generate_variant(media_id, original, variant)
-            for variant in self.VARIANTS
-        ]
-        
-        variant_keys = await asyncio.gather(*tasks)
-        
-        # Store variant metadata
-        await self._store_variant_metadata(media_id, variant_keys)
-        
-        # Trigger CDN prefetch for popular regions
-        await self._prefetch_to_cdn(variant_keys)
-        
-        return variant_keys
-    
-    async def _generate_variant(
-        self, 
-        media_id: str, 
-        original: bytes,
-        variant: MediaVariant
-    ) -> str:
-        """Generate a single variant."""
-        from PIL import Image
-        import io
-        
-        img = Image.open(io.BytesIO(original))
-        
-        if variant.width > 0:
-            # Resize maintaining aspect ratio
-            img.thumbnail((variant.width, variant.height), Image.LANCZOS)
-        
-        # Save to buffer
-        buffer = io.BytesIO()
-        img.save(buffer, format='JPEG', quality=variant.quality)
-        buffer.seek(0)
-        
-        # Upload to S3
-        key = f"media/{media_id}/{variant.name}.jpg"
-        await self._upload(self.processed_bucket, key, buffer.read())
-        
-        return key
-    
-    def get_cdn_url(self, media_id: str, variant: str = "medium") -> str:
-        """Get CDN URL for media variant."""
-        return f"https://cdn.instagram.com/media/{media_id}/{variant}.jpg"
-```
+### Connected Feed
 
----
+**Documented (2020):** Meta described Instagram Home Feed as ranking posts from followed sources using factors such as engagement, relevance, interests, quality, and freshness. The source does not reveal the storage layout or full ranking function.
 
-## News Feed Architecture
+An **inference** is that candidate eligibility and ranking should be distinct: follow state determines one candidate universe, while ranking orders eligible items. A privacy edge is not merely a negative feature.
 
-### Ranking-Based Feed (Not Chronological)
+An **explicit reference-design read**:
 
-```python
-from dataclasses import dataclass
-from typing import List, Dict
-import numpy as np
+1. Resolve followed-source, recent-interaction, and product-policy candidate sources under independent deadlines.
+2. Union and deduplicate compact post IDs, retaining source provenance.
+3. Batch-hydrate post, author, audience, and feature state.
+4. Remove deleted, blocked, ineligible, or already-seen items.
+5. Run coarse then expensive ranking, diversity, and integrity stages.
+6. Recheck audience policy at response assembly and issue an opaque cursor tied to an ordering boundary and pipeline version.
 
-@dataclass
-class FeedCandidate:
-    post_id: str
-    author_id: str
-    created_at: float
-    features: Dict[str, float]
+### Stories
 
-class FeedRankingService:
-    """
-    Rank feed posts using ML model.
-    Instagram uses engagement prediction models.
-    """
-    
-    def __init__(self, model_service, feature_store):
-        self.model = model_service
-        self.features = feature_store
-    
-    async def generate_feed(
-        self, 
-        user_id: str, 
-        count: int = 20
-    ) -> List[str]:
-        """Generate ranked feed for user."""
-        
-        # 1. Candidate Generation
-        candidates = await self._get_candidates(user_id)
-        
-        # 2. Feature Extraction
-        enriched = await self._extract_features(user_id, candidates)
-        
-        # 3. Ranking
-        scored = await self._score_candidates(enriched)
-        
-        # 4. Diversification
-        diversified = self._diversify(scored)
-        
-        # 5. Final selection
-        return [c.post_id for c in diversified[:count]]
-    
-    async def _get_candidates(self, user_id: str) -> List[FeedCandidate]:
-        """
-        Get candidate posts from followed users.
-        Also includes some explore candidates for discovery.
-        """
-        following = await self._get_following(user_id)
-        
-        candidates = []
-        
-        # Recent posts from following (last 3 days)
-        for followee_id in following:
-            posts = await self._get_recent_posts(followee_id, days=3)
-            candidates.extend(posts)
-        
-        # Add some explore candidates (10%)
-        explore_candidates = await self._get_explore_candidates(user_id)
-        candidates.extend(explore_candidates[:len(candidates) // 10])
-        
-        return candidates
-    
-    async def _extract_features(
-        self, 
-        user_id: str,
-        candidates: List[FeedCandidate]
-    ) -> List[FeedCandidate]:
-        """Extract ranking features for candidates."""
-        
-        for candidate in candidates:
-            # User-author affinity
-            candidate.features['affinity'] = await self.features.get_affinity(
-                user_id, candidate.author_id
-            )
-            
-            # Post engagement rate
-            candidate.features['engagement_rate'] = await self.features.get_engagement_rate(
-                candidate.post_id
-            )
-            
-            # Recency (time decay)
-            age_hours = (time.time() - candidate.created_at) / 3600
-            candidate.features['recency'] = 1.0 / (1.0 + age_hours / 24)
-            
-            # Content type affinity
-            candidate.features['content_affinity'] = await self.features.get_content_affinity(
-                user_id, candidate.post_id
-            )
-            
-            # Author engagement history
-            candidate.features['author_engagement'] = await self.features.get_author_engagement(
-                user_id, candidate.author_id
-            )
-        
-        return candidates
-    
-    async def _score_candidates(
-        self, 
-        candidates: List[FeedCandidate]
-    ) -> List[FeedCandidate]:
-        """Score candidates using ML model."""
-        
-        # Prepare feature matrix
-        feature_names = ['affinity', 'engagement_rate', 'recency', 
-                        'content_affinity', 'author_engagement']
-        
-        X = np.array([
-            [c.features[f] for f in feature_names]
-            for c in candidates
-        ])
-        
-        # Get predictions (probability of engagement)
-        scores = await self.model.predict(X)
-        
-        for candidate, score in zip(candidates, scores):
-            candidate.features['score'] = score
-        
-        # Sort by score
-        candidates.sort(key=lambda c: c.features['score'], reverse=True)
-        
-        return candidates
-    
-    def _diversify(
-        self, 
-        candidates: List[FeedCandidate]
-    ) -> List[FeedCandidate]:
-        """
-        Diversify feed to avoid showing too many posts
-        from same author or same content type.
-        """
-        result = []
-        author_counts = {}
-        max_per_author = 3
-        
-        for candidate in candidates:
-            author_id = candidate.author_id
-            
-            if author_counts.get(author_id, 0) < max_per_author:
-                result.append(candidate)
-                author_counts[author_id] = author_counts.get(author_id, 0) + 1
-        
-        return result
-```
+Public sources do not specify a complete current Stories backend. Therefore the architecture here is a **reference design**. Maintain a per-viewer tray as a disposable projection of active story IDs, but enforce `published_at <= now < expires_at` against canonical state. Store view receipts as idempotent events partitioned by story or viewer according to the dominant query, and produce counts asynchronously. Do not make the displayed count authoritative for authorization or payout.
 
-### Feed Caching Strategy
+### Explore and Reels-style discovery
 
-```python
-class FeedCacheService:
-    """
-    Cache pre-computed feeds for fast reads.
-    Invalidate on new posts from followed users.
-    """
-    
-    def __init__(self, redis_client, ranking_service):
-        self.redis = redis_client
-        self.ranking = ranking_service
-        self.cache_ttl = 300  # 5 minutes
-    
-    async def get_feed(
-        self, 
-        user_id: str, 
-        cursor: str = None,
-        count: int = 20
-    ) -> tuple[List[str], str]:
-        """Get feed with pagination."""
-        
-        cache_key = f"feed:v2:{user_id}"
-        
-        # Try cache first
-        cached = await self.redis.get(cache_key)
-        
-        if not cached:
-            # Generate and cache feed
-            post_ids = await self.ranking.generate_feed(user_id, count=100)
-            await self.redis.setex(
-                cache_key, 
-                self.cache_ttl,
-                json.dumps(post_ids)
-            )
-        else:
-            post_ids = json.loads(cached)
-        
-        # Pagination
-        start_idx = 0
-        if cursor:
-            try:
-                start_idx = post_ids.index(cursor) + 1
-            except ValueError:
-                start_idx = 0
-        
-        page = post_ids[start_idx:start_idx + count]
-        next_cursor = page[-1] if len(page) == count else None
-        
-        return page, next_cursor
-    
-    async def invalidate_feed(self, user_id: str):
-        """Invalidate user's feed cache."""
-        await self.redis.delete(f"feed:v2:{user_id}")
-    
-    async def handle_new_post(self, author_id: str, post_id: str):
-        """
-        Handle new post - invalidate followers' feeds.
-        Done async to not block post creation.
-        """
-        followers = await self._get_followers(author_id)
-        
-        pipe = self.redis.pipeline()
-        for follower_id in followers:
-            pipe.delete(f"feed:v2:{follower_id}")
-        await pipe.execute()
-```
+**Documented (2023):** Explore used a staged funnel: retrieval, first-stage ranking, second-stage ranking, and final reranking. It combined real-time and pre-generated sources; used Two-Tower representations for cacheable retrieval/early ranking; applied heavier multi-task ranking later; and used final reranking for integrity and diversity.
 
----
+**Inference:** each narrowing stage should publish coverage, latency, and selection statistics. Otherwise a healthy final model can conceal a failed retrieval source.
 
-## Stories Architecture
+**Reference design degradation ladder:**
 
-```python
-from datetime import datetime, timedelta
-from typing import List, Optional
-import json
+- Skip one unhealthy source while preserving minimum source diversity.
+- Reuse a bounded-age precomputed candidate set.
+- Use a lighter registered ranker when the heavy ranker misses its deadline.
+- Return fewer policy-cleared items.
+- Never bypass authorization or integrity to fill a page.
 
-@dataclass
-class Story:
-    id: str
-    author_id: str
-    media_url: str
-    created_at: datetime
-    expires_at: datetime
-    view_count: int = 0
-    viewers: List[str] = None
+Recommendation mechanisms are developed fully in [Recommendation Systems](../16-ml-systems/07-recommendation-systems.md), [Model Serving](../16-ml-systems/03-model-serving.md), and [Model Monitoring](../16-ml-systems/04-model-monitoring.md).
 
-class StoryService:
-    """
-    Stories are ephemeral content (24 hours).
-    Stored in Redis with TTL.
-    """
-    
-    def __init__(self, redis_client, media_service):
-        self.redis = redis_client
-        self.media = media_service
-        self.story_ttl = 86400  # 24 hours
-    
-    async def create_story(
-        self, 
-        user_id: str, 
-        media_id: str
-    ) -> Story:
-        """Create a new story."""
-        story_id = generate_id()
-        now = datetime.utcnow()
-        
-        story = Story(
-            id=story_id,
-            author_id=user_id,
-            media_url=self.media.get_cdn_url(media_id),
-            created_at=now,
-            expires_at=now + timedelta(hours=24),
-            viewers=[]
-        )
-        
-        # Store story data
-        story_key = f"story:{story_id}"
-        await self.redis.setex(
-            story_key,
-            self.story_ttl,
-            json.dumps(story.__dict__, default=str)
-        )
-        
-        # Add to user's story list
-        user_stories_key = f"user_stories:{user_id}"
-        await self.redis.zadd(
-            user_stories_key,
-            {story_id: now.timestamp()}
-        )
-        await self.redis.expire(user_stories_key, self.story_ttl)
-        
-        # Notify followers
-        await self._notify_followers(user_id, story_id)
-        
-        return story
-    
-    async def get_stories_feed(self, user_id: str) -> List[dict]:
-        """
-        Get story trays for users the viewer follows.
-        Returns list of users with active stories.
-        """
-        following = await self._get_following(user_id)
-        
-        story_trays = []
-        
-        for followee_id in following:
-            stories = await self._get_user_stories(followee_id)
-            
-            if stories:
-                # Get unseen count
-                unseen = await self._count_unseen(user_id, followee_id, stories)
-                
-                story_trays.append({
-                    'user_id': followee_id,
-                    'story_count': len(stories),
-                    'unseen_count': unseen,
-                    'latest_story_at': stories[0]['created_at'],
-                    'preview_url': stories[0]['media_url']
-                })
-        
-        # Sort by unseen first, then by latest
-        story_trays.sort(
-            key=lambda x: (x['unseen_count'] == 0, -x['latest_story_at']),
-        )
-        
-        return story_trays
-    
-    async def view_story(self, viewer_id: str, story_id: str):
-        """Record story view."""
-        view_key = f"story_views:{story_id}"
-        
-        # Add to viewers set
-        await self.redis.sadd(view_key, viewer_id)
-        
-        # Increment view count
-        await self.redis.hincrby(f"story:{story_id}", "view_count", 1)
-        
-        # Track that user has seen this story
-        seen_key = f"stories_seen:{viewer_id}"
-        await self.redis.sadd(seen_key, story_id)
-        await self.redis.expire(seen_key, self.story_ttl)
-    
-    async def _get_user_stories(self, user_id: str) -> List[dict]:
-        """Get all active stories for a user."""
-        story_ids = await self.redis.zrevrange(
-            f"user_stories:{user_id}",
-            0, -1
-        )
-        
-        stories = []
-        for story_id in story_ids:
-            data = await self.redis.get(f"story:{story_id.decode()}")
-            if data:
-                stories.append(json.loads(data))
-        
-        return stories
-```
+## Storage and Partitioning
 
----
+**Documented historical design (2012):** Instagram described PostgreSQL logical shards mapped onto physical databases and globally sortable IDs containing the logical shard. The value of logical shards is movable placement: resharding can move small units without changing object identity.
 
-## Explore/Discovery
+**Documented historical migration (2015):** Instagram's multi-datacenter post distinguished global data from local data and discussed PostgreSQL and Cassandra replication. It is evidence of data classification during migration, not proof that every dataset used one consistency model.
 
-```python
-class ExploreService:
-    """
-    Personalized content discovery.
-    Uses collaborative filtering and content-based recommendations.
-    """
-    
-    def __init__(self, redis_client, ml_service, feature_store):
-        self.redis = redis_client
-        self.ml = ml_service
-        self.features = feature_store
-    
-    async def get_explore_feed(
-        self, 
-        user_id: str,
-        count: int = 30
-    ) -> List[str]:
-        """Generate personalized explore feed."""
-        
-        # 1. Get user interests
-        interests = await self._get_user_interests(user_id)
-        
-        # 2. Get candidate posts
-        candidates = await self._get_explore_candidates(interests)
-        
-        # 3. Filter already seen
-        seen = await self._get_seen_posts(user_id)
-        candidates = [c for c in candidates if c.post_id not in seen]
-        
-        # 4. Score and rank
-        scored = await self._score_explore_candidates(user_id, candidates)
-        
-        # 5. Diversify by topic/author
-        diversified = self._diversify_explore(scored)
-        
-        return [c.post_id for c in diversified[:count]]
-    
-    async def _get_user_interests(self, user_id: str) -> List[str]:
-        """
-        Infer user interests from:
-        - Posts they've liked
-        - Accounts they follow
-        - Time spent viewing content
-        - Hashtags they engage with
-        """
-        # Get recent engagements
-        recent_likes = await self.features.get_recent_likes(user_id, days=30)
-        
-        # Extract topics/hashtags from liked posts
-        topics = []
-        for post_id in recent_likes:
-            post_topics = await self.features.get_post_topics(post_id)
-            topics.extend(post_topics)
-        
-        # Get top interests by frequency
-        from collections import Counter
-        topic_counts = Counter(topics)
-        top_interests = [t for t, c in topic_counts.most_common(20)]
-        
-        return top_interests
-    
-    async def _get_explore_candidates(
-        self, 
-        interests: List[str]
-    ) -> List[FeedCandidate]:
-        """Get candidate posts for explore."""
-        candidates = []
-        
-        # Posts trending in user's interest areas
-        for interest in interests[:10]:
-            trending = await self._get_trending_for_topic(interest)
-            candidates.extend(trending)
-        
-        # Globally viral posts
-        viral = await self._get_viral_posts()
-        candidates.extend(viral)
-        
-        # Posts from suggested accounts
-        suggested_accounts = await self._get_suggested_accounts()
-        for account in suggested_accounts[:10]:
-            posts = await self._get_top_posts(account)
-            candidates.extend(posts)
-        
-        return candidates
-```
+A modern **reference design** partitions by access path:
 
----
+| Dataset | Partition key | Secondary path | Hotspot control |
+|---|---|---|---|
+| Post metadata | Hash of post ID | Author/time projection | Salt hot-author buckets by time |
+| Follow graph | Source user for “following”; destination projection for followers | Asynchronous inverse projection | Split high-degree vertices |
+| Interactions | Post or user plus time bucket | Stream-built aggregates | Separate viral counters from raw log |
+| Stories | Author plus expiry bucket | Viewer tray projection | Bounded active window |
+| Media objects | Content/object key | Manifest by asset ID | CDN and request collapsing |
+| Feature events | Entity plus event time | Offline lake partitions | Backpressure by bytes and age |
+| ANN retrieval | Embedding shard/version | Metadata filter index | Replicas for hot interests |
 
-## Data Storage
+Cross-shard joins are assembled at services or precomputed only for named queries. Do not denormalize privacy state into an unbounded number of places without a suppression path. See [Data Modeling](../02-distributed-databases/10-data-modeling.md) and [Secondary Indexes](../02-distributed-databases/06-secondary-indexes.md).
 
-| System | Type | Stores |
-|--------|------|--------|
-| PostgreSQL | Relational DB | User profiles, Follows, Authentication, Settings |
-| Cassandra | Wide-column | User feeds, Activity logs, Comments, Likes |
-| Redis | In-memory cache | Feed cache, Story data, Sessions, Rate limits |
-| S3 | Object storage | Photos, Videos, Thumbnails |
-| Elasticsearch | Search engine | User search, Hashtag search, Location |
-| Kafka | Event streaming | Events, Notifications, Analytics |
+## Illustrative Capacity and Cost Model
 
----
+These are **illustrative assumptions**, not Instagram metrics:
 
-## Key Metrics & Scale
+- 2,000 media posts/s average, 8,000/s peak.
+- 70% images averaging 4 MiB originals; 30% videos averaging 40 MiB originals.
+- Derived variants total 1.8 times original bytes before replication.
+- Post metadata plus primary indexes average 2 KiB.
+- 1,000,000 concurrent video viewers average 2 Mbit/s delivered bitrate.
 
-| Metric | Value |
-|--------|-------|
-| Monthly Active Users | 2B+ |
-| Photos uploaded daily | 100M+ |
-| Total photos stored | 100B+ |
-| Storage size | Exabytes |
-| Average image variants | 5 per photo |
-| CDN bandwidth | Petabytes/day |
-| Feed loads per day | Billions |
+Weighted original size is:
 
----
+`0.70 × 4 MiB + 0.30 × 40 MiB = 14.8 MiB/post`.
 
-## Production Insights
+Average original ingress is approximately `28.9 GiB/s`, or `2.38 PiB/day`. Derived output adds about `4.29 PiB/day` at the assumed 1.8 multiplier, before replication and lifecycle deletion. Metadata grows by only about `330 GiB/day` before replication. The byte path and metadata path therefore need different capacity plans.
 
-### Cassandra Migration from PostgreSQL
+The illustrative video egress is `1,000,000 × 2 Mbit/s = 2 Tbit/s`. Cache-hit ratio must be measured by bytes and rendition, not merely request count. A thumbnail hit can hide an origin miss on a large video segment.
 
-Instagram's activity feed, comments, and likes originally lived in PostgreSQL. At ~500M users, write amplification on PostgreSQL's B-tree indexes became the bottleneck — every like required updating the post's like count, the user's activity feed, and the notification table, all against B-tree indexes with random I/O.
+For transcode capacity, if the weighted work is 180 compute-seconds per uploaded media-second and arrivals contain 600 media-seconds/s, steady-state demand is `108,000 compute cores` at one real-time equivalent per core before utilization and failure headroom. Replace those assumptions with codec benchmarks, device ladder, re-encode rate, and deadline classes.
 
-**Why Cassandra won:**
-- LSM-tree write path: sequential I/O, writes are append-only to memtable → sstable. 10-50x faster for write-heavy workloads than PostgreSQL's in-place B-tree updates.
-- Token-aware routing: the Java driver's `TokenAwarePolicy` routes requests directly to the replica owning the partition key, avoiding coordinator hops. For a `user_id`-partitioned table, this means single-node writes with no cross-node coordination.
-- No joins by design: Cassandra has no JOIN support. Instagram enforced a "no-join discipline" at the application layer — every query pattern has a dedicated denormalized table. This forced engineers to think about access patterns upfront instead of relying on ad-hoc SQL joins.
+Storage cost must include originals, derivatives, replication/erasure overhead, CDN fill, re-encoding, moderation artifacts, and legal retention. See [FinOps and Cost Engineering](../11-observability/06-finops-cost-engineering.md).
 
-**Migration strategy:**
-- Dual-write: application writes to both PostgreSQL and Cassandra simultaneously for 4 weeks.
-- Shadow-read validation: reads from Cassandra compared against PostgreSQL. Discrepancy rate tracked until < 0.01%.
-- Cutover: read traffic shifted to Cassandra. PostgreSQL kept as fallback for 2 weeks, then decommissioned.
-- Replication: `NetworkTopologyStrategy` with RF=3 per datacenter, `LOCAL_QUORUM` for reads and writes. Cross-DC replication is asynchronous — user sees their own writes (session consistency) but followers in other DCs may see 100-500ms staleness.
+## Concrete Failure Trace: Viral Media and a Cold Rendition
 
-**Compaction strategy:** `LeveledCompactionStrategy` for read-heavy tables (user profiles, post metadata). `TimeWindowCompactionStrategy` for time-series data (activity feeds, notifications) where older data is rarely accessed and can be compacted into larger SSTables efficiently.
+This is a **reference-design failure**, not a reported Instagram incident.
 
-### Django Scaling at 2B MAU
+1. A newly published video receives a sudden global burst before regional CDN caches hold its selected rendition.
+2. Thousands of clients miss on the same first segments and converge on an origin tier.
+3. Request retries and adaptive-bitrate switches multiply origin reads across several renditions.
+4. Object-store latency rises; unrelated uploads and thumbnails share the same quota and slow down.
+5. Playback ranking continues recommending the video, increasing demand faster than caches fill.
+6. Operators see acceptable API latency but worsening startup delay and rebuffering.
 
-Instagram is one of the largest Django deployments in the world. They never rewrote in a different framework — instead, they optimized Django itself.
+Control the cascade at each amplification point:
 
-**Raw SQL over ORM for hot paths:**
-- Django's ORM generates SQL with `select_related` (JOIN) and `prefetch_related` (N+1 → 2 queries). For the feed endpoint (~50% of all traffic), this is too slow.
-- Hot paths use raw SQL with hand-tuned queries: `cursor.execute("SELECT ...")` with pre-computed read replicas.
-- A custom `PostHydrator` class fetches post data, author data, and social context (mutual friends who liked) in 3 parallel queries instead of ORM's serial chain.
+- Collapse concurrent fills by `(asset, rendition, segment)` and use shield caches.
+- Pre-position predicted hot content, while retaining origin fallback.
+- Separate upload, thumbnail, manifest, and playback quotas.
+- Feed playback health back into recommendation eligibility with a bounded, audited control loop.
+- Bound client retries and honor end-to-end deadlines.
+- Degrade to a lower ready rendition rather than synchronously transcode on demand.
+- Monitor origin bytes, cache-fill amplification, startup time, and rebuffer rate together.
 
-**Read replica routing:**
-- Custom Django database router routes `SELECT` queries to read replicas based on the request's AZ (availability zone).
-- Sticky reads: after a write, subsequent reads from the same session are routed to the primary for 2 seconds to ensure read-your-writes consistency.
-- Each Django app server maintains connection pools to 1 primary + 3 read replicas.
+The canonical treatments of this mechanism are [CDN Architecture](../06-scaling/04-cdn-architecture.md), [Cache Stampede](../04-caching/04-cache-stampede.md), and [Backpressure](../06-scaling/07-backpressure.md).
 
-**Celery task architecture:**
-- 4 priority queues: `critical` (notifications, DMs), `high` (feed updates, likes), `default` (analytics events, ML feature logging), `low` (email digests, data exports).
-- Media transcoding runs on dedicated GPU-equipped worker fleets, not shared Celery workers.
-- Fan-out (distributing a new post to followers' feeds) is the most expensive async operation — a celebrity post fans out to 100M+ follower feeds via batched Redis LPUSH operations.
-- Task idempotency: every Celery task includes a `task_id` derived from the content hash. Duplicate tasks (from retry storms) are deduplicated at the broker level.
+## Multi-Region, Failure Recovery, and Operations
 
-**gunicorn tuning:**
-- `--preload`: loads the Django application once in the master process, then forks workers with copy-on-write memory sharing. Saves ~200MB per worker.
-- Worker count: `2 * CPU_CORES + 1` for CPU-bound, `4 * CPU_CORES` for I/O-bound (Instagram uses the latter with gevent).
-- `--max-requests 10000 --max-requests-jitter 1000`: recycle workers after 10K requests to prevent memory leaks from accumulating.
-- `--timeout 30`: kill workers that take > 30s (indicates database lock wait or downstream service failure).
+An **explicit reference design** separates data classes:
 
-**Why not async Django:**
-Instagram evaluated Django 4.x async views (ASGI) but decided against adoption because:
-1. Their existing Celery infrastructure handles async workloads.
-2. The ORM is not async-native — `sync_to_async` wrappers add overhead without real benefit.
-3. The operational risk of migrating 10,000+ views to ASGI outweighs the latency benefit (~5ms improvement on p50).
-4. WebSocket needs (real-time DMs, live video) are handled by a separate Go service, not Django.
+- Immutable public media can replicate broadly and serve from CDN edges.
+- Canonical post and relationship writes have a declared home/authority epoch.
+- Feed and recommendation projections rebuild regionally from logs.
+- Safety tombstones and account restrictions use a fast global propagation channel.
+- Private media delivery requires authorization local to the serving region or a fail-closed token.
+- Region-local workflow queues can be recreated from canonical manifests and offsets.
 
-### Image Processing Pipeline
+Failover is not DNS alone. Promotion must fence the previous writer, verify replication position, restore policy/config/model dependencies, and ensure the destination has compute, storage, and egress headroom. See [Multi-Region Architecture](../06-scaling/09-multi-region-architecture.md) and [Disaster Recovery](../15-deployment/05-disaster-recovery.md).
 
-Instagram processes 100M+ photo uploads per day. The pipeline must generate 5+ image variants (thumbnail, small, medium, large, original) per upload within 2 seconds of the upload completing.
+Observe the system by product outcome and pipeline stage:
 
-**Pillow vs libvips:**
-- Instagram originally used Pillow (PIL fork). At scale, Pillow's memory usage per image (loading the entire decoded image into RAM) became the bottleneck: a 12MP photo consumes ~48MB decoded.
-- libvips uses demand-driven processing: it only loads the portion of the image being processed. Memory usage: ~7x less than Pillow for the same operation.
-- Throughput: libvips generates thumbnails 3-5x faster than Pillow on the same hardware due to SIMD-optimized codecs and streaming I/O.
+- Upload reservation success, resumed bytes, checksum failure, scan age, transcode queue age, and rendition-ready latency.
+- Publish commit latency, outbox age, projection lag, and duplicate-event rate.
+- Candidate count and age by source; filter reasons; stage latency; fallback and empty-page rates.
+- Model calibration/stability, feature age, artifact/config mismatch, and resource use per model.
+- Media startup, bitrate switches, rebuffering, CDN hit bytes, origin amplification, and regional egress.
+- Deletion-to-suppression and deletion-to-physical-removal latency.
 
-**Dedicated worker fleets:**
-- Image processing does NOT run on Django app servers. It runs on dedicated `c5.2xlarge` (compute-optimized) worker fleets.
-- Three tiers: `fast` (thumbnail + small, < 500ms SLA), `standard` (medium + large, < 2s SLA), `heavy` (video transcoding, filters, < 30s SLA).
-- Workers consume from SQS FIFO queues with `MessageGroupId = user_id` to ensure per-user ordering (a user's second upload shouldn't complete before their first).
-- Auto-scaling based on `ApproximateNumberOfMessagesVisible` — scale out when queue depth > 1000, scale in when < 100.
+**Documented (2025):** Meta's Instagram model-platform post says model health previously lacked a consistent definition and describes calibration and normalized entropy inputs to a stability metric plus SLO automation. The general lesson is to monitor prediction behavior, not only server uptime.
 
-**Pre-signed S3 URL pattern:**
-- The mobile client requests a pre-signed S3 PUT URL from the API server.
-- The client uploads the image directly to S3, bypassing Django entirely. This eliminates the 10-50MB upload from hitting the app server's request handling pipeline.
-- After S3 receives the upload, an S3 Event Notification triggers a Lambda that enqueues the processing job.
-- Benefit: Django handles a 200-byte metadata request instead of a 10MB file upload. At 100M uploads/day, this saves ~1PB/day of app-server bandwidth.
+## Security, Privacy, and Abuse
 
-**CDN cache key strategy:**
-- URL format: `https://cdn.instagram.com/{variant_name}/{content_hash}.{format}`
-- Example: `https://cdn.instagram.com/t/abc123def456.jpg` (thumbnail), `https://cdn.instagram.com/l/abc123def456.webp` (large, webp)
-- Content-addressable: the hash changes when the image content changes (edit, filter applied). Old URLs remain valid (immutable).
-- `Cache-Control: public, max-age=31536000, immutable` — cached forever. New versions get new hashes, so no purging needed.
-- Three-tier CDN: edge PoP (< 10ms) → regional shield (< 50ms) → S3 origin (< 200ms). Cache hit rate > 99.5% at the edge for images older than 1 hour.
+The media system expands the attack surface:
 
----
+- Upload capabilities are short-lived, size-limited, content-type constrained, and scoped to one object key.
+- Active content, malformed codecs, metadata leaks, and decompression bombs are isolated in sandboxed processing.
+- Authorization is evaluated against current audience and relationship state before returning private metadata or a delivery token.
+- Signed media tokens bind asset, rendition, audience context, expiry, and optionally region; URLs alone are not authorization.
+- Likes, follows, comments, and views have actor- and target-aware rate limits plus coordinated-abuse detection.
+- Training and feature pipelines carry purpose, retention, deletion, and lineage metadata.
+- Operator access and legal-policy actions are audited separately from ordinary user reads.
 
-## Key Takeaways
+Deletion has at least four clocks: read suppression, CDN invalidation, projection cleanup, and durable byte deletion. Publish all four; saying “deleted” without naming the clock is ambiguous.
 
-1. **Direct-to-S3 uploads**: Bypass app servers for media uploads using signed URLs; process async
+## Evolution and Migration
 
-2. **Multiple image variants**: Generate thumbnails and sizes upfront; serve appropriate size for device
+The dated sources show evolution rather than one ideal endpoint: sharded PostgreSQL and custom IDs in 2012, a multi-datacenter migration in 2015, increasingly explicit recommendation funnels in 2020–2023, and model-fleet governance in 2025.
 
-3. **ML-ranked feeds**: Engagement prediction models rank content; not chronological
+A **reference migration pattern** for a new post store, feed projection, or media recipe is:
 
-4. **Stories in Redis**: Ephemeral content with TTL; no persistence needed
+1. Version the schema, manifest, event, and read contract first.
+2. Backfill from immutable source data with per-partition checksums.
+3. Mirror events to the new projection and compare semantic outcomes in shadow reads.
+4. Serve a small cohort using stable experiment assignment and safety/cost guardrails.
+5. Keep one canonical authority; a dual-write path is transport, not dual truth.
+6. Roll forward by partition and retain a proven rollback point.
+7. Stop old writes, wait through the retention/replay window, then remove old reads and data.
 
-5. **CDN is critical**: Majority of requests served from edge; origin sees tiny fraction
+Ranking changes require offline replay and explicit documentation of counterfactual limitations, followed by staged online experiments with integrity, diversity, latency, and compute guardrails, not click rate alone.
 
-6. **Cassandra for scale**: Wide-column store for high-write workloads (likes, comments, activity)
+## Verification and Design Lessons
 
-7. **Explore = Discovery**: Personalized recommendations drive engagement beyond just following
+Verify that:
+
+- A publish cannot reference an incomplete required rendition.
+- Retried upload completion and post commands remain idempotent.
+- Blocks, privacy changes, story expiry, and deletion suppress stale feed/search/CDN copies.
+- Candidate-source loss is visible and selects a registered fallback.
+- Model, feature, and experiment versions can reproduce a ranking decision.
+- Hot media cannot exhaust upload or metadata capacity.
+- A projection can rebuild from the canonical log within its recovery objective.
+- Regional failover preserves authority and data-residency policy.
+
+The main lessons are:
+
+1. Design media bytes, social metadata, and ML computation as different capacity systems.
+2. Make immutable originals and explicit manifests the base for safe reprocessing.
+3. Separate eligibility and integrity from ranking preference.
+4. Treat recommendation stages as an observable narrowing funnel.
+5. Give deletion a fast suppression path and measurable cleanup paths.
+6. Preserve dated evidence boundaries; a 2012 storage post and a 2025 ML post do not describe one simultaneous architecture.
+
+## Primary Sources
+
+- Instagram Engineering, [“Sharding & IDs at Instagram”](https://medium.com/instagram-engineering/sharding-ids-at-instagram-1cf5a71e5a5c), December 2012.
+- Instagram Engineering, [“Instagration Pt. 2: Scaling our infrastructure to multiple data centers”](https://medium.com/instagram-engineering/instagration-pt-2-scaling-our-infrastructure-to-multiple-data-centers-5745cbad7834), 2015.
+- Instagram Engineering, [“Open-sourcing a 10x reduction in Apache Cassandra tail latency”](https://medium.com/instagram-engineering/open-sourcing-a-10x-reduction-in-apache-cassandra-tail-latency-d64f86b43589), March 2018.
+- Meta Engineering, [“How Instagram suggests new content”](https://engineering.fb.com/2020/12/10/web/how-instagram-suggests-new-content/), December 2020.
+- Meta Engineering, [“Scaling the Instagram Explore recommendations system”](https://engineering.fb.com/2023/08/09/ml-applications/scaling-instagram-explore-recommendations-system/), August 2023.
+- Meta Engineering, [“Journey to 1000 models: Scaling Instagram's recommendation system”](https://engineering.fb.com/2025/05/21/production-engineering/journey-to-1000-models-scaling-instagrams-recommendation-system/), May 2025.

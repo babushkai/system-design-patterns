@@ -1,945 +1,436 @@
-# Backpressure
+# Backpressure: Bounded Buffers, Flow Control, and Load Shedding
 
 ## TL;DR
 
-Backpressure is a flow control mechanism where downstream components signal upstream components to slow down when they cannot keep up with incoming data. Instead of buffering indefinitely (leading to memory exhaustion) or dropping data silently, backpressure creates a feedback loop that propagates load information throughout the system, allowing producers to adjust their rate.
+Backpressure is the propagation of downstream capacity information toward producers. It is complete only when it changes **enqueue or production behavior**. Slowing workers while an upstream accepts an unbounded backlog merely moves the failure.
+
+Every boundary needs a finite buffer, a full-buffer action, cancellation/deadline handling, and a signal the producer can obey. Options include blocking or asynchronous demand, explicit credits, cheap rejection, coalescing, sampling, degradation, or intentional loss. Durable queues absorb a bounded mismatch in time; they do not create service capacity.
+
+Backpressure governs already admitted work and defines the overload policy at every buffer. [Rate Limiting](./05-rate-limiting.md) owns entitlement/admission budgets, [Circuit Breakers](./06-circuit-breakers.md) own dependency health and in-flight calls, [Auto-Scaling](./08-auto-scaling.md) owns delayed capacity changes, and [Retries, Timeouts, and Hedging](./10-retries-timeouts-hedging.md) owns repeated attempts.
 
 ---
 
-## Why Backpressure?
+## 1. Flow-Control Contract
 
-Without backpressure:
+For every producer → buffer → consumer edge, define:
 
-```mermaid
-graph LR
-    P[Producer<br/>1000/s] --> Q[Queue<br/>unbounded]
-    Q --> C[Consumer<br/>100/s]
-    Q --> M[Memory grows<br/>without bound]
-    M --> OOM[OutOfMemoryError!<br/>System crashes]
-```
+| Field | Required answer |
+|---|---|
+| **Work unit** | Request, byte, message, frame, row, token, or weighted cost. |
+| **Capacity** | Sustainable consumer rate and concurrency under the real workload mix. |
+| **Buffer** | Location, count/byte limit, durability, ordering, and maximum residence time. |
+| **Signal** | Credit, demand, blocked write, reduced receive window, queue-full response, or lag notification. |
+| **Producer response** | Pause, slow, retry later, coalesce, sample, degrade, redirect, or discard. |
+| **Loss policy** | Which work may be dropped and how consumers learn about gaps. |
+| **Deadline** | When queued work becomes useless and who cancels it. |
+| **Fairness** | Tenant, priority, key, or flow isolation. |
+| **Recovery** | How backlog drains without overwhelming consumers or replaying expired work. |
 
-With backpressure:
+### Invariants
 
-```mermaid
-graph LR
-    P[Producer<br/>adjusts to 100/s] --> Q[Queue<br/>bounded]
-    Q --> C[Consumer<br/>100/s]
-    Q -.->|Slow down!| P
-    C -.->|Propagate back| P
-```
-
-Memory stays bounded, system stays stable.
-
----
-
-## Backpressure Strategies
-
-### 1. Blocking (Synchronous)
-
-```python
-import queue
-import threading
-from typing import TypeVar, Generic
-
-T = TypeVar('T')
-
-class BlockingQueue(Generic[T]):
-    """
-    Bounded queue that blocks producers when full.
-    Simplest form of backpressure.
-    """
-    def __init__(self, max_size: int):
-        self.queue = queue.Queue(maxsize=max_size)
-    
-    def put(self, item: T, timeout: float = None) -> bool:
-        """
-        Block until space available.
-        Returns False if timeout expires.
-        """
-        try:
-            self.queue.put(item, block=True, timeout=timeout)
-            return True
-        except queue.Full:
-            return False
-    
-    def get(self, timeout: float = None) -> T:
-        """Block until item available."""
-        return self.queue.get(block=True, timeout=timeout)
-    
-    @property
-    def size(self) -> int:
-        return self.queue.qsize()
-    
-    @property
-    def is_full(self) -> bool:
-        return self.queue.full()
-
-# Usage
-buffer = BlockingQueue[dict](max_size=1000)
-
-def producer():
-    while True:
-        data = fetch_data()
-        # Producer blocks here when queue is full
-        # This is backpressure in action
-        buffer.put(data)
-
-def consumer():
-    while True:
-        data = buffer.get()
-        process_slowly(data)  # Takes time
-```
-
-```
-Blocking Backpressure Timeline:
-
-Time ─────────────────────────────────────────────────────────►
-
-Producer: [produce][produce][produce][BLOCKED........][produce]
-                                          ▲
-                                          │
-Queue:    [--][███][█████████████████████████][████████]
-                                          │
-                                          Queue full!
-                                          │
-Consumer: [---][consume][consume][consume][consume][consume]
-```
-
-### 2. Dropping (Lossy)
-
-```python
-from enum import Enum
-from typing import Optional
-from collections import deque
-
-class DropPolicy(Enum):
-    DROP_OLDEST = "drop_oldest"   # Drop front of queue
-    DROP_NEWEST = "drop_newest"   # Drop incoming item
-    DROP_RANDOM = "drop_random"   # Drop random item
-
-class DroppingQueue(Generic[T]):
-    """
-    Bounded queue that drops items when full.
-    Good when recent data is more important.
-    """
-    def __init__(self, max_size: int, policy: DropPolicy = DropPolicy.DROP_OLDEST):
-        self.max_size = max_size
-        self.policy = policy
-        self.queue = deque(maxlen=max_size if policy == DropPolicy.DROP_OLDEST else None)
-        self.dropped_count = 0
-        self.lock = threading.Lock()
-    
-    def put(self, item: T) -> Optional[T]:
-        """
-        Add item to queue.
-        Returns dropped item if any.
-        """
-        with self.lock:
-            if self.policy == DropPolicy.DROP_OLDEST:
-                if len(self.queue) >= self.max_size:
-                    dropped = self.queue.popleft()
-                    self.dropped_count += 1
-                    self.queue.append(item)
-                    return dropped
-                self.queue.append(item)
-                return None
-            
-            elif self.policy == DropPolicy.DROP_NEWEST:
-                if len(self.queue) >= self.max_size:
-                    self.dropped_count += 1
-                    return item  # Drop incoming
-                self.queue.append(item)
-                return None
-    
-    def get(self) -> Optional[T]:
-        with self.lock:
-            if self.queue:
-                return self.queue.popleft()
-            return None
-
-# Example: Live metrics - old data less valuable
-metrics_queue = DroppingQueue[dict](
-    max_size=10000,
-    policy=DropPolicy.DROP_OLDEST
-)
-
-def emit_metric(metric: dict):
-    dropped = metrics_queue.put(metric)
-    if dropped:
-        # Optionally log dropped data
-        logger.debug(f"Dropped old metric: {dropped['timestamp']}")
-```
-
-### 3. Sampling
-
-```python
-import random
-import time
-from dataclasses import dataclass
-from typing import Callable
-
-@dataclass
-class SamplingConfig:
-    base_rate: float = 1.0        # 100% at low load
-    min_rate: float = 0.01        # Never below 1%
-    load_threshold: float = 0.8   # Start sampling above 80% load
-
-class AdaptiveSampler:
-    """
-    Reduce sampling rate based on load.
-    Good for metrics, logs, or analytics.
-    """
-    def __init__(self, config: SamplingConfig):
-        self.config = config
-        self.current_rate = config.base_rate
-        self.queue_size = 0
-        self.max_queue_size = 10000
-    
-    def update_load(self, queue_size: int, max_size: int):
-        """Adjust sampling rate based on queue fill level"""
-        self.queue_size = queue_size
-        self.max_queue_size = max_size
-        
-        load = queue_size / max_size
-        
-        if load < self.config.load_threshold:
-            self.current_rate = self.config.base_rate
-        else:
-            # Linear reduction from base_rate to min_rate
-            excess_load = (load - self.config.load_threshold) / (1 - self.config.load_threshold)
-            self.current_rate = max(
-                self.config.min_rate,
-                self.config.base_rate * (1 - excess_load)
-            )
-    
-    def should_sample(self) -> bool:
-        """Probabilistically decide whether to sample this item"""
-        return random.random() < self.current_rate
-    
-    def sample(self, item: T, process: Callable[[T], None]):
-        if self.should_sample():
-            process(item)
-
-# Usage: Trace sampling under load
-sampler = AdaptiveSampler(SamplingConfig(
-    base_rate=1.0,    # Sample 100% normally
-    min_rate=0.001,   # Sample 0.1% under extreme load
-    load_threshold=0.7
-))
-
-def process_trace(trace: dict):
-    if sampler.should_sample():
-        send_to_tracing_backend(trace)
-```
-
-```
-Adaptive Sampling:
-
-Queue Load:    0%      50%      70%      90%      100%
-               │        │        │        │        │
-Sample Rate: 100%     100%      50%      10%       1%
-               │        │        │        │        │
-               └────────┴────────┴────────┴────────┘
-                   Normal     │  Degraded Operation
-                  Operation   │
-```
-
-### 4. Reactive Streams (Pull-Based)
-
-```python
-from abc import ABC, abstractmethod
-from typing import TypeVar, Generic
-import asyncio
-
-T = TypeVar('T')
-
-class Publisher(ABC, Generic[T]):
-    """Reactive streams publisher"""
-    @abstractmethod
-    def subscribe(self, subscriber: 'Subscriber[T]'):
-        pass
-
-class Subscriber(ABC, Generic[T]):
-    """Reactive streams subscriber"""
-    @abstractmethod
-    def on_subscribe(self, subscription: 'Subscription'):
-        pass
-    
-    @abstractmethod
-    def on_next(self, item: T):
-        pass
-    
-    @abstractmethod
-    def on_error(self, error: Exception):
-        pass
-    
-    @abstractmethod
-    def on_complete(self):
-        pass
-
-class Subscription(ABC):
-    """Reactive streams subscription"""
-    @abstractmethod
-    def request(self, n: int):
-        """Request n more items (pull-based backpressure)"""
-        pass
-    
-    @abstractmethod
-    def cancel(self):
-        pass
-
-# Implementation
-class BufferedPublisher(Publisher[T]):
-    def __init__(self, source: asyncio.Queue):
-        self.source = source
-        self.subscribers = []
-    
-    def subscribe(self, subscriber: Subscriber[T]):
-        subscription = BufferedSubscription(self.source, subscriber)
-        self.subscribers.append(subscription)
-        subscriber.on_subscribe(subscription)
-
-class BufferedSubscription(Subscription):
-    def __init__(self, source: asyncio.Queue, subscriber: Subscriber):
-        self.source = source
-        self.subscriber = subscriber
-        self.requested = 0
-        self.cancelled = False
-        self._task = None
-    
-    def request(self, n: int):
-        """Subscriber requests n more items"""
-        self.requested += n
-        if self._task is None:
-            self._task = asyncio.create_task(self._emit_loop())
-    
-    async def _emit_loop(self):
-        while not self.cancelled and self.requested > 0:
-            try:
-                # Only fetch when there's demand
-                item = await asyncio.wait_for(
-                    self.source.get(), 
-                    timeout=1.0
-                )
-                self.requested -= 1
-                self.subscriber.on_next(item)
-            except asyncio.TimeoutError:
-                continue
-            except Exception as e:
-                self.subscriber.on_error(e)
-                break
-        
-        self._task = None
-    
-    def cancel(self):
-        self.cancelled = True
-
-# Usage
-class ProcessingSubscriber(Subscriber[dict]):
-    def __init__(self, batch_size: int = 10):
-        self.batch_size = batch_size
-        self.subscription = None
-        self.buffer = []
-    
-    def on_subscribe(self, subscription: Subscription):
-        self.subscription = subscription
-        # Request initial batch
-        subscription.request(self.batch_size)
-    
-    def on_next(self, item: dict):
-        self.buffer.append(item)
-        
-        if len(self.buffer) >= self.batch_size:
-            self._process_batch()
-            # Request more only after processing
-            self.subscription.request(self.batch_size)
-    
-    def _process_batch(self):
-        # Process items
-        for item in self.buffer:
-            process(item)
-        self.buffer.clear()
-```
-
-```mermaid
-sequenceDiagram
-    participant S as Subscriber
-    participant P as Publisher
-
-    S->>P: Request 10 items
-    P-->>S: Items 1-10
-    Note over S: Processing...
-    S->>P: Request 10 more
-    P-->>S: Items 11-20
-    Note over S,P: Publisher only sends what<br/>subscriber requests.<br/>No buffer overflow possible.
-```
+1. Accepted but unfinished work is bounded by count, bytes, cost, and useful lifetime.
+2. A full downstream boundary eventually changes upstream admission or production.
+3. Producers cannot create unlimited hidden buffers outside the measured queue.
+4. Work whose deadline or consumer has disappeared is canceled before expensive execution where possible.
+5. Loss, coalescing, and sampling preserve a declared product semantic.
+6. Critical traffic retains a bounded share during optional-traffic overload.
+7. Recovery load is bounded; clearing a backlog cannot exceed downstream safe capacity.
 
 ---
 
-## Backpressure in Message Queues
+## 2. Data Plane and Control Plane
 
-### Kafka Consumer Backpressure
+~~~mermaid
+flowchart LR
+    subgraph DP["Data plane"]
+        P["Producer"]
+        A["Admission boundary"]
+        Q[("Bounded buffer<br/>count + bytes + age")]
+        C["Consumer pool"]
+        D["Downstream"]
+        X["Reject / drop /<br/>degrade / coalesce"]
+        P --> A
+        A -->|accepted| Q
+        A -->|full or expired| X
+        Q --> C --> D
+        C -.credits / demand.-> A
+        Q -.occupancy / age.-> A
+    end
 
-```python
-from kafka import KafkaConsumer
-from kafka.structs import TopicPartition
-import time
+    subgraph CP["Control plane"]
+        POL[("Versioned flow policy")]
+        SCALE["Capacity controller"]
+        OBS["Lag, goodput, drops,<br/>deadline and fairness"]
+        POL --> A
+        OBS --> SCALE
+    end
 
-class BackpressuredKafkaConsumer:
-    """
-    Kafka consumer with backpressure handling.
-    """
-    def __init__(
-        self,
-        topic: str,
-        group_id: str,
-        max_poll_records: int = 500,
-        max_poll_interval_ms: int = 300000,
-        processing_threshold: float = 0.8
-    ):
-        self.consumer = KafkaConsumer(
-            topic,
-            group_id=group_id,
-            # Limit records per poll (built-in backpressure)
-            max_poll_records=max_poll_records,
-            # Allow time for slow processing
-            max_poll_interval_ms=max_poll_interval_ms,
-            enable_auto_commit=False
-        )
-        self.processing_threshold = processing_threshold
-        self.current_batch_size = max_poll_records
-        self.min_batch_size = 10
-    
-    def consume_with_backpressure(self, process_batch: callable):
-        while True:
-            start_time = time.time()
-            
-            # Poll with current batch size
-            records = self.consumer.poll(
-                timeout_ms=1000,
-                max_records=self.current_batch_size
-            )
-            
-            if not records:
-                continue
-            
-            # Process records
-            for tp, messages in records.items():
-                for message in messages:
-                    process_batch(message)
-            
-            # Commit after processing
-            self.consumer.commit()
-            
-            # Adjust batch size based on processing time
-            processing_time = time.time() - start_time
-            self._adjust_batch_size(processing_time, len(records))
-    
-    def _adjust_batch_size(self, processing_time: float, record_count: int):
-        """Adaptive batch sizing based on processing speed"""
-        # Target: process within 80% of max_poll_interval
-        target_time = (self.consumer.config['max_poll_interval_ms'] / 1000) * self.processing_threshold
-        
-        if processing_time > target_time:
-            # Too slow - reduce batch size
-            self.current_batch_size = max(
-                self.min_batch_size,
-                int(self.current_batch_size * 0.8)
-            )
-            print(f"Reducing batch size to {self.current_batch_size}")
-        elif processing_time < target_time * 0.5 and record_count == self.current_batch_size:
-            # Fast processing - can increase batch size
-            self.current_batch_size = min(
-                self.consumer.config['max_poll_records'],
-                int(self.current_batch_size * 1.2)
-            )
-```
+    DP -.telemetry.-> OBS
+    SCALE -.delayed capacity.-> C
+~~~
 
-### RabbitMQ Prefetch
-
-```python
-import pika
-from typing import Callable
-
-class BackpressuredRabbitConsumer:
-    """
-    RabbitMQ consumer using prefetch for backpressure.
-    """
-    def __init__(
-        self,
-        queue_name: str,
-        prefetch_count: int = 10
-    ):
-        self.connection = pika.BlockingConnection(
-            pika.ConnectionParameters('localhost')
-        )
-        self.channel = self.connection.channel()
-        self.queue_name = queue_name
-        
-        # Prefetch limits unacked messages
-        # This is RabbitMQ's backpressure mechanism
-        self.channel.basic_qos(prefetch_count=prefetch_count)
-    
-    def consume(self, callback: Callable):
-        """
-        Consume with backpressure.
-        Only receives prefetch_count messages at a time.
-        Must ack before receiving more.
-        """
-        def on_message(channel, method, properties, body):
-            try:
-                callback(body)
-                # Ack releases slot for next message
-                channel.basic_ack(delivery_tag=method.delivery_tag)
-            except Exception as e:
-                # Nack and requeue on failure
-                channel.basic_nack(
-                    delivery_tag=method.delivery_tag,
-                    requeue=True
-                )
-        
-        self.channel.basic_consume(
-            queue=self.queue_name,
-            on_message_callback=on_message
-        )
-        
-        self.channel.start_consuming()
-
-# Visualization
-"""
-Prefetch = 3:
-
-RabbitMQ Queue: [1][2][3][4][5][6][7][8][9][10]...
-                 │  │  │
-                 └──┴──┴──► Consumer (processing 1,2,3)
-                 
-Consumer acks message 1:
-
-RabbitMQ Queue: [4][5][6][7][8][9][10]...
-                 │  │  │
-                 └──┴──┴──► Consumer (now has 2,3,4)
-
-Always exactly prefetch_count in-flight
-"""
-```
+The data plane must remain bounded without waiting for the autoscaler or configuration service. The control plane can change capacity and policy later; it cannot rescue an unbounded buffer during a fast burst.
 
 ---
 
-## HTTP Backpressure
+## 3. Flow Control at Different Layers
 
-### Server-Side Throttling
+### Transport flow control
 
-```python
-from flask import Flask, request, jsonify
-from functools import wraps
-import time
-import threading
+TCP receive windows and HTTP/2 or QUIC stream/connection credits prevent a fast sender from overflowing protocol buffers at the receiver. They do not know whether the application’s database, worker pool, or user-level queue has capacity. If the application eagerly reads the socket into an unbounded heap queue, transport backpressure has ended too early.
 
-app = Flask(__name__)
+### Application demand and credits
 
-class LoadBasedThrottler:
-    """Throttle requests based on server load"""
-    
-    def __init__(
-        self,
-        max_concurrent: int = 100,
-        queue_size: int = 500,
-        load_shed_threshold: float = 0.9
-    ):
-        self.max_concurrent = max_concurrent
-        self.queue_size = queue_size
-        self.load_shed_threshold = load_shed_threshold
-        
-        self.active_requests = 0
-        self.queued_requests = 0
-        self.lock = threading.Lock()
-    
-    def acquire(self, timeout: float = 30.0) -> bool:
-        """Try to acquire a request slot"""
-        deadline = time.time() + timeout
-        
-        while time.time() < deadline:
-            with self.lock:
-                # Check if we should shed load
-                load = self.active_requests / self.max_concurrent
-                if load >= self.load_shed_threshold and self.queued_requests > 0:
-                    return False  # Shed load
-                
-                if self.active_requests < self.max_concurrent:
-                    self.active_requests += 1
-                    return True
-                
-                if self.queued_requests < self.queue_size:
-                    self.queued_requests += 1
-                else:
-                    return False  # Queue full
-            
-            time.sleep(0.01)  # Wait for slot
-            
-            with self.lock:
-                self.queued_requests -= 1
-        
-        return False
-    
-    def release(self):
-        """Release a request slot"""
-        with self.lock:
-            self.active_requests -= 1
-    
-    def get_stats(self) -> dict:
-        with self.lock:
-            return {
-                'active': self.active_requests,
-                'queued': self.queued_requests,
-                'max_concurrent': self.max_concurrent,
-                'load': self.active_requests / self.max_concurrent
-            }
+Pull/demand protocols let a consumer grant a bounded number of elements or bytes. Reactive Streams requires demand before a publisher sends elements. Credit must correspond to actual downstream capacity, not merely the ability to copy data into another buffer.
 
-throttler = LoadBasedThrottler()
+Track bytes or weighted work when item sizes vary. “Ten messages” can mean ten tiny events or ten multi-megabyte objects.
 
-def with_backpressure(f):
-    @wraps(f)
-    def wrapper(*args, **kwargs):
-        if not throttler.acquire(timeout=30.0):
-            return jsonify({
-                'error': 'Service overloaded',
-                'retry_after': 5
-            }), 503, {'Retry-After': '5'}
-        
-        try:
-            return f(*args, **kwargs)
-        finally:
-            throttler.release()
-    
-    return wrapper
+### Queue/broker flow control
 
-@app.route('/api/heavy-operation', methods=['POST'])
-@with_backpressure
-def heavy_operation():
-    # Simulate heavy processing
-    time.sleep(2)
-    return jsonify({'status': 'success'})
+A durable broker decouples availability and permits replay. It transfers the backlog to durable storage and extends the time available to recover. Producers still need:
 
-@app.route('/health/load')
-def load_health():
-    stats = throttler.get_stats()
-    status_code = 200 if stats['load'] < 0.8 else 503
-    return jsonify(stats), status_code
-```
+- quota and queue-depth/age admission;
+- broker publish failure handling;
+- a maximum retained backlog;
+- a policy for expiration, compaction, or dead-lettering;
+- a consumer catch-up rate above new arrival rate.
 
-### Client-Side Response
+Pausing a consumer does not backpressure a producer unless queue policy eventually rejects, slows, or changes producer behavior.
 
-```python
-import requests
-import time
-from typing import Optional, Callable
-import random
+### Work scheduler
 
-class BackpressureAwareClient:
-    """HTTP client that respects server backpressure signals"""
-    
-    def __init__(
-        self,
-        base_url: str,
-        max_retries: int = 5,
-        base_delay: float = 1.0,
-        max_delay: float = 60.0
-    ):
-        self.base_url = base_url
-        self.max_retries = max_retries
-        self.base_delay = base_delay
-        self.max_delay = max_delay
-        self.session = requests.Session()
-    
-    def request(
-        self,
-        method: str,
-        path: str,
-        **kwargs
-    ) -> requests.Response:
-        """Make request with exponential backoff on 429/503"""
-        
-        for attempt in range(self.max_retries):
-            try:
-                response = self.session.request(
-                    method,
-                    f"{self.base_url}{path}",
-                    **kwargs
-                )
-                
-                if response.status_code == 429 or response.status_code == 503:
-                    # Server is telling us to back off
-                    retry_after = self._get_retry_after(response)
-                    delay = retry_after or self._calculate_backoff(attempt)
-                    
-                    print(f"Server backpressure: waiting {delay:.1f}s (attempt {attempt + 1})")
-                    time.sleep(delay)
-                    continue
-                
-                return response
-                
-            except requests.exceptions.ConnectionError:
-                # Server might be overloaded
-                delay = self._calculate_backoff(attempt)
-                time.sleep(delay)
-        
-        raise MaxRetriesExceeded(f"Failed after {self.max_retries} attempts")
-    
-    def _get_retry_after(self, response: requests.Response) -> Optional[float]:
-        """Parse Retry-After header"""
-        retry_after = response.headers.get('Retry-After')
-        if retry_after:
-            try:
-                return float(retry_after)
-            except ValueError:
-                pass
-        return None
-    
-    def _calculate_backoff(self, attempt: int) -> float:
-        """Exponential backoff with jitter"""
-        delay = self.base_delay * (2 ** attempt)
-        delay = min(delay, self.max_delay)
-        # Add jitter to prevent thundering herd
-        jitter = random.uniform(0, delay * 0.1)
-        return delay + jitter
-
-# Usage
-client = BackpressureAwareClient("https://api.example.com")
-response = client.request("POST", "/api/heavy-operation", json={"data": "..."})
-```
+Concurrency permits bound work that left the queue. Separate pending work from running work. If every worker takes many items into a local prefetch buffer, the broker may look empty while a large, invisible backlog waits on workers; bound and observe prefetch.
 
 ---
 
-## Streaming Backpressure
+## 4. Buffer Sizing and Queue Stability
 
-### gRPC Streaming
+Let:
 
-```python
-import grpc
-from concurrent import futures
-import queue
-import threading
+- <code>lambda</code>: arrival work units/s;
+- <code>mu</code>: sustainable completion units/s;
+- <code>Q</code>: maximum queued units;
+- <code>S</code>: mean service time;
+- <code>D</code>: maximum useful queue delay.
 
-class BackpressuredStreamService(StreamServiceServicer):
-    """gRPC service with streaming backpressure"""
-    
-    def BidirectionalStream(self, request_iterator, context):
-        """
-        gRPC streaming with flow control.
-        Client controls consumption rate.
-        """
-        buffer = queue.Queue(maxsize=100)
-        producer_done = threading.Event()
-        
-        def produce():
-            try:
-                for request in request_iterator:
-                    # Block if buffer is full (backpressure)
-                    buffer.put(process_request(request), block=True)
-            finally:
-                producer_done.set()
-        
-        # Start producer thread
-        producer = threading.Thread(target=produce)
-        producer.start()
-        
-        # Yield responses as buffer has items
-        while not (producer_done.is_set() and buffer.empty()):
-            try:
-                response = buffer.get(timeout=0.1)
-                yield response
-            except queue.Empty:
-                continue
-        
-        producer.join()
+During overload, backlog grows at:
 
-# Client-side flow control
-def streaming_client_with_backpressure(stub):
-    """Client that controls its consumption rate"""
-    
-    def request_generator():
-        for i in range(1000):
-            yield Request(id=i)
-            # Client-side rate limiting
-            time.sleep(0.1)  # Don't overwhelm server
-    
-    # Process responses at our own pace
-    for response in stub.BidirectionalStream(request_generator()):
-        process_slowly(response)  # Taking time is OK
-        # gRPC handles backpressure via HTTP/2 flow control
-```
+> backlog growth rate = max(0, lambda − mu)
 
-### Async Generators
+A free buffer of <code>Q_free</code> fills after approximately:
 
-```python
-import asyncio
-from typing import AsyncIterator, TypeVar
+> time to full = Q_free / (lambda − mu), when lambda > mu
 
-T = TypeVar('T')
+After arrivals fall to <code>lambda_recovery < mu</code>, a backlog <code>B</code> drains in:
 
-class BackpressuredPipeline:
-    """Async pipeline with built-in backpressure"""
-    
-    def __init__(self, buffer_size: int = 10):
-        self.buffer_size = buffer_size
-    
-    async def produce(self) -> AsyncIterator[dict]:
-        """Producer yields items, respecting consumer pace"""
-        for i in range(1000):
-            data = await fetch_data(i)
-            yield data
-            # Yielding allows consumer to control pace
-    
-    async def transform(
-        self, 
-        source: AsyncIterator[T],
-        buffer_size: int = None
-    ) -> AsyncIterator[T]:
-        """Transform stage with bounded buffer"""
-        buffer_size = buffer_size or self.buffer_size
-        buffer = asyncio.Queue(maxsize=buffer_size)
-        
-        async def fill_buffer():
-            async for item in source:
-                # Blocks when buffer full (backpressure)
-                await buffer.put(item)
-            await buffer.put(None)  # Sentinel
-        
-        # Start filling buffer
-        filler = asyncio.create_task(fill_buffer())
-        
-        while True:
-            item = await buffer.get()
-            if item is None:
-                break
-            
-            transformed = await process(item)
-            yield transformed
-        
-        await filler
-    
-    async def consume(self, source: AsyncIterator[dict]):
-        """Consumer pulls at its own pace"""
-        async for item in source:
-            await slow_operation(item)
+> drain time = B / (mu − lambda_recovery)
 
-# Usage
-async def main():
-    pipeline = BackpressuredPipeline(buffer_size=10)
-    
-    # Compose pipeline
-    source = pipeline.produce()
-    transformed = pipeline.transform(source)
-    
-    # Consumer controls the pace
-    await pipeline.consume(transformed)
-```
+If recovery arrival stays at or above completion, it never drains.
+
+Little’s Law relates average queue occupancy <code>Lq</code>, admitted arrival <code>lambda_a</code>, and average wait <code>Wq</code>:
+
+> Lq = lambda_a × Wq
+
+Size the queue from useful wait and memory/disk cost, not from the largest integer supported. If callers have deadline <code>D</code>, capacity beyond roughly <code>mu × D</code> often stores work that cannot finish usefully; workload variance and priorities require simulation, not blind equality.
+
+### Count and byte bounds
+
+Enforce both. A count-only queue fails on oversized items; a byte-only queue can fail on per-item metadata, timers, file descriptors, or scheduler overhead. Weighted-cost bounds protect expensive operations.
 
 ---
 
-## Backpressure Metrics
+## 5. Backpressure Mechanisms
 
-```python
-from dataclasses import dataclass
-from prometheus_client import Gauge, Counter, Histogram
-import time
+### Blocking or asynchronous wait
 
-@dataclass
-class BackpressureMetrics:
-    queue_size: Gauge
-    queue_capacity: Gauge
-    items_dropped: Counter
-    wait_time: Histogram
-    throughput: Gauge
+The producer waits for capacity. This naturally propagates through a synchronous pipeline only if:
 
-class MonitoredQueue:
-    """Queue with backpressure monitoring"""
-    
-    def __init__(self, name: str, capacity: int):
-        self.name = name
-        self.capacity = capacity
-        self.queue = asyncio.Queue(maxsize=capacity)
-        
-        # Metrics
-        self.metrics = BackpressureMetrics(
-            queue_size=Gauge(
-                f'{name}_queue_size',
-                'Current queue size'
-            ),
-            queue_capacity=Gauge(
-                f'{name}_queue_capacity',
-                'Queue capacity'
-            ),
-            items_dropped=Counter(
-                f'{name}_items_dropped_total',
-                'Items dropped due to backpressure'
-            ),
-            wait_time=Histogram(
-                f'{name}_put_wait_seconds',
-                'Time waiting to put items',
-                buckets=[0.001, 0.01, 0.1, 1, 10, 60]
-            ),
-            throughput=Gauge(
-                f'{name}_throughput_per_second',
-                'Current throughput'
-            )
-        )
-        
-        self.metrics.queue_capacity.set(capacity)
-        self._last_count = 0
-        self._last_time = time.time()
-    
-    async def put(self, item, timeout: float = None) -> bool:
-        start = time.time()
-        
-        try:
-            if timeout:
-                await asyncio.wait_for(
-                    self.queue.put(item),
-                    timeout=timeout
-                )
-            else:
-                await self.queue.put(item)
-            
-            wait_time = time.time() - start
-            self.metrics.wait_time.observe(wait_time)
-            self.metrics.queue_size.set(self.queue.qsize())
-            return True
-            
-        except asyncio.TimeoutError:
-            self.metrics.items_dropped.inc()
-            return False
-    
-    async def get(self):
-        item = await self.queue.get()
-        self.metrics.queue_size.set(self.queue.qsize())
-        self._update_throughput()
-        return item
-    
-    def _update_throughput(self):
-        now = time.time()
-        elapsed = now - self._last_time
-        if elapsed >= 1.0:
-            throughput = (self.queue.qsize() - self._last_count) / elapsed
-            self.metrics.throughput.set(throughput)
-            self._last_count = self.queue.qsize()
-            self._last_time = now
-```
+- waits have deadlines and cancellation;
+- blocked producers do not hold scarce locks/transactions;
+- thread or coroutine counts are bounded;
+- cyclic dependencies cannot deadlock.
+
+Blocking an event loop or holding a database connection while waiting turns flow control into resource starvation.
+
+### Credit or pull
+
+Consumers grant explicit demand. This gives a clear upper bound:
+
+> outstanding elements ≤ granted credits + in-flight protocol race
+
+Return credit only after the resource it represents is actually released. Granting credit when an item is merely copied to another queue breaks the bound.
+
+### Explicit rejection
+
+Reject before expensive work with an overload-specific response. This is appropriate for interactive requests whose callers can degrade or retry later under the canonical retry policy. A rejection path must avoid expensive authentication, logging, serialization, or dependency calls after the decision.
+
+### Shaping
+
+Delay work to a controlled rate when the caller deadline and buffer bound permit it. Shaping turns burst into queue delay; its capacity math still applies. Long shaping queues hide overload and make cancellation essential.
+
+### Coalescing
+
+Replace many pending updates for the same key with the newest state, or combine identical reads into one in-flight call. This is correct only when intermediate events have no required semantics. State replication may coalesce desired state; a financial ledger may not.
+
+### Sampling and degradation
+
+Reduce optional work:
+
+- sample telemetry with known probability and weights;
+- lower image/video quality;
+- omit expensive enrichment;
+- return a cached/stale result with provenance;
+- aggregate many metrics into one summary.
+
+Make the mode visible so downstream analytics and users do not treat sampled or degraded data as complete.
+
+### Drop policy
+
+- **Drop newest:** preserves accepted order and backlog but penalizes current traffic.
+- **Drop oldest:** favors fresh work when old work loses value.
+- **LIFO service:** improves chance that served interactive requests still have live callers, but can starve old work.
+- **Priority drop:** preserves critical classes but needs quotas to prevent starvation.
+- **Deadline drop:** removes objectively expired work.
+
+Choose by product semantics, never by queue library default.
 
 ---
 
-## Key Takeaways
+## 6. End-to-End Propagation and Hidden Buffers
 
-1. **Bounded queues are essential**: Unbounded queues hide problems until OOM; bounded queues make backpressure explicit
+Inventory every place work can accumulate:
 
-2. **Choose the right strategy**: Blocking for correctness, dropping for availability, sampling for observability
+- client retry queue;
+- socket send/receive buffers;
+- proxy pending requests;
+- server accept backlog;
+- runtime executor or event-loop queue;
+- application channel;
+- broker topic/subscription;
+- consumer prefetch;
+- connection pool;
+- database lock/wait queue;
+- fallback and dead-letter paths.
 
-3. **Propagate backpressure**: Don't absorb pressure at one layer—propagate it back to the source
+The end-to-end bound is the sum of these reservoirs, and the deadline cost is their sequential wait. A bounded queue followed by an unbounded executor is not a bounded system.
 
-4. **Monitor queue depths**: Queue size is your early warning signal for capacity issues
+### Fan-out
 
-5. **Prefer pull over push**: Pull-based systems (reactive streams) make backpressure natural
+One input can create <code>F</code> downstream work units. Backpressure must account for amplification before fan-out. If branches have different speeds:
 
-6. **Client cooperation**: Clients should respect 429/503 responses and implement exponential backoff
+- block all branches for strict aligned semantics;
+- buffer each branch independently within bounds;
+- drop/degrade optional branches;
+- materialize once in a durable log and let branches own lag.
 
-7. **Adaptive behavior**: Adjust batch sizes, sampling rates, or concurrency based on observed load
+A slow optional consumer must not hold mandatory processing unless that coupling is deliberate.
+
+### Cycles
+
+Credit cycles can deadlock when A waits for B while B waits for A. Break cycles with bounded seed credit, separate control channels, or durable asynchronous boundaries. Never allow the backpressure signal itself to require capacity from the saturated data queue.
+
+---
+
+## 7. Fairness and Priority
+
+One FIFO mixes cheap/expensive, interactive/batch, and tenants. A large low-priority backlog can make critical traffic miss deadlines even after capacity returns.
+
+Use:
+
+- separate queues or concurrency pools by priority/resource class;
+- weighted fair scheduling;
+- per-tenant queue and in-flight bounds;
+- aging only where starvation is worse than missing fresh deadlines;
+- reserved critical capacity plus controlled borrowing.
+
+Priority must propagate. Marking a request high priority at the edge is useless if it waits behind bulk work in the database pool.
+
+Guard against priority inflation: only trusted policy may assign classes.
+
+---
+
+## 8. Cancellation and Abandoned Work
+
+When a client disconnects or deadline expires:
+
+1. Stop admitting downstream fan-out.
+2. Remove queued work if possible.
+3. Propagate cancellation to active operations.
+4. Release credits, permits, memory, and transactions once.
+5. Decide whether a committed side effect must finish despite caller loss.
+6. Record goodput separately from work completed too late.
+
+Cancellation is not rollback. A write may already have committed. Use idempotency and effect protocols from [Idempotency](../01-foundations/08-idempotency.md); do not blindly retry an ambiguous operation.
+
+For long jobs, cancellation may mean “stop future steps and compensate” rather than kill a process.
+
+---
+
+## 9. Concrete Failure Trace: Backpressure Stops at the Wrong Queue
+
+1. A downstream database slows from <code>mu_normal</code> to <code>mu_degraded</code>.
+2. Consumers reduce polling and their local queues remain bounded.
+3. The API continues accepting every request into a durable broker with no age/size admission.
+4. Broker depth grows; callers time out but messages remain valid to the worker.
+5. Autoscaling adds consumers, but the database is still the bottleneck.
+6. When the database recovers, old work plus live traffic and retries hit it together.
+7. Most old results are no longer useful; goodput stays low and the database overloads again.
+
+Backpressure existed only between broker and consumer. Fix the end-to-end contract: bound queue age/bytes, reject or degrade at enqueue, propagate deadlines into messages, discard expired work, reserve recovery capacity, and drain at a rate the database can sustain.
+
+---
+
+## 10. Backpressure versus Neighboring Controls
+
+| Mechanism | Canonical question |
+|---|---|
+| Rate limit | May this subject/resource introduce this much work over time? |
+| Concurrency limit | May another call be in flight to this dependency now? |
+| Circuit breaker | Does recent evidence say calls should be suppressed/probed? |
+| Backpressure | How does downstream saturation change upstream production and buffering? |
+| Autoscaling | How should capacity change after delayed measurements? |
+| Retry budget | How much extra attempt load may failures create? |
+
+Compose them:
+
+1. Reject invalid/unauthorized work cheaply.
+2. Apply admission entitlement.
+3. Check the deadline.
+4. Acquire bounded queue/concurrency capacity.
+5. Call through dependency protection.
+6. Retry only within the remaining deadline and aggregate retry budget.
+7. Feed sustained demand (not uncontrolled queue growth alone) to autoscaling.
+
+The exact order depends on whether a token is charged for rejected or completed work, but the accounting boundary must be explicit.
+
+---
+
+## 11. Capacity and Cost Model
+
+Include:
+
+- buffer memory = queued items × per-item retained bytes plus allocator/index overhead;
+- durable storage = arrival byte rate × retained backlog time × replication factor;
+- enqueue/dequeue and acknowledgement operations;
+- retry/dead-letter amplification;
+- network and serialization copies;
+- consumer idle headroom reserved for drain;
+- cost of dropped work already partially executed.
+
+For partitioned queues, total consumer parallelism may be bounded by partitions or ordering keys. Adding workers beyond eligible partitions does not raise <code>mu</code>. Hot keys create one slow partition while fleet averages look idle.
+
+To meet a drain objective <code>T_drain</code> for backlog <code>B</code> with recovery arrival <code>lambda_r</code>:
+
+> required completion rate ≥ lambda_r + B / T_drain
+
+Verify the downstream can tolerate that rate. Otherwise change the objective, shed backlog, or isolate drain capacity.
+
+Cost per **useful** completion matters. During overload, high CPU with many expired completions is poor goodput, not efficiency.
+
+---
+
+## 12. Operations and Migration
+
+### Introducing bounds
+
+1. Inventory and instrument every buffer.
+2. Add byte, count, age, and deadline visibility.
+3. Shadow the proposed full-buffer decision.
+4. Teach producers to obey the signal.
+5. Enable bounds for optional/low-priority work.
+6. Expand while monitoring goodput and fairness.
+7. Remove or cap hidden downstream buffers.
+
+Changing buffer size or drop order changes observable semantics. Version queue messages and consumer behavior when adding deadlines, priorities, coalescing, or gap markers.
+
+### Recovery runbook
+
+- stop/limit new optional enqueue;
+- cancel expired work;
+- measure backlog by age, priority, key, and cost;
+- establish safe downstream drain capacity;
+- isolate live traffic from backlog where needed;
+- raise consumers only while completion headroom remains;
+- avoid retrying dropped work without a new admission decision;
+- verify the system returns to low-lag stable state after the trigger is removed.
+
+---
+
+## 13. Security and Governance
+
+- Authenticate before granting tenant/priority credit, with an earlier cheap abuse guard.
+- Bound message/item size before allocation or deserialization.
+- Prevent user-supplied priority, partition, or cost from bypassing fairness.
+- Encrypt durable queues and inspect payload retention/privacy implications.
+- Redact queued payloads from diagnostics and dead-letter samples.
+- Apply deletion/retention policy to main, retry, dead-letter, spill, and local prefetch stores.
+- Protect control/credit channels from spoofing and starvation.
+- Audit emergency shedding, queue purge, replay, and priority-policy changes.
+
+Backlogs often contain the most complete copy of recently submitted sensitive data.
+
+---
+
+## 14. Observability
+
+At every boundary:
+
+- offered, admitted, completed, rejected, dropped, coalesced, sampled, and expired units/bytes;
+- queue count, bytes, oldest age, and residence-time distribution;
+- producer blocked time, credit starvation, and full-buffer duration;
+- consumer busy/idle time, service time, concurrency, and completion rate;
+- prefetch/local hidden backlog;
+- cancellation propagation and work completed after caller deadline;
+- goodput versus throughput;
+- fairness by bounded tenant/priority aggregation;
+- retry and dead-letter creation/replay.
+
+Queue depth without arrival and completion rate cannot predict whether lag is growing or draining. Oldest age is often closer to user impact than count.
+
+---
+
+## 15. Verification
+
+- burst above capacity and prove every buffer remains within count/byte bounds;
+- vary item size and processing cost independently;
+- stop consumers, fill queues, and verify producer behavior;
+- disconnect clients and verify queued/active cancellation and permit release;
+- overload one tenant, key, and optional branch while critical work continues;
+- create a hot partition and verify averages do not hide it;
+- test every drop/coalesce policy against product invariants and gap signaling;
+- partition credit/control channels without blocking emergency rejection;
+- recover with a large backlog and prove drain stays under downstream safe capacity;
+- add consumers beyond partition parallelism and verify capacity model;
+- push beyond saturation, remove excess arrival, and prove autonomous recovery;
+- reconcile accepted work with completed, expired, dropped, and still-pending outcomes.
+
+Test long enough to expose retention, dead-letter, and replay loops, not only a short request burst.
+
+---
+
+## 16. Decision Framework
+
+| Workload | Flow-control direction |
+|---|---|
+| Synchronous request, short deadline | Small/no queue, concurrency permit, early rejection |
+| Lossless ordered stream | Credit/pull, bounded durable buffer, producer pause |
+| Latest state supersedes old updates | Per-key coalescing |
+| Telemetry where completeness is statistical | Sampling with recorded probability/weights |
+| Durable jobs tolerating delay | Broker with age/size admission and drain plan |
+| Optional enrichment | Shed/degrade before mandatory path |
+| Cyclic topology | Explicit seed credit or durable cycle break |
+| Producer cannot slow and loss is forbidden | Provision for peak or move buffer to a capacity/retention contract that can hold it |
+
+If the producer cannot slow, work cannot be rejected, loss is forbidden, and storage is bounded, the requirements are inconsistent once arrival exceeds completion. Architecture cannot negotiate that arithmetic.
+
+---
+
+## Primary References
+
+- Reactive Streams, [Specification](https://www.reactive-streams.org/).
+- IETF, [RFC 9293: Transmission Control Protocol](https://www.rfc-editor.org/rfc/rfc9293.html), including receive-window flow control.
+- IETF, [RFC 9113: HTTP/2](https://www.rfc-editor.org/rfc/rfc9113.html), including stream and connection flow control.
+- Google SRE, [Handling Overload](https://sre.google/sre-book/handling-overload/).
+- Google SRE, [Addressing Cascading Failures](https://sre.google/sre-book/addressing-cascading-failures/).
+- Apache Kafka, [Consumer Configuration](https://kafka.apache.org/documentation/#consumerconfigs) and [Design](https://kafka.apache.org/documentation/#design).
+- Apache Flink, [Monitoring Back Pressure](https://nightlies.apache.org/flink/flink-docs-stable/docs/ops/monitoring/back_pressure/).

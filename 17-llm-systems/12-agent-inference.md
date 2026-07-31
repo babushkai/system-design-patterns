@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-Agent inference is a session-level workload, not a collection of independent chat calls. A task alternates model turns with tools and approvals; its context usually grows; most prior tokens are prefix-reusable; siblings may share a base prefix; and orchestrator fan-out converts one logical decision into a burst of concurrent prefills. The fleet must optimize task goodput under deadline, spend, and memory constraints—not request throughput in isolation.
+Agent inference is a session-level workload, not a collection of independent chat calls. A task alternates model turns with tools and approvals; its context usually grows; most prior tokens are prefix-reusable; siblings may share a base prefix; and orchestrator fan-out converts one logical decision into a burst of concurrent prefills. The fleet must optimize task goodput under deadline, spend, and memory constraints, not request throughput in isolation.
 
 The durable serving state is a logical session and context revision. KV cache is a derived, evictable acceleration artifact tied to an exact model/runtime/context identity; losing it changes latency and cost, not correctness. Routing therefore balances cache reuse against queueing, failure domains, and tenant fairness. Residency policy compares the opportunity cost of holding idle KV with the expected cost of demotion, transfer, or re-prefill when the session returns.
 
@@ -204,7 +204,7 @@ The numerator includes retries, synthesis, and cancelled branches. Shared-prefix
 
 ## Speculation and Structured Agent Output
 
-Agent turns often emit tool objects, code, diffs, or repeated file content. Some slices have predictable next tokens and may benefit from prompt lookup, an auxiliary draft model, multiple-token prediction, or externally supplied candidate output. The relevant variable is measured acceptance—not the label “agent traffic.”
+Agent turns often emit tool objects, code, diffs, or repeated file content. Some slices have predictable next tokens and may benefit from prompt lookup, an auxiliary draft model, multiple-token prediction, or externally supplied candidate output. The relevant variable is measured acceptance, not the label “agent traffic.”
 
 For draft length $k$, acceptance probability, drafter cost, verifier shape, batching level, and rollback overhead determine speedup. Speculation consumes spare compute to reduce sequential target-model steps; it can hurt when the target is already compute-bound, acceptance is low, or the drafter competes for scarce capacity. Measure by output class and concurrency, including quality equivalence and tail latency.
 
@@ -300,20 +300,20 @@ Begin with canonical session state and task-level measurement. Add affinity only
 - Canonical context and action state are durable. KV is an exact-identity, security-scoped, evictable performance artifact.
 - Cache hit rate is produced by context construction, routing, residency, failure, and rollout policy; it is not a fixed workload constant.
 - Hold/demote/evict decisions compare capacity opportunity cost with expected promotion or re-prefill cost under the tool-wait distribution.
-- Routing optimizes reuse value against queueing, risk, transfer, fairness, and deadline—not affinity at any cost.
+- Routing optimizes reuse value against queueing, risk, transfer, fairness, and deadline, not affinity at any cost.
 - Fan-out creates correlated burst load; shared prefixes reduce only the common prefill component and require compatible placement.
 - Speculation and constrained decoding are slice-specific optimizations whose benefit depends on acceptance, batching, schema diversity, and available compute.
 - Capacity and release decisions use verified task goodput, cost per success, and task-level deadlines, supported by step-level diagnostics.
 
 ## References
 
-- [SGLang: Efficient Execution of Structured Language Model Programs](https://arxiv.org/abs/2312.07104) — radix-tree prefix reuse and structured-program execution
-- [Efficient Memory Management for Large Language Model Serving with PagedAttention](https://arxiv.org/abs/2309.06180) — paged KV allocation and sharing
-- [Pensieve: Retaining Contexts for Multi-turn Dialogue in Large Language Model Serving](https://arxiv.org/abs/2312.05516) — multi-turn KV retention and migration
-- [DistServe: Disaggregating Prefill and Decoding for Goodput-optimized Large Language Model Serving](https://www.usenix.org/conference/osdi24/presentation/zhong-yinmin) — phase-specific goodput and disaggregation
-- [Mooncake: A KVCache-centric Disaggregated Architecture for LLM Serving](https://arxiv.org/abs/2407.00079) — distributed KV cache and disaggregated serving
-- [Fast Inference from Transformers via Speculative Decoding](https://arxiv.org/abs/2211.17192) — exact speculative decoding
-- [Orca: A Distributed Serving System for Transformer-Based Generative Models](https://www.usenix.org/conference/osdi22/presentation/yu) — iteration-level scheduling
-- [Context Management](./08-context-management.md) — context construction, compaction, and token economics
-- [GPU Inference Internals](./11-gpu-inference-internals.md) — phase rooflines, KV footprint, kernels, and parallelism
-- [LLM Infrastructure](./05-llm-infrastructure.md) — admission, routing, streaming, rollout, and regional serving architecture
+- [SGLang: Efficient Execution of Structured Language Model Programs](https://arxiv.org/abs/2312.07104): radix-tree prefix reuse and structured-program execution
+- [Efficient Memory Management for Large Language Model Serving with PagedAttention](https://arxiv.org/abs/2309.06180): paged KV allocation and sharing
+- [Pensieve: Retaining Contexts for Multi-turn Dialogue in Large Language Model Serving](https://arxiv.org/abs/2312.05516): multi-turn KV retention and migration
+- [DistServe: Disaggregating Prefill and Decoding for Goodput-optimized Large Language Model Serving](https://www.usenix.org/conference/osdi24/presentation/zhong-yinmin): phase-specific goodput and disaggregation
+- [Mooncake: A KVCache-centric Disaggregated Architecture for LLM Serving](https://arxiv.org/abs/2407.00079): distributed KV cache and disaggregated serving
+- [Fast Inference from Transformers via Speculative Decoding](https://arxiv.org/abs/2211.17192): exact speculative decoding
+- [Orca: A Distributed Serving System for Transformer-Based Generative Models](https://www.usenix.org/conference/osdi22/presentation/yu): iteration-level scheduling
+- [Context Management](./08-context-management.md): context construction, compaction, and token economics
+- [GPU Inference Internals](./11-gpu-inference-internals.md): phase rooflines, KV footprint, kernels, and parallelism
+- [LLM Infrastructure](./05-llm-infrastructure.md): admission, routing, streaming, rollout, and regional serving architecture

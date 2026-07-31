@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-A dataset is not a file; it is a reproducible claim about a slice of the world. In production ML, the dataset is the model's specification, so dataset management plays the same role that source control plays for code: it makes behavior traceable, reviewable, and rebuildable. The hard parts are not storing terabytes cheaply. The hard parts are immutability, point-in-time reconstruction, split reproducibility, lineage, privacy deletion, and detecting when a dataset changed meaning without changing schema. A training run that says "trained on June data" is not reproducible; a training run that pins source versions, extraction time, feature versions, label definition, observation windows, split assignment, and content hashes is. The core invariant is simple: **every model must be traceable to an immutable dataset snapshot, and every dataset snapshot must be reconstructable or explicitly retained.**
+A dataset is a versioned, reproducible claim about a population, not a file. Each training release must pin source versions, extraction time, feature and label definitions, observation windows, split assignment, privacy state, and content identity. Immutability, point-in-time reconstruction, lineage, deletion, and semantic-change detection determine whether the model can be explained or rebuilt.
 
 ---
 
@@ -12,7 +12,7 @@ Traditional software can usually be rebuilt from source code, dependencies, and 
 
 The failure mode is familiar. A team trains a model in March and deploys it. In June, quality regresses. Someone tries to reproduce the March model to compare behavior, but the warehouse tables have been backfilled, late events have arrived, deleted rows are gone, a label policy changed, and a feature definition was updated in place. The query still runs, but it no longer returns the dataset the March model saw. The team can rebuild *a* model, but not *the* model. Rollback, audit, and debugging are now guesswork.
 
-The engineering lesson is that a dataset used for training is a release artifact. It needs identity, ownership, lineage, retention, and compatibility rules. A model artifact without a dataset contract is like a binary without source control: it may run, but it cannot be explained.
+Treat every training dataset as a release artifact with identity, ownership, lineage, retention, and compatibility rules. A model without a dataset contract may run, but it cannot be explained.
 
 ---
 
@@ -70,7 +70,7 @@ WHERE t.created_at >= '2026-01-01'
 
 This query is mutable even if the text never changes. Late events arrive. Backfills rewrite history. Chargeback status changes. Rows are deleted for privacy. Source schemas add enum values. The query is stable; the result is not.
 
-The fix is snapshotting: bind every source read to an immutable version. Warehouses and lakehouse table formats offer different mechanisms — BigQuery snapshots, Snowflake time travel, Iceberg/Delta/Hudi table versions, object-store manifests — but the invariant is the same: the training dataset must be a function of immutable inputs.
+The fix is snapshotting: bind every source read to an immutable version. Warehouses and lakehouse table formats offer different mechanisms (BigQuery snapshots, Snowflake time travel, Iceberg/Delta/Hudi table versions, object-store manifests), but the invariant is the same: the training dataset must be a function of immutable inputs.
 
 ```text
 dataset_snapshot = extraction_code(commit)
@@ -82,9 +82,9 @@ dataset_snapshot = extraction_code(commit)
 
 If any term is unpinned, reproducibility is broken. `latest` is the enemy. `current_features` is the enemy. `main` is the enemy. The dataset contract must name exact versions, not moving aliases.
 
-### How Time Travel Actually Works — and When It Silently Stops
+### How Time Travel Actually Works, and When It Silently Stops
 
-Lakehouse table formats make creation of a snapshot metadata-efficient, and understanding the mechanism explains both why the commit is cheap and where long-term retention becomes costly. An Iceberg table is a tree of immutable metadata: a table pointer names a metadata file, which lists *snapshots*; each snapshot points to a manifest list; each manifest names data files with statistics. A commit writes new data files and a new metadata tree—it does not modify the older data-file set in place:
+Lakehouse table formats make creation of a snapshot metadata-efficient, and understanding the mechanism explains both why the commit is cheap and where long-term retention becomes costly. An Iceberg table is a tree of immutable metadata: a table pointer names a metadata file, which lists *snapshots*; each snapshot points to a manifest list; each manifest names data files with statistics. A commit writes new data files and a new metadata tree: it does not modify the older data-file set in place:
 
 ```text
 table pointer → metadata.json
@@ -93,7 +93,7 @@ table pointer → metadata.json
                  └─ snapshot 881219  → manifest-list → [...]
 ```
 
-Reading an old snapshot is just reading an old tree — which is why pinning `snapshot: 881204` in the dataset contract costs nothing at write time:
+Reading an old snapshot is just reading an old tree, which is why pinning `snapshot: 881204` in the dataset contract costs nothing at write time:
 
 ```sql
 -- Iceberg (Spark SQL)
@@ -135,7 +135,7 @@ feature_values_v8
 
 For training, the pipeline must choose which truth it wants. To reproduce a historical model, use the view as it existed then. To train a new model after the bug fix, use the corrected version or a new feature version. Both are legitimate; conflating them is not.
 
-This mirrors database temporal modeling. There is **valid time** — when a fact was true in the domain — and **transaction time** — when the system learned or stored it. ML datasets often need both. A label may be valid for a transaction in January but observed in March. A feature may describe an event at 10:00 but become available at 10:10. Reproducible datasets must respect what was available to the model at the time of decision or training.
+This mirrors database temporal modeling. There is **valid time**, when a fact was true in the domain, and **transaction time**, when the system learned or stored it. ML datasets often need both. A label may be valid for a transaction in January but observed in March. A feature may describe an event at 10:00 but become available at 10:10. Reproducible datasets must respect what was available to the model at the time of decision or training.
 
 ---
 
@@ -166,7 +166,7 @@ split_assignments
 
 This seems bureaucratic until a metric changes because someone reran the split with a different seed. If the validation set is part of the measurement instrument, changing it changes the instrument. Treat it accordingly.
 
-For entity-disjoint splits, the strongest implementation is *stateless hashing* rather than a seeded shuffle, because it stays stable as the dataset grows — an entity keeps its assignment forever, even across dataset versions, without storing or coordinating anything:
+For entity-disjoint splits, the strongest implementation is *stateless hashing* rather than a seeded shuffle, because it stays stable as the dataset grows: an entity keeps its assignment forever, even across dataset versions, without storing or coordinating anything:
 
 ```python
 import hashlib
@@ -196,9 +196,9 @@ manifest_hash sha256:ccc...
 
 The manifest gives three properties:
 
-1. **Reproducible reads** — a training job reads the files named in the manifest, not whatever files happen to match a prefix.
-2. **Integrity checking** — corrupted or replaced files are detected by hash mismatch.
-3. **Cacheability** — pipeline steps can key on manifest hash, not path or timestamp.
+1. **Reproducible reads**: a training job reads the files named in the manifest, not whatever files happen to match a prefix.
+2. **Integrity checking**: corrupted or replaced files are detected by hash mismatch.
+3. **Cacheability**: pipeline steps can key on manifest hash, not path or timestamp.
 
 Content addressing also prevents a subtle cache bug. If a dataset path is reused for new contents, a pipeline cache keyed on path may return stale features or stale evaluation results. If the key includes the manifest hash, new bytes create a new cache key automatically.
 
@@ -252,8 +252,8 @@ Compatibility is a relation between producer and consumer contracts, not a prope
 
 Dataset lineage answers two questions:
 
-1. **Provenance** — what produced this dataset?
-2. **Impact** — what depends on this dataset or source?
+1. **Provenance**: what produced this dataset?
+2. **Impact**: what depends on this dataset or source?
 
 Provenance is needed for debugging and audit. Impact is needed during incidents. If a source table double-counted transactions for a week, the platform must answer which datasets included that source version, which models trained on those datasets, and which deployments served those models.
 
@@ -384,7 +384,7 @@ Freshness by itself is dangerous. A fresh but semantically broken dataset should
 
 **Lineage gaps** leave the team unable to answer which models used a corrupted source. Defense: automatic pipeline-written lineage edges from sources to datasets to training runs to models.
 
-**Privacy deletion breaks rollback** when a retained model depends on a dataset that can no longer be reconstructed. Defense: dataset state tracking — retained, redacted, expired — and rollback validation that checks data availability.
+**Privacy deletion breaks rollback** when a retained model depends on a dataset that can no longer be reconstructed. Defense: dataset state tracking (retained, redacted, expired) and rollback validation that checks data availability.
 
 **Manifest/path mismatch** occurs when files under a path change but the dataset version name does not. Defense: content hashes and manifest hashes as the actual identity.
 
@@ -447,11 +447,11 @@ If the answer to any of these is no, model metrics may still exist, but they are
 
 ## References
 
-1. [Hidden Technical Debt in Machine Learning Systems](https://proceedings.neurips.cc/paper_files/paper/2015/file/86df7dcfd896fcaf2674f757a2463eba-Paper.pdf) — Sculley et al., 2015
-2. [Data Validation for Machine Learning](https://mlsys.org/Conferences/2019/doc/2019/167.pdf) — Breck et al., 2019
-3. [Datasheets for Datasets](https://arxiv.org/abs/1803.09010) — Gebru et al., 2018
-4. [Delta Lake: High-Performance ACID Table Storage over Cloud Object Stores](https://www.vldb.org/pvldb/vol13/p3411-armbrust.pdf) — Armbrust et al., VLDB 2020
-5. [Apache Iceberg Table Format](https://iceberg.apache.org/spec/) — snapshot and manifest-based lakehouse tables
-6. [DVC Documentation](https://dvc.org/doc) — data and model versioning concepts
+1. [Hidden Technical Debt in Machine Learning Systems](https://proceedings.neurips.cc/paper_files/paper/2015/file/86df7dcfd896fcaf2674f757a2463eba-Paper.pdf): Sculley et al., 2015
+2. [Data Validation for Machine Learning](https://mlsys.org/Conferences/2019/doc/2019/167.pdf): Breck et al., 2019
+3. [Datasheets for Datasets](https://arxiv.org/abs/1803.09010): Gebru et al., 2018
+4. [Delta Lake: High-Performance ACID Table Storage over Cloud Object Stores](https://www.vldb.org/pvldb/vol13/p3411-armbrust.pdf): Armbrust et al., VLDB 2020
+5. [Apache Iceberg Table Format](https://iceberg.apache.org/spec/): snapshot and manifest-based lakehouse tables
+6. [DVC Documentation](https://dvc.org/doc): data and model versioning concepts
 7. [Lakehouse and Open Table Formats](../13-data-pipelines/05-lakehouse-table-formats.md)
-8. [Apache Iceberg Snapshot Retention](https://iceberg.apache.org/docs/latest/maintenance/) — expiration and reachability of snapshot files
+8. [Apache Iceberg Snapshot Retention](https://iceberg.apache.org/docs/latest/maintenance/): expiration and reachability of snapshot files

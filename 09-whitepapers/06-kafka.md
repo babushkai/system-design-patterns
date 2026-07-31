@@ -1,809 +1,141 @@
-# Kafka: A Distributed Messaging System for Log Processing
-
-## Paper Overview
-
-- **Title**: Kafka: a Distributed Messaging System for Log Processing
-- **Authors**: Jay Kreps, Neha Narkhede, Jun Rao (LinkedIn)
-- **Published**: NetDB Workshop 2011
-- **Context**: LinkedIn needed high-throughput, low-latency log processing
-
-## TL;DR
-
-Kafka is a distributed commit log that provides:
-- **High throughput** through sequential disk I/O and batching
-- **Scalability** via partitioned topics
-- **Durability** through replication
-- **Simple consumer model** with offset-based tracking
-
-## Problem Statement
-
-### Log Processing Challenges
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                   LinkedIn's Requirements                        │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  Activity Data:                                                 │
-│  ┌─────────────────────────────────────────────┐                │
-│  │  - Page views: billions per day             │                │
-│  │  - User actions: clicks, searches, etc.     │                │
-│  │  - System metrics: CPU, memory, latency     │                │
-│  └─────────────────────────────────────────────┘                │
-│                                                                  │
-│  Use Cases:                                                     │
-│  ┌─────────────────────────────────────────────┐                │
-│  │  - Real-time analytics dashboards           │                │
-│  │  - Offline batch processing (Hadoop)        │                │
-│  │  - Search indexing                          │                │
-│  │  - Recommendation systems                   │                │
-│  └─────────────────────────────────────────────┘                │
-│                                                                  │
-│  Existing Solutions Fall Short:                                 │
-│  ┌─────────────────────────────────────────────┐                │
-│  │  - Traditional MQ: Too slow, not scalable   │                │
-│  │  - Log files: No real-time, hard to manage  │                │
-│  │  - Custom solutions: Complex, fragile       │                │
-│  └─────────────────────────────────────────────┘                │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-## Kafka Architecture
-
-### Core Concepts
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Kafka Architecture                           │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  TOPIC: Named feed of messages                                  │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │                        Topic "clicks"                     │   │
-│  │  ┌────────────────────────────────────────────────────┐  │   │
-│  │  │ Partition 0:  [M0][M1][M2][M3][M4][M5]...          │  │   │
-│  │  └────────────────────────────────────────────────────┘  │   │
-│  │  ┌────────────────────────────────────────────────────┐  │   │
-│  │  │ Partition 1:  [M0][M1][M2][M3][M4]...              │  │   │
-│  │  └────────────────────────────────────────────────────┘  │   │
-│  │  ┌────────────────────────────────────────────────────┐  │   │
-│  │  │ Partition 2:  [M0][M1][M2][M3][M4][M5][M6]...      │  │   │
-│  │  └────────────────────────────────────────────────────┘  │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                                                                  │
-│  PARTITION: Ordered, immutable sequence of messages             │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │                                                           │   │
-│  │   Offset:  0    1    2    3    4    5    6    7          │   │
-│  │          ┌────┬────┬────┬────┬────┬────┬────┬────┐       │   │
-│  │          │ M0 │ M1 │ M2 │ M3 │ M4 │ M5 │ M6 │ M7 │       │   │
-│  │          └────┴────┴────┴────┴────┴────┴────┴────┘       │   │
-│  │                                              ▲            │   │
-│  │                                          append-only      │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                                                                  │
-│  BROKER: Server that stores partitions                          │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │  Broker 1        Broker 2        Broker 3                │   │
-│  │  ┌──────────┐   ┌──────────┐   ┌──────────┐              │   │
-│  │  │ P0, P3   │   │ P1, P4   │   │ P2, P5   │              │   │
-│  │  └──────────┘   └──────────┘   └──────────┘              │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### Message Flow
-
-```mermaid
-graph LR
-    subgraph Producers
-        P1[App 1]
-        P2[App 2]
-        P3[App 3]
-    end
-
-    subgraph Kafka["Kafka Broker Cluster"]
-        BC[Broker Cluster]
-    end
-
-    subgraph Consumers
-        CA[App A]
-        CB[App B]
-        CC[App C]
-    end
-
-    ZK[ZooKeeper<br/>metadata]
-
-    P1 -->|publish| BC
-    P2 -->|publish| BC
-    P3 -->|publish| BC
-
-    BC -->|consume| CA
-    BC -->|consume| CB
-    BC -->|consume| CC
-
-    BC --- ZK
-```
-
-## Log-Based Storage
-
-### Append-Only Log
-
-```properties
-# server.properties — Key broker settings for log-based storage
-#
-# Kafka's storage is an append-only commit log on disk.
-# Key insight: Sequential writes are FAST (~600 MB/s per disk).
-
-# ── Segment & retention ──────────────────────────────────────────
-# Each partition is split into segment files of this size (1 GB default).
-# When the active segment reaches this limit, Kafka rolls to a new one.
-log.segment.bytes=1073741824
-
-# How long to keep data before deletion (7 days default).
-log.retention.hours=168
-
-# Alternative: delete segments when total partition size exceeds this.
-# log.retention.bytes=-1  # -1 = unlimited
-
-# How often the log cleaner checks for segments to delete.
-log.retention.check.interval.ms=300000
-
-# ── Flush policy (usually leave to OS page cache) ────────────────
-# Number of messages before forcing a flush to disk.
-# Default: rely on OS page cache for best throughput.
-# log.flush.interval.messages=10000
-# log.flush.interval.ms=1000
-
-# ── Directories ──────────────────────────────────────────────────
-# Comma-separated list of directories for log data.
-# Spreading across multiple disks increases throughput.
-log.dirs=/var/kafka-logs
-```
-
-```shell
-# Inspect the on-disk log structure for a partition
-ls -l /var/kafka-logs/clicks-0/
-
-# Example output:
-# 00000000000000000000.index   <- sparse offset index
-# 00000000000000000000.log     <- segment file (messages)
-# 00000000000000000000.timeindex
-# 00000000000052428800.index   <- next segment (rolled at offset 52428800)
-# 00000000000052428800.log
-
-# Dump messages from a segment file
-kafka-dump-log.sh \
-  --files /var/kafka-logs/clicks-0/00000000000000000000.log \
-  --print-data-log
-```
-
-### Efficient I/O
-
-```
-Kafka I/O Optimizations
-
-Zero-copy transfer (sendfile syscall):
-  Traditional path:             Zero-copy path:
-  1. File → kernel buffer       1. File → kernel buffer
-  2. Kernel buf → user buf      2. Kernel buf → NIC (direct)
-  3. User buf → socket buf
-  4. Socket buf → NIC           Eliminates 2 copies
-                                and 2 context switches!
-
-Batched compression:
-  Messages are compressed together in batches rather than individually.
-  This yields a much better compression ratio because similar messages
-  share redundant byte patterns.
-
-Page-cache-friendly writes:
-  1. Producer appends to memory-mapped segment file.
-  2. OS page cache absorbs writes and flushes asynchronously.
-  3. Consumer reads recent data straight from page cache.
-  Result: Near-memory speed for recent (tail) data.
-```
-
-## Producer
-
-### Publishing Messages
-
-```shell
-# ── Topic creation ────────────────────────────────────────────────
-kafka-topics.sh --bootstrap-server localhost:9092 \
-  --create \
-  --topic clicks \
-  --partitions 6 \
-  --replication-factor 3
-
-# Verify topic configuration
-kafka-topics.sh --bootstrap-server localhost:9092 \
-  --describe --topic clicks
-
-# ── Producing messages ────────────────────────────────────────────
-# Interactive producer (key:value with key separator)
-kafka-console-producer.sh --bootstrap-server localhost:9092 \
-  --topic clicks \
-  --property parse.key=true \
-  --property key.separator=:
-# > user-123:{"page":"/home","ts":1700000000}
-# > user-456:{"page":"/cart","ts":1700000001}
-
-# Produce from a file
-kafka-console-producer.sh --bootstrap-server localhost:9092 \
-  --topic clicks < clickstream.jsonl
-
-# ── Partitioning behaviour ───────────────────────────────────────
-# When a key is provided:
-#   partition = murmur2(key) % num_partitions
-#   → Messages with the same key always land in the same partition
-#     (guarantees per-key ordering).
-#
-# When no key is provided:
-#   The default partitioner uses sticky round-robin (batch-aware)
-#   for even load distribution.
-#
-# Custom partitioning is configured in the Java producer:
-#   props.put("partitioner.class",
-#             "com.example.RegionPartitioner");
-```
-
-## Consumer
-
-### Consumer Groups
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Consumer Groups                              │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  Topic "orders" with 4 partitions                               │
-│  ┌────────────────────────────────────────────────────────┐     │
-│  │  P0          P1          P2          P3                │     │
-│  └──┬───────────┬───────────┬───────────┬─────────────────┘     │
-│     │           │           │           │                       │
-│     │           │           │           │                       │
-│  Consumer Group A                                               │
-│  (3 consumers)                                                  │
-│  ┌─────────────────────────────────────────────┐                │
-│  │  Consumer A1    Consumer A2    Consumer A3  │                │
-│  │    (P0, P1)       (P2)          (P3)        │                │
-│  └─────────────────────────────────────────────┘                │
-│                                                                  │
-│  Consumer Group B                                               │
-│  (2 consumers)                                                  │
-│  ┌────────────────────────────────────┐                         │
-│  │  Consumer B1        Consumer B2    │                         │
-│  │    (P0, P1)          (P2, P3)      │                         │
-│  └────────────────────────────────────┘                         │
-│                                                                  │
-│  Key Points:                                                    │
-│  - Each partition assigned to exactly one consumer in group     │
-│  - Consumer can handle multiple partitions                      │
-│  - Different groups receive all messages independently          │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### Consumer Implementation
-
-```java
-import org.apache.kafka.clients.consumer.*;
-import org.apache.kafka.common.serialization.StringDeserializer;
-import java.time.Duration;
-import java.util.*;
-
-/**
- * Kafka consumer with manual offset commit (at-least-once).
- *
- * Partition assignment strategies (set via partition.assignment.strategy):
- *   - RangeAssignor:           consecutive partitions per consumer
- *                              (good for co-partitioned joins)
- *   - RoundRobinAssignor:      even spread across consumers
- *   - CooperativeStickyAssignor: incremental rebalance, minimal partition moves
- */
-public class ClickConsumer {
-
-    public static void main(String[] args) {
-        Properties props = new Properties();
-        props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
-        props.put(ConsumerConfig.GROUP_ID_CONFIG, "click-analytics");
-        props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG,
-                  StringDeserializer.class.getName());
-        props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG,
-                  StringDeserializer.class.getName());
-        props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false");
-        props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
-        // Use cooperative rebalancing to avoid stop-the-world pauses
-        props.put(ConsumerConfig.PARTITION_ASSIGNMENT_STRATEGY_CONFIG,
-                  "org.apache.kafka.clients.consumer.CooperativeStickyAssignor");
-
-        try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(props)) {
-            consumer.subscribe(List.of("clicks"));
-
-            while (true) {
-                ConsumerRecords<String, String> records =
-                    consumer.poll(Duration.ofMillis(1000));
-
-                for (ConsumerRecord<String, String> record : records) {
-                    System.out.printf("partition=%d offset=%d key=%s value=%s%n",
-                        record.partition(), record.offset(),
-                        record.key(), record.value());
-                    // ... process record ...
-                }
-
-                // Manual synchronous commit after processing
-                // If crash between process and commit → messages reprocessed (at-least-once)
-                consumer.commitSync();
-            }
-        }
-    }
-}
-```
-
-```shell
-# ── Quick consumption with console consumer ──────────────────────
-kafka-console-consumer.sh --bootstrap-server localhost:9092 \
-  --topic clicks \
-  --group click-analytics \
-  --from-beginning \
-  --property print.key=true \
-  --property print.timestamp=true
-
-# ── Consumer group management ────────────────────────────────────
-# List all consumer groups
-kafka-consumer-groups.sh --bootstrap-server localhost:9092 --list
-
-# Describe group: see partition assignments, lag, and current offsets
-kafka-consumer-groups.sh --bootstrap-server localhost:9092 \
-  --describe --group click-analytics
-
-# Reset offsets to earliest (group must be inactive)
-kafka-consumer-groups.sh --bootstrap-server localhost:9092 \
-  --group click-analytics \
-  --topic clicks \
-  --reset-offsets --to-earliest --execute
-
-# Reset offsets to a specific timestamp
-kafka-consumer-groups.sh --bootstrap-server localhost:9092 \
-  --group click-analytics \
-  --topic clicks \
-  --reset-offsets --to-datetime 2024-01-01T00:00:00.000 --execute
-```
-
-### Offset Management
-
-```java
-import org.apache.kafka.clients.consumer.*;
-import org.apache.kafka.common.TopicPartition;
-import java.time.Duration;
-import java.util.*;
-
-/**
- * Offset management strategies.
- *
- * Offsets are stored in the internal __consumer_offsets topic.
- */
-public class OffsetManagementExamples {
-
-    /** Auto-commit: simplest but may lose messages on crash. */
-    static Properties autoCommitConfig() {
-        Properties props = new Properties();
-        props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "true");
-        props.put(ConsumerConfig.AUTO_COMMIT_INTERVAL_MS_CONFIG, "5000");
-        // Risk: crash between poll and next auto-commit → message loss
-        return props;
-    }
-
-    /** Manual sync commit: at-least-once guarantee. */
-    static void manualSyncCommit(KafkaConsumer<String, String> consumer) {
-        while (true) {
-            ConsumerRecords<String, String> records =
-                consumer.poll(Duration.ofMillis(1000));      // 1. poll
-            for (ConsumerRecord<String, String> r : records) {
-                process(r);                                   // 2. process
-            }
-            consumer.commitSync();                            // 3. commit
-            // If crash between 2 and 3 → messages reprocessed (at-least-once)
-        }
-    }
-
-    /** Manual async commit: higher throughput, harder error handling. */
-    static void manualAsyncCommit(KafkaConsumer<String, String> consumer) {
-        while (true) {
-            ConsumerRecords<String, String> records =
-                consumer.poll(Duration.ofMillis(1000));
-            for (ConsumerRecord<String, String> r : records) {
-                process(r);
-            }
-            consumer.commitAsync((offsets, exception) -> {
-                if (exception != null) {
-                    System.err.println("Commit failed: " + exception.getMessage());
-                }
-            });
-        }
-    }
-
-    /**
-     * auto.offset.reset strategies (when no committed offset exists):
-     *   "earliest" — start from the beginning of the partition
-     *   "latest"   — start from the end (new messages only)
-     */
-    static void resetOffsetConfig(Properties props, String strategy) {
-        props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, strategy);
-    }
-
-    private static void process(ConsumerRecord<String, String> r) { /* ... */ }
-}
-```
-
-## Replication
-
-### Leader-Follower Replication
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                   Partition Replication                         │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  Partition 0 (Replication Factor = 3)                           │
-│                                                                  │
-│  Broker 1                Broker 2                Broker 3       │
-│  ┌─────────────┐        ┌─────────────┐        ┌─────────────┐ │
-│  │   LEADER    │        │  FOLLOWER   │        │  FOLLOWER   │ │
-│  │             │        │             │        │             │ │
-│  │  [0][1][2]  │───────>│  [0][1][2]  │        │  [0][1][2]  │ │
-│  │  [3][4][5]  │        │  [3][4][5]  │<───────│  [3][4]     │ │
-│  │  [6][7]     │        │  [6]        │        │             │ │
-│  │      ▲      │        │             │        │             │ │
-│  └──────┼──────┘        └─────────────┘        └─────────────┘ │
-│         │                                                       │
-│    Producers write                                              │
-│    to leader only                                               │
-│                                                                  │
-│  ISR (In-Sync Replicas): {Broker 1, Broker 2}                  │
-│  - Broker 3 is behind, not in ISR                              │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### Replication Protocol
-
-```properties
-# server.properties — Replication & durability settings
-#
-# acks behaviour (set on the producer side):
-#   acks=0    Fire and forget (fastest, may lose data)
-#   acks=1    Wait for leader write only (balanced)
-#   acks=all  Wait for ALL in-sync replicas (safest)
-
-# ── Replication factor (topic-level default) ─────────────────────
-default.replication.factor=3
-
-# ── In-sync replica (ISR) controls ──────────────────────────────
-# Minimum replicas that must acknowledge before a produce with
-# acks=all succeeds. Set to 2 with replication.factor=3 to
-# tolerate 1 broker failure without blocking writes.
-min.insync.replicas=2
-
-# How far behind a follower can fall before being removed from ISR.
-replica.lag.time.max.ms=30000
-
-# ── Unclean leader election ─────────────────────────────────────
-# If true, an out-of-sync replica can become leader (risks data loss).
-# Keep false for strong durability.
-unclean.leader.election.enable=false
-```
-
-```
-High Watermark (HWM)
-
-  Leader       Follower-1   Follower-2
-  [0–7]        [0–7]        [0–5]      ← Log End Offset (LEO)
-       ▲
-       HWM = min(LEO of all ISR replicas) = 5
-
-  - Consumers can only read up to HWM (offset < 5).
-  - This ensures consumers never see uncommitted data.
-  - Follower-2 is behind; if it falls beyond replica.lag.time.max.ms
-    it is evicted from the ISR.
-```
-
-```shell
-# Inspect ISR and leader assignment for a topic
-kafka-topics.sh --bootstrap-server localhost:9092 \
-  --describe --topic clicks
-
-# Example output:
-# Topic: clicks  Partition: 0  Leader: 1  Replicas: 1,2,3  Isr: 1,2
-
-# Alter min.insync.replicas at the topic level
-kafka-configs.sh --bootstrap-server localhost:9092 \
-  --alter --entity-type topics --entity-name clicks \
-  --add-config min.insync.replicas=2
-```
-
-## ZooKeeper Integration
-
-### Metadata Management
-
-```shell
-# ── ZooKeeper-based metadata (pre-KRaft, Kafka < 3.3) ───────────
-
-# List registered brokers
-zookeeper-shell.sh localhost:2181 ls /brokers/ids
-
-# Get broker details
-zookeeper-shell.sh localhost:2181 get /brokers/ids/0
-
-# Get partition state (leader, ISR)
-zookeeper-shell.sh localhost:2181 \
-  get /brokers/topics/clicks/partitions/0/state
-
-# Get current controller
-zookeeper-shell.sh localhost:2181 get /controller
-
-# ── KRaft mode (Kafka 3.3+, no ZooKeeper) ────────────────────────
-
-# Generate a cluster ID
-kafka-storage.sh random-uuid
-
-# Format storage directories for KRaft
-kafka-storage.sh format \
-  --config server.properties \
-  --cluster-id <generated-uuid>
-
-# Describe the cluster metadata (KRaft)
-kafka-metadata.sh --snapshot /var/kafka-logs/__cluster_metadata-0/00000000000000000000.log \
-  --cluster-id <cluster-id>
-
-# List brokers in KRaft mode
-kafka-broker-api-versions.sh --bootstrap-server localhost:9092
-```
-
-## Performance Optimizations
-
-### Batching and Compression
-
-```shell
-# ── Producer batching & compression tuning ───────────────────────
-# These are set as producer properties (or via command-line overrides).
-
-kafka-console-producer.sh --bootstrap-server localhost:9092 \
-  --topic clicks \
-  --producer-property batch.size=16384 \
-  --producer-property linger.ms=5 \
-  --producer-property compression.type=lz4
-
-# Batching benefits:
-#   - Fewer network round trips
-#   - Better compression ratio (similar messages share patterns)
-#   - More efficient sequential disk writes
-
-# ── Compression codec comparison ─────────────────────────────────
-#   Codec   | Ratio     | CPU cost | Notes
-#   --------|-----------|----------|------------------------------
-#   gzip    | Best      | Highest  | Best for cold/archival data
-#   snappy  | Moderate  | Low      | Good general-purpose default
-#   lz4     | Good      | Lowest   | Best for latency-sensitive
-#   zstd    | Very good | Moderate | Best balance of ratio & speed
-
-# ── Why Kafka is fast: Sequential I/O ────────────────────────────
-#   Random I/O:     ~100 ops/sec  (disk seek time dominates)
-#   Sequential I/O: ~600 MB/sec   (no seeks, full disk bandwidth)
-#
-#   Kafka only appends — it never modifies existing data.
-#   This enables sustained high throughput on commodity hardware.
-```
-
-## Exactly-Once Semantics
-
-### Idempotent Producer
-
-```java
-import org.apache.kafka.clients.producer.*;
-import org.apache.kafka.common.serialization.StringSerializer;
-import java.util.Properties;
-
-/**
- * Idempotent producer (Kafka 0.11+).
- *
- * The broker tracks (producer_id, partition, sequence_number).
- * Duplicate records from retries are detected and deduplicated automatically.
- * Setting enable.idempotence=true is the only change needed.
- */
-public class IdempotentProducerExample {
-
-    public static void main(String[] args) {
-        Properties props = new Properties();
-        props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
-        props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG,
-                  StringSerializer.class.getName());
-        props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG,
-                  StringSerializer.class.getName());
-        // Enable idempotent writes (implied by enable.idempotence=true):
-        //   acks=all, retries=Integer.MAX_VALUE, max.in.flight.requests.per.connection<=5
-        props.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, "true");
-
-        try (KafkaProducer<String, String> producer = new KafkaProducer<>(props)) {
-            ProducerRecord<String, String> record =
-                new ProducerRecord<>("clicks", "user-123", "{\"page\":\"/home\"}");
-
-            // The broker deduplicates any retried send with the same sequence number.
-            producer.send(record, (metadata, exception) -> {
-                if (exception == null) {
-                    System.out.printf("Sent to partition=%d offset=%d%n",
-                        metadata.partition(), metadata.offset());
-                } else {
-                    exception.printStackTrace();
-                }
-            });
-        }
-    }
-}
-```
-
-```java
-import org.apache.kafka.clients.consumer.*;
-import org.apache.kafka.clients.producer.*;
-import org.apache.kafka.common.serialization.*;
-import java.time.Duration;
-import java.util.*;
-
-/**
- * Transactional producer for atomic writes across multiple partitions.
- *
- * Enables exactly-once semantics in consume-transform-produce patterns.
- */
-public class TransactionalProducerExample {
-
-    public static void main(String[] args) {
-        // ── Producer with transactions ──────────────────────────
-        Properties producerProps = new Properties();
-        producerProps.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
-        producerProps.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG,
-                         StringSerializer.class.getName());
-        producerProps.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG,
-                         StringSerializer.class.getName());
-        producerProps.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, "order-processor-1");
-        // enable.idempotence is automatically true when transactional.id is set
-
-        KafkaProducer<String, String> producer = new KafkaProducer<>(producerProps);
-        producer.initTransactions();
-
-        // ── Consumer (read-committed isolation) ─────────────────
-        Properties consumerProps = new Properties();
-        consumerProps.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
-        consumerProps.put(ConsumerConfig.GROUP_ID_CONFIG, "order-processor");
-        consumerProps.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG,
-                         StringDeserializer.class.getName());
-        consumerProps.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG,
-                         StringDeserializer.class.getName());
-        consumerProps.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false");
-        consumerProps.put(ConsumerConfig.ISOLATION_LEVEL_CONFIG, "read_committed");
-
-        KafkaConsumer<String, String> consumer = new KafkaConsumer<>(consumerProps);
-        consumer.subscribe(List.of("orders"));
-
-        // ── Consume-transform-produce loop ──────────────────────
-        while (true) {
-            ConsumerRecords<String, String> records =
-                consumer.poll(Duration.ofMillis(1000));
-            if (records.isEmpty()) continue;
-
-            producer.beginTransaction();
-            try {
-                for (ConsumerRecord<String, String> r : records) {
-                    // Transform and produce to output topic
-                    String enriched = enrich(r.value());
-                    producer.send(new ProducerRecord<>(
-                        "enriched-orders", r.key(), enriched));
-                }
-                // Commit consumer offsets within the same transaction
-                producer.sendOffsetsToTransaction(
-                    currentOffsets(records), consumer.groupMetadata());
-                producer.commitTransaction();
-            } catch (Exception e) {
-                producer.abortTransaction();
-            }
-        }
-    }
-
-    private static String enrich(String value) { return value; /* ... */ }
-
-    private static Map<org.apache.kafka.common.TopicPartition, OffsetAndMetadata>
-            currentOffsets(ConsumerRecords<String, String> records) {
-        Map<org.apache.kafka.common.TopicPartition, OffsetAndMetadata> offsets = new HashMap<>();
-        records.partitions().forEach(tp ->
-            offsets.put(tp, new OffsetAndMetadata(
-                records.records(tp).get(records.records(tp).size() - 1).offset() + 1)));
-        return offsets;
-    }
-}
-```
-
-## Key Results
-
-### Production Performance
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Kafka Performance                            │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  Throughput (per broker):                                       │
-│  ┌─────────────────────────────────────────────┐                │
-│  │  Producer: 200,000+ messages/sec            │                │
-│  │  Consumer: 400,000+ messages/sec            │                │
-│  │  Aggregate: 2 million+ msg/sec (cluster)    │                │
-│  └─────────────────────────────────────────────┘                │
-│                                                                  │
-│  Latency:                                                       │
-│  ┌─────────────────────────────────────────────┐                │
-│  │  Produce (acks=1): 2-5ms                    │                │
-│  │  Produce (acks=all): 5-15ms                 │                │
-│  │  Consume: 1-2ms                             │                │
-│  └─────────────────────────────────────────────┘                │
-│                                                                  │
-│  Storage Efficiency:                                            │
-│  ┌─────────────────────────────────────────────┐                │
-│  │  With compression: 5-10x reduction          │                │
-│  │  Sequential writes: ~600 MB/sec per disk    │                │
-│  └─────────────────────────────────────────────┘                │
-│                                                                  │
-│  At LinkedIn (2011):                                            │
-│  ┌─────────────────────────────────────────────┐                │
-│  │  10+ billion messages per day               │                │
-│  │  1+ TB of data per day                      │                │
-│  └─────────────────────────────────────────────┘                │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-## Influence and Legacy
-
-### Impact on Industry
-
-1. **Log-centric architecture**: Made append-only logs mainstream
-2. **Stream processing**: Enabled Kafka Streams, ksqlDB
-3. **Event sourcing**: Foundation for event-driven systems
-4. **Microservices**: Standard for inter-service communication
-
-### Evolution
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│                    Kafka Evolution                           │
-├──────────────────────────────────────────────────────────────┤
-│                                                               │
-│  2011: Original Paper                                        │
-│  - Basic pub/sub                                             │
-│  - Simple consumer model                                     │
-│                                                               │
-│  2015: Kafka 0.9                                             │
-│  - New consumer API                                          │
-│  - Security (SSL, SASL)                                      │
-│                                                               │
-│  2017: Kafka 0.11                                            │
-│  - Exactly-once semantics                                    │
-│  - Idempotent producer                                       │
-│  - Transactions                                              │
-│                                                               │
-│  2022: Kafka 3.3 (KRaft)                                     │
-│  - Remove ZooKeeper dependency                               │
-│  - Self-managed metadata                                     │
-│  - Simplified operations                                     │
-│                                                               │
-└──────────────────────────────────────────────────────────────┘
-```
-
-## Key Takeaways
-
-1. **Sequential I/O is fast**: Append-only enables high throughput
-2. **Batch everything**: Messages, compression, network I/O
-3. **Simple consumer model**: Offset-based is elegant and efficient
-4. **Partitioning for scale**: Horizontal scaling via partitions
-5. **Replication for durability**: ISR ensures no data loss
-6. **Consumer groups for parallelism**: Easy to scale consumption
-7. **Log as truth**: All data in the log, everything else derived
+# Kafka (NetDB 2011): Evidence-First Paper Analysis
+
+The 2011 Kafka paper describes a much smaller system than modern Kafka: brokers store **partitioned append-only files**, consumers pull by byte offset, and retention is independent of acknowledgements. Replication, durable producer acknowledgements, idempotent production, transactions, and KRaft were outside the published design.
+
+## Publication identity and historical boundary
+
+- **Paper:** *Kafka: a Distributed Messaging System for Log Processing*
+- **Authors:** Jay Kreps, Neha Narkhede, and Jun Rao, LinkedIn
+- **Venue and version:** NetDB workshop, 2011
+- **System described:** LinkedIn's first production Kafka architecture, benchmarked against ActiveMQ 5.4 and RabbitMQ 2.4
+
+Modern Kafka guarantees are not used as evidence for the 2011 paper; later replication appears separately below.
+
+For present-day pattern language, see [Message Queues](../05-messaging/01-message-queues.md), [Message Ordering](../05-messaging/03-message-ordering.md), and [Delivery Guarantees](../05-messaging/04-delivery-guarantees.md).
+
+## Problem and workload
+
+LinkedIn needed to collect large volumes of operational and activity events from online services, feed both near-real-time consumers and Hadoop/data-warehouse loading, retain data for replay, and add consumers without multiplying producer integrations.
+
+Traditional enterprise messaging systems carried features and state that this workload did not always need: per-message delivery tracking, rich headers, broker-managed subscriber cursors, and deletion tied to consumption. Kafka narrowed the problem:
+
+- messages belong to topics;
+- a topic has independent ordered partitions;
+- producers append batches;
+- consumers pull sequential ranges using offsets;
+- a consumer group divides partitions among its members;
+- time/size retention, not successful delivery, controls deletion.
+
+That is closer to a distributed commit log than a work queue. It enables replay and multiple independent consumers, but ordering stops at a partition and consumers own progress semantics.
+
+## Durable state and core invariants
+
+In the paper, each topic partition is an ever-growing logical log represented by segment files. A message ID is its **byte offset** in the partition, not a broker-assigned opaque UUID. The offset lets a consumer request “messages beginning here” without the broker maintaining per-consumer delivery records.
+
+Three invariants follow:
+
+1. A broker appends to the end of a partition and never reorders existing bytes.
+2. Within one consumer group, one consumer owns a partition at a time, so that partition's records are delivered in log order to one processing stream.
+3. Consumer progress is separate from log retention. Rewinding the offset replays data; a slow consumer does not force immediate retention of every message unless configured retention still covers it.
+
+There is no total order across partitions. If business events require a single order, their partitioning key must route them to one partition, concentrating that ordered stream's throughput and availability on one broker in the original design.
+
+## Storage and transfer path
+
+The broker writes messages to ordinary append-only files and relies on the operating system page cache rather than maintaining a second application cache. Old segments can be removed as coarse files according to retention, avoiding per-message deletion and free-list management.
+
+The paper emphasizes end-to-end batching:
+
+- producers send a message set in one request;
+- brokers append that set contiguously;
+- consumers fetch a large byte range;
+- Linux `sendfile` transfers page-cache data to the socket without copying it through a user-space buffer.
+
+Sequential I/O, page-cache reuse, fewer system calls, and a compact record format reinforce one another. “Disk-backed” therefore does not mean every consumer read waits for a physical disk: recent log tails are often already in the page cache.
+
+Producers choose a partition, either randomly for balance or by a semantic key so related records share order. The 2011 broker does not transparently split one partition; the chosen partition count is both the parallelism ceiling for a consumer group and an operational placement decision.
+
+## Consumer coordination and delivery semantics
+
+Brokers and consumers register in ZooKeeper. A consumer-group member observes membership or broker changes, sorts consumers and available partitions, and deterministically claims its share. Algorithm 1 writes ownership and reads each partition's stored offset from ZooKeeper.
+
+The decentralized rebalance can race: two consumers may attempt ownership concurrently and retry after conflict. It also pauses or moves partitions when group membership changes. The paper favors this client-side coordination to keep brokers stateless with respect to consumers.
+
+Delivery semantics depend on when the consumer stores its offset relative to processing:
+
+- save before processing: a crash can skip work;
+- process before saving: a crash can replay records, producing duplicates;
+- atomically store output and source offset in the same destination transaction: the destination can make replay exactly-once relative to itself.
+
+The LinkedIn Hadoop loader used the third pattern by committing data and offsets together in HDFS only after a successful MapReduce task. The broker itself did not provide transactions. The paper explicitly says applications that care about duplicates need offset-based or business-key deduplication.
+
+## Failure behavior in the published system
+
+Each record carries a CRC. On broker recovery, Kafka scans and removes records with inconsistent CRCs, protecting against partial writes and detected corruption.
+
+The larger limitation is stark: **the 2011 implementation has no built-in replication**. If a broker fails, its unconsumed partitions are unavailable. If its storage is permanently damaged, those messages are lost. Section 6 lists replication as future work.
+
+Producer durability is also weak in the benchmarked path. The producer did not wait for a broker acknowledgement; the paper says this raises throughput but provides no guarantee that every published message reached the broker. Asynchronous broker flush means even receipt and process failure do not necessarily imply durable media persistence.
+
+ZooKeeper preserves group metadata, but it does not replicate log bytes. A healthy coordination service cannot recover a destroyed partition.
+
+These facts are why it is incorrect to attach modern `acks=all`, ISR, idempotent-producer, or transaction guarantees to the NetDB results.
+
+## Experimental evidence and fair interpretation
+
+Section 5 used two Linux machines, each with eight 2 GHz cores, 16 GB RAM, six disks in RAID 10, and a 1 Gbit link. One machine ran the broker; the other ran a single producer or consumer. Brokers asynchronously flushed their persistence stores. This is a single-broker throughput experiment, not a distributed-failure benchmark.
+
+### Producer experiment
+
+Each system received 10 million messages of 200 bytes. Kafka used batch sizes 1 and 50; the authors could not configure comparable producer batching in ActiveMQ or RabbitMQ and assumed batch size 1 for them.
+
+- Kafka averaged 50,000 messages/s at batch 1.
+- Kafka averaged 400,000 messages/s at batch 50, nearly saturating the 1 Gbit link.
+- The paper reports at least twice RabbitMQ's throughput and orders of magnitude above ActiveMQ in that setup.
+
+The comparison is not feature-equivalent. Kafka's producer did not wait for acknowledgements, while the competing products offered more messaging features. The paper itself says the purpose is to demonstrate the potential of specialization, not prove the other systems inferior.
+
+The record-format result is similarly bounded: the measured overhead was 9 bytes per Kafka message versus 144 bytes for ActiveMQ, making ActiveMQ use 70% more space for this 200-byte, 10-million-message dataset. Header requirements and indexing explain much of the difference.
+
+### Consumer experiment
+
+A single consumer fetched 10 million messages. Fetches requested up to 1,000 messages or about 200 KB; all records fit in memory/page cache. Kafka averaged 22,000 messages/s, more than four times ActiveMQ and RabbitMQ in the reported run. The authors attribute the result to compact records, no broker-side per-message delivery updates, and `sendfile`.
+
+Because everything was cache-resident, the experiment does not establish cold-storage throughput, multi-consumer scaling, replication cost, tail latency, or recovery time.
+
+### Production snapshot
+
+At publication, LinkedIn reported hundreds of gigabytes and close to one billion messages/day, with roughly 10-second average end-to-end latency into the offline-analysis pipeline without much tuning. This describes that deployment and pipeline, not a Kafka latency guarantee.
+
+## Limits and assumptions
+
+- One partition is the ordering and consumer-parallelism unit; skewed partition keys create hot brokers.
+- The paper's producer path may lose messages before broker receipt or durable flush.
+- No broker replication means machine loss can become data loss.
+- Consumer-side offsets make replay powerful but move duplicate/skip correctness to the application.
+- ZooKeeper-based group coordination can rebalance and temporarily stop partition processing.
+- Time-based retention assumes consumers recover before required data expires.
+- The benchmark favors Kafka's narrow feature set and does not match durability semantics.
+
+## What later Kafka changed
+
+Apache Kafka's later replication design added a leader and replicas for each partition, an in-sync replica set (ISR), a high watermark for committed records, and producer acknowledgement choices. That design changes both failure recovery and the meaning of “published.” Subsequent releases added broker-managed consumer offsets, idempotent producers, transactions, stream processing, and eventually a Raft-based metadata quorum. These are significant new protocols, not implementation details hidden in the 2011 paper.
+
+What survived is the architectural core: partitioned append logs, immutable offsets, batched sequential I/O, pull-based consumers, replay, and retention decoupled from individual subscriptions.
+
+## Design review questions
+
+1. What entity requires ordering, and can all its events safely share one partition?
+2. When may a producer acknowledge: process receipt, page cache, local fsync, or replicated commit?
+3. Where is consumer progress stored relative to the side effect it represents?
+4. How long can a consumer be down before retention destroys required replay data?
+5. What happens to availability and durability when a partition leader or disk fails?
+6. Are benchmark comparisons matched for acknowledgements, flush, replication, batch size, and cache state?
+7. Is partition count sufficient for growth without making coordination and recovery excessive?
+
+## Primary sources
+
+- [Kreps, Narkhede, and Rao, *Kafka: a Distributed Messaging System for Log Processing* (NetDB 2011), archived paper PDF](https://www.microsoft.com/en-us/research/wp-content/uploads/2017/09/Kafka.pdf)
+- [Apache Kafka project archive of the 2011 NetDB material](https://cwiki.apache.org/confluence/download/attachments/27822226/Kafka-netdb-06-2011.pdf)
+- [Apache Kafka, official high-level replication design](https://cwiki.apache.org/confluence/spaces/KAFKA/pages/27840158/Kafka%2BReplication)
+- [Apache Kafka, official detailed replication design](https://cwiki.apache.org/confluence/spaces/KAFKA/pages/27844516/kafka%2BDetailed%2BReplication%2BDesign%2BV3)

@@ -105,96 +105,6 @@ graph TD
 
 ---
 
-## パスワード保存
-
-### 平文パスワードは絶対に保存しない
-
-```python
-# WRONG - attacker dumps database, gets all passwords
-password_hash = hashlib.sha256(password).hexdigest()
-
-# WRONG - rainbow table attack
-password_hash = hashlib.sha256(password + "static_salt").hexdigest()
-
-# CORRECT - unique salt per user, slow hash function
-import bcrypt
-password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=12))
-```
-
-### なぜBcrypt/Argon2なのか？
-
-1. **ソルト付き**：各ハッシュにランダムソルトを含む
-2. **低速**：設定可能なワークファクター
-3. **CPU集約型**：GPU攻撃に耐性がある（Argon2はメモリハードでもある）
-
-```python
-# Verification
-def verify_password(stored_hash, provided_password):
-    return bcrypt.checkpw(
-        provided_password.encode(),
-        stored_hash.encode()
-    )
-```
-
-### ワークファクターの選択
-
-| ワークファクター | ハッシュあたりの時間 | 攻撃者の試行回数/秒 |
-|-------------|---------------|-------------------------|
-| 10          | 約100ms        | 10                      |
-| 12          | 約400ms        | 2.5                     |
-| 14          | 約1.6s         | 0.6                     |
-
-ハードウェアで250〜500msかかるファクターを選択してください。
-
----
-
-## 多要素認証（MFA）
-
-### 知識 + 所持
-
-```
-Factor 1: Password (knowledge)
-Factor 2: One of:
-  - TOTP code from authenticator app (possession)
-  - SMS code (possession) - weaker, SIM swap attacks
-  - Hardware key like YubiKey (possession)
-  - Biometric (inherence)
-```
-
-### TOTPの実装
-
-```python
-import pyotp
-import time
-
-# Setup: Generate secret, show QR code to user
-secret = pyotp.random_base32()  # Store encrypted in DB
-totp = pyotp.TOTP(secret)
-provisioning_uri = totp.provisioning_uri(
-    name="user@example.com",
-    issuer_name="MyApp"
-)
-# Convert provisioning_uri to QR code for user to scan
-
-# Verification
-def verify_totp(user_secret, provided_code):
-    totp = pyotp.TOTP(user_secret)
-    # valid_window allows for clock drift
-    return totp.verify(provided_code, valid_window=1)
-```
-
-### TOTPの内部構造
-
-```
-TOTP = HMAC-SHA1(secret, floor(time / 30))
-
-Time:    1704067200  1704067230  1704067260
-Code:    847293      159462      738291
-         ◄─── 30s ──►◄─── 30s ──►
-```
-
----
-
 ## パスキー (WebAuthn / FIDO2)
 
 パスキーは新しい認証システムの現代的なデフォルトです: オリジンに束縛された公開鍵クレデンシャルを、デバイスの生体認証/PINで解錠します。**構造的にフィッシング耐性があります** — 盗める共有シークレットが存在せず(サーバーは公開鍵のみ保存)、ブラウザは間違ったオリジンに対してクレデンシャルを行使しないため、偽ドメインのフィッシングとクレデンシャルスタッフィングを一手で殺します。
@@ -225,6 +135,8 @@ sequenceDiagram
 - **ロールアウトの現実:** まずパスワードと*並走*でパスキーを出荷し(ログイン成功時に登録を促す)、採用率を計測し、アカウントリカバリこそ本当の攻撃面として扱うこと — メールリセットにフォールバックするパスキー保護アカウントは、リセットフローの強度しかありません。移行期間中、パスワード利用者には[MFA](#多要素認証mfa)を維持します。パスキーは第二要素を包含します(所持+生体認証がひとつの儀式に)。
 
 ---
+
+<a id="ブルートフォース対策"></a>
 
 ## ブルートフォース対策
 
@@ -627,6 +539,8 @@ bcryptからArgon2id（またはコストファクターの増加）にアップ
 確立されたライブラリ（bcrypt、Argon2）はこれを内部で処理しますが、トークンやハッシュを手動で比較する場合は、定数時間のバリアントを使用してください。
 
 ---
+
+<a id="多要素認証mfa"></a>
 
 ## 多要素認証（MFA）
 

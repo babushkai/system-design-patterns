@@ -11,8 +11,7 @@ const sidebarEN = [
       { text: 'CAP Theorem', link: '/01-foundations/03-cap-theorem' },
       { text: 'Consistency Models', link: '/01-foundations/04-consistency-models' },
       { text: 'Distributed Time', link: '/01-foundations/05-distributed-time' },
-      { text: 'Failure Modes', link: '/01-foundations/06-failure-modes' },
-      { text: 'Network Partitions', link: '/01-foundations/07-network-partitions' },
+      { text: 'Failure Semantics and Recovery', link: '/01-foundations/06-failure-modes' },
       { text: 'Idempotency', link: '/01-foundations/08-idempotency' },
       { text: 'Distributed Locks', link: '/01-foundations/09-distributed-locks' },
       { text: 'Capacity Planning & Estimation', link: '/01-foundations/10-capacity-planning' },
@@ -31,7 +30,7 @@ const sidebarEN = [
       { text: 'Distributed Transactions', link: '/02-distributed-databases/07-distributed-transactions' },
       { text: 'Consensus Algorithms', link: '/02-distributed-databases/08-consensus-algorithms' },
       { text: 'Leader Election', link: '/02-distributed-databases/09-leader-election' },
-      { text: 'Data Modeling', link: '/02-distributed-databases/10-data-modeling' },
+      { text: 'Workload-Driven Data Modeling', link: '/02-distributed-databases/10-data-modeling' },
     ]
   },
   {
@@ -45,34 +44,31 @@ const sidebarEN = [
       { text: 'Bloom Filters', link: '/03-storage-engines/05-bloom-filters' },
       { text: 'Column Storage', link: '/03-storage-engines/06-column-storage' },
       { text: 'Data Encoding', link: '/03-storage-engines/07-data-encoding' },
-      { text: 'Object Storage', link: '/03-storage-engines/08-object-storage' },
+      { text: 'Object Storage & Commit Protocols', link: '/03-storage-engines/08-object-storage' },
     ]
   },
   {
     text: '4. Caching',
     collapsed: true,
     items: [
-      { text: 'Cache Strategies', link: '/04-caching/01-cache-strategies' },
-      { text: 'Cache Invalidation', link: '/04-caching/02-cache-invalidation' },
-      { text: 'Distributed Caching', link: '/04-caching/03-distributed-caching' },
-      { text: 'Cache Stampede', link: '/04-caching/04-cache-stampede' },
-      { text: 'Multi-Tier Caching', link: '/04-caching/05-multi-tier-caching' },
-      { text: 'Cache Warming', link: '/04-caching/06-cache-warming' },
+      { text: 'Semantics & Economics', link: '/04-caching/01-cache-strategies' },
+      { text: 'Invalidation & Coherence', link: '/04-caching/02-cache-invalidation' },
+      { text: 'Distributed Cache Internals', link: '/04-caching/03-distributed-caching' },
+      { text: 'Stampede, Cold Start & Warming', link: '/04-caching/04-cache-stampede' },
     ]
   },
   {
     text: '5. Messaging',
     collapsed: true,
     items: [
-      { text: 'Message Queues', link: '/05-messaging/01-message-queues' },
-      { text: 'Pub/Sub Systems', link: '/05-messaging/02-pub-sub' },
+      { text: 'Message Queue Architecture', link: '/05-messaging/01-message-queues' },
+      { text: 'Publish-Subscribe Architecture', link: '/05-messaging/02-pub-sub' },
       { text: 'Message Ordering', link: '/05-messaging/03-message-ordering' },
-      { text: 'Delivery Guarantees', link: '/05-messaging/04-delivery-guarantees' },
-      { text: 'Event Sourcing', link: '/05-messaging/05-event-sourcing' },
-      { text: 'CQRS', link: '/05-messaging/06-cqrs' },
-      { text: 'Outbox Pattern', link: '/05-messaging/07-outbox-pattern' },
-      { text: 'Dead Letter Queues', link: '/05-messaging/08-dead-letter-queues' },
-      { text: 'Saga Pattern', link: '/05-messaging/09-saga-pattern' },
+      { text: 'Delivery & Effect Boundaries', link: '/05-messaging/04-delivery-guarantees' },
+      { text: 'Event Sourcing & Domain Logs', link: '/05-messaging/05-event-sourcing' },
+      { text: 'CQRS & Projection Architecture', link: '/05-messaging/06-cqrs' },
+      { text: 'Outbox, Inbox & CDC', link: '/05-messaging/07-outbox-pattern' },
+      { text: 'Poison Messages & Redrive', link: '/05-messaging/08-dead-letter-queues' },
     ]
   },
   {
@@ -90,7 +86,7 @@ const sidebarEN = [
       { text: 'Multi-Region Architecture', link: '/06-scaling/09-multi-region-architecture' },
       { text: 'Retries & Hedging', link: '/06-scaling/10-retries-timeouts-hedging' },
       { text: 'Cell-Based Architecture', link: '/06-scaling/11-cell-based-architecture' },
-      { text: 'Multi-Tenancy', link: '/06-scaling/12-multi-tenancy' },
+      { text: 'Multi-Tenant Isolation & Lifecycle', link: '/06-scaling/12-multi-tenancy' },
       { text: 'DNS & Connections', link: '/06-scaling/13-dns-and-connection-management' },
       { text: 'Network Transport Internals', link: '/06-scaling/14-network-transport-internals' },
     ]
@@ -99,13 +95,10 @@ const sidebarEN = [
     text: '7. Real-Time',
     collapsed: true,
     items: [
-      { text: 'Polling', link: '/07-real-time/01-polling' },
-      { text: 'Long Polling', link: '/07-real-time/02-long-polling' },
-      { text: 'Server-Sent Events', link: '/07-real-time/03-server-sent-events' },
-      { text: 'WebSockets', link: '/07-real-time/04-websockets' },
+      { text: 'Client Delivery Transports', link: '/07-real-time/01-polling' },
       { text: 'WebRTC', link: '/07-real-time/05-webrtc' },
       { text: 'Presence', link: '/07-real-time/06-presence' },
-      { text: 'CRDTs & Collaboration', link: '/07-real-time/07-crdts-collaborative-editing' },
+      { text: 'Collaborative Sync & CRDTs', link: '/07-real-time/07-crdts-collaborative-editing' },
     ]
   },
   {
@@ -152,58 +145,56 @@ const sidebarEN = [
     text: '10. Security',
     collapsed: true,
     items: [
-      { text: 'Authentication Fundamentals', link: '/10-security/01-authentication-fundamentals' },
-      { text: 'OAuth2 & OpenID Connect', link: '/10-security/02-oauth2-openid-connect' },
-      { text: 'JWT Tokens', link: '/10-security/03-jwt-tokens' },
-      { text: 'API Security', link: '/10-security/04-api-security' },
-      { text: 'Zero Trust Architecture', link: '/10-security/05-zero-trust-architecture' },
-      { text: 'Encryption', link: '/10-security/06-encryption' },
-      { text: 'Authorization Patterns', link: '/10-security/07-authorization-patterns' },
+      { text: 'Authentication Systems', link: '/10-security/01-authentication-fundamentals' },
+      { text: 'OAuth 2.0 and OpenID Connect', link: '/10-security/02-oauth2-openid-connect' },
+      { text: 'JOSE and JWT Verification', link: '/10-security/03-jwt-tokens' },
+      { text: 'API Threat Boundaries', link: '/10-security/04-api-security' },
+      { text: 'Zero-Trust Workload Architecture', link: '/10-security/05-zero-trust-architecture' },
+      { text: 'Cryptographic Key Architecture', link: '/10-security/06-encryption' },
+      { text: 'Authorization at Scale', link: '/10-security/07-authorization-patterns' },
     ]
   },
   {
-    text: '11. Observability',
+    text: '11. Observability and Operations',
     collapsed: true,
     items: [
-      { text: 'Distributed Tracing', link: '/11-observability/01-distributed-tracing' },
-      { text: 'Metrics & Monitoring', link: '/11-observability/02-metrics-monitoring' },
-      { text: 'Logging', link: '/11-observability/03-logging' },
-      { text: 'Alerting', link: '/11-observability/04-alerting' },
-      { text: 'SLOs & Error Budgets', link: '/11-observability/05-slos-error-budgets' },
-      { text: 'FinOps & Cost', link: '/11-observability/06-finops-cost-engineering' },
-      { text: 'Incident Management', link: '/11-observability/07-incident-management' },
+      { text: 'Tracing & Telemetry Pipelines', link: '/11-observability/01-distributed-tracing' },
+      { text: 'Metrics Systems & Monitoring', link: '/11-observability/02-metrics-monitoring' },
+      { text: 'Production Logging', link: '/11-observability/03-logging' },
+      { text: 'Alert Evaluation & Notification', link: '/11-observability/04-alerting' },
+      { text: 'SLOs & Error-Budget Control', link: '/11-observability/05-slos-error-budgets' },
+      { text: 'FinOps & Cost Engineering', link: '/11-observability/06-finops-cost-engineering' },
+      { text: 'Incident Command & Learning', link: '/11-observability/07-incident-management' },
     ]
   },
   {
-    text: '12. Service Mesh',
+    text: '12. Service Connectivity and APIs',
     collapsed: true,
     items: [
-      { text: 'Service Discovery', link: '/12-service-mesh/01-service-discovery' },
-      { text: 'API Gateway', link: '/12-service-mesh/02-api-gateway' },
-      { text: 'Sidecar Pattern', link: '/12-service-mesh/03-sidecar-pattern' },
-      { text: 'API Design Patterns', link: '/12-service-mesh/04-api-design-patterns' },
+      { text: 'Discovery & Control-Plane State', link: '/12-service-mesh/01-service-discovery' },
+      { text: 'Edge Gateway & API Mediation', link: '/12-service-mesh/02-api-gateway' },
+      { text: 'Mesh Data & Control Planes', link: '/12-service-mesh/03-sidecar-pattern' },
+      { text: 'API Design & Evolution', link: '/12-service-mesh/04-api-design-patterns' },
     ]
   },
   {
     text: '13. Data Pipelines',
     collapsed: true,
     items: [
-      { text: 'Batch Processing', link: '/13-data-pipelines/01-batch-processing' },
-      { text: 'Stream Processing', link: '/13-data-pipelines/02-stream-processing' },
-      { text: 'Lambda & Kappa Architecture', link: '/13-data-pipelines/03-lambda-kappa-architecture' },
-      { text: 'Change Data Capture', link: '/13-data-pipelines/04-change-data-capture' },
-      { text: 'Lakehouse & Table Formats', link: '/13-data-pipelines/05-lakehouse-table-formats' },
+      { text: 'Batch Execution', link: '/13-data-pipelines/01-batch-processing' },
+      { text: 'Stream Execution', link: '/13-data-pipelines/02-stream-processing' },
+      { text: 'CDC: Snapshot, Tail & Repair', link: '/13-data-pipelines/04-change-data-capture' },
+      { text: 'Lakehouse Table Formats', link: '/13-data-pipelines/05-lakehouse-table-formats' },
     ]
   },
   {
     text: '14. Search Systems',
     collapsed: true,
     items: [
-      { text: 'Inverted Indexes', link: '/14-search-systems/01-inverted-indexes' },
-      { text: 'Full-Text Search', link: '/14-search-systems/02-full-text-search' },
-      { text: 'Vector Search', link: '/14-search-systems/03-vector-search' },
-      { text: 'Ranking Algorithms', link: '/14-search-systems/04-ranking-algorithms' },
-      { text: 'Search Relevance Tuning', link: '/14-search-systems/05-search-relevance-tuning' },
+      { text: 'Index Architecture & Internals', link: '/14-search-systems/01-inverted-indexes' },
+      { text: 'Lexical Query Execution', link: '/14-search-systems/02-full-text-search' },
+      { text: 'Vector Retrieval Systems', link: '/14-search-systems/03-vector-search' },
+      { text: 'Ranking & Evaluation', link: '/14-search-systems/04-ranking-algorithms' },
       { text: 'Typeahead & Autocomplete', link: '/14-search-systems/06-typeahead-autocomplete' },
     ]
   },
@@ -211,12 +202,12 @@ const sidebarEN = [
     text: '15. Deployment',
     collapsed: true,
     items: [
-      { text: 'Deployment Strategies', link: '/15-deployment/01-deployment-strategies' },
-      { text: 'Feature Flags', link: '/15-deployment/02-feature-flags' },
+      { text: 'Progressive Delivery', link: '/15-deployment/01-deployment-strategies' },
+      { text: 'Feature-Flag Control Planes', link: '/15-deployment/02-feature-flags' },
       { text: 'Database Migrations', link: '/15-deployment/03-database-migrations' },
-      { text: 'CI/CD & GitOps', link: '/15-deployment/04-cicd-gitops' },
-      { text: 'Disaster Recovery', link: '/15-deployment/05-disaster-recovery' },
-      { text: 'Migration Strategies', link: '/15-deployment/06-migration-strategies' },
+      { text: 'Delivery Control Planes & GitOps', link: '/15-deployment/04-cicd-gitops' },
+      { text: 'Disaster Recovery & Reconstruction', link: '/15-deployment/05-disaster-recovery' },
+      { text: 'Service & Platform Migration', link: '/15-deployment/06-migration-strategies' },
     ]
   },
   {
@@ -264,25 +255,25 @@ const sidebarEN = [
     items: [
       { text: 'Workflow Fundamentals', link: '/18-workflow-job-systems/01-workflow-system-fundamentals' },
       { text: 'Background Jobs & Workers', link: '/18-workflow-job-systems/02-background-jobs-worker-pools' },
-      { text: 'Distributed Cron & Scheduling', link: '/18-workflow-job-systems/03-distributed-cron-scheduling' },
+      { text: 'Distributed Scheduling & Timers', link: '/18-workflow-job-systems/03-distributed-cron-scheduling' },
       { text: 'Durable Execution', link: '/18-workflow-job-systems/04-durable-execution-workflow-engines' },
       { text: 'DAG Orchestration', link: '/18-workflow-job-systems/05-dag-orchestration' },
-      { text: 'Retry, Idempotency & Compensation', link: '/18-workflow-job-systems/06-retry-idempotency-compensation' },
+      { text: 'Effect Commit Protocols', link: '/18-workflow-job-systems/06-retry-idempotency-compensation' },
       { text: 'Priority, Fairness & Backpressure', link: '/18-workflow-job-systems/07-priority-fairness-backpressure' },
       { text: 'Leases, Heartbeats & Recovery', link: '/18-workflow-job-systems/08-leases-heartbeats-recovery' },
       { text: 'Observability & Replay', link: '/18-workflow-job-systems/09-workflow-observability-replay' },
     ]
   },
   {
-    text: '19. Compound Engineering',
+    text: '19. Engineering Systems for Coding Agents',
     collapsed: true,
     items: [
-      { text: 'Fundamentals', link: '/19-compound-engineering/01-compound-engineering-fundamentals' },
-      { text: 'Coding Agent Tool Design', link: '/19-compound-engineering/02-coding-agent-tool-design' },
-      { text: 'Agent Context Engineering', link: '/19-compound-engineering/03-agent-context-engineering' },
-      { text: 'AI-Native Architecture', link: '/19-compound-engineering/04-ai-native-software-architecture' },
-      { text: 'Quality Engineering', link: '/19-compound-engineering/05-quality-engineering-with-ai-agents' },
-      { text: 'Compound Workflows', link: '/19-compound-engineering/06-compound-development-workflows' },
+      { text: 'Platform Fundamentals', link: '/19-compound-engineering/01-compound-engineering-fundamentals' },
+      { text: 'Tool & Runtime Contracts', link: '/19-compound-engineering/02-coding-agent-tool-design' },
+      { text: 'Context & Policy Plane', link: '/19-compound-engineering/03-agent-context-engineering' },
+      { text: 'Repository Architecture', link: '/19-compound-engineering/04-ai-native-software-architecture' },
+      { text: 'Verification & Governance', link: '/19-compound-engineering/05-quality-engineering-with-ai-agents' },
+      { text: 'Parallel Development', link: '/19-compound-engineering/06-compound-development-workflows' },
     ]
   },
 ]
@@ -294,7 +285,10 @@ export default withMermaid({
   // Base URL for the custom domain
   base: '/',
 
-  // Ignore dead links in README.md (original repo content)
+  // README is the repository landing page, not a localized documentation route.
+  srcExclude: ['README.md'],
+
+  // Generated-link integrity is checked after every production build.
   ignoreDeadLinks: true,
 
   head: [
@@ -332,15 +326,15 @@ export default withMermaid({
               { text: 'Case Studies', link: '/08-case-studies/01-twitter' },
               { text: 'Whitepapers', link: '/09-whitepapers/01-mapreduce' },
               { text: 'Security', link: '/10-security/01-authentication-fundamentals' },
-              { text: 'Observability', link: '/11-observability/01-distributed-tracing' },
-              { text: 'Service Mesh', link: '/12-service-mesh/01-service-discovery' },
+              { text: 'Observability and Operations', link: '/11-observability/01-distributed-tracing' },
+              { text: 'Service Connectivity and APIs', link: '/12-service-mesh/01-service-discovery' },
               { text: 'Data Pipelines', link: '/13-data-pipelines/01-batch-processing' },
               { text: 'Search Systems', link: '/14-search-systems/01-inverted-indexes' },
               { text: 'Deployment', link: '/15-deployment/01-deployment-strategies' },
               { text: 'ML Systems', link: '/16-ml-systems/01-ml-system-fundamentals' },
               { text: 'LLM Systems', link: '/17-llm-systems/01-agent-fundamentals' },
               { text: 'Workflow & Job Systems', link: '/18-workflow-job-systems/01-workflow-system-fundamentals' },
-              { text: 'Compound Engineering', link: '/19-compound-engineering/01-compound-engineering-fundamentals' },
+              { text: 'Coding Agent Platforms', link: '/19-compound-engineering/01-compound-engineering-fundamentals' },
             ]
           },
           { text: 'GitHub', link: 'https://github.com/babushkai/system-design-patterns' }
@@ -381,8 +375,7 @@ export default withMermaid({
                 { text: 'CAP定理', link: '/ja/01-foundations/03-cap-theorem' },
                 { text: '整合性モデル', link: '/ja/01-foundations/04-consistency-models' },
                 { text: '分散時間', link: '/ja/01-foundations/05-distributed-time' },
-                { text: '障害モード', link: '/ja/01-foundations/06-failure-modes' },
-                { text: 'ネットワーク分断', link: '/ja/01-foundations/07-network-partitions' },
+                { text: '障害セマンティクス・検知・復旧', link: '/ja/01-foundations/06-failure-modes' },
                 { text: '冪等性', link: '/ja/01-foundations/08-idempotency' },
                 { text: '分散ロック', link: '/ja/01-foundations/09-distributed-locks' },
                 { text: 'キャパシティプランニング', link: '/ja/01-foundations/10-capacity-planning' },
@@ -422,12 +415,10 @@ export default withMermaid({
               text: '4. キャッシング',
               collapsed: true,
               items: [
-                { text: 'キャッシュ戦略', link: '/ja/04-caching/01-cache-strategies' },
-                { text: 'キャッシュ無効化', link: '/ja/04-caching/02-cache-invalidation' },
-                { text: '分散キャッシュ', link: '/ja/04-caching/03-distributed-caching' },
-                { text: 'キャッシュスタンピード', link: '/ja/04-caching/04-cache-stampede' },
-                { text: 'マルチティアキャッシュ', link: '/ja/04-caching/05-multi-tier-caching' },
-                { text: 'キャッシュウォーミング', link: '/ja/04-caching/06-cache-warming' },
+                { text: 'キャッシュのセマンティクスと経済性', link: '/ja/04-caching/01-cache-strategies' },
+                { text: '無効化とコヒーレンス', link: '/ja/04-caching/02-cache-invalidation' },
+                { text: '分散キャッシュの内部構造', link: '/ja/04-caching/03-distributed-caching' },
+                { text: 'スタンピード、コールドスタート、ウォーミング', link: '/ja/04-caching/04-cache-stampede' },
               ]
             },
             {
@@ -442,7 +433,6 @@ export default withMermaid({
                 { text: 'CQRS', link: '/ja/05-messaging/06-cqrs' },
                 { text: 'Outboxパターン', link: '/ja/05-messaging/07-outbox-pattern' },
                 { text: 'デッドレターキュー', link: '/ja/05-messaging/08-dead-letter-queues' },
-                { text: 'Sagaパターン', link: '/ja/05-messaging/09-saga-pattern' },
               ]
             },
             {
@@ -469,10 +459,7 @@ export default withMermaid({
               text: '7. リアルタイム',
               collapsed: true,
               items: [
-                { text: 'ポーリング', link: '/ja/07-real-time/01-polling' },
-                { text: 'ロングポーリング', link: '/ja/07-real-time/02-long-polling' },
-                { text: 'Server-Sent Events', link: '/ja/07-real-time/03-server-sent-events' },
-                { text: 'WebSocket', link: '/ja/07-real-time/04-websockets' },
+                { text: 'クライアント配信トランスポート', link: '/ja/07-real-time/01-polling' },
                 { text: 'WebRTC', link: '/ja/07-real-time/05-webrtc' },
                 { text: 'プレゼンス', link: '/ja/07-real-time/06-presence' },
                 { text: 'CRDTと共同編集', link: '/ja/07-real-time/07-crdts-collaborative-editing' },
@@ -560,7 +547,6 @@ export default withMermaid({
               items: [
                 { text: 'バッチ処理', link: '/ja/13-data-pipelines/01-batch-processing' },
                 { text: 'ストリーム処理', link: '/ja/13-data-pipelines/02-stream-processing' },
-                { text: 'Lambda/Kappaアーキテクチャ', link: '/ja/13-data-pipelines/03-lambda-kappa-architecture' },
                 { text: 'チェンジデータキャプチャ', link: '/ja/13-data-pipelines/04-change-data-capture' },
                 { text: 'レイクハウス', link: '/ja/13-data-pipelines/05-lakehouse-table-formats' },
               ]
@@ -569,11 +555,10 @@ export default withMermaid({
               text: '14. 検索システム',
               collapsed: true,
               items: [
-                { text: '転置インデックス', link: '/ja/14-search-systems/01-inverted-indexes' },
-                { text: '全文検索', link: '/ja/14-search-systems/02-full-text-search' },
-                { text: 'ベクトル検索', link: '/ja/14-search-systems/03-vector-search' },
-                { text: 'ランキングアルゴリズム', link: '/ja/14-search-systems/04-ranking-algorithms' },
-                { text: '検索関連性チューニング', link: '/ja/14-search-systems/05-search-relevance-tuning' },
+                { text: '検索インデックスのアーキテクチャ', link: '/ja/14-search-systems/01-inverted-indexes' },
+                { text: '字句クエリ実行', link: '/ja/14-search-systems/02-full-text-search' },
+                { text: 'ベクトル検索システム', link: '/ja/14-search-systems/03-vector-search' },
+                { text: 'ランキングと評価', link: '/ja/14-search-systems/04-ranking-algorithms' },
                 { text: 'タイプアヘッド', link: '/ja/14-search-systems/06-typeahead-autocomplete' },
               ]
             },

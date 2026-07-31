@@ -532,6 +532,8 @@ mysql> XA COMMIT 'xid1';   -- or XA ROLLBACK 'xid1';
 
 ---
 
+<a id="saga-pattern-deep-dive"></a>
+
 ## Sagaパターンの深掘り
 
 ### コレオグラフィ vs オーケストレーションのトレードオフ

@@ -2,892 +2,372 @@
 
 ## TL;DR
 
-Isolation levels define what concurrent transactions can see. Higher isolation = fewer anomalies but worse performance. Most OLTP apps use Read Committed (PostgreSQL default) or Repeatable Read (MySQL default). Serializable is the only level that prevents all anomalies, but costs 20-40% throughput under contention. Know the anomalies, know your database's actual implementation, and use application-level patterns (SELECT FOR UPDATE, optimistic locking) to close gaps cheaply.
+An isolation level is a contract over **which transaction histories may commit**. It is not a performance preset and its SQL name is not portable across engines. Start from a business invariant, construct the smallest concurrent history that could break it, and then choose a mechanism that rejects that history: a declarative constraint, one atomic statement, an explicit lock, compare-and-swap, snapshot isolation, or serializability. Multi-version concurrency control makes readers cheap by retaining old versions; it does not by itself make a history serializable. Lock-based serializability waits, serializable snapshot isolation aborts dangerous dependency structures, and both move cost into different queues. Every application using an abort-capable level needs a bounded retry protocol, a way to resolve ambiguous commits, and a boundary that keeps external effects out of speculative transactions.
 
 ---
 
-## Why Isolation Levels Exist
+## Scope: Transaction Histories, Not Replica Freshness
 
-The SQL standard defines four isolation levels because full serializability is expensive. The cost comes from two fundamental tensions:
+Transaction isolation governs concurrent access to one transactional authority through snapshots, locks, serialization conflicts, and retry behavior.
 
-**Readers vs. writers.** A fully serialized system either blocks readers while writers hold locks, or aborts writers when reads conflict. In a typical OLTP workload (95% reads, 5% writes), blocking all readers for every write destroys throughput.
+- [ACID Transactions](01-acid-transactions.md) covers atomic commit, durability, WAL, and recovery.
+- [Consistency Models](04-consistency-models.md) covers client-visible guarantees across replicas and services.
+- [Distributed Transactions](../02-distributed-databases/07-distributed-transactions.md) covers commit across multiple resource managers.
+- [Idempotency](08-idempotency.md) covers duplicate requests and durable effect deduplication.
 
-**Throughput vs. correctness.** Consider a payment system processing 10,000 TPS. Under strict two-phase locking (2PL) at Serializable, lock contention on hot rows (account balances, inventory counts) creates convoy effects -- transactions queue behind each other, P99 latency spikes from 5ms to 500ms. Weaker isolation allows concurrent access at the cost of permitting certain anomalies.
-
-**The engineering tradeoff is explicit:** the SQL standard defines exactly which anomalies each level permits, so engineers can choose the cheapest level that their application logic can tolerate.
-
-Most applications don't need full serializability because:
-- Many reads are informational (dashboards, listings) where stale data is acceptable
-- Business logic often has natural idempotency or compensating transactions
-- Critical sections (inventory decrement, balance transfer) can use targeted locking without paying the cost everywhere
-
-> Cross-reference: see [ACID Transactions](01-acid-transactions.md) for WAL, fsync, and undo/redo log mechanics that underpin durability and atomicity.
+Those boundaries matter. A serializable transaction on a lagging read replica can be internally serializable yet stale. A linearizable key-value operation can be individually current yet fail a multi-row invariant. “The database is ACID” does not specify either behavior.
 
 ---
 
-## The Anomalies
+## Model the History Before Naming the Level
 
-### Dirty Read
+Write a transaction as reads and writes over logical items. `r1(x=0)` means transaction 1 read version 0 of `x`; `w2(y=1)` means transaction 2 wrote `y`; `c1` is commit and `a1` is abort.
 
-Reading uncommitted data from another transaction.
+Two histories are **conflict-equivalent** when they preserve the order of every conflicting pair: read/write, write/read, or write/write on the same logical item. A committed history is serializable when it is equivalent to some serial execution of those transactions. Build a serialization graph with one vertex per committed transaction and an edge $T_i \rightarrow T_j$ when their conflicting operations require $T_i$ before $T_j$. A cycle proves that no serial explanation exists.
 
-```
-T1: BEGIN
-T1: UPDATE accounts SET balance = 0 WHERE id = 1
-                                            T2: SELECT balance FROM accounts WHERE id = 1
-                                            T2: Returns 0 (uncommitted!)
-T1: ROLLBACK
-```
+Serializability deliberately says nothing about wall-clock order. If transaction B starts after transaction A has returned, a merely serializable system may still choose a serialization order that places B before A. **Strict serializability** adds real-time order. Linearizability is the corresponding single-operation/object property; strict serializability applies the idea to transactions.
 
-T2 saw data that never existed in committed state. If T2 made a decision based on that balance (e.g., denying a loan), the decision was based on phantom state.
+Snapshot isolation (SI) is different again:
 
-**Prevented by: Read Committed and above**
+1. a transaction reads from a stable snapshot,
+2. its writes become visible atomically at commit, and
+3. concurrent transactions that write the same item cannot both commit, usually through a first-committer-wins rule.
 
----
+SI prevents dirty reads and many lost updates, but two transactions may read the same predicate and write different rows. Their writes do not conflict, so both commit even when the combined state violates an invariant. That is write skew, and it is the canonical proof that snapshot isolation is not serializable.
 
-### Non-Repeatable Read (Read Skew)
+### SQL names are lossy labels
 
-Reading the same row twice yields different values.
-
-```
-T1: BEGIN
-T1: SELECT balance FROM accounts WHERE id = 1  -- Returns 100
-                                            T2: UPDATE accounts SET balance = 50 WHERE id = 1
-                                            T2: COMMIT
-T1: SELECT balance FROM accounts WHERE id = 1  -- Returns 50!
-T1: COMMIT
-```
-
-T1's view of the world changed mid-transaction. This breaks backup operations (inconsistent snapshot), report generation (totals don't add up), and integrity checks (foreign key references shift).
-
-**Prevented by: Repeatable Read and above**
+The SQL names `READ COMMITTED`, `REPEATABLE READ`, and `SERIALIZABLE` describe minimum observable behavior, not a universal implementation. Engines differ in whether a snapshot lasts a statement or transaction, whether concurrent updates wait or abort, how range predicates are protected, and whether “serializable” means strict two-phase locking, optimistic validation, or serializable snapshot isolation. Treat the engine manual and a concurrency test as part of the interface contract.
 
 ---
 
-### Phantom Read
+## Anomalies as Broken Invariants
 
-A query returns different rows when executed twice.
+Memorizing four ANSI phenomena is insufficient. The useful question is: *which dependency cycle can this operation create?*
+
+| Anomaly | Minimal shape | Broken assumption | Typical defense |
+|---|---|---|---|
+| Dirty read | T2 reads T1's uncommitted write; T1 aborts | Decisions use committed state | Read committed or stronger |
+| Non-repeatable read | T1 reads `x`; T2 commits `x`; T1 rereads `x` | One transaction has one view | Transaction snapshot or locking read |
+| Read skew / fractured read | T1 sees new `x` and old related `y` | Correlated values move atomically | One consistent snapshot |
+| Lost update | T1 and T2 read `x=10`; both write derived values | Both transformations survive | Atomic update, version CAS, write conflict |
+| Phantom | T1 evaluates predicate P; T2 inserts a matching row | Predicate result stays stable | Range/predicate protection |
+| Write skew | T1 and T2 read overlapping state, write disjoint rows | Cross-row invariant remains true | Constraint, explicit lock, serializable validation |
+
+### Lost update: the application overwrites evidence
 
 ```
-T1: BEGIN
-T1: SELECT COUNT(*) FROM accounts WHERE balance > 100  -- Returns 3
-                                            T2: INSERT INTO accounts VALUES (4, 200)
-                                            T2: COMMIT
-T1: SELECT COUNT(*) FROM accounts WHERE balance > 100  -- Returns 4!
-T1: COMMIT
+T1: read seats_remaining = 2
+T2: read seats_remaining = 2
+T1: write seats_remaining = 1; commit
+T2: write seats_remaining = 1; commit
 ```
 
-New rows "appeared" mid-transaction. This is distinct from non-repeatable reads because the *set of rows* changed, not just their values. Phantoms break range-based invariants (e.g., "total deposits must equal total withdrawals").
+Two reservations succeeded, but only one decrement remains. Raising isolation is one option; expressing the transition as one conditional statement is often more direct:
 
-**Prevented by: Serializable** (MySQL RR prevents some phantoms via gap locks, but not all)
+```sql
+UPDATE flights
+   SET seats_remaining = seats_remaining - 1
+ WHERE flight_id = :id
+   AND seats_remaining > 0;
+```
+
+The invariant is now enforced at the write item. The application treats `row_count = 0` as “sold out.” No preliminary read participates in correctness.
+
+### Write skew: disjoint writes can still conflict logically
+
+Suppose at least one doctor must remain on call:
+
+```
+Initial: Alice=on, Bob=on
+
+T1 reads Alice=on, Bob=on       T2 reads Alice=on, Bob=on
+T1 writes Alice=off             T2 writes Bob=off
+T1 commits                      T2 commits
+
+Final: Alice=off, Bob=off
+```
+
+The rows written are disjoint, so a row-level write conflict cannot detect the broken predicate. Defenses, in order of locality, are:
+
+1. redesign the state so one constrained row represents available coverage;
+2. lock a stable parent or guard row shared by both transitions;
+3. use a serializable implementation that tracks predicate dependencies; or
+4. serialize this command through one ordered owner.
+
+“Use repeatable read” is not a defense unless that engine explicitly rejects this history.
+
+### Phantoms are about predicates, not mystical rows
+
+If a transaction checks `SUM(amount) < credit_limit` and another inserts a matching charge, the conflict is with the *predicate range*, not an existing tuple. A B-tree next-key lock can protect an indexed range. SSI can remember that the predicate was read and abort a later dangerous structure. An unindexed predicate may require coarse protection because the engine cannot name a narrow range.
 
 ---
 
-### Write Skew
+## MVCC: Snapshots Are Retained Versions
 
-Two transactions read overlapping data, make decisions, write non-overlapping data.
+Multi-version concurrency control (MVCC) replaces read/write blocking with version selection. A logical row has multiple physical versions, each associated with creation and retirement transaction metadata. A snapshot contains enough information to decide which transactions were visible when it was taken.
 
-```
-Constraint: At least one doctor must be on call
+```text
+logical account A
 
-T1: SELECT COUNT(*) FROM doctors WHERE on_call = true  -- Returns 2
-T1: I can go off-call, there's another doctor
-                                            T2: SELECT COUNT(*) FROM doctors WHERE on_call = true  -- Returns 2
-                                            T2: I can go off-call, there's another doctor
-T1: UPDATE doctors SET on_call = false WHERE id = 1
-T1: COMMIT
-                                            T2: UPDATE doctors SET on_call = false WHERE id = 2
-                                            T2: COMMIT
+version v17: balance=100, created by tx 17, retired by tx 24
+version v24: balance= 80, created by tx 24, still current
+
+snapshot S started before tx 24 committed -> reads v17
+snapshot S2 started after tx 24 committed -> reads v24
 ```
 
-Result: Zero doctors on call. Constraint violated.
+The central invariant is: **a reader sees only versions committed before its snapshot, plus its own writes, and never versions from aborted or still-invisible transactions**. The exact metadata differs (transaction identifiers, commit timestamps, undo records, or immutable key suffixes), but the visibility rule is the product contract.
 
-Write skew is the most insidious anomaly because each transaction's logic is individually correct. The conflict is invisible without tracking read-write dependencies across transactions.
+### Statement and transaction snapshots
 
-**Prevented by: Serializable only**
+At a common read-committed implementation, each statement obtains a new snapshot. Two queries in one transaction can therefore observe different committed worlds. At repeatable-read/SI, the transaction keeps one snapshot, so rereads are stable. Neither choice automatically protects a value that the application read and then later overwrites; that depends on update conflict handling.
+
+### Version retention is a capacity obligation
+
+Old versions cannot be reclaimed while any active snapshot might still need them. Let:
+
+- $u$ be updated bytes per second, including index/version overhead,
+- $T_{old}$ be the age of the oldest snapshot, and
+- $r$ be the fraction of changed bytes that require retained history.
+
+An initial retention estimate is:
+
+$$
+B_{retained} \approx u \times T_{old} \times r
+$$
+
+This is a planning model, not a vendor promise. It explains why a forgotten analytical transaction can create table bloat, undo-space growth, longer vacuum work, or a replication-retention emergency. “Readers do not block writers” often means “readers create deferred cleanup work.”
+
+### Snapshot construction is shared state
+
+At high transaction rates, allocating transaction IDs, publishing active-transaction state, and constructing visibility snapshots can become coordination points. Measure snapshot acquisition time and active-set size; do not assume MVCC read scaling is free simply because row locks are absent.
 
 ---
 
-### Lost Update
+## Three Ways to Enforce Serial Order
 
-Two transactions read the same value, compute a new value, and write it back. One update is silently overwritten.
+### Strict two-phase locking
 
-```
--- Account balance starts at 100
+Two-phase locking (2PL) acquires locks while a transaction executes and releases them only after the lock-growing phase. Strict 2PL holds write locks through commit, preventing other transactions from observing uncommitted writes and making recovery tractable.
 
-T1: BEGIN
-T1: SELECT balance FROM accounts WHERE id = 1  -- Returns 100
-                                            T2: BEGIN
-                                            T2: SELECT balance FROM accounts WHERE id = 1  -- Returns 100
-T1: UPDATE accounts SET balance = 100 + 50 WHERE id = 1  -- Deposit 50
-T1: COMMIT
-                                            T2: UPDATE accounts SET balance = 100 - 30 WHERE id = 1  -- Withdraw 30
-                                            T2: COMMIT
+Predicate correctness needs more than row locks. An engine may lock index gaps/ranges, materialize predicate locks, or fall back to coarser locks. The cost appears as waiting and deadlocks:
 
--- Final balance: 70 (should be 120)
--- T1's deposit of 50 was lost
+```text
+T1 holds A, waits for B
+T2 holds B, waits for A
+                 -> wait-for cycle -> abort one victim
 ```
 
-This is the classic read-modify-write race. PostgreSQL RR detects this and aborts T2. MySQL RR does NOT -- it silently loses T1's update. Under Read Committed, both databases lose the update.
+Global lock ordering prevents cycles when the application can enumerate resources. A deadlock detector handles the rest, but victim aborts still require the same retry discipline as optimistic concurrency.
 
-**Prevented by:**
-- Repeatable Read in PostgreSQL (first-updater-wins)
-- Serializable in MySQL
-- `SELECT FOR UPDATE` at any isolation level
-- Atomic operations: `UPDATE accounts SET balance = balance + 50` (no read-modify-write)
+### Optimistic validation
+
+Optimistic concurrency executes against a snapshot, records a read/write set, and validates at commit that serial order remains possible. It avoids waiting when conflicts are rare. Under contention, completed work is thrown away and retried, so CPU and downstream reads amplify precisely when the system is stressed.
+
+A version-column compare-and-swap is a narrow form:
+
+```sql
+UPDATE documents
+   SET body = :body, version = version + 1
+ WHERE id = :id AND version = :observed_version;
+```
+
+Zero updated rows means “the premise changed,” not an infrastructure error. The command must re-read and either merge, reject, or retry from the beginning.
+
+### Serializable snapshot isolation
+
+Serializable snapshot isolation (SSI) preserves nonblocking snapshot reads but tracks **read-write anti-dependencies**: T1 read a version that T2 later replaced, so T1 appears before T2 in the dependency graph. A cycle containing these edges is nonserializable.
+
+Implementations need not retain the entire graph. SSI detects a dangerous shape:
+
+$$
+T_{in} \xrightarrow{rw} T_{pivot} \xrightarrow{rw} T_{out}
+$$
+
+and aborts a participant when commit ordering makes the structure capable of closing a cycle. This may abort a history that would ultimately have been serializable (a conservative false positive), but it never permits a known serialization cycle. Read-only safe snapshots can avoid tracking when the engine proves that concurrent read/write transactions cannot create the dangerous structure.
+
+SSI moves the cost from lock waits to dependency metadata, predicate-read footprints, and aborts. Missing indexes can make one logical predicate cover a huge part of the database, increasing memory use and false conflicts even when the query itself is fast enough.
 
 ---
 
-## MVCC Internals
+## Put Invariants at the Narrowest Reliable Boundary
 
-Multi-Version Concurrency Control is how PostgreSQL, MySQL/InnoDB, and Oracle implement isolation without read locks. Each write creates a new version of the row; readers see the version appropriate for their snapshot.
+Choose the cheapest mechanism whose scope exactly covers the invariant.
 
-### PostgreSQL: Heap Tuple Headers (v16)
+| Invariant | Preferred expression | Why |
+|---|---|---|
+| Email unique per tenant | Unique constraint on `(tenant_id, normalized_email)` | Database arbitrates every writer |
+| Counter never below zero | Conditional atomic update | One write item, no read/write race |
+| User edit based on version seen | Version CAS | Conflict is part of product behavior |
+| Sum across mutable rows under limit | Serializable transaction or locked guard row | Predicate spans multiple items |
+| One command produces DB state and event | Local transaction plus outbox | External broker is outside DB isolation |
+| Cross-database invariant | Redesign ownership or distributed commit/workflow | One engine cannot serialize unknown state |
 
-Every row in PostgreSQL carries version metadata directly in the heap:
+Declarative constraints are usually stronger than application checks because all writers pass the same authority. A preflight `SELECT` followed by `INSERT` is a user-experience optimization; the unique constraint is the correctness mechanism.
 
-```sql
--- Observe MVCC metadata directly
-SELECT ctid, xmin, xmax, * FROM accounts;
+### Read-only transactions still make promises
 
---  ctid  | xmin | xmax | id | balance
--- -------+------+------+----+---------
---  (0,1) |  100 |    0 |  1 |    500
---  (0,2) |  100 |  105 |  2 |    300
---  (0,3) |  110 |    0 |  3 |    750
-```
+A report may require a mutually consistent snapshot but not the latest value. A fraud decision may require freshness relative to a just-completed command. Label those separately. Route snapshot-consistent analytics and read-your-writes traffic differently when replicas cannot provide both.
 
-**Field meanings:**
+### Authorization predicates belong inside the transaction model
 
-| Field | Purpose |
-|-------|---------|
-| `xmin` | Transaction ID that inserted this tuple version |
-| `xmax` | Transaction ID that deleted/updated this tuple (0 = still live) |
-| `ctid` | Physical location `(page, offset)` within the heap file |
-| `t_infomask` | Bitmask flags: `HEAP_XMIN_COMMITTED`, `HEAP_XMAX_INVALID`, etc. |
-| `t_infomask2` | Number of attributes, HOT update flag |
-
-When a row is UPDATEd, PostgreSQL does not modify in place. Instead:
-
-```
-Before UPDATE:
-  (0,1): xmin=100, xmax=0, balance=500        -- live tuple
-
-After UPDATE (by xid 120):
-  (0,1): xmin=100, xmax=120, balance=500      -- dead tuple (old version)
-  (0,4): xmin=120, xmax=0, balance=600        -- new live tuple
-```
-
-The old tuple's `xmax` is set to the updating transaction's ID. The old tuple's `ctid` is updated to point to the new tuple location (forming a version chain).
-
-### Snapshot Construction
-
-When a transaction begins (in RR/Serializable), PostgreSQL takes a snapshot:
-
-```
-Snapshot = {
-  xmin: 100,            -- oldest active transaction ID
-  xmax: 125,            -- first unassigned transaction ID
-  xip:  [105, 110, 118] -- transaction IDs that were in-progress at snapshot time
-}
-```
-
-**Visibility rules for a tuple:**
-
-1. If `tuple.xmin` is in `xip` (still in-progress at snapshot time) -> invisible
-2. If `tuple.xmin >= snapshot.xmax` (started after snapshot) -> invisible
-3. If `tuple.xmin` is committed AND `tuple.xmin < snapshot.xmax` AND `tuple.xmin` not in `xip` -> visible (if `xmax` doesn't hide it)
-4. If `tuple.xmax` is committed AND visible by the same rules -> tuple is dead, invisible
-
-Under Read Committed, a new snapshot is taken for *each statement*, which is why it sees newly committed data mid-transaction.
-
-### Dead Tuple Accumulation and VACUUM
-
-Because updates create new tuple versions, old versions accumulate as "dead tuples":
-
-```sql
--- Monitor dead tuple ratio (PostgreSQL 16)
-SELECT relname,
-       n_live_tup,
-       n_dead_tup,
-       round(n_dead_tup::numeric / greatest(n_live_tup, 1) * 100, 2) AS dead_pct,
-       last_vacuum,
-       last_autovacuum
-FROM pg_stat_user_tables
-WHERE n_dead_tup > 0
-ORDER BY n_dead_tup DESC;
-```
-
-**Why VACUUM exists:** Dead tuples waste disk space and slow sequential scans (the heap must skip over them). VACUUM marks dead tuple space as reusable. VACUUM FULL rewrites the entire table to reclaim disk space (requires ACCESS EXCLUSIVE lock).
-
-**Autovacuum triggers** (default settings in PostgreSQL 16):
-
-```
-autovacuum_vacuum_threshold = 50          -- minimum dead tuples before vacuum
-autovacuum_vacuum_scale_factor = 0.2      -- fraction of table size
--- Trigger: dead_tuples > threshold + scale_factor * n_live_tup
--- For a 1M row table: vacuum triggers after 200,050 dead tuples
-```
-
-For high-churn tables, lower the scale factor:
-
-```sql
-ALTER TABLE hot_table SET (autovacuum_vacuum_scale_factor = 0.01);
--- Now triggers at 10,050 dead tuples for a 1M row table
-```
-
-### InnoDB Contrast (MySQL 8.0)
-
-InnoDB takes a different approach to versioning:
-
-| Aspect | PostgreSQL | InnoDB |
-|--------|-----------|--------|
-| Old versions stored in | Heap (inline) | Undo log segments (separate tablespace) |
-| Cleanup mechanism | VACUUM (external process) | Purge thread (background) |
-| Version chain direction | Forward (old ctid -> new ctid) | Backward (current row -> undo log) |
-| Read overhead of bloat | Heap scan slows down | Undo log traversal slows long-running reads |
-
-InnoDB stores the current version in the clustered index. When a transaction needs an older version, it reconstructs it by applying undo log records in reverse. This means current reads are fast, but old-snapshot reads (from long-running transactions) must traverse the undo chain.
-
-```sql
--- Monitor InnoDB undo log usage (MySQL 8.0)
-SELECT count AS undo_log_entries
-FROM information_schema.innodb_metrics
-WHERE name = 'trx_rseg_history_len';
-
--- High values (>1M) indicate long-running transactions preventing purge
-```
+Tenant and policy filters are correctness predicates. If an authorization check reads membership and a later statement mutates a protected resource, define whether membership revocation may race that mutation. Row-level security, explicit tenant keys, and transaction-local identity reduce “check then use” gaps. Never let a pooled connection retain a previous request's tenant, role, or isolation setting.
 
 ---
 
-## Locking Internals
+## Retry Is Part of the Transaction Protocol
 
-### Lock Hierarchy
+Serializable, deadlock-detected, and optimistic transactions may abort during healthy operation. Retry the **entire logical transaction**, not only the last statement, because every earlier read belonged to an invalidated premise.
 
-Databases use a hierarchy of lock granularities. Finer granularity = more concurrency but more overhead.
-
-**PostgreSQL lock hierarchy:**
-
-```
-ACCESS SHARE          -- SELECT (blocks nothing except ACCESS EXCLUSIVE)
-ROW SHARE             -- SELECT FOR UPDATE/SHARE
-ROW EXCLUSIVE         -- INSERT/UPDATE/DELETE
-SHARE UPDATE EXCLUSIVE -- VACUUM, CREATE INDEX CONCURRENTLY
-SHARE                 -- CREATE INDEX (non-concurrent)
-SHARE ROW EXCLUSIVE   -- triggers, some ALTER TABLE
-EXCLUSIVE             -- blocks ROW SHARE and above
-ACCESS EXCLUSIVE      -- ALTER TABLE, DROP, VACUUM FULL
-```
-
-Actual row-level locks are separate from these table-level modes. PostgreSQL row locks live in the tuple header (`xmax` + `t_infomask` bits), not in a shared lock table, so millions of row locks have near-zero memory overhead.
-
-```sql
--- View current locks (PostgreSQL 16)
-SELECT l.locktype, l.relation::regclass, l.mode, l.granted, l.pid,
-       a.query
-FROM pg_locks l
-JOIN pg_stat_activity a ON l.pid = a.pid
-WHERE l.relation IS NOT NULL
-ORDER BY l.relation;
+```text
+for attempt in 0..max_attempts:
+    begin transaction
+    read all decision inputs
+    validate request id / command state
+    apply state transition
+    insert outbox record in the same transaction
+    try commit
+      committed        -> return durable result
+      serialization    -> rollback, jittered backoff, retry whole body
+      definite failure -> rollback, classify
+      outcome unknown  -> resolve by command id before any retry
 ```
 
-### InnoDB Gap Locks
+The **outcome-unknown** branch is different from a serialization abort. A connection can disappear after the commit record becomes durable but before the response arrives. Blindly repeating the business action can double-charge or double-reserve. Give each logical command a stable identifier, store it with the result under a uniqueness constraint, and query that record to resolve the outcome. See [Idempotency](08-idempotency.md).
 
-In MySQL InnoDB under Repeatable Read, range queries acquire **gap locks** to prevent phantoms:
+Keep network calls, email, and irreversible device actions outside the speculative transaction. Persist intent in an outbox or workflow state, commit, then deliver the effect with its own idempotency key. Holding database locks while waiting on an external dependency couples two unrelated failure domains and makes tail latency the lock duration.
 
-```sql
--- Session 1 (MySQL 8.0, default RR)
-BEGIN;
-SELECT * FROM orders WHERE id > 10 AND id < 20 FOR UPDATE;
+### Bound the retry amplifier
 
--- This locks:
---   Record locks on existing rows where 10 < id < 20
---   Gap locks on the gaps between existing keys
---   Next-key lock on the supremum pseudo-record
-```
+If a transaction has abort probability $p$ and attempts are independent, expected attempts per success are:
 
-```sql
--- Session 2 (blocked!)
-INSERT INTO orders (id, amount) VALUES (15, 100);
--- Waits... blocked by gap lock even though id=15 doesn't exist yet
-```
+$$
+E[A] = \frac{1}{1-p}
+$$
 
-Gap locks prevent phantom inserts but cause unexpected blocking. A `SELECT ... WHERE status = 'pending'` on a secondary index can lock gaps that block unrelated inserts.
-
-```sql
--- Diagnose InnoDB locks (MySQL 8.0)
-SELECT * FROM performance_schema.data_locks
-WHERE lock_type = 'RECORD'
-ORDER BY lock_data;
-
--- Shows lock_mode: X,GAP  or  X,REC_NOT_GAP  or  X (next-key lock)
-```
-
-### PostgreSQL Predicate Locks (SSI)
-
-Under Serializable isolation, PostgreSQL tracks what each transaction reads using **SIReadLock** entries:
-
-```sql
--- Session 1 (Serializable)
-BEGIN ISOLATION LEVEL SERIALIZABLE;
-SELECT * FROM doctors WHERE on_call = true;
-
--- PostgreSQL creates SIReadLock entries for the rows and the index range
-```
-
-These aren't locks in the blocking sense -- they're markers. SSI doesn't block; it tracks dependencies and aborts when it detects a cycle.
-
-```sql
--- View predicate locks
-SELECT locktype, relation::regclass, page, tuple
-FROM pg_locks
-WHERE mode = 'SIReadLock';
-
--- locktype | relation | page | tuple
--- ---------+----------+------+-------
--- tuple    | doctors  |    0 |     1
--- tuple    | doctors  |    0 |     3
--- page     | doctors  |    0 |
-```
-
-### Deadlock Detection
-
-When two transactions each hold a lock the other needs, a deadlock occurs:
-
-```
-T1: UPDATE accounts SET balance = balance - 100 WHERE id = 1;  -- holds lock on id=1
-T2: UPDATE accounts SET balance = balance - 50  WHERE id = 2;  -- holds lock on id=2
-T1: UPDATE accounts SET balance = balance + 100 WHERE id = 2;  -- waits for T2
-T2: UPDATE accounts SET balance = balance + 50  WHERE id = 1;  -- waits for T1 -> DEADLOCK
-```
-
-**PostgreSQL** detects deadlocks by building a **waits-for graph** and checking for cycles. The check runs after `deadlock_timeout` (default 1 second). One transaction is aborted with `ERROR: deadlock detected`.
-
-```sql
--- PostgreSQL: tune deadlock detection
-SET deadlock_timeout = '500ms';  -- check sooner (more CPU) or later (longer waits)
-
--- Log deadlocks for analysis
-ALTER SYSTEM SET log_lock_waits = on;       -- log waits exceeding deadlock_timeout
-ALTER SYSTEM SET deadlock_timeout = '1s';
-SELECT pg_reload_conf();
-```
-
-**MySQL InnoDB** checks for deadlocks on every lock wait (no timeout delay). It uses a waits-for graph and rolls back the transaction with the fewest undo log records (cheapest to roll back).
-
-```sql
--- MySQL: view last deadlock
-SHOW ENGINE INNODB STATUS\G
--- Look for "LATEST DETECTED DEADLOCK" section
-```
+At $p=0.2$, useful throughput requires 1.25 attempts per success; at $p=0.5$, it requires 2. The independence assumption usually becomes optimistic under a hot-key incident because immediate retries collide again. Use randomized backoff, a finite retry budget, admission control, and a contention-specific error to callers. Retries are load; they do not create capacity.
 
 ---
 
-## Serializable Snapshot Isolation (SSI) Deep Dive
+## Capacity and Contention Model
 
-SSI (used by PostgreSQL 9.1+ and CockroachDB) is an optimistic concurrency control mechanism. It runs transactions against snapshots (like Repeatable Read) but detects serialization conflicts and aborts offenders at commit.
+For arrival rate $\lambda$ transactions per second and mean time $W$ seconds spent inside a transaction, Little's Law estimates in-flight transactions:
 
-### rw-Anti-Dependency
+$$
+N = \lambda W
+$$
 
-The core concept in SSI is the **rw-anti-dependency** (also called rw-conflict):
+This connects application behavior to database state. A remote call that raises transaction time from 10 ms to 500 ms multiplies concurrent snapshots and possible lock holders by 50 at the same throughput.
 
-> Transaction T1 has an rw-anti-dependency on T2 if T1 reads a version of some data item, and T2 later writes a new version of that same item.
+Build an isolation budget from four resources:
 
-```
-T1: reads row X (version v1)
-T2: writes row X (version v2)
--- T1 has an rw-anti-dependency on T2: T1 read old data that T2 changed
-```
+1. **lock residency:** lock count, wait duration, and hot-resource queue depth;
+2. **version residency:** update bytes times oldest-snapshot age;
+3. **validation work:** read/predicate footprint and conflict edges retained until commit;
+4. **retry work:** attempted transactions divided by committed logical commands.
 
-A single rw-anti-dependency is fine. The danger is a **cycle of rw-anti-dependencies** involving two (or more) consecutive edges:
-
-```
-"Dangerous structure":
-T1 --rw--> T2 --rw--> T3  (where T3 committed before T1)
-
-If this pattern forms, one transaction must be aborted to maintain serializability.
-```
-
-### When SSI Aborts vs. 2PL Blocks
-
-| Situation | 2PL behavior | SSI behavior |
-|-----------|-------------|-------------|
-| Read-write conflict | Reader blocks until writer commits | Both proceed; abort at commit if cycle detected |
-| Write-write conflict | Second writer blocks | Second writer blocks (same as 2PL) |
-| No actual conflict | Still blocks (pessimistic) | No overhead (optimistic) |
-| Deadlock possible | Yes (needs detection/timeout) | No deadlocks on reads (only write-write can block) |
-
-SSI's advantage: read-heavy workloads see almost no overhead because reads never block. The cost is occasional aborts that require retry.
-
-### Serialization Failure Retry Pattern (PostgreSQL 16)
-
-When SSI detects a conflict, it raises `ERROR 40001 (serialization_failure)`. Applications **must** retry:
-
-```python
-import psycopg2
-from psycopg2 import extensions
-import time
-
-def execute_with_retry(conn_params, operation, max_retries=5):
-    """Execute a serializable transaction with exponential backoff retry.
-
-    Args:
-        conn_params: dict of psycopg2 connection parameters
-        operation: callable(cursor) -> result, the transaction body
-        max_retries: maximum number of retry attempts
-
-    Returns:
-        Result of the operation callable
-
-    Raises:
-        psycopg2.Error: if max retries exceeded or non-retryable error
-    """
-    for attempt in range(max_retries):
-        conn = psycopg2.connect(**conn_params)
-        conn.set_isolation_level(extensions.ISOLATION_LEVEL_SERIALIZABLE)
-        try:
-            with conn.cursor() as cur:
-                result = operation(cur)
-                conn.commit()
-                return result
-        except psycopg2.errors.SerializationFailure:
-            conn.rollback()
-            if attempt == max_retries - 1:
-                raise
-            # Exponential backoff with jitter
-            delay = (2 ** attempt) * 0.01 * (0.5 + random.random())
-            time.sleep(delay)
-        except Exception:
-            conn.rollback()
-            raise  # Non-retryable errors propagate immediately
-        finally:
-            conn.close()
-
-
-# Usage
-def transfer_funds(cur):
-    cur.execute("SELECT balance FROM accounts WHERE id = 1 FOR UPDATE")
-    balance = cur.fetchone()[0]
-    if balance < 100:
-        raise ValueError("Insufficient funds")
-    cur.execute("UPDATE accounts SET balance = balance - 100 WHERE id = 1")
-    cur.execute("UPDATE accounts SET balance = balance + 100 WHERE id = 2")
-
-execute_with_retry({"dbname": "myapp"}, transfer_funds)
-```
-
-Key points:
-- The *entire transaction* must be retried, not just the failed statement
-- `40001` is the SQLSTATE for serialization failure -- check this code, not the error message
-- Exponential backoff with jitter prevents retry storms under contention
+Do not publish universal “serializable costs X%” claims. Cost is a workload property: conflict topology, transaction duration, index quality, write-set overlap, and the engine's mechanism dominate the result. Benchmark with the real invariant-preserving transaction shape and a skew distribution that includes hot tenants and keys.
 
 ---
 
-## Comparison Table
+## Failure Modes
 
-| Level | Dirty Read | Non-Repeatable | Phantom | Write Skew | Lost Update | Performance |
-|-------|------------|----------------|---------|------------|-------------|-------------|
-| Read Uncommitted | Yes | Yes | Yes | Yes | Yes | Best |
-| Read Committed | No | Yes | Yes | Yes | Yes | Good |
-| Repeatable Read | No | No | PG: No, MySQL: Partial | PG: Yes, MySQL: Yes | PG: No, MySQL: Yes | Medium |
-| Serializable | No | No | No | No | No | Worst |
+### The pooled-session leak
 
-Notes on the "Maybe" cells:
-- PostgreSQL RR prevents phantoms and lost updates via first-updater-wins, but not write skew
-- MySQL RR prevents phantoms on *consistent reads* (MVCC snapshot) but not on *locking reads* or DML
-- MySQL RR does NOT detect lost updates in read-modify-write patterns
+Request A changes a session default to serializable or installs tenant context, then returns the connection without resetting it. Request B inherits that state. The symptom may be unexpected aborts or cross-tenant data exposure. Prefer transaction-scoped settings, reset connections on checkout/check-in, and test pool reuse explicitly.
 
----
+### The long snapshot retention incident
 
-## Performance Impact
+An analyst opens a repeatable-read transaction and leaves it idle. Update traffic continues. Cleanup cannot remove versions visible to that snapshot; storage and replication logs grow, compaction/vacuum falls behind, and latency degrades. A restart “fixes” the oldest snapshot while discarding the evidence. Alert on oldest transaction/snapshot age well before disk pressure, label the owning workload, and enforce idle-in-transaction limits.
 
-### Benchmark Ratios
+### The retry storm on a hot invariant
 
-Relative throughput under concurrent workloads (normalized to Read Committed = 1.0). Measured patterns are typical OLTP: 80% point reads, 15% updates, 5% range queries. Based on published benchmarks and common industry observations.
+A new campaign makes one inventory row hot. Serializable aborts rise. Every client retries immediately, so attempted TPS grows while committed TPS falls. Queueing moves from the database to CPU and connection pools. Bound attempts, add jitter, shed optional work, and consider a per-key command queue or escrow-style allocation when the product permits it.
 
-| Workload | RC | RR | Serializable (2PL) | Serializable (SSI) |
-|----------|----|----|--------------------|--------------------|
-| Low contention (1% hot rows) | 1.0 | 0.95 | 0.85 | 0.92 |
-| Medium contention (10% hot rows) | 1.0 | 0.90 | 0.60 | 0.82 |
-| High contention (50% hot rows) | 1.0 | 0.85 | 0.30 | 0.65 |
-| Read-only | 1.0 | 0.99 | 0.95 | 0.98 |
+### The replica-read premise
 
-Key observations:
-- SSI (PostgreSQL) significantly outperforms 2PL (MySQL Serializable) under contention because reads don't block
-- RR is nearly free for read-only workloads
-- Under high contention, Serializable (2PL) can drop to 30% of RC throughput due to lock convoy effects
+A command reads eligibility from a lagging replica and writes to the primary. No primary isolation level can repair the stale premise because the read was outside the transaction authority. Move the decision read to the writer, use a session/LSN fence, or explicitly accept the stale decision as product semantics.
 
-### Lock Wait Impact on P99 Latency
+### The missing predicate index
 
-```
-Isolation Level     P50 Latency    P99 Latency    P99/P50 Ratio
------------------------------------------------------------------
-Read Committed      2ms            12ms           6x
-Repeatable Read     2ms            18ms           9x
-Serializable (2PL)  3ms            150ms          50x
-Serializable (SSI)  2ms            25ms           12.5x  (includes retry cost)
-```
-
-Under SSI, P99 includes the cost of occasional aborts + retries. Under 2PL, P99 reflects lock wait queuing.
-
-### MVCC Read Overhead at Different Bloat Levels
-
-Dead tuples slow down sequential scans because PostgreSQL must check visibility for every tuple, live or dead.
-
-```
-Dead Tuple Ratio    Seq Scan Overhead    Index Scan Overhead
-------------------------------------------------------------
-0% (freshly vacuumed)   1.0x            1.0x
-20%                     1.15x           1.02x
-50%                     1.45x           1.05x
-80%                     2.5x            1.10x
-```
-
-Index scans are relatively unaffected because they go directly to live tuples via the index. Sequential scans must traverse the entire heap, including dead tuples. This is why VACUUM frequency matters more for tables accessed via sequential scans.
+A serializable query scans broadly because the intended filter lacks an index. Locking engines protect a large range; SSI engines record coarse predicate evidence. Unrelated transactions block or abort. Query plans are therefore part of the concurrency contract, not only a latency concern.
 
 ---
 
-## Application Patterns
+## Observability as History Evidence
 
-### SELECT FOR UPDATE SKIP LOCKED: Queue-Worker Pattern
+Monitor the mechanism and the user-visible outcome together:
 
-Use this to implement a database-backed job queue without external message brokers:
+- commits, aborts, deadlock victims, and serialization failures by transaction class;
+- retry attempts per logical command and exhausted retry budgets;
+- lock wait time, wait-for edges, oldest waiter, and hot locked resource;
+- transaction duration and idle-in-transaction age;
+- oldest snapshot, retained-version/undo bytes, cleanup debt, and WAL retention;
+- predicate/read-set memory where the engine exposes it;
+- ambiguous commit resolutions and duplicate-command constraint hits;
+- query-plan changes for invariant-bearing predicates.
 
-```sql
--- Worker picks up the next unprocessed job (PostgreSQL 16 / MySQL 8.0)
-BEGIN;
-
-SELECT id, payload
-FROM job_queue
-WHERE status = 'pending'
-ORDER BY created_at
-LIMIT 1
-FOR UPDATE SKIP LOCKED;  -- Skip rows locked by other workers
-
--- Returns a row that no other worker is processing
--- If all pending rows are locked, returns empty set (worker sleeps and retries)
-
--- Process the job...
-
-UPDATE job_queue SET status = 'completed', completed_at = now() WHERE id = $1;
-COMMIT;
-```
-
-**Why this works:** `SKIP LOCKED` skips rows currently locked by other transactions, giving each worker a unique job without blocking. This works at *any* isolation level, including Read Committed.
-
-**Advantage over polling:** No row contention, no deadlocks, no duplicate processing. Multiple workers can safely process the queue concurrently.
-
-### Optimistic Locking with Version Columns
-
-Full Python implementation with retry logic:
-
-```python
-import psycopg2
-from psycopg2.extras import RealDictCursor
-
-class OptimisticLockError(Exception):
-    pass
-
-def update_product_price(conn, product_id: int, new_price: float, max_retries: int = 3):
-    """Update product price with optimistic concurrency control.
-
-    Works correctly under Read Committed -- no elevated isolation needed.
-    """
-    for attempt in range(max_retries):
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            # Step 1: Read current state including version
-            cur.execute(
-                "SELECT id, price, version FROM products WHERE id = %s",
-                (product_id,)
-            )
-            product = cur.fetchone()
-            if not product:
-                raise ValueError(f"Product {product_id} not found")
-
-            current_version = product["version"]
-
-            # Step 2: Business logic (could be complex computation)
-            validated_price = validate_pricing_rules(new_price, product)
-
-            # Step 3: Conditional update -- only succeeds if version unchanged
-            cur.execute(
-                """UPDATE products
-                   SET price = %s, version = version + 1, updated_at = now()
-                   WHERE id = %s AND version = %s""",
-                (validated_price, product_id, current_version)
-            )
-
-            if cur.rowcount == 1:
-                conn.commit()
-                return  # Success
-            else:
-                conn.rollback()  # Version changed, retry
-                continue
-
-    raise OptimisticLockError(
-        f"Failed to update product {product_id} after {max_retries} retries"
-    )
-```
-
-This pattern works under Read Committed because the `WHERE version = %s` clause acts as a compare-and-swap. No elevated isolation level needed.
-
-### Advisory Locks
-
-PostgreSQL advisory locks are application-level cooperative locks -- the database doesn't enforce them on any table, but they provide a fast, deadlock-detectable mutual exclusion primitive.
-
-```sql
--- Transaction-scoped advisory lock (released at COMMIT/ROLLBACK)
-SELECT pg_try_advisory_xact_lock(12345);
--- Returns true if acquired, false if already held by another session
-
--- Use case: prevent duplicate processing of an event
-BEGIN;
-SELECT pg_try_advisory_xact_lock(hashtext('order:' || order_id::text));
--- If false, another worker is already processing this order -- skip
--- If true, process the order
-COMMIT;  -- Lock automatically released
-```
-
-```sql
--- Session-scoped advisory lock (persists until explicit release or disconnect)
-SELECT pg_advisory_lock(hash_key);      -- blocks until acquired
-SELECT pg_advisory_unlock(hash_key);    -- explicit release required
-
--- Useful for: singleton cron jobs, schema migrations, cache warming
-```
-
-Advisory locks are checked via the same waits-for graph as regular locks, so deadlocks between advisory locks and row locks are detected.
-
-### Anti-Pattern: Read-Modify-Write Under Read Committed
-
-```sql
--- WRONG: This loses updates under Read Committed
--- Two concurrent sessions can read the same balance, compute independently, overwrite
-
--- Session 1                                    -- Session 2
-BEGIN;                                          BEGIN;
-SELECT balance FROM accounts WHERE id = 1;      SELECT balance FROM accounts WHERE id = 1;
--- Returns 100                                  -- Returns 100
-UPDATE accounts SET balance = 150 WHERE id = 1;
-COMMIT;                                         UPDATE accounts SET balance = 70 WHERE id = 1;
-                                                COMMIT;
--- Final: 70 (lost Session 1's +50 deposit)
-```
-
-```sql
--- FIX Option 1: Atomic expression (no read-modify-write)
-UPDATE accounts SET balance = balance + 50 WHERE id = 1;
-
--- FIX Option 2: SELECT FOR UPDATE (pessimistic)
-BEGIN;
-SELECT balance FROM accounts WHERE id = 1 FOR UPDATE;  -- acquires row lock
--- Other sessions block on their SELECT FOR UPDATE until this commits
-UPDATE accounts SET balance = balance + 50 WHERE id = 1;
-COMMIT;
-
--- FIX Option 3: Optimistic locking (see version column pattern above)
-```
-
-Always prefer atomic expressions when possible. They're simpler, faster, and correct at any isolation level.
+Use stable operation names rather than raw SQL as metric labels. Raw statements contain sensitive values and create unbounded cardinality. During an incident, retain sampled transaction traces with transaction ID, snapshot/commit coordinate, rows or key ranges touched, wait/abort reason, and logical command ID.
 
 ---
 
-## Database-Specific Notes
+## Migration and Verification
 
-### PostgreSQL (v16)
+### Strengthening isolation safely
 
-**Isolation implementation:**
-- Read Committed: each *statement* gets a fresh snapshot
-- Repeatable Read: one snapshot for entire transaction, first-updater-wins for write conflicts
-- Serializable: SSI-based, detects rw-anti-dependency cycles
+1. Inventory transaction classes and state the invariant each owns.
+2. Add stable command IDs and whole-transaction retry support before enabling an abort-capable level.
+3. Move external effects behind outbox/workflow boundaries.
+4. Add missing constraints and predicate indexes.
+5. Shadow or canary the stronger level for selected operations; measure abort topology, not only average latency.
+6. Increase coverage gradually and keep a per-operation rollback switch.
 
-**Monitoring dead tuples and XID health:**
+A rollback to weaker isolation is a semantic rollback. Document which anomaly becomes legal again; do not call it a transparent performance change.
 
-```sql
--- Dead tuple monitoring
-SELECT schemaname, relname, n_live_tup, n_dead_tup,
-       round(n_dead_tup::numeric / greatest(n_live_tup, 1) * 100, 1) AS bloat_pct,
-       last_autovacuum
-FROM pg_stat_user_tables
-WHERE n_dead_tup > 1000
-ORDER BY n_dead_tup DESC;
+### Deterministic concurrency tests
+
+Unit tests that run transactions sequentially prove little. Use barriers to force the dangerous interleaving:
+
+```text
+T1 read predicate ---- barrier ---- write A ---- commit
+T2 read predicate ---- barrier ---- write B ---- commit
 ```
 
-**XID wraparound prevention:**
-
-PostgreSQL transaction IDs are 32-bit (4 billion values). When the XID counter approaches wraparound, PostgreSQL forces aggressive vacuuming and eventually shuts down to prevent data corruption.
-
-```sql
--- Check XID age (how close to wraparound)
-SELECT datname,
-       age(datfrozenxid) AS xid_age,
-       round(age(datfrozenxid)::numeric / 2147483647 * 100, 2) AS pct_to_wraparound
-FROM pg_database
-ORDER BY xid_age DESC;
-
--- Danger zone: xid_age > 1 billion (autovacuum_freeze_max_age default: 200 million)
--- Emergency zone: xid_age > 2 billion (database shuts down to prevent wraparound)
-```
-
-Long-running transactions prevent VACUUM from advancing the frozen XID horizon. A single idle-in-transaction session can hold back the entire cluster.
-
-### MySQL InnoDB (v8.0)
-
-**Default isolation:** Repeatable Read (unlike PostgreSQL's Read Committed default)
-
-**Key diagnostics:**
-
-```sql
--- Active transactions
-SELECT trx_id, trx_state, trx_started,
-       timestampdiff(SECOND, trx_started, now()) AS age_seconds,
-       trx_rows_locked, trx_rows_modified, trx_isolation_level
-FROM information_schema.innodb_trx
-ORDER BY trx_started;
-
--- Lock waits
-SELECT r.trx_id AS waiting_trx,
-       r.trx_query AS waiting_query,
-       b.trx_id AS blocking_trx,
-       b.trx_query AS blocking_query
-FROM information_schema.innodb_lock_waits w
-JOIN information_schema.innodb_trx b ON b.trx_id = w.blocking_trx_id
-JOIN information_schema.innodb_trx r ON r.trx_id = w.requesting_trx_id;
-
--- Detailed lock information (MySQL 8.0+)
-SELECT engine_lock_id, lock_type, lock_mode, lock_status,
-       lock_data, object_name
-FROM performance_schema.data_locks
-WHERE lock_status = 'WAITING';
-```
-
-**MySQL RR quirks:**
-- Consistent reads (plain SELECT) use MVCC snapshot -- no phantoms
-- Locking reads (SELECT FOR UPDATE, SELECT FOR SHARE) read the *latest committed version*, not the snapshot
-- This inconsistency means the same WHERE clause can match different rows depending on whether you use a locking or non-locking read
-
-### Oracle (21c)
-
-- Supports only Read Committed and Serializable
-- No Read Uncommitted, no Repeatable Read
-- **"Serializable" is actually Snapshot Isolation** -- it does NOT prevent write skew
-- Oracle detects write-write conflicts (ORA-08177: can't serialize access) but not read-write conflicts
-- True serializability requires application-level `SELECT FOR UPDATE`
-
-```sql
--- Oracle: set serializable (actually SI)
-ALTER SESSION SET ISOLATION_LEVEL = SERIALIZABLE;
-
--- Write skew IS possible here. Oracle will not detect the doctor on-call anomaly.
-```
-
-### CockroachDB (v23.x)
-
-- **Serializable by default** -- only isolation level available (until v23.2 added Read Committed as opt-in)
-- Uses a distributed SSI implementation across nodes
-- Cross-node transactions incur coordination overhead (~2-5ms per involved range)
-- Automatic transaction retries at the gateway node when possible (transparent to client)
-- Contention on hot rows causes "transaction retry" errors just like PostgreSQL SSI
-
-```sql
--- CockroachDB: check contention
-SELECT * FROM crdb_internal.cluster_contended_tables;
-SELECT * FROM crdb_internal.cluster_contended_indexes;
-```
+Assert that at most one commits or that the invariant still holds. Add histories for lost update, phantom insertion, deadlock victim retry, process crash after commit-before-response, pool reuse, long snapshots, and replica lag. For a custom store, record invocation/completion histories and check them against the promised model; fault injection should include pauses, partitions, and clock changes even though isolation itself must not depend on wall-clock correctness.
 
 ---
 
-## Common Mistakes
+## Decision Framework
 
-### 1. Connection Pool Isolation Level Leaking
+1. **Can the invariant be a constraint or one atomic conditional write?** Use that first.
+2. **Is conflict expected product behavior, such as concurrent editing?** Use version CAS and expose merge/reject semantics.
+3. **Does the invariant span a stable, small resource set?** Lock those resources in a global order.
+4. **Does it span predicates or dynamically discovered rows?** Use true serializability and design for aborts or waits.
+5. **Are reads outside the writer or effects outside the database?** Isolation alone is insufficient; add freshness fences and durable effect protocols.
+6. **Is contention sustained rather than accidental?** Change ownership or data shape instead of increasing retries.
 
-If you set isolation level on a connection and return it to the pool without resetting, the next borrower inherits it:
-
-```python
-# BUG: isolation level leaks through the pool
-conn = pool.getconn()
-conn.set_isolation_level(ISOLATION_LEVEL_SERIALIZABLE)
-# ... do work ...
-pool.putconn(conn)
-# Next pool.getconn() may return this connection -- still at SERIALIZABLE!
-```
-
-**Fix:** Always reset isolation level before returning to pool, or use transaction-level isolation:
-
-```sql
--- Per-transaction isolation (doesn't affect connection default)
-BEGIN ISOLATION LEVEL SERIALIZABLE;
--- ... work ...
-COMMIT;
--- Connection returns to its default level
-```
-
-### 2. MySQL RR Doesn't Prevent Write Skew
-
-A common misconception: "Repeatable Read prevents all anomalies except phantoms." This is only true if you ignore write skew, which the original SQL standard did.
-
-```sql
--- MySQL 8.0, Repeatable Read: write skew succeeds (BUG if you need invariant)
--- The doctor on-call example runs without error on MySQL RR.
--- Both transactions commit successfully. Zero doctors on call.
-
--- Fix: Use SELECT ... FOR UPDATE to escalate to locking reads
-BEGIN;
-SELECT * FROM doctors WHERE on_call = true FOR UPDATE;  -- Now this blocks
-```
-
-### 3. Long Transactions Blocking VACUUM
-
-The most common PostgreSQL performance disaster in production:
-
-```sql
--- This idle transaction prevents VACUUM from cleaning ANY dead tuples
--- created after its snapshot
-BEGIN;  -- snapshot taken
-SELECT * FROM tiny_table;  -- harmless-looking query
--- Developer forgets to COMMIT, goes to lunch
--- Meanwhile, heavy UPDATE traffic on big_table creates millions of dead tuples
--- Autovacuum runs but cannot remove tuples newer than this snapshot
--- Table bloats, sequential scans slow down, disk fills up
-```
-
-**Prevention:**
-
-```sql
--- PostgreSQL: kill idle-in-transaction sessions automatically
-ALTER SYSTEM SET idle_in_transaction_session_timeout = '5min';
-SELECT pg_reload_conf();
-
--- Monitor for long-running transactions
-SELECT pid, now() - xact_start AS duration, query, state
-FROM pg_stat_activity
-WHERE state = 'idle in transaction'
-  AND now() - xact_start > interval '1 minute'
-ORDER BY duration DESC;
-```
-
-### 4. Assuming All Databases Implement the Same Level Identically
-
-The SQL standard defines isolation levels by which anomalies they prevent, but implementations vary dramatically:
-
-| Behavior | PostgreSQL RR | MySQL RR | Oracle "Serializable" |
-|----------|--------------|----------|----------------------|
-| Phantoms prevented | Yes (MVCC) | Partial (gap locks) | Yes (MVCC) |
-| Lost updates prevented | Yes (first-updater-wins) | No | Yes (ORA-08177) |
-| Write skew prevented | No | No | No |
-| True serializability | No (need Serializable) | No (need Serializable) | No (need app logic) |
+The correct level is selected per transaction class. One service can reasonably use read committed for independent inserts, version CAS for user edits, and serializable transactions for a cross-row financial invariant.
 
 ---
 
 ## Key Takeaways
 
-1. **Higher isolation = fewer bugs, worse throughput.** The cost is real: Serializable (2PL) can drop to 30% of Read Committed throughput under contention
-2. **Read Committed is usually good enough.** Pair it with atomic SQL expressions and SELECT FOR UPDATE for critical sections
-3. **Repeatable Read is not the same across databases.** PostgreSQL RR prevents lost updates; MySQL RR does not
-4. **Serializable (SSI) is practical.** PostgreSQL's SSI is far cheaper than MySQL's lock-based Serializable -- consider it for correctness-critical workloads
-5. **Application-level patterns close isolation gaps cheaply.** SELECT FOR UPDATE, optimistic locking with version columns, and advisory locks avoid global Serializable overhead
-6. **MVCC is not free.** Dead tuples accumulate, VACUUM must keep up, and long transactions block cleanup. Monitor `n_dead_tup` and `idle_in_transaction_session_timeout`
-7. **Database "isolation levels" don't match the SQL standard.** Oracle's "Serializable" is SI. MySQL's "Repeatable Read" has locking-read inconsistencies. Always test your database's actual behavior
-8. **Always retry on serialization failure (SQLSTATE 40001).** SSI aborts are expected, not exceptional -- build retry logic into your data access layer
+1. Isolation is a set of admitted histories; engine labels are only hints.
+2. Snapshot isolation prevents many anomalies but permits write skew across disjoint writes.
+3. Constraints and atomic state transitions are narrower and often stronger than a global level change.
+4. MVCC trades blocking for retained versions, cleanup debt, and snapshot-management work.
+5. Serializable implementations pay through waits, validation metadata, aborts, or some combination.
+6. Whole-transaction retry, ambiguous-commit resolution, and external-effect isolation are part of correctness.
+7. Test the exact bad interleaving and observe committed logical commands, not merely SQL attempts.
 
-> Cross-reference: see [Consistency Models](04-consistency-models.md) for the linearizability spectrum and distributed consistency guarantees beyond single-node isolation.
+---
+
+## References
+
+- Atul Adya, [*Weak Consistency: A Generalized Theory and Optimistic Implementations for Distributed Transactions*](https://pmg.csail.mit.edu/papers/adya-phd.pdf), MIT PhD thesis, 1999.
+- Hal Berenson et al., [*A Critique of ANSI SQL Isolation Levels*](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/tr-95-51.pdf), Microsoft Research, 1995.
+- Dan R. K. Ports and Kevin Grittner, [*Serializable Snapshot Isolation in PostgreSQL*](https://www.vldb.org/pvldb/vol5/p1850_danrkports_vldb2012.pdf), VLDB, 2012.
+- PostgreSQL, [Transaction Isolation](https://www.postgresql.org/docs/current/transaction-iso.html), current documentation.
+- MySQL, [InnoDB Transaction Model](https://dev.mysql.com/doc/refman/8.4/en/innodb-transaction-model.html), 8.4 Reference Manual.
+- Philip A. Bernstein, Vassos Hadzilacos, and Nathan Goodman, [*Concurrency Control and Recovery in Database Systems*](https://www.microsoft.com/en-us/research/people/philbe/book/), 1987.

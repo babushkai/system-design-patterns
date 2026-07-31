@@ -1,604 +1,214 @@
 # Conflict Resolution
 
-## TL;DR
+Conflict resolution is the policy that turns **independently accepted, causally concurrent updates** into one convergent state. It cannot recover an intention the system never recorded. A merge can preserve both shopping-cart additions, for example, but it cannot decide whether two users who independently claimed the same username should share it. The data type and business invariant must define that answer.
 
-Conflicts occur when concurrent updates happen across replicas. Resolution strategies range from simple (last-writer-wins) to complex (custom merge functions). Choose based on your data semantics: LWW for simplicity with data loss risk, CRDTs for automatic convergence, or application-level resolution for full control. The best conflict is one you prevent from happening.
+Conflict resolution must define detection, representation, merge semantics, deletion knowledge, and repair for conflicting versions. [Multi-Leader Replication](./02-multi-leader-replication.md) and [Leaderless Replication](./03-leaderless-replication.md) own the replica protocols that create and exchange those versions. [Distributed Transactions](./07-distributed-transactions.md) owns coordination when an invariant cannot be merged safely.
 
----
+## Start with the contract, not the merge function
 
-## When Conflicts Occur
+Four properties are often collapsed into “eventual consistency,” but they are different:
 
-### Concurrent Updates
+- **Convergence:** replicas that receive the same updates eventually hold equivalent state.
+- **Causality preservation:** a version known to include another version does not lose it during reconciliation.
+- **Intention preservation:** the merged state reflects the users' operations, such as two increments rather than one overwritten number.
+- **Invariant preservation:** every reachable state satisfies rules such as non-negative inventory or unique ownership.
 
-```
-Replica A                    Replica B
-    │                            │
- write(x, 1)                  write(x, 2)
-    │                            │
-    └────────────────────────────┘
-                  │
-           Both succeed locally
-           Which value is correct?
-```
-
-### Network Partition
-
-```
-┌─────────────────┐     ┌─────────────────┐
-│   Partition A   │     │   Partition B   │
-│                 │     │                 │
-│   write(x, 1)   │  X  │   write(x, 2)   │
-│                 │     │                 │
-└─────────────────┘     └─────────────────┘
-
-After partition heals:
-  x = 1 or x = 2?
-```
-
-### Offline Clients
-
-```
-Client A (online):  write(x, 1) → synced
-Client B (offline): write(x, 2) → queued
-
-Client B comes online:
-  Conflict: x = 1 vs x = 2
-```
-
----
-
-## Conflict Types
-
-### Write-Write Conflict
-
-Same field modified differently.
-
-```
-Replica A: user.name = "Alice"
-Replica B: user.name = "Bob"
-
-Conflict: Which name?
-```
-
-### Read-Modify-Write Conflict
-
-Both replicas read same value, modify, write.
-
-```
-Initial: counter = 10
-
-Replica A: read 10, increment, write 11
-Replica B: read 10, increment, write 11
-
-Expected: 12
-Actual: 11 (lost update)
-```
-
-### Delete-Update Conflict
-
-One deletes, one updates.
-
-```
-Replica A: DELETE FROM users WHERE id = 1
-Replica B: UPDATE users SET name = 'Bob' WHERE id = 1
-
-What happens to the update?
-```
-
-### Constraint Violation
-
-Both replicas create conflicting entries.
-
-```
-Replica A: INSERT (id=1, email='x@y.com')
-Replica B: INSERT (id=2, email='x@y.com')
-
-Unique constraint on email violated
-```
-
----
-
-## Resolution Strategies
-
-### Last-Writer-Wins (LWW)
-
-Highest timestamp wins.
-
-```
-Write A: {value: "Alice", timestamp: 1000}
-Write B: {value: "Bob", timestamp: 1001}
-
-Resolution: value = "Bob" (higher timestamp)
-```
-
-**Implementation:**
-```python
-def resolve_lww(versions):
-    return max(versions, key=lambda v: v.timestamp)
-```
-
-**Pros:**
-- Simple to implement
-- Deterministic
-- Automatic convergence
-
-**Cons:**
-- Data loss (earlier writes discarded)
-- Clock skew can cause wrong winner
-- No semantic understanding
-
-**When to use:**
-- Cache entries
-- Last-modified timestamps
-- Data where "most recent" makes sense
-
-### First-Writer-Wins
-
-Lowest timestamp wins (preserve original).
-
-```
-Write A: {value: "Alice", timestamp: 1000}
-Write B: {value: "Bob", timestamp: 1001}
+A deterministic winner supplies convergence. It does not automatically preserve causality, intention, or invariants. A CRDT supplies convergence under a particular state and delivery contract. It does not automatically make every application invariant coordination-free.
 
-Resolution: value = "Alice" (lower timestamp)
-```
-
-**When to use:**
-- Immutable records
-- Audit logs
-- "Create once" semantics
-
-### Merge Values
-
-Combine conflicting values.
-
-```
-Cart at A: [item1, item2]
-Cart at B: [item1, item3]
+Before choosing a strategy, write the semantic table for each operation:
 
-Merge: [item1, item2, item3]
-```
-
-**Implementation:**
-```python
-def merge_sets(versions):
-    result = set()
-    for v in versions:
-        result = result.union(v.items)
-    return result
-```
+| Concurrent operations | Required result | Can information be discarded? | Coordination needed? |
+|---|---|---:|---:|
+| profile photo A / profile photo B | one deterministic photo | perhaps | no, if arbitrary winner is acceptable |
+| increment 3 / increment 5 | total increases by 8 | no | no, with a counter CRDT |
+| add item / remove an observed add | item absent | no | no, with causal remove metadata |
+| two claims on one username | at most one owner | losing claim must be rejected | normally yes |
+| debit / concurrent debit | balance never below zero | no overspend | yes, or rights must be escrow-partitioned |
 
-**Works for:**
-- Sets (union)
-- Counters (max or sum)
-- Append-only lists
+The table is the contract. “Use last writer wins” is an implementation choice only after the first row has explicitly accepted data loss.
 
-### Application-Level Resolution
-
-Store all versions, let application decide.
-
-```
-Read(x) → {
-    versions: [
-        {value: "Alice", timestamp: 1000, source: "A"},
-        {value: "Bob", timestamp: 1001, source: "B"}
-    ],
-    conflict: true
-}
-
-Application: Present UI for user to choose
-```
+## State required for correct reconciliation
 
-**Implementation:**
-```python
-def read_with_conflicts(key):
-    versions = get_all_versions(key)
-    if len(versions) > 1:
-        return Conflict(versions)
-    return versions[0]
-
-def resolve_conflict(key, chosen_version, discarded_versions):
-    write(key, chosen_version)
-    for v in discarded_versions:
-        mark_as_resolved(v)
-```
+A conflict-aware record is more than a value and a timestamp. Depending on the strategy, durable state includes:
 
----
+- the payload or operation;
+- a unique event identity, often `(replica_id, counter)`;
+- causal context describing updates already observed;
+- a deterministic order key if one winner is required;
+- deletion knowledge or removal context;
+- a schema and merge-policy version;
+- sibling versions that are concurrent and not yet reconciled.
 
-## CRDTs (Conflict-free Replicated Data Types)
+Replica identity and counters are correctness state. Restoring a replica from backup while reusing an old identity and counter can recreate an event ID already covered by a tombstone; a genuinely new add can then disappear. Decommissioning and restoring actors therefore require an identity-lifecycle protocol, not only a data backup.
 
-### Concept
+### Version vectors detect ancestry and concurrency
 
-Data structures designed to always merge without conflict.
+A version vector maps each actor to the greatest counter observed from that actor. Vector `A` dominates vector `B` when every component of `A` is at least the corresponding component of `B` and one is greater. `B` is then an ancestor and can be discarded. If neither dominates, the versions are concurrent.
 
-```
-Property: Merge is:
-  - Commutative: merge(A, B) = merge(B, A)
-  - Associative: merge(merge(A, B), C) = merge(A, merge(B, C))
-  - Idempotent: merge(A, A) = A
-
-Any order of merging produces same result
-```
+For example:
 
-### G-Counter (Grow-only Counter)
+```text
+v1 = {A: 4, B: 1}
+v2 = {A: 3, B: 2}
 
+v1 contains a later A event; v2 contains a later B event.
+Neither dominates, so discarding either loses an update.
 ```
-Each node tracks its own increment:
-  Node A: {A: 5, B: 0, C: 0}
-  Node B: {A: 3, B: 7, C: 0}
-
-Merge: component-wise max
-  Result: {A: 5, B: 7, C: 0}
-  
-Total: 5 + 7 + 0 = 12
-```
 
-**Operations:**
-```python
-class GCounter:
-    def __init__(self, node_id):
-        self.node_id = node_id
-        self.counts = {}
-    
-    def increment(self):
-        self.counts[self.node_id] = self.counts.get(self.node_id, 0) + 1
-    
-    def value(self):
-        return sum(self.counts.values())
-    
-    def merge(self, other):
-        for node, count in other.counts.items():
-            self.counts[node] = max(self.counts.get(node, 0), count)
-```
+A **dotted version vector** separates the new event's dot from the causal context it observed. This represents causality more precisely when different servers coordinate writes for the same logical object. Physical timestamps cannot substitute for this relation: clock order is not evidence that one writer observed another.
 
-### PN-Counter (Positive-Negative Counter)
+Vectors have a membership cost. A dense vector is `O(r)` metadata for `r` actors, and actor churn can grow it indefinitely. Practical systems use stable actors, sparse maps, dotted contexts, interval compression, or deliberately lossy truncation. Dynamo's timestamp-based vector-clock truncation is explicit about the trade: bounded metadata can forget ancestry and create siblings that a complete clock would have eliminated.
 
-Supports increment and decrement:
-```
-P (positive): G-Counter for increments
-N (negative): G-Counter for decrements
+## Resolution families
 
-Value = P.value() - N.value()
+### Serialize the operation when one answer is mandatory
 
-Merge: merge P and N separately
-```
+“First writer wins” is not choosing the lowest client timestamp after replicas diverge. It is accepting one operation at a serialization point and rejecting the rest through compare-and-set, a unique index, a consensus-backed create-if-absent operation, or a transaction.
 
-### G-Set (Grow-only Set)
+Use this contract for one-time idempotency-key ownership, uniqueness, inventory rights that cannot be oversold, and other non-mergeable invariants. Independent replicas may still accept requests for availability, but they cannot both promise globally exclusive success unless ownership rights were partitioned in advance.
 
-Elements can only be added, never removed.
+### Last-writer-wins register
 
-```
-Set A: {1, 2, 3}
-Set B: {2, 3, 4}
+An LWW register chooses the maximum element under a **total order**, commonly `(timestamp, stable_writer_id)`. The stable tie-breaker is required: if equal timestamps let replica A prefer its local value while replica B prefers its local value, anti-entropy never converges.
 
-Merge: union = {1, 2, 3, 4}
+```text
+winner = max(versions, key = (logical_or_physical_time, stable_writer_id))
 ```
 
-### OR-Set (Observed-Remove Set)
+The tie-breaker guarantees convergence, not that an unsynchronized clock identified the real last writer. A hybrid logical clock preserves causal order better than a raw wall clock, but LWW still deliberately discards concurrent information. It is suitable only when any deterministic winner is semantically acceptable: cache hints, replaceable preferences, or fields whose authoritative source will refresh them.
 
-Supports add and remove with "add wins" semantics.
-
-```
-Each element has unique tags:
-  add(x) → x with new tag
-  remove(x) → remove all current tags
-
-Concurrent add and remove:
-  add(x) creates new tag, remove sees old tags
-  Result: x exists (add wins)
-```
+Deletes in an LWW register are values too. A tombstone must participate in the same order; physically removing it early allows an older live value to win again.
 
-**Implementation:**
-```python
-class ORSet:
-    def __init__(self):
-        self.elements = {}  # element → set of tags
-    
-    def add(self, element):
-        tag = unique_tag()
-        self.elements.setdefault(element, set()).add(tag)
-    
-    def remove(self, element):
-        self.elements[element] = set()  # Remove all known tags
-    
-    def contains(self, element):
-        return len(self.elements.get(element, set())) > 0
-    
-    def merge(self, other):
-        for elem, tags in other.elements.items():
-            self.elements[elem] = self.elements.get(elem, set()).union(tags)
-```
+### Multi-value register and application merge
 
-### LWW-Register
-
-Last-writer-wins register as a CRDT.
-
-```python
-class LWWRegister:
-    def __init__(self):
-        self.value = None
-        self.timestamp = 0
-    
-    def write(self, value, timestamp):
-        if timestamp > self.timestamp:
-            self.value = value
-            self.timestamp = timestamp
-    
-    def merge(self, other):
-        if other.timestamp > self.timestamp:
-            self.value = other.value
-            self.timestamp = other.timestamp
-```
+A multi-value register removes causally dominated versions and returns every maximal concurrent sibling. A later write that includes all sibling contexts supersedes them. This avoids silent loss and lets a domain-aware resolver decide.
 
-### LWW-Map
+The application merge must itself be retry-safe and deterministic. If two replicas resolve the same siblings differently, resolution creates another conflict. Persist the resolved value with causal context covering **all** consumed siblings; merely deleting sibling rows locally does not prevent another replica from returning them.
 
-Map where each key is an LWW-Register.
+This model works well when conflicts are rare and a user can make a meaningful decision. It works poorly when a hot key routinely has many independent writers: sibling count, payload storage, read latency, and human repair queues all grow.
 
-```
-Node A: {"name": ("Alice", t=100), "age": (30, t=100)}
-Node B: {"name": ("Bob", t=101), "city": ("NYC", t=100)}
-
-Merge:
-  "name": ("Bob", t=101)  ← higher timestamp
-  "age": (30, t=100)
-  "city": ("NYC", t=100)
-```
+### State-based CRDTs
 
----
+A state-based CRDT represents state as a join-semilattice. Local updates move state monotonically upward, and merge computes the least upper bound. The merge is commutative, associative, and idempotent, so duplicate and reordered state transfer converges.
 
-## Version Vectors
+A grow-only counter stores one monotonically increasing component per actor. Merge takes the component-wise maximum; the displayed value is the sum of components. Plain `sum` of replica totals double-counts retransmitted state, while plain `max` loses independent increments. A positive-negative counter uses two grow-only component maps, one for increments and one for decrements.
 
-### Tracking Causality
+An observed-remove set gives every add a durable unique dot. Removing element `x` records exactly the add dots for `x` that the remover has observed:
 
-```
-Version vector: {A: 3, B: 2, C: 1}
-
-Meaning:
-  - Incorporates 3 updates from A
-  - Incorporates 2 updates from B
-  - Incorporates 1 update from C
-```
+```text
+A observes add(x, dot=A:7), then removes x
+  -> tombstone/context covers A:7; that add stays removed after merge
 
-### Comparing Versions
-
-```python
-def compare(vv1, vv2):
-    less_or_equal = all(vv1.get(k, 0) <= vv2.get(k, 0) for k in set(vv1) | set(vv2))
-    greater_or_equal = all(vv1.get(k, 0) >= vv2.get(k, 0) for k in set(vv1) | set(vv2))
-    
-    if less_or_equal and not greater_or_equal:
-        return "vv1 < vv2"  # vv1 is ancestor
-    elif greater_or_equal and not less_or_equal:
-        return "vv1 > vv2"  # vv2 is ancestor
-    elif less_or_equal and greater_or_equal:
-        return "equal"
-    else:
-        return "concurrent"  # Neither is ancestor → conflict
+B concurrently adds(x, dot=B:4), unseen by A
+  -> B:4 is not covered; x remains present (add-wins)
 ```
 
-### Detecting Conflicts
+The simple representation retains add dots and removed dots forever. Optimized forms such as ORSWOT summarize removal knowledge with causal context. Compaction is safe only after **causal stability** establishes that no replica can later reintroduce a covered add. A wall-clock retention period alone is unsafe if an old replica or backup may rejoin after that period.
 
-```
-Write 1: value="A", vv={A:1, B:0}
-Write 2: value="B", vv={A:0, B:1}
-
-Compare:
-  {A:1, B:0} vs {A:0, B:1}
-  Neither dominates → concurrent → conflict!
-```
+### Operation-based and delta-state CRDTs
 
-### Resolving with Version Vectors
-
-```python
-def read_repair(versions):
-    # Find all versions that are not dominated by another
-    non_dominated = []
-    for v in versions:
-        if not any(dominates(other.vv, v.vv) for other in versions if other != v):
-            non_dominated.append(v)
-    
-    if len(non_dominated) == 1:
-        return non_dominated[0]  # Clear winner
-    else:
-        return Conflict(non_dominated)  # Need resolution
-```
+Operation-based CRDTs disseminate operations rather than full state. Their convergence usually requires either reliable causal delivery plus duplicate suppression or operations designed to commute under a weaker delivery order. Delta-state CRDTs disseminate small joinable state fragments and retain the idempotent join model while reducing bandwidth.
 
----
+Do not label arbitrary event handlers a CRDT. The proof must name the state order or operation-delivery contract and demonstrate convergence for every concurrent operation pair, including add/remove, update/delete, and duplicate delivery.
 
-## Semantic Conflict Resolution
+### Semantic operation logs
 
-### Three-Way Merge
+Some domains merge intentions more safely than values. Recording `add 5` and `subtract 2` retains more information than two replicas writing totals. Collaborative editors similarly reconcile insert/delete operations with stable element identities; operational transformation and sequence CRDTs solve different protocol problems and should not be mixed casually.
 
-Use common ancestor to intelligently merge.
+Operation logs require bounded retention, deterministic replay, idempotency, and a snapshot/compaction rule. An operation that calls an external service is not made safe merely by putting it in a mergeable log; see [Idempotency](../01-foundations/08-idempotency.md).
 
-```
-Original (base): "The quick brown fox"
-Version A:       "The quick red fox"    (changed brown → red)
-Version B:       "The fast brown fox"   (changed quick → fast)
-
-Three-way merge:
-  - "quick" → "fast" (B's change)
-  - "brown" → "red" (A's change)
-  Result: "The fast red fox"
-```
+## Concrete failure traces
 
-**Implementation:**
-```python
-def three_way_merge(base, a, b):
-    a_changes = diff(base, a)
-    b_changes = diff(base, b)
-    
-    for change in a_changes + b_changes:
-        if conflicts_with(change, a_changes + b_changes):
-            return Conflict(a, b)
-    
-    return apply_changes(base, a_changes + b_changes)
-```
+### Equal timestamps without a stable tie-breaker
 
-### Operational Transformation (OT)
+1. Replica A accepts `name = Alice` at timestamp 100.
+2. Replica B accepts `name = Bob` at timestamp 100.
+3. Each implementation keeps its local value on equality.
+4. Every exchange repeats the tie and leaves A and B different.
 
-Transform operations to apply in any order.
+The fix is a total deterministic order (or retaining both versions), not hoping timestamp precision makes ties impossible.
 
-```
-Base: "abc"
-Op A: insert('X', position=1) → "aXbc"
-Op B: insert('Y', position=2) → "abYc"
-
-If A applied first:
-  B needs transformation: position 2 → position 3
-  "aXbc" + insert('Y', 3) = "aXbYc"
-
-If B applied first:
-  A remains: position 1
-  "abYc" + insert('X', 1) = "aXbYc"
-
-Same result regardless of order
-```
+### Delete resurrection
 
----
+1. A and B contain add dot `A:9` for item `x`; C is offline with the old value.
+2. A removes `x`, and A/B later physically discard removal context after an elapsed-time rule.
+3. C returns and sends `A:9`.
+4. No surviving state proves that `A:9` was removed, so `x` reappears.
 
-## Delete Handling
+Safe collection requires causal stability, an operational guarantee that C can never rejoin, or rebuilding C from a current snapshot before it participates.
 
-### Tombstones
+### Retry double-counts a non-idempotent merge
 
-Mark deleted items instead of removing.
+1. A exports counter total 10; B exports total 7.
+2. A resolver adds them and stores 17.
+3. The reply is lost, so repair repeats and adds B's 7 again.
+4. The total becomes 24 even though no new increment occurred.
 
-```
-Before: {id: 1, name: "Alice", deleted: false}
-Delete: {id: 1, name: "Alice", deleted: true, deleted_at: 1000}
-
-Why tombstones:
-  - Replicas need to know item was deleted
-  - Otherwise they might resurrect it from their version
-```
+Per-actor components and component-wise max turn retransmission into an idempotent merge.
 
-### Tombstone Cleanup
+### Locally valid values violate a global constraint
 
-```
-Problem: Tombstones accumulate forever
-
-Solutions:
-1. Time-based garbage collection
-   Delete tombstones older than X days
-   Risk: old replica comes back, resurrects data
-
-2. Version vector garbage collection
-   Delete when all replicas have seen tombstone
-   Requires coordination
-
-3. Compaction
-   Periodically merge and remove tombstones
-```
+1. During a partition, A assigns username `river` to user 1.
+2. B assigns `river` to user 2.
+3. LWW can converge on one owner, but both users may already have received success and created dependent state.
 
-### Soft Delete vs Hard Delete
+The conflict is not merely which row remains. The API promised something it could not preserve without coordination, escrowed ownership, or a later explicit revocation workflow.
 
-```
-Soft delete: Keep record, mark as deleted
-  + Can undelete
-  + Preserves audit trail
-  - Storage overhead
-
-Hard delete: Remove record
-  + No storage overhead
-  - Can cause resurrection
-  - Loses history
-```
+## Capacity and cost model
 
----
+Conflict resolution moves cost from the write path into metadata, reads, repair, and garbage collection.
 
-## Real-World Approaches
+Let `r` be active causal actors, `s` unresolved siblings for a key, `v` average payload bytes, and `m` metadata bytes per version. A multi-value record occupies roughly `s * (v + m)`. Naive pairwise vector dominance costs `O(s^2 * r)` component comparisons; good implementations maintain a maximal frontier incrementally, but large sibling sets still make one hot key expensive.
 
-### Amazon Dynamo (Riak)
+For state-based anti-entropy, network demand is approximately:
 
+```text
+repair_bytes_per_second
+  = changed_keys_per_second * replicas_contacted * transferred_state_per_key
 ```
-Strategy: Return all conflicting versions to client
-
-Read → [{value: "A", clock: {A:1}}, {value: "B", clock: {B:1}}]
 
-Client merges, writes back with merged clock
-  Write(merged, clock: {A:1, B:1, Client:1})
-```
+Full-state CRDTs make `transferred_state_per_key` grow with accumulated history. Delta-state transfer reduces the common case but still needs a full-state/bootstrap path when deltas are lost or a replica is new.
 
-### CouchDB
+Tombstones and causal context are compaction debt. Track bytes and count by age, but never turn an age metric directly into a deletion rule. The safe-removal frontier must come from replica progress or an explicit membership decision. Repair bandwidth must also be capacity-reserved; foreground success during a partition can create a backlog whose reconciliation later saturates CPU, disk, or network.
 
-```
-Store all revisions in conflict
-  _id: "doc1"
-  _conflicts: ["2-abc123", "2-def456"]
-
-Application picks winner or merges
-Losing revisions become historical
-```
+## Production operation and migration
 
-### Cassandra
+### Make merge policy versioned data
 
-```
-LWW by default per column
-
-CREATE TABLE users (
-  id uuid,
-  name text,
-  email text,
-  PRIMARY KEY (id)
-);
-
--- Each column resolved independently
--- Highest timestamp wins per column
-```
+Changing from LWW to an OR-set, changing timestamp sources, or altering add/remove precedence changes persisted semantics. Store a policy/schema version beside the record. During migration, readers must understand old and new forms; writers should dual-write or translate under a documented cutover frontier. Never allow two live versions of the resolver to interpret the same bytes differently without a compatibility proof.
 
-### Git
+### Operate actor identity explicitly
 
-```
-Three-way merge for file contents
-Conflict markers for unresolvable conflicts
-
-<<<<<<< HEAD
-my changes
-=======
-their changes
->>>>>>> branch
-
-User manually resolves
-```
+- Persist `(actor_id, counter)` across process restarts.
+- Allocate a new identity after restoring an old backup unless counter continuity is proven.
+- Mark retired actors in membership state.
+- Rebuild long-offline replicas from a current snapshot when removal context may have been collected.
+- Quarantine replicas whose clock or causal metadata moves backward.
 
----
+### Observe the hidden queues
 
-## Choosing a Strategy
+Useful signals include unresolved siblings per key and percentile, causal-context bytes, tombstone bytes, merge retries, reconciliation outcomes by policy version, anti-entropy backlog, oldest unacknowledged removal, and replicas behind the stability frontier. A converged cluster can still be wrong, so convergence alone is not an SLO.
 
-### Decision Matrix
+### Test algebra and histories
 
-| Scenario | Strategy | Reasoning |
-|----------|----------|-----------|
-| Cache | LWW | Stale data acceptable |
-| Counter | CRDT G-Counter | Accurate aggregation |
-| Shopping cart | OR-Set CRDT | Add wins, merge items |
-| User profile | LWW or merge fields | Field-level resolution |
-| Document editing | OT or CRDT | Real-time collaboration |
-| Financial transaction | Prevent conflicts | Use single leader |
-| Social feed | LWW | Staleness OK |
+Property tests should randomly permute, duplicate, batch, and replay updates and then assert merge commutativity, associativity, and idempotence where promised. Generate concurrent operation histories and verify domain invariants, not only equal final bytes. Fault tests must include partitions, process pauses, lost acknowledgements, actor restart from backup, schema-version skew, and a replica returning after removal compaction.
 
-### Prevention Over Resolution
+## Decision framework
 
-Best conflict strategy is preventing conflicts:
+1. What concurrent operation pairs can occur, including delete/update and retry/retry?
+2. Must both intentions survive, or may one deterministic value be discarded?
+3. Is the business invariant closed under the proposed merge operation?
+4. What causal metadata proves ancestry, and how does actor churn affect its size?
+5. What exact condition makes removal knowledge safe to collect?
+6. Can the application resolve every sibling deterministically and idempotently?
+7. What repair capacity drains divergence after the longest supported partition?
+8. If coordination is required, should the API reject immediately rather than acknowledge a promise it may later revoke?
 
-```
-1. Single leader for conflicting data
-2. Partition data so conflicts impossible
-3. Use optimistic locking with retries
-4. Serialize operations through queue
-
-Prevention is simpler than resolution
-```
+## Primary references
 
----
-
-## Key Takeaways
-
-1. **Conflicts are inevitable** in multi-leader/leaderless systems
-2. **LWW is simple but lossy** - acceptable for some data
-3. **CRDTs guarantee convergence** - no conflicts by design
-4. **Version vectors detect concurrency** - essential for conflict detection
-5. **Application knows best** - sometimes let user decide
-6. **Tombstones are necessary** - but need cleanup strategy
-7. **Prevent when possible** - single leader for critical data
-8. **Choose by data semantics** - counters, sets, registers need different strategies
+- [DeCandia et al., *Dynamo: Amazon's Highly Available Key-value Store* (SOSP 2007)](https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf)
+- [Terry et al., *Managing Update Conflicts in Bayou, a Weakly Connected Replicated Storage System* (SOSP 1995)](https://doi.org/10.1145/224056.224070)
+- [Shapiro et al., *A Comprehensive Study of Convergent and Commutative Replicated Data Types* (INRIA Research Report 7506, 2011)](https://inria.hal.science/inria-00555588/document)
+- [Almeida, Baquero, and Fonte, *Interval Tree Clocks: A Logical Clock for Dynamic Systems* (OPODIS 2008)](https://gsd.di.uminho.pt/members/cbm/ps/itc2008.pdf)
+- [Almeida, Baquero, and Fonte, *Dotted Version Vectors: Logical Clocks for Optimistic Replication* (2010)](https://arxiv.org/abs/1011.5808)
+- [Kleppmann and Beresford, *A Conflict-Free Replicated JSON Datatype* (IEEE TPDS 2017)](https://arxiv.org/abs/1608.03960)

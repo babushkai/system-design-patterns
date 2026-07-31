@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-Context management—often called *context engineering*—is the discipline of constructing the model's bounded working state on every call. A context is not a transcript dump. It is a versioned, policy-filtered materialized view assembled from instructions, session events, task state, retrieved evidence, tool observations, and persistent memory. Every item needs provenance, authority, freshness, token cost, and lifecycle semantics.
+Context management (often called *context engineering*) is the discipline of constructing the model's bounded working state on every call. A context is not a transcript dump. It is a versioned, policy-filtered materialized view assembled from instructions, session events, task state, retrieved evidence, tool observations, and persistent memory. Every item needs provenance, authority, freshness, token cost, and lifecycle semantics.
 
 The window is finite; attention and recall are non-uniform; input is repeatedly processed in multi-turn systems; and compaction is lossy. Those properties require explicit budget allocation, stable-prefix design, bounded tool results, evidence selection, validated compaction, inspectable memory, and observability of exactly what entered each request. Optimize the lifecycle of information across the task, not one prompt string.
 
@@ -10,7 +10,7 @@ The window is finite; attention and recall are non-uniform; input is repeatedly 
 
 ## The Context Window Is a Budget
 
-Every request presents the model with one bounded sequence or equivalent ordered content structure: system instructions, tool definitions, conversation state, retrieved documents, the current message, and space reserved for the response. Advertised model limits continue to grow, but a large repository, long-running agent trace, or document corpus can still exceed them—and quality can degrade well before the hard limit.
+Every request presents the model with one bounded sequence or equivalent ordered content structure: system instructions, tool definitions, conversation state, retrieved documents, the current message, and space reserved for the response. Advertised model limits continue to grow, but a large repository, long-running agent trace, or document corpus can still exceed them, and quality can degrade well before the hard limit.
 
 The budget must be allocated before optional material is selected. Let $W_m$ be the qualified usable window for model $m$, which may be below its protocol maximum. Feasibility requires
 
@@ -157,7 +157,7 @@ Everything above manages context *within* a session. Memory is policy-governed i
 
 The canonical record must remain inspectable and correctable. An embedding match is a retrieval candidate, not proof that an old claim is still valid for this user, project, or time. This is the same [feedback-loop contamination](../16-ml-systems/01-ml-system-fundamentals.md) problem as training on model-generated outcomes: an inferred memory can be repeatedly reintroduced until it appears authoritative unless provenance and review state remain visible.
 
-The operational hazards are staleness and scope. A memory that was true in March ("the deploy script is `deploy.sh`") silently poisons sessions in July; memory entries need the same treatment as [dataset versioning](../16-ml-systems/11-dataset-management-versioning.md) gives data — provenance, and deletion when wrong. And memory written from one user's session must never load into another's: memory stores are per-tenant security boundaries, not shared caches.
+The operational hazards are staleness and scope. A memory that was true in March ("the deploy script is `deploy.sh`") silently poisons sessions in July; memory entries need the same treatment as [dataset versioning](../16-ml-systems/11-dataset-management-versioning.md) gives data: provenance and deletion when wrong. And memory written from one user's session must never load into another's: memory stores are per-tenant security boundaries, not shared caches.
 
 ### Memory lifecycle and write authority
 
@@ -218,7 +218,7 @@ Two context projections can isolate high-value state without changing canonical 
 
 **Lost constraints after compaction.** The summary preserved the narrative and dropped the prohibition; the agent re-attempts something explicitly ruled out. Defense: compaction schemas with explicit slots for corrections/constraints, and keeping recent turns verbatim.
 
-**Context poisoning.** A hallucinated "fact," a wrong tool output, or an injected instruction enters the transcript early and every later turn reasons from it — errors compound because the context *is* the agent's world-model. Defense: validate tool outputs at the boundary, keep untrusted retrieved content clearly delimited ([prompt injection](./06-prompt-engineering.md)), and prefer restarting a poisoned session over arguing with it.
+**Context poisoning.** A hallucinated "fact," a wrong tool output, or an injected instruction enters the transcript early and every later turn reasons from it: errors compound because the context *is* the agent's world-model. Defense: validate tool outputs at the boundary, keep untrusted retrieved content clearly delimited ([prompt injection](./06-prompt-engineering.md)), and prefer restarting a poisoned session over arguing with it.
 
 **Context distraction.** Stuffing the window with marginally relevant retrieval measurably *lowers* accuracy versus a tighter context. Defense: rerank hard, cap retrieved tokens, and evaluate retrieval precision, not just recall.
 
@@ -269,11 +269,11 @@ The correct context is the smallest authorized view that preserves the task's ob
 
 ## References
 
-1. [Lost in the Middle: How Language Models Use Long Contexts](https://arxiv.org/abs/2307.03172) — Liu et al., 2023
-2. [Effective Context Engineering for AI Agents](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents) — Anthropic, 2025
-3. [Context Rot: How Increasing Input Tokens Impacts LLM Performance](https://research.trychroma.com/context-rot) — Chroma Research, 2025
-4. [MemGPT: Towards LLMs as Operating Systems](https://arxiv.org/abs/2310.08560) — Packer et al., 2023
-5. [Context Engineering for AI Agents: Lessons from Building Manus](https://manus.im/blog/Context-Engineering-for-AI-Agents-Lessons-from-Building-Manus) — Manus, 2025 (KV-cache discipline, recitation, filesystem-as-context)
-6. [Prompt Caching — Anthropic Documentation](https://platform.claude.com/docs/en/build-with-claude/prompt-caching) — prefix semantics, TTLs, cache pricing
-7. [LLMLingua: Compressing Prompts for Accelerated Inference](https://arxiv.org/abs/2310.05736) — Jiang et al., 2023
-8. [How Long Contexts Fail](https://www.dbreunig.com/2025/06/22/how-contexts-fail-and-how-to-fix-them.html) — Breunig, 2025 (poisoning/distraction/confusion taxonomy)
+1. [Lost in the Middle: How Language Models Use Long Contexts](https://arxiv.org/abs/2307.03172): Liu et al., 2023
+2. [Effective Context Engineering for AI Agents](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents): Anthropic, 2025
+3. [Context Rot: How Increasing Input Tokens Impacts LLM Performance](https://research.trychroma.com/context-rot): Chroma Research, 2025
+4. [MemGPT: Towards LLMs as Operating Systems](https://arxiv.org/abs/2310.08560): Packer et al., 2023
+5. [Context Engineering for AI Agents: Lessons from Building Manus](https://manus.im/blog/Context-Engineering-for-AI-Agents-Lessons-from-Building-Manus): Manus, 2025 (KV-cache discipline, recitation, filesystem-as-context)
+6. [Prompt Caching: Anthropic Documentation](https://platform.claude.com/docs/en/build-with-claude/prompt-caching): prefix semantics, TTLs, cache pricing
+7. [LLMLingua: Compressing Prompts for Accelerated Inference](https://arxiv.org/abs/2310.05736): Jiang et al., 2023
+8. [How Long Contexts Fail](https://www.dbreunig.com/2025/06/22/how-contexts-fail-and-how-to-fix-them.html): Breunig, 2025 (poisoning/distraction/confusion taxonomy)

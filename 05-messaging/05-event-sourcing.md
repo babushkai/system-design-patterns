@@ -1,721 +1,265 @@
-# Event Sourcing
+# Event Sourcing and Domain Logs
 
-## TL;DR
+Event sourcing stores accepted domain transitions as the authoritative record of an aggregate. Current state is obtained by folding an ordered stream of immutable facts, optionally starting from a verified snapshot. This is a domain persistence model, not a synonym for publishing integration events to a broker.
 
-Event sourcing stores all changes to application state as a sequence of events. Instead of storing current state, you store the history of what happened. Current state is derived by replaying events. Benefits: complete audit trail, temporal queries, debugging. Costs: complexity, eventual consistency, storage growth. Often paired with CQRS.
+An event-sourced system must define authoritative aggregate streams, optimistic concurrency, event-store transactions, snapshots, evolution, retention, and temporal reconstruction. [CQRS Projections](06-cqrs.md) owns query read models. [Outbox and Inbox](07-outbox-pattern.md) owns atomic publication to other systems. [Ordering](03-message-ordering.md) owns downstream gap/resequence protocols.
 
----
+## Workload and contract
 
-## Traditional vs Event Sourcing
+An event-sourced store supports:
 
-### Traditional (State-Based)
-
-```
-Database stores current state:
-
-Users table:  id: 123, balance: 500, updated_at: 2024-01-15
-
-Problem: History is lost
-  What was the balance yesterday? How did we get to 500? Unknown.
+```text
+load_stream(aggregate_type, aggregate_id, from_version) -> events
+append_stream(aggregate_id, expected_version, events, command_id) -> new_version
+load_snapshot(aggregate_id, max_version) -> snapshot?
+read_by_commit_position(from_position, filter) -> committed event batches
 ```
 
-### Event Sourcing
+The command path is:
 
-```
-Database stores events:
-  AccountCreated(id=123, balance=1000)
-  MoneyWithdrawn(id=123, amount=200)
-  MoneyDeposited(id=123, amount=300)
-  MoneyWithdrawn(id=123, amount=600)
-
-Current state: Replay → 1000 - 200 + 300 - 600 = 500 ✓
-Complete history preserved
+```text
+command
+  -> load aggregate at version v
+  -> validate invariant and decide events
+  -> append only if current version is still v
+  -> return committed aggregate version and command result
 ```
 
----
+Define:
 
-## Core Concepts
+- aggregate boundary and invariants protected by one append;
+- expected-version conflict behavior;
+- command idempotency scope and result retention;
+- event and metadata schema ownership;
+- stream and global commit ordering semantics;
+- snapshot validity and rebuild path;
+- temporal-query meaning under corrected/late information;
+- retention, privacy erasure, legal hold, and integrity controls;
+- integration publication and projection freshness contracts.
 
-### Event
+Events describe facts the domain accepted: `CreditLimitChanged`, not persistence implementation details such as `RowUpdated`. They carry stable identity, aggregate ID/version, event type/schema, command/causation/correlation IDs, recorded time, optional effective time, actor/authority provenance, and payload.
 
-```python
-@dataclass
-class Event:
-    event_id: str
-    aggregate_id: str
-    event_type: str
-    timestamp: datetime
-    data: dict
-    version: int
+## State and invariants
 
-# Example
-AccountCreated(
-    event_id="evt-001",
-    aggregate_id="account-123",
-    event_type="AccountCreated",
-    timestamp="2024-01-15T10:00:00Z",
-    data={"owner": "Alice", "initial_balance": 1000},
-    version=1
-)
+The event store keeps stream metadata, immutable event records, transaction/commit records, command-result identities, snapshot records, schema/upcaster registry, and publication/projection checkpoints.
+
+Enforce:
+
+**Contiguous aggregate version.** A committed aggregate stream has versions `1..v` with at most one event at each version. A multi-event command reserves one contiguous range atomically.
+
+**Expected-version compare-and-append.** Two commands based on version 12 cannot both append version 13. One wins; the other reloads and re-decides or reports conflict.
+
+**Command identity is stable.** Retrying the same command ID with the same request returns the original committed result; reuse with different semantics is rejected.
+
+**Commit closure.** A commit record never exposes only part of a multi-event append or references missing event bytes.
+
+**Original event identity is immutable.** Upcasting creates a read representation; it does not silently alter stored evidence or event IDs.
+
+**Snapshot is subordinate.** A snapshot accelerates replay but is never more authoritative than its exact stream prefix. It can be discarded and rebuilt.
+
+**Derived copies are rebuildable.** Broker messages, indexes, caches, and query models are projections with checkpoints and reconciliation.
+
+## Event store versus message broker
+
+An event store is optimized for atomic append to one domain stream, expected-version conflicts, aggregate reconstruction, and long-lived semantic history. A broker is optimized for distribution, subscription progress, fan-out, and retention throughput. One product can implement both roles only if it satisfies both contracts.
+
+A partitioned broker log alone may be insufficient as an aggregate store when:
+
+- expected-version append cannot be enforced atomically;
+- retention or compaction can erase required history;
+- events for an aggregate can move partitions without a stream pivot;
+- consumer offsets are mistaken for aggregate versions;
+- restoring a broker archive does not restore command identity/snapshot metadata;
+- administrative rewrite changes the authoritative record.
+
+Conversely, making every integration consumer scan a transactional event table can overload the domain database and couple retention to subscribers. Keep the domain store authoritative, write an outbox/integration record in the same append transaction, and relay it to a broker with stable identity.
+
+## Data plane and control plane
+
+The **data plane** authenticates commands, loads streams/snapshots, checks command identity and expected version, appends events/commit metadata, reads committed positions, and constructs snapshots. It returns only committed batches.
+
+The **control plane** owns aggregate/event types, schemas/upcasters, shard placement, retention/legal holds, encryption keys, snapshot policies, repair tools, and publication/projection registrations. Changes are immutable versions with staged rollout; readers pin a compatible schema/upcaster bundle.
+
+The command service (not the store) normally owns business decision logic. The store enforces structural concurrency and uniqueness, while the aggregate code enforces domain invariants. Server-side stored procedures can combine them, but then domain-code deployment and replay compatibility move into the data tier.
+
+## Append transaction
+
+A relational layout might have:
+
+- `streams(aggregate_id, current_version, shard, status)`;
+- `events(aggregate_id, aggregate_version, event_id, type, schema, payload, metadata, commit_position)`;
+- `commits(commit_position, event_count, checksum, recorded_at)`;
+- `command_results(aggregate_id, command_id, request_digest, committed_version, result)`;
+- `outbox(event_id, destination_contract, payload, created_at)`.
+
+The append transaction:
+
+1. check `command_results` for the command identity; return prior result on exact retry;
+2. compare the stream’s current version with `expected_version` using a row lock or conditional update;
+3. validate event IDs/types/sizes and assign contiguous aggregate versions;
+4. write event rows and a commit position/batch checksum;
+5. advance stream version;
+6. write integration outbox records if required;
+7. store command request digest/result;
+8. commit once.
+
+A unique constraint on `(aggregate_id, aggregate_version)` is the last line of defense, not the only concurrency protocol. A conflict means the aggregate decision was based on stale state; blindly retrying the same events at new versions can violate invariants. Reload the stream and re-run the command decision.
+
+Global commit position provides a change feed but not necessarily a business total order across aggregates. Its allocation must not expose aborted transactions as unexplained gaps unless readers understand the gap policy.
+
+Large aggregates can exceed transaction limits. Revisit the aggregate boundary rather than weakening atomic invariants. A command that legitimately emits many records should have bounded event count/bytes and one semantic summary where possible.
+
+## Aggregate reconstruction
+
+Loading folds events in aggregate-version order through deterministic transition functions:
+
+```text
+state_0 = initial_state
+state_n = apply(state_(n-1), event_n)
 ```
 
-### Event Store
+`apply` does not call networks, read wall-clock time, generate random IDs, or consult mutable configuration. Any value that influenced the original decision belongs in the event or a versioned reference whose historical content is immutable.
 
-```
-Append-only log of events
+Replay code validates aggregate ID, contiguous versions, event/schema identity, and stream checksum before applying. Unknown event types fail closed or use an explicit compatibility policy; silently skipping can produce plausible but false state.
 
-┌──────────────────────────────────────────────┐
-│ Event 1 │ Event 2 │ Event 3 │ ... │ Event N │
-└──────────────────────────────────────────────┘
-     ↑
-  Append only (no updates, no deletes)
-```
-
-### Aggregate
-
-```
-Domain entity that groups related events. Events always belong to an aggregate.
-
-Account aggregate:  Created, Deposited, Withdrawn, Closed
-Order aggregate:    Placed, Confirmed, Shipped, Delivered
-```
-
-### Command
-
-```
-Represents intent to change state. Validated, then generates events.
-
-Command: Withdraw(account_id=123, amount=100)
-  Validation: Account exists? ✓  Sufficient balance? ✓
-  Result: MoneyWithdrawn event generated
-```
-
----
-
-## Event Store Implementation
-
-### Schema
-
-```sql
-CREATE TABLE events (
-    event_id UUID PRIMARY KEY,
-    aggregate_id VARCHAR(255) NOT NULL,
-    aggregate_type VARCHAR(255) NOT NULL,
-    event_type VARCHAR(255) NOT NULL,
-    event_data JSONB NOT NULL,
-    metadata JSONB,
-    version INT NOT NULL,
-    timestamp TIMESTAMP NOT NULL,
-    
-    UNIQUE (aggregate_id, version)  -- Optimistic concurrency
-);
-
-CREATE INDEX idx_events_aggregate ON events(aggregate_id, version);
-CREATE INDEX idx_events_timestamp ON events(timestamp);
-```
-
-### Append Events
-
-```python
-class EventStore:
-    def append(self, aggregate_id, events, expected_version):
-        with transaction():
-            # Check optimistic concurrency
-            current = self.get_latest_version(aggregate_id)
-            if current != expected_version:
-                raise ConcurrencyError(
-                    f"Expected version {expected_version}, got {current}"
-                )
-            
-            # Append events
-            for i, event in enumerate(events):
-                event.version = expected_version + i + 1
-                self.db.insert(event)
-            
-            # Publish events
-            for event in events:
-                self.publish(event)
-```
-
-### Load Aggregate
-
-```python
-def load_aggregate(aggregate_id):
-    # Get all events for aggregate
-    events = event_store.get_events(aggregate_id)
-    
-    # Replay to rebuild state
-    aggregate = Account()
-    for event in events:
-        aggregate.apply(event)
-    
-    return aggregate
-
-class Account:
-    def apply(self, event):
-        if event.type == "AccountCreated":
-            self.id = event.data["id"]
-            self.balance = event.data["initial_balance"]
-        elif event.type == "MoneyDeposited":
-            self.balance += event.data["amount"]
-        elif event.type == "MoneyWithdrawn":
-            self.balance -= event.data["amount"]
-```
-
----
+Aggregate code evolves. Keep historical transition compatibility, use read-time upcasters to a supported internal representation, or perform an audited stream migration to a new stream/type with lineage. Do not require old commands to remain executable; only events need to remain interpretable for the retained history.
 
 ## Snapshots
 
-### The Problem
-
-```
-Account with 10,000 events
-Every load: replay 10,000 events
-Very slow!
-```
-
-### Snapshot Solution
-
-```
-Every N events, save current state as snapshot
-
-Events: 1-1000
-Snapshot at event 1000: {balance: 5000, ...}
-Events: 1001-2000
-
-Load process:
-  1. Load snapshot (if exists)
-  2. Replay only events after snapshot
-  
-Replay 1000 events instead of 2000
-```
-
-### Implementation
-
-```python
-def load_aggregate_with_snapshot(aggregate_id):
-    # Try to load snapshot
-    snapshot = snapshot_store.get_latest(aggregate_id)
-    
-    if snapshot:
-        aggregate = deserialize(snapshot.state)
-        start_version = snapshot.version + 1
-    else:
-        aggregate = Account()
-        start_version = 0
-    
-    # Replay events since snapshot
-    events = event_store.get_events(
-        aggregate_id, 
-        from_version=start_version
-    )
-    
-    for event in events:
-        aggregate.apply(event)
-    
-    return aggregate
-
-def save_snapshot(aggregate_id, aggregate, version):
-    snapshot_store.save(
-        aggregate_id=aggregate_id,
-        state=serialize(aggregate),
-        version=version
-    )
-```
-
----
-
-## Projections
-
-### Concept
-
-```
-Events (source of truth)
-    ↓ Project
-Read Models (optimized for queries)
-
-Same events → multiple projections
-Each optimized for specific use case
-```
-
-### Examples
-
-```
-Events:
-  AccountCreated(id=1, owner="Alice")
-  MoneyDeposited(id=1, amount=1000)
-  AccountCreated(id=2, owner="Bob")
-  MoneyWithdrawn(id=1, amount=500)
-
-Projection: Account Balances
-  {id: 1, balance: 500}
-  {id: 2, balance: 0}
-
-Projection: Activity Timeline
-  [
-    {time: T1, action: "Account 1 created"},
-    {time: T2, action: "Deposit of 1000 to Account 1"},
-    ...
-  ]
-
-Projection: Owner Directory
-  {Alice: [1], Bob: [2]}
-```
-
-### Building Projections
-
-```python
-class BalanceProjection:
-    def __init__(self):
-        self.balances = {}
-    
-    def handle(self, event):
-        if event.type == "AccountCreated":
-            self.balances[event.data["id"]] = event.data.get("initial_balance", 0)
-        elif event.type == "MoneyDeposited":
-            self.balances[event.aggregate_id] += event.data["amount"]
-        elif event.type == "MoneyWithdrawn":
-            self.balances[event.aggregate_id] -= event.data["amount"]
-    
-    def rebuild_from_start(self):
-        self.balances = {}
-        for event in event_store.get_all_events():
-            self.handle(event)
-```
-
----
-
-## Benefits
-
-### Complete Audit Trail
-
-```
-Every change is recorded
-Who did what, when
-
-Question: "Why is balance 500?"
-Answer: Replay events and see each change
-```
-
-### Temporal Queries
-
-```python
-def get_balance_at_time(account_id, timestamp):
-    events = event_store.get_events(
-        account_id,
-        before=timestamp
-    )
-    
-    balance = 0
-    for event in events:
-        if event.type == "MoneyDeposited":
-            balance += event.data["amount"]
-        elif event.type == "MoneyWithdrawn":
-            balance -= event.data["amount"]
-    
-    return balance
-
-# What was balance on Jan 1?
-get_balance_at_time("account-123", "2024-01-01")
-```
-
-### Debugging
-
-```
-Bug in production:
-  1. Capture events that led to bug
-  2. Replay locally
-  3. Debug with full history
-  4. Fix and test with same events
-```
-
-### Schema Evolution
-
-```
-Events are facts about the past
-Don't change events, add new types
-
-v1: UserCreated(name)
-v2: UserCreated(name, email)  # New field
-
-Old events still valid
-New code handles both versions
-```
-
----
-
-## Challenges
-
-### Eventual Consistency
-
-```
-Event stored → Projection updated (async)
-
-Gap where projection is stale
-UI might show outdated data
-
-Solutions:
-  - Accept eventual consistency
-  - Read from event store for critical reads
-  - Optimistic UI updates
-```
-
-### Storage Growth
-
-```
-Events never deleted
-Storage grows forever
-
-Mitigations:
-  - Snapshots (reduce replay time)
-  - Archival (move old events to cold storage)
-  - Event compaction (carefully, for specific patterns)
-```
-
-### Event Schema Changes
-
-```
-Challenge: Past events are immutable
-
-Solutions:
-  - Version events explicitly
-  - Upcasting: Transform old events when reading
-  - Weak schema: Store as JSON, handle missing fields
-```
-
-```python
-def upcast_event(event):
-    if event.type == "UserCreated" and event.version == 1:
-        # Add default email for v1 events
-        event.data["email"] = None
-        event.version = 2
-    return event
-```
-
-### Complex Queries
-
-```
-Event store optimized for:
-  - Append
-  - Read by aggregate
-
-NOT optimized for:
-  - Complex queries across aggregates
-  - Aggregations
-
-Solution: Projections for query needs
-```
-
----
-
-## Event Sourcing Patterns
-
-### Command → Event
-
-```python
-def handle_withdraw(cmd: WithdrawCommand):
-    # Load aggregate
-    account = load_aggregate(cmd.account_id)
-    
-    # Validate
-    if account.balance < cmd.amount:
-        raise InsufficientFundsError()
-    
-    # Generate event
-    event = MoneyWithdrawn(
-        account_id=cmd.account_id,
-        amount=cmd.amount,
-        timestamp=now()
-    )
-    
-    # Store event
-    event_store.append(cmd.account_id, [event], account.version)
-    
-    return event
-```
-
-### Saga/Process Manager
-
-```
-Coordinate multiple aggregates
-
-OrderSaga:
-  On OrderPlaced:
-    Send ReserveInventory command
-  
-  On InventoryReserved:
-    Send ChargePayment command
-  
-  On PaymentCharged:
-    Send ShipOrder command
-  
-  On PaymentFailed:
-    Send ReleaseInventory command
-```
-
-### Event Replay for Migration
-
-```python
-def migrate_to_new_projection():
-    # Create new projection store
-    new_projection = NewProjection()
-    
-    # Replay all events
-    for event in event_store.get_all_events():
-        new_projection.handle(event)
-    
-    # Switch over
-    swap_projection(old_projection, new_projection)
-```
-
----
-
-## When to Use Event Sourcing
-
-```
-✓ Strong audit requirements (finance, healthcare)
-✓ Complex domain with business rules
-✓ Need for temporal queries
-✓ Event-driven architecture already in place
-✓ CQRS implementation
-```
-
----
-
-## Snapshotting Strategies
-
-### Why Snapshot
-
-```
-Aggregate with 1,000,000 events → replay all on every load? Unacceptable.
-
-Snapshot = serialized aggregate state at a known version.
-Load snapshot → replay only events after that version.
-
-Without snapshot:  replay 1..1,000,000  (~seconds to minutes)
-With snapshot at v999,000:  deserialize + replay 1,000  (~ms)
-```
-
-### When to Snapshot
-
-```
-Every N events    — snapshot after every 100 events. Simple, predictable.
-Time-based        — snapshot if last one older than T. Better for bursty writes.
-On read (lazy)    — if events_since_snapshot > threshold → snapshot after load.
-                    No background job, but first slow read pays the cost.
-
-Tradeoff: too frequent → storage cost / write amplification
-          too rare    → slow recovery / high replay latency
-```
-
-### Snapshot Storage
-
-```
-Separate store, keyed by (aggregate_id, version):
-
-  snapshots: aggregate_id | version | state (JSONB) | schema_version
-             account-123  | 1000    | {balance:...} | 3
-             account-123  | 2000    | {balance:...} | 4
-
-Include schema_version — snapshot from code v3 may not deserialize with v5.
-Migrate on read if schema_version < current.
-```
-
-### Snapshot Manager
-
-```python
-class SnapshotManager:
-    def __init__(self, event_store, snapshot_store, interval=100):
-        self.event_store = event_store
-        self.snapshot_store = snapshot_store
-        self.interval = interval
-
-    def load(self, aggregate_id, factory):
-        snapshot = self.snapshot_store.get_latest(aggregate_id)
-        if snapshot:
-            aggregate = deserialize(snapshot.state, snapshot.schema_version)
-            from_version = snapshot.version + 1
-        else:
-            aggregate, from_version = factory(), 0
-
-        events = self.event_store.get_events(aggregate_id, from_version=from_version)
-        for event in events:
-            aggregate.apply(event)
-
-        if len(events) >= self.interval:  # lazy snapshot on read
-            self.snapshot_store.save(
-                aggregate_id=aggregate_id, version=aggregate.version,
-                state=serialize(aggregate), schema_version=CURRENT_SCHEMA_VERSION)
-        return aggregate
-```
-
----
-
-## Schema Evolution
-
-### The Problem
-
-```
-Events are immutable — you cannot modify stored events.
-But your domain model evolves: new fields, renamed fields, split events.
-
-Day 1:  OrderPlaced { order_id, total }
-Day 90: OrderPlaced { order_id, total, currency, customer_tier }
-
-Old events still have the day-1 shape. Application code expects day-90 shape.
-```
-
-### Upcasting
-
-```python
-# Transform old event shapes to current shape ON READ.
-# Event store keeps original bytes untouched.
-UPCASTERS = {
-    ("OrderPlaced", 1): lambda data: {
-        **data, "currency": "USD", "customer_tier": "standard",
-    },
-}
-
-def upcast(event_type, version, data):
-    key = (event_type, version)
-    while key in UPCASTERS:
-        data = UPCASTERS[key](data)
-        version += 1
-        key = (event_type, version)
-    return data
-```
-
-### Versioned Event Types
-
-```
-Explicit version in type name:
-  OrderPlaced_v1 { order_id, total }
-  OrderPlaced_v2 { order_id, total, currency, customer_tier }
-
-Consumer handles both via match/switch.
-Works but proliferates types — prefer upcasting for most cases.
-```
-
-### Schema Strategy Comparison
-
-```
-Weak schema (JSON, tolerant reader):
-  + Easy to add fields, no registry needed
-  - No compile-time safety, silent failures on typos
-
-Strong schema (Avro / Protobuf):
-  + Forward/backward compatibility enforced, compile-time types
-  - Requires schema registry, more operational overhead
-```
-
-### Anti-pattern: Mutating Stored Events
-
-```
-NEVER rewrite events in the store.
-Breaks: audit trail, deterministic replay, causality with downstream consumers.
-
-To correct a fact, append a compensating event:
-  OrderPlaced → OrderCorrected { reason, corrected_fields }
-```
-
----
-
-## Event Store Technology Choices
-
-### PostgreSQL
-
-```
-Already shown above in "Event Store Implementation" section.
-Simple, proven, JSONB for flexible event data.
-Unique constraint on (aggregate_id, version) = optimistic concurrency.
-Application retries on constraint violation: reload, re-validate, re-append.
-```
-
-### EventStoreDB
-
-```
-Purpose-built event store (open source, gRPC API).
-Native stream-per-aggregate, built-in projections, persistent subscriptions.
-Optimistic concurrency on stream version. Catch-up subscriptions for rebuilds.
-Choose when ES is central to architecture and team can operate a dedicated store.
-```
-
-### Kafka as Event Log
-
-```
-Append-only distributed log — tempting as an event store, but:
-  - No per-aggregate ordering (topic partitions ≠ aggregates)
-  - No optimistic concurrency per aggregate
-  - Reading single aggregate = scan partition or maintain external index
-  - Retention policies can delete events (violates immutability)
-
-Better role: publish events FROM event store to Kafka for downstream consumers.
-Event store = source of truth, Kafka = distribution layer.
-```
-
-### DynamoDB
-
-```
-Partition key = aggregate_id, sort key = version.
-Conditional write (attribute_not_exists) = optimistic concurrency.
-Serverless, scales horizontally, DynamoDB Streams for CDC.
-Limitations: 400 KB item limit, no built-in projections (DIY via Streams + Lambda).
-```
-
-### Comparison
-
-```
-                    PostgreSQL   EventStoreDB   Kafka      DynamoDB
-Optimistic conc.    ✓ (unique)   ✓ (native)     ✗          ✓ (cond. write)
-Built-in proj.      ✗ (DIY)      ✓              ✗          ✗ (DIY)
-Per-aggregate read  ✓            ✓              ✗          ✓
-Ops complexity      Low          Medium         High       Low
-Best for            Starting out ES-centric     Distribution Serverless
-```
-
----
-
-## When NOT to Use Event Sourcing
-
-```
-Simple CRUD without audit needs
-  User preferences, feature flags, CMS content.
-  No one asks "what was the value 3 months ago?" — plain UPDATE wins.
-
-Domain has no meaningful events
-  Config management, static reference data, lookup tables.
-  Rare changes + uninteresting history = ceremony with no payoff.
-
-Team experience gap
-  ES demands: eventual consistency, projection rebuilds, idempotent handlers,
-  schema evolution, upcasting. Steep learning curve → bugs in production.
-  Build event-driven skills incrementally before adopting full ES.
-
-Unacceptable read staleness
-  If business requires reads to reflect writes instantly, the async projection
-  lag in ES + CQRS is a constant pain point. Workarounds (synchronous
-  projections, read-your-writes) erode the decoupling benefits.
-
-Unpredictable schema churn
-  Event shapes shifting weekly → upcaster chains grow, test matrix explodes.
-  Stabilize the domain model first, adopt ES later.
-
-Anti-pattern: "Event Source Everything"
-  Apply selectively to bounded contexts that benefit:
-    Payment processing → strong audit, temporal queries → YES
-    User profile CRUD  → simple reads/writes, no history → NO
-  Mixing ES and non-ES contexts in the same system is normal and healthy.
-```
-
----
-
-## Key Takeaways
-
-1. **Store events, not state** - State is derived
-2. **Events are immutable** - Never update or delete
-3. **Snapshots prevent slow rebuilds** - Take periodically
-4. **Projections for queries** - Multiple views from same events
-5. **Eventual consistency is normal** - Design for it
-6. **Great for audit trails** - Complete history
-7. **Complexity is real** - Not for simple CRUD
-8. **Pairs well with CQRS** - Separate read/write models
+A snapshot contains aggregate ID/type, exact last included version, state schema/version, serialized state, event-stream checksum/digest through the version or commit identity, code/upcaster compatibility, created time, and encryption metadata.
+
+Snapshot creation is asynchronous:
+
+1. load a verified stream prefix through version `v`;
+2. fold it with a pinned reducer version;
+3. serialize and checksum the snapshot;
+4. write it immutably under `(aggregate_id, v, snapshot_schema)`;
+5. publish it only after complete durability;
+6. on load, select the newest compatible snapshot no later than current stream version and replay the suffix.
+
+An event append never depends on snapshot success. Invalid, corrupt, or incompatible snapshots are discarded and rebuilt. Snapshot frequency follows measured replay cost and hot-aggregate access, not an arbitrary event count. Creating snapshots too often increases write/storage amplification; too rarely increases latency and recovery time.
+
+Snapshots do not justify deleting events unless the product explicitly changes from event sourcing to a compacted-state model. A snapshot usually depends on current code and may not support audit, alternative projections, or corrected reconstruction.
+
+## Event evolution
+
+Separate wire schema version from semantic event type. Compatible additions can remain one type when absence has a stable meaning. Semantic changes use a new event type or version with explicit mapping.
+
+Upcasters are pure, deterministic functions from old stored representation to a supported in-memory representation. Record the chain and test every historical schema. Avoid network lookups and “current defaults.” If an old event lacks data now required, model `unknown`, derive from immutable historical context, or perform an explicit migration: do not invent today’s value.
+
+Event type deprecation proceeds by stopping new writes, ensuring all retained readers understand old/new forms, rebuilding projections, and retaining decoding support through the oldest kept event. Schema registries validate syntax; domain owners review semantics.
+
+Stream migration is a new derived artifact:
+
+1. pin source stream/checkpoint and migration code digest;
+2. transform into a new stream namespace with source event lineage;
+3. dual-project the source suffix or pause at a controlled pivot;
+4. compare reconstructed state and invariant reports;
+5. atomically switch command/read ownership;
+6. keep source immutable through rollback/legal policy.
+
+## Temporal queries, corrections, and audit
+
+Replaying through commit position or effective time can answer “what did the system know?” or “what was believed effective?” only if the model distinguishes recorded time from domain effective time. Late facts and corrections create bitemporal questions. An event recorded today stating an address was effective last week must not disappear from the record of what the system knew yesterday.
+
+Corrections are new events referencing the corrected fact; they do not overwrite history. Projections decide whether to present latest corrected truth or historical belief.
+
+An append-only table is not automatically an audit trail. Audit requires authenticated actor/authority, tamper evidence, access logging, retention/hold, time provenance, and independent protection against privileged modification. Cryptographic hash chaining or signed checkpoints can detect some tampering, but key custody and external anchoring determine assurance.
+
+## Retention and privacy
+
+“Events are immutable forever” conflicts with cost, privacy erasure, and changing legal duties. Classify fields before storing them. Prefer events containing stable identifiers and necessary facts, not copied profiles or secrets. Store especially sensitive payload fields in separately encrypted blobs so key destruction or governed redaction can make data inaccessible while retaining non-sensitive event structure.
+
+Retention can differ by aggregate/event class, but deletion changes reconstruction. Before pruning, create an authoritative genesis/compaction event or snapshot whose semantics explicitly replace the removed prefix, verify every required projection and audit obligation, and record the truncation boundary. After pruning, do not claim full temporal reconstruction before that boundary.
+
+Backups, replicas, exported broker events, projections, snapshots, and debug stores are copies subject to the same deletion policy. Maintain a lineage registry and completion evidence.
+
+## Sharding, replication, and recovery
+
+Route an aggregate to one write shard/leader at a time. The shard term plus expected aggregate version fences stale writers. Hashing aggregate ID balances ordinary streams; tenant/range placement supports residency but needs hot-tenant splitting at aggregate boundaries.
+
+Cross-aggregate transactions are possible only within a shared transactional shard and should be rare; otherwise model a durable workflow with explicit invariants and compensation. Event sourcing does not make a distributed transaction disappear.
+
+Recovery validates the latest complete store checkpoint/snapshot, replays committed database/WAL state, then restarts publication and projections from their durable checkpoints. Align command-result identities with event recovery. Restoring events without idempotent command results can cause a retried client command to append a second logical transition.
+
+## Capacity and cost model
+
+Illustrative domain:
+
+- 12,000 commands/s;
+- 1.8 events/command;
+- 1.1 KiB encoded event plus 180 bytes index/metadata;
+- three database replicas;
+- 20% of events produce a 700-byte integration outbox record;
+- ten-year retained history;
+- median aggregate has 14 events; p99 has 8,000.
+
+Event rate is 21,600/s. One logical event stream grows about `21,600 * 1.28 KiB`, or 2.23 TiB/day. Three replicas are about 6.7 TiB/day before WAL, compaction, indexes, backups, and snapshots. Ten-year raw retention is economically enormous; compress measured payloads, tier cold history, minimize event size, and define retention by domain rather than assuming forever.
+
+Outbox ingress adds roughly `21,600 * 0.20 * 700`, about 2.9 MiB/s logical. It is modest beside events but can burden the primary if polling indexes and cleanup are poor.
+
+Replay cost is skewed. At a measured reducer speed of 80,000 events/s/core, reconstructing a p99 8,000-event aggregate consumes 100 ms CPU before I/O. A compatible snapshot at version 7,900 reduces the suffix to 100 events. Base snapshot policy on observed load/replay service time and snapshot write cost.
+
+A full projection replay of one year at 21,600/s is 681 billion events; even 5 million events/s sustained takes about 37.8 hours before output writes. Rebuild capacity must be designed from day one.
+
+## Concrete failure trace: snapshot published ahead of stream
+
+A snapshot worker reads aggregate version 50 from a replica whose transaction view later rolls back/fails over, while the authoritative stream remains at 49. It publishes snapshot `(version=50)` without binding to a committed stream checksum. Loaders accept it and then append command decisions at expected version 49 based on state that includes an uncommitted event.
+
+Containment disables the snapshot generation and reconstructs affected aggregates from authoritative events. Repair removes invalid snapshots and reconciles command results/projections. Prevention requires snapshot source reads from a committed generation, binds snapshot to exact stream version/commit identity and checksum, and rejects any snapshot beyond current authoritative version or with mismatched digest.
+
+## Operations and observability
+
+Track by aggregate/event type, shard, schema, snapshot version, and projection/publication:
+
+- command rate, expected-version conflicts, duplicate command results, append latency/bytes;
+- stream length/skew and unknown/invalid event rejection;
+- event/global commit positions and replica lag;
+- snapshot hit, age, build latency, incompatibility, checksum failure, and replay suffix;
+- upcaster path usage, oldest schema, and deprecated writers/readers;
+- outbox/publication and projection checkpoints/lag;
+- replay throughput/ETA and read/write impact;
+- retention/tier bytes, legal holds, privacy deletion progress, and integrity checkpoint verification.
+
+Runbooks cover corrupt event, unknown schema, hot aggregate, conflict storm, invalid snapshot, projection/publication lag, replay overload, privacy erasure, and inconsistent disaster restore.
+
+## Security and isolation
+
+Authorize command handling, stream reads, temporal queries, replay/export, schema registration, snapshots, and repair independently. Tenant ID comes from authenticated context, not untrusted event payload. Encrypt payloads and backups with scoped keys; redact sensitive metadata from logs and traces.
+
+Protect event/upcaster/model artifacts with provenance and review. Limit event/batch size, nesting, aggregate stream length, and replay rate. A crafted long stream or decompression payload can be a denial of service. Privileged repair never mutates silently; it emits audited corrective artifacts or a controlled migration with before/after digests.
+
+## Verification strategy
+
+- property-test aggregate reducers and invariants over generated event sequences;
+- race concurrent expected-version appends and verify one winner/contiguous range;
+- crash at each event/commit/outbox/command-result boundary;
+- replay every retained historical schema through current upcasters;
+- corrupt/advance snapshots and prove loaders fall back to the stream;
+- compare snapshot-plus-suffix with full replay for sampled aggregates;
+- rebuild projections and reconcile IDs/versions/digests;
+- restore events, command results, snapshots, and outbox to skewed points;
+- test privacy deletion across events, blobs, snapshots, backups, and projections.
+
+## Decision framework
+
+Use event sourcing when domain history is intrinsically valuable, invariants fit aggregates, alternative projections/reconstruction justify the complexity, and the organization can govern long-lived schemas. Do not use it merely to “have an audit log” or because events are already on a broker.
+
+Answer:
+
+1. Which aggregate invariants are protected by expected-version append?
+2. Are events stable domain facts rather than persistence diffs?
+3. Can every retained event be interpreted for its full lifetime?
+4. What snapshot, replay, and rebuild bounds keep operations feasible?
+5. How do integration publication and query projections remain derived and reconcilable?
+6. How do privacy, retention, correction, and audit requirements coexist?
+7. Can command identities and effects recover consistently with the event store?
+
+## References
+
+- [Martin Fowler: Event Sourcing](https://martinfowler.com/eaaDev/EventSourcing.html)
+- [Pat Helland: Immutability Changes Everything](https://www.cidrdb.org/cidr2015/Papers/CIDR15_Paper16.pdf)
+- [EventStoreDB: Expected Version and Optimistic Concurrency](https://developers.eventstore.com/clients/grpc/appending-events.html)
+- [Microsoft: CQRS Journey](https://learn.microsoft.com/en-us/previous-versions/msp-n-p/jj554200(v=pandp.10))
+- [CloudEvents Specification](https://github.com/cloudevents/spec)
+- [NIST SP 800-92: Guide to Computer Security Log Management](https://csrc.nist.gov/pubs/sp/800/92/final)

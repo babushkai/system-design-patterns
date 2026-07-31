@@ -1,835 +1,149 @@
-# Amazon Aurora: Design Considerations for High Throughput Cloud-Native Relational Databases
+# Amazon Aurora (SIGMOD 2017): Evidence-First Paper Analysis
 
-## Paper Overview
+Aurora's key idea is to treat network I/O, not disks, as the scarce database resource. The database engine sends **redo records rather than full pages** to a six-way, multi-AZ storage service. Storage nodes continuously materialize pages, repair replicas, back up data, and perform much of recovery. This removes duplicated database-to-storage traffic and turns crash recovery from a serial startup phase into ongoing distributed work.
 
-- **Title**: Amazon Aurora: Design Considerations for High Throughput Cloud-Native Relational Databases
-- **Authors**: Alexandre Verbitski et al. (Amazon Web Services)
-- **Published**: SIGMOD 2017
-- **Context**: AWS needed a cloud-native relational database with high availability
+## Publication identity and boundary
 
-## TL;DR
+- **Paper:** *Amazon Aurora: Design Considerations for High Throughput Cloud-Native Relational Databases*
+- **Authors:** Alexandre Verbitski, Anurag Gupta, Debanjan Saha, Murali Brahmadesam, Kamal Gupta, Raman Mittal, Sailesh Krishnamurthy, Sandor Maurice, Tengiz Kharatishvili, and Xiaofeng Bao
+- **Venue and version:** ACM SIGMOD International Conference on Management of Data, 2017, pages 1041–1052
+- **System described:** the MySQL-compatible Aurora service that had been generally available since July 2015, as implemented and measured for the paper
 
-Aurora is a cloud-native relational database that provides:
-- **Log-is-the-database** architecture separating compute and storage
-- **6-way replication** across 3 availability zones
-- **Quorum-based I/O** for durability without consensus overhead
-- **Near-instant crash recovery** through parallel, on-demand redo
+The paper does not describe every present Aurora engine, feature, or topology. It presents one writer with shared storage and up to 15 read replicas. Later multi-writer, serverless, PostgreSQL-compatible, cross-region, or disaggregated-service features must be evaluated from their own sources.
 
-## Problem Statement
+[Write-Ahead Logging](../03-storage-engines/04-write-ahead-logging.md), [Single-Leader Replication](../02-distributed-databases/01-single-leader-replication.md), and [Failure Modes](../01-foundations/06-failure-modes.md) cover conventional mechanisms. This chapter focuses on Aurora's changed storage contract.
 
-### Traditional Database Limitations in the Cloud
+## Problem and workload assumptions
 
-```mermaid
-graph TD
-    subgraph Primary["Primary Instance"]
-        BP[Buffer Pool] --> LB[Log Buffer]
-        BP --> DP[("Data Pages<br/>EBS")]
-        LB --> RL[("Redo Log<br/>EBS")]
-    end
+A traditional primary database may send a write-ahead log, dirty pages, replicated log traffic, backups, and cache-management I/O across the network. In a multi-AZ cloud design, those flows multiply. Checkpointing, page flushing, replica apply, backup, and crash recovery also create foreground jitter.
 
-    Primary -->|synchronous<br/>replication| Standby["Standby Instance<br/>(Full Copy)"]
-```
+Aurora targets MySQL/InnoDB OLTP workloads whose transaction and query processing can remain on one database instance while durable storage scales and repairs independently. Its design goals are:
 
-> **Problems:** 1) Network I/O amplification (4x for mirrored EBS). 2) Synchronous replication adds latency. 3) Crash recovery replays entire redo log. 4) Failover takes minutes.
+- preserve familiar SQL, transactions, and MySQL wire compatibility;
+- increase write throughput by shrinking database-node network traffic;
+- tolerate storage-node and Availability Zone failures;
+- make replicas share one durable volume rather than each copying pages independently;
+- recover database compute quickly without replaying a long log before reopening.
 
-### Aurora's Insight
+This is **storage disaggregation**, not a shared-nothing distributed SQL engine. The writer still performs SQL execution, locking, buffer-pool management, and log-sequence allocation.
 
-```mermaid
-graph LR
-    subgraph Compute["Database Instance"]
-        BP2[Buffer Pool]
-    end
+## Protection groups and quorum invariants
 
-    subgraph Storage["Storage Service"]
-        SN[("Storage Nodes<br/>apply logs to generate pages")]
-    end
+A logical volume is divided into 10 GB segments. Each segment is replicated six ways as a **protection group**: two copies in each of three Availability Zones. Volumes allocate more protection groups as they grow; the paper reports support up to 64 TB of unreplicated logical data.
 
-    BP2 -->|redo logs| SN
-    SN -->|pages| BP2
-```
+The paper's quorum model uses:
 
-> **"The log is the database."** Traditional: Write pages + Write logs (2x writes). Aurora: Write logs only (storage applies them).
-> **Benefits:** Network traffic reduced to just redo logs. Storage handles durability and replication. Crash recovery is just storage reconstruction.
+- six replicas per segment;
+- write quorum `Vw = 4`;
+- read quorum `Vr = 3` during recovery or when discovering durable state.
 
-## Architecture
+Because `Vw + Vr > 6`, a read quorum intersects every completed write quorum. Four write acknowledgements permit continued writes after any two copy failures, including loss of one two-copy AZ. Three readable copies permit recovery even after three copy failures, although new writes then lack four acknowledgements.
 
-### Overall System Design
+Quorum counts are not the whole failure model. Placement across three independent AZs addresses correlation; rapid segment repair reduces exposure time. The paper states that a 10 GB segment can be repaired in about 10 seconds over a 10 Gbit/s link in its environment. That observed repair speed is part of the durability argument, not a universal bound.
 
-```mermaid
-graph TD
-    subgraph ComputeLayer["Compute Layer"]
-        W["Writer Instance<br/>Query, Buffer, Txn Mgmt"]
-        R1["Reader Instance<br/>Query, Buffer, Cache"]
-        R2["Reader Instance<br/>Query, Buffer, Cache"]
-    end
+## Redo-only storage protocol
 
-    subgraph StorageLayer["Storage Layer — 6 copies across 3 AZs"]
-        subgraph AZA["AZ-A"]
-            N1[("Node 1")] & N2[("Node 2")]
-        end
-        subgraph AZB["AZ-B"]
-            N3[("Node 3")] & N4[("Node 4")]
-        end
-        subgraph AZC["AZ-C"]
-            N5[("Node 5")] & N6[("Node 6")]
-        end
-    end
+The database assigns each redo record a monotonically increasing log sequence number (LSN) and sends only records relevant to each protection group. Storage nodes queue, persist, acknowledge, gossip missing records to peers, coalesce redo into pages, upload backups, scrub checksums, and garbage-collect old versions.
 
-    W -->|redo logs| StorageLayer
-    R1 -->|page reads| StorageLayer
-    R2 -->|page reads| StorageLayer
-```
+Each redo record links to the previous record for that protection group. A segment derives a **Segment Complete LSN (SCL)**: the greatest point below which it has every required record. Peer gossip uses gaps in that sequence to repair missing data.
 
-### Storage Segmentation
+The database tracks acknowledgements from segment replicas. Across protection groups it computes a **Volume Complete LSN (VCL)**: the highest contiguous volume point known complete. Completeness alone is not enough: InnoDB mini-transactions contain several contiguous redo records that must become visible atomically. The final record of each mini-transaction is marked a **Consistency Point LSN (CPL)**. The **Volume Durable LSN (VDL)** is the highest CPL no greater than the VCL.
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                   Storage Segmentation                          │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  Database Volume (up to 128 TB)                                 │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │                                                           │   │
-│  │  Segment 1 (10GB)    Segment 2 (10GB)    Segment N       │   │
-│  │  ┌────────────────┐  ┌────────────────┐  ┌────────────┐  │   │
-│  │  │                │  │                │  │            │  │   │
-│  │  │  6 replicas    │  │  6 replicas    │  │ 6 replicas │  │   │
-│  │  │  across 3 AZs  │  │  across 3 AZs  │  │            │  │   │
-│  │  │                │  │                │  │            │  │   │
-│  │  └────────────────┘  └────────────────┘  └────────────┘  │   │
-│  │                                                           │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                                                                  │
-│  Protection Groups (PGs):                                       │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │  Each segment forms a Protection Group                   │   │
-│  │  - 6 storage nodes per PG                                │   │
-│  │  - 2 nodes per Availability Zone                         │   │
-│  │  - Independent failure domain                            │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                                                                  │
-│  Benefits:                                                      │
-│  - Parallel repair (10GB takes ~10 seconds)                     │
-│  - Blast radius limited to 10GB segment                         │
-│  - Background repair doesn't affect foreground operations       │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
+This distinction is the core invariant:
 
-## Quorum-Based I/O
+- records through VCL are physically complete;
+- only a CPL is a valid database consistency boundary;
+- commits may be acknowledged only when VDL reaches their commit LSN;
+- recovery truncates anything above the reconstructed VDL.
 
-### Write and Read Quorums
+The database also limits LSN allocation to at most 10 million beyond the current VDL in the paper. That backpressure prevents compute from creating an unbounded recovery/truncation window when storage or network falls behind. It is an implementation value, not a tuning recommendation.
 
-```python
-class AuroraQuorum:
-    """Aurora's quorum-based replication."""
-    
-    def __init__(self):
-        self.replicas = 6     # Total copies
-        self.write_quorum = 4 # Vw
-        self.read_quorum = 3  # Vr
-        
-        # Vw + Vr > V (4 + 3 > 6) ensures overlap
-        # Vw > V/2 (4 > 3) ensures no conflicting writes
-    
-    def write(self, log_record) -> bool:
-        """
-        Write log record to storage.
-        
-        Must reach write quorum (4/6) to acknowledge.
-        """
-        acks = 0
-        futures = []
-        
-        for storage_node in self.get_nodes_for_segment(log_record.segment):
-            future = storage_node.write_async(log_record)
-            futures.append(future)
-        
-        # Wait for write quorum
-        for future in futures:
-            try:
-                future.wait(timeout=50)  # 50ms
-                acks += 1
-                if acks >= self.write_quorum:
-                    return True
-            except Timeout:
-                continue
-        
-        return acks >= self.write_quorum
-    
-    def read(self, page_id) -> Page:
-        """
-        Read page from storage.
-        
-        Only need read quorum (3/6) - but actually
-        Aurora optimizes to read from single node!
-        """
-        # In practice, Aurora tracks which nodes are current
-        # and reads from a single up-to-date node
-        node = self.get_current_node(page_id)
-        return node.read_page(page_id)
+## Foreground reads, writes, and commits
 
+### Write path
 
-class QuorumProperties:
-    """
-    Aurora's quorum guarantees.
-    
-    With V=6, Vw=4, Vr=3:
-    - Survives loss of entire AZ (2 nodes) + 1 additional node
-    - Writes complete with any 4 nodes available
-    - Reads complete with any 3 nodes available
-    """
-    
-    def can_write_with_az_failure(self) -> bool:
-        """
-        AZ failure = 2 nodes down
-        Remaining = 4 nodes
-        Write quorum = 4
-        Can still write!
-        """
-        return True
-    
-    def can_read_with_az_plus_one_failure(self) -> bool:
-        """
-        AZ + 1 failure = 3 nodes down
-        Remaining = 3 nodes
-        Read quorum = 3
-        Can still read!
-        """
-        return True
-    
-    def write_read_overlap(self) -> bool:
-        """
-        Any read quorum overlaps with any write quorum.
-        
-        Vw + Vr = 4 + 3 = 7 > 6
-        Guarantees at least 1 node has latest write.
-        """
-        return True
-```
+The writer batches redo records and sends each protection group's subset to all six segment copies in parallel. It advances VDL as quorums acknowledge complete mini-transactions. Unlike traditional InnoDB, it does not send dirty pages to storage on eviction or checkpoint.
 
-### Durability Model
+### Commit path
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                  Aurora Durability Model                        │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  Failure Scenarios:                                             │
-│                                                                  │
-│  Scenario 1: Single Node Failure                                │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │  AZ-A        AZ-B        AZ-C                           │    │
-│  │  [1] [X]     [3] [4]     [5] [6]                        │    │
-│  │                                                          │    │
-│  │  5 nodes up, can read (3) and write (4) ✓               │    │
-│  └─────────────────────────────────────────────────────────┘    │
-│                                                                  │
-│  Scenario 2: AZ Failure                                         │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │  AZ-A        AZ-B        AZ-C                           │    │
-│  │  [X] [X]     [3] [4]     [5] [6]                        │    │
-│  │                                                          │    │
-│  │  4 nodes up, can read (3) and write (4) ✓               │    │
-│  └─────────────────────────────────────────────────────────┘    │
-│                                                                  │
-│  Scenario 3: AZ + 1 Failure                                     │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │  AZ-A        AZ-B        AZ-C                           │    │
-│  │  [X] [X]     [X] [4]     [5] [6]                        │    │
-│  │                                                          │    │
-│  │  3 nodes up, can read (3), cannot write ✗               │    │
-│  │  (Read-only mode until repair)                          │    │
-│  └─────────────────────────────────────────────────────────┘    │
-│                                                                  │
-│  Repair:                                                        │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │  - 10GB segment repairs in ~10 seconds                  │    │
-│  │  - Background gossip-based repair                       │    │
-│  │  - MTTF of double failure ≈ extremely low               │    │
-│  └─────────────────────────────────────────────────────────┘    │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
+When a transaction requests commit, its worker records the commit LSN on a waiting list and processes other work. A dedicated thread acknowledges transactions when `VDL >= commit LSN`. This asynchronous handoff avoids tying worker scheduling to individual storage jitter while retaining the WAL rule.
 
-## Log Processing
+### Read path
 
-### Log Shipping Architecture
+The buffer cache serves present pages. On a miss, the database chooses a storage replica whose SCL covers the read point and requests the page at that VDL. No normal read quorum is necessary because the writer tracks completeness. A dirty page may be evicted only after all of its changes are durable through VDL; storage can reconstruct it later from materialized state plus redo.
 
-```python
-class AuroraLogShipping:
-    """Aurora's log-based replication."""
-    
-    def __init__(self):
-        self.current_lsn = 0  # Log Sequence Number
-        self.commit_lsn = 0   # Last committed
-        self.durable_lsn = 0  # Durable in storage
-    
-    def process_transaction(self, transaction):
-        """
-        Process transaction and ship logs.
-        
-        Only redo logs are shipped - not pages!
-        """
-        log_records = []
-        
-        for operation in transaction.operations:
-            # Generate redo log record
-            log_record = LogRecord(
-                lsn=self._next_lsn(),
-                transaction_id=transaction.id,
-                page_id=operation.page_id,
-                redo_data=operation.redo_data
-            )
-            log_records.append(log_record)
-        
-        # Ship to storage (in parallel across segments)
-        futures = {}
-        for record in log_records:
-            segment = self._get_segment(record.page_id)
-            if segment not in futures:
-                futures[segment] = []
-            futures[segment].append(
-                self._ship_to_segment(segment, record)
-            )
-        
-        # Wait for all segments to acknowledge
-        for segment, segment_futures in futures.items():
-            for future in segment_futures:
-                future.wait()
-        
-        # Transaction is durable when all logs acknowledged
-        self.durable_lsn = max(r.lsn for r in log_records)
-        
-        return True
-    
-    def _ship_to_segment(self, segment, log_record):
-        """
-        Ship log record to storage segment.
-        
-        Storage will:
-        1. Persist log record
-        2. Add to pending queue
-        3. Eventually apply to generate page
-        """
-        return segment.write_log_async(log_record)
+The writer and read replicas share the same storage volume. Redo also streams to replica compute nodes so they can update cached pages; if a page is absent, a replica discards that redo and later reads a current page from storage. Replicas apply only records no greater than VDL and apply each mini-transaction atomically in their cache. Publication-era replicas were asynchronous from the writer's commit path.
 
+## Failure, repair, and recovery
 
-class StorageNode:
-    """Aurora storage node operations."""
-    
-    def __init__(self):
-        self.log_records = []
-        self.pages = {}
-        self.pending_queue = []
-    
-    def write_log(self, log_record) -> bool:
-        """
-        Receive and persist log record.
-        
-        This is the ONLY write from compute!
-        """
-        # Persist to local storage (SSD)
-        self._persist_log(log_record)
-        
-        # Add to pending queue for page materialization
-        self.pending_queue.append(log_record)
-        
-        # Acknowledge immediately - no blocking
-        return True
-    
-    def read_page(self, page_id) -> Page:
-        """
-        Read page, applying pending logs if needed.
-        
-        Redo application happens on READ, not WRITE.
-        """
-        # Get base page
-        page = self.pages.get(page_id)
-        if page is None:
-            page = Page.empty(page_id)
-        
-        # Apply any pending log records for this page
-        pending_for_page = [
-            r for r in self.pending_queue 
-            if r.page_id == page_id
-        ]
-        
-        for record in sorted(pending_for_page, key=lambda r: r.lsn):
-            page = self._apply_redo(page, record)
-        
-        return page
-    
-    def background_coalesce(self):
-        """
-        Background process to apply logs to pages.
-        
-        Reduces work on read path.
-        """
-        while True:
-            # Group pending records by page
-            by_page = defaultdict(list)
-            for record in self.pending_queue:
-                by_page[record.page_id].append(record)
-            
-            # Apply and persist pages
-            for page_id, records in by_page.items():
-                page = self.pages.get(page_id, Page.empty(page_id))
-                for record in sorted(records, key=lambda r: r.lsn):
-                    page = self._apply_redo(page, record)
-                
-                self.pages[page_id] = page
-                
-                # Remove applied records
-                max_lsn = max(r.lsn for r in records)
-                self.pending_queue = [
-                    r for r in self.pending_queue
-                    if r.page_id != page_id or r.lsn > max_lsn
-                ]
-            
-            time.sleep(1)  # Run every second
-```
+- **Storage-copy loss:** remaining segment replicas serve requests; peers reconstruct the missing 10 GB segment and restore the six-copy placement.
+- **Slow storage node:** parallel requests and a four-of-six write quorum prevent one straggler from determining every write latency.
+- **Database-process crash:** a replacement queries a read quorum for every protection group, reconstructs VDL, and sends versioned truncation ranges above it. It rebuilds volatile transaction state while storage already holds materialized pages and redo.
+- **Uncommitted transactions:** undo still exists. The paper allows undo recovery after the database comes online, using the in-flight transaction list rebuilt from undo segments.
+- **Interrupted recovery:** epoch-versioned truncation records make repeated recovery distinguish the newest boundary.
+- **Read-replica failure:** no storage copy is lost because replicas mount the shared volume; a replacement warms its own buffer cache.
 
-### Network I/O Reduction
+The paper says database recovery was generally under 10 seconds even after processing more than 100,000 write statements/s. This is an operational observation from Aurora, not a bound under every volume, cache, or control-plane failure.
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│              Network I/O Comparison                             │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  Traditional MySQL with EBS Mirroring:                          │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │                                                          │    │
-│  │  Per Transaction Write:                                  │    │
-│  │  1. Redo log (primary EBS)          → 1 network I/O     │    │
-│  │  2. Redo log (mirror EBS)           → 1 network I/O     │    │
-│  │  3. Binlog (primary EBS)            → 1 network I/O     │    │
-│  │  4. Binlog (mirror EBS)             → 1 network I/O     │    │
-│  │  5. Data page (primary EBS)         → 1 network I/O     │    │
-│  │  6. Data page (mirror EBS)          → 1 network I/O     │    │
-│  │  7. Double-write buffer             → 1 network I/O     │    │
-│  │  8. FRM files                       → 1 network I/O     │    │
-│  │                                                          │    │
-│  │  Total: ~8 network round trips, synchronous             │    │
-│  └─────────────────────────────────────────────────────────┘    │
-│                                                                  │
-│  Aurora:                                                        │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │                                                          │    │
-│  │  Per Transaction Write:                                  │    │
-│  │  1. Redo log to storage nodes       → 1 network I/O     │    │
-│  │     (sent in parallel to 6 nodes)                       │    │
-│  │                                                          │    │
-│  │  Total: 1 network round trip (parallel to 6 nodes)      │    │
-│  │                                                          │    │
-│  │  No data pages, no binlog, no double-write buffer!      │    │
-│  └─────────────────────────────────────────────────────────┘    │
-│                                                                  │
-│  Result: 35x reduction in I/O per transaction                   │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
+## Evaluation evidence and methodology
 
-## Recovery and Failover
+The authors are the system's designers and operator. Most comparisons used r3.8xlarge EC2 instances with 32 vCPUs, 244 GB RAM, Intel Xeon E5-2670 v2 processors, and a 170 GB buffer cache. MySQL used EBS with 30,000 provisioned IOPS unless stated otherwise. Results measure particular configurations, not architecture alone.
 
-### Crash Recovery
+### Network-I/O experiment
 
-```python
-class AuroraRecovery:
-    """
-    Aurora crash recovery - near instant.
-    
-    Key insight: Recovery is just establishing
-    consistency point, not replaying logs.
-    """
-    
-    def recover_after_crash(self):
-        """
-        Crash recovery process.
-        
-        Traditional: Replay entire redo log (minutes to hours)
-        Aurora: Find highest durable LSN (seconds)
-        """
-        # Step 1: Find Volume Durable LSN (VDL)
-        vdl = self._find_volume_durable_lsn()
-        
-        # Step 2: Truncate any logs beyond VDL
-        self._truncate_incomplete_logs(vdl)
-        
-        # Step 3: Ready to serve!
-        # Pages are reconstructed on-demand during reads
-        return vdl
-    
-    def _find_volume_durable_lsn(self) -> int:
-        """
-        Find highest LSN durable across all segments.
-        
-        Query each segment for its highest complete LSN.
-        VDL = min of all segment's highest complete LSN.
-        """
-        segment_lsns = []
-        
-        for segment in self.segments:
-            # Each segment knows its highest complete LSN
-            # (based on quorum writes)
-            highest = segment.get_highest_complete_lsn()
-            segment_lsns.append(highest)
-        
-        # VDL is the min - guarantees all prior logs are durable
-        return min(segment_lsns)
-    
-    def _reconstruct_page_on_demand(self, page_id) -> Page:
-        """
-        Reconstruct page when first accessed.
-        
-        Storage has all the logs needed.
-        """
-        segment = self._get_segment(page_id)
-        return segment.read_page(page_id)  # Applies pending logs
+Table 1 ran a 30-minute SysBench write-only workload over 100 GB on r3.8xlarge instances. It compared synchronous mirrored MySQL across AZs with Aurora and its multi-AZ replicas.
 
+- mirrored MySQL completed 780,000 transactions at 7.4 database-node I/Os per transaction;
+- Aurora completed 27,378,000 transactions at 0.95 I/Os per transaction;
+- the paper summarizes this as 35 times the transactions and 7.7 times fewer database-node I/Os per transaction.
 
-class FastFailover:
-    """Aurora fast failover mechanism."""
-    
-    def __init__(self):
-        self.writer = None
-        self.readers = []
-        self.failover_time = 0
-    
-    def perform_failover(self, new_writer):
-        """
-        Failover to new writer.
-        
-        Steps:
-        1. Detect failure (typically via health checks)
-        2. Promote reader to writer
-        3. Update DNS
-        
-        Total time: ~30 seconds
-        """
-        start = time.time()
-        
-        # Step 1: Detect failure
-        if not self._is_writer_healthy():
-            # Step 2: Promote reader
-            new_writer = self._select_best_reader()
-            
-            # Reader has most of buffer pool already!
-            # Just needs to:
-            # - Establish write capability
-            # - Catch up any missing logs
-            new_writer.become_writer()
-            
-            # Step 3: Update DNS
-            self._update_dns(new_writer)
-        
-        self.failover_time = time.time() - start
-        # Typically < 30 seconds
-    
-    def _select_best_reader(self):
-        """
-        Select reader with most up-to-date buffer pool.
-        
-        Reader replicas continuously apply redo logs,
-        so they're nearly current with writer.
-        """
-        best = None
-        highest_lsn = 0
-        
-        for reader in self.readers:
-            if reader.current_lsn > highest_lsn:
-                highest_lsn = reader.current_lsn
-                best = reader
-        
-        return best
-```
+The result supports the redo-only network thesis in that setup. It is not a controlled decomposition of every difference between the MySQL and Aurora stacks, and it does not report a cost-normalized or tail-latency comparison.
 
-## Read Replicas
+### SysBench scale experiments
 
-### Replica Architecture
+For 1 GB datasets over the r3 instance family, the paper reports near-linear Aurora scaling with instance size, reaching about 121,000 writes/s and 600,000 reads/s on r3.8xlarge. Table 2's write-only runs report:
 
-```mermaid
-graph TD
-    subgraph Writer
-        WBP[Buffer Pool + Pages]
-    end
+| Database size | Aurora writes/s | MySQL writes/s |
+|---:|---:|---:|
+| 1 GB | 107,000 | 8,400 |
+| 10 GB | 107,000 | 2,400 |
+| 100 GB | 101,000 | 1,500 |
+| 1 TB | 41,000 | 1,200 |
 
-    subgraph Reader["Reader(s)"]
-        RBP[Buffer Pool + Pages]
-    end
+The authors call the 100 GB ratio 67 times and the 1 TB ratio 34 times. The working set, EBS configuration, MySQL versions, and buffer sizes are inseparable from those ratios.
 
-    SS[("Shared Storage<br/>All replicas share the same volume")]
+### Replica lag and contention
 
-    WBP -.->|redo logs<br/>async| RBP
-    WBP -->|read pages| SS
-    RBP -->|read pages| SS
-```
+Table 4 defines replica lag as time from writer commit until visibility on a replica. As write rate increased from 1,000 to 10,000 writes/s, Aurora lag rose from 2.62 to 5.38 ms; the MySQL configuration rose from under 1,000 ms to 300,000 ms. The comparison demonstrates shared-storage/log-stream behavior in the test, not all possible MySQL replication designs.
 
-> **Replica Lag:** Typically less than 20ms (log shipping latency). No data copying between writer and readers.
+The Percona TPC-C variant used 100 or 1,000 warehouses and 500 or 5,000 connections. Aurora's reported throughput ranged from 30,221 to 73,955 tpmC across those four cases, 2.3–16.3 times MySQL 5.7. It was a TPC-C-derived workload, not an audited TPC-C result.
 
-### Replica Log Application
+## Limits and assumptions
 
-```python
-class AuroraReplica:
-    """Aurora read replica implementation."""
-    
-    def __init__(self, storage):
-        self.storage = storage
-        self.buffer_pool = BufferPool()
-        self.current_lsn = 0
-        self.log_queue = []
-    
-    def receive_log_record(self, log_record):
-        """
-        Receive redo log from writer.
-        
-        Sent asynchronously for low overhead.
-        """
-        self.log_queue.append(log_record)
-        
-        # Apply to buffer pool if page is cached
-        if log_record.page_id in self.buffer_pool:
-            self._apply_to_buffer_pool(log_record)
-    
-    def _apply_to_buffer_pool(self, log_record):
-        """
-        Apply log record to cached page.
-        
-        Keeps buffer pool consistent with writer.
-        """
-        page = self.buffer_pool.get(log_record.page_id)
-        
-        # Check if this log is newer than page
-        if log_record.lsn > page.lsn:
-            # Apply redo to page
-            new_page = self._apply_redo(page, log_record)
-            self.buffer_pool.put(log_record.page_id, new_page)
-        
-        self.current_lsn = max(self.current_lsn, log_record.lsn)
-    
-    def read_page(self, page_id) -> Page:
-        """
-        Read page for query.
-        
-        Check buffer pool first, then storage.
-        """
-        if page_id in self.buffer_pool:
-            return self.buffer_pool.get(page_id)
-        
-        # Read from shared storage
-        # Storage applies any pending logs automatically
-        page = self.storage.read_page(page_id)
-        
-        # Apply any pending logs in our queue
-        for record in self.log_queue:
-            if record.page_id == page_id and record.lsn > page.lsn:
-                page = self._apply_redo(page, record)
-        
-        self.buffer_pool.put(page_id, page)
-        return page
-    
-    def get_replica_lag(self) -> float:
-        """
-        Get replica lag in seconds.
-        
-        Typically < 20ms due to async log shipping.
-        """
-        if not self.log_queue:
-            return 0
-        
-        oldest = min(r.timestamp for r in self.log_queue)
-        return time.time() - oldest
-```
+- One writer is the serialization and SQL-compute bottleneck in the published architecture.
+- Six-way storage replication spends capacity to reduce correlated-failure risk and tail latency.
+- Correctness depends on LSN ordering, CPL placement, quorum intersection, and storage-node redo determinism.
+- Shared storage removes replica storage copies but does not make asynchronous readers instantly current.
+- The design assumes AWS's regional network, AZ separation, fleet repair, and managed control plane.
+- Benchmarks are vendor-run and compare stacks with different implementations and, in some cases, feature paths.
+- Compatibility was based on a MySQL 5.6 fork at publication; it was not identical to upstream MySQL behavior or ecosystem surface.
 
-## Storage Gossip and Repair
+## What the follow-up clarified
 
-### Gossip Protocol
+The 2018 SIGMOD paper, *Amazon Aurora: On Avoiding Distributed Consensus for I/Os, Commits, and Membership Changes*, makes explicit how the single-writer epoch, quorum state, and locally reconstructed metadata avoid running a general consensus round for most storage I/O. It retains the 2017 architecture while deepening the invariant argument. That clarification should not be simplified to “Aurora has no consensus”: the system still establishes unique writer epochs and durable quorum state; it avoids consensus on particular steady-state paths under stated invariants.
 
-```python
-class StorageGossip:
-    """
-    Aurora storage gossip for repair.
-    
-    Storage nodes constantly gossip to detect
-    and repair missing data.
-    """
-    
-    def __init__(self, node_id: int, peers: list):
-        self.node_id = node_id
-        self.peers = peers
-        self.log_records = {}  # lsn -> LogRecord
-        self.gaps = []
-    
-    def gossip_round(self):
-        """
-        One round of gossip with peers.
-        
-        Exchange information about what logs we have.
-        """
-        for peer in self.peers:
-            # Send our highest LSN
-            their_info = peer.exchange_info(
-                my_highest_lsn=self.get_highest_lsn(),
-                my_gaps=self.gaps
-            )
-            
-            # Fill gaps from peer
-            for gap in self.gaps:
-                if peer.has_logs(gap.start, gap.end):
-                    missing = peer.get_logs(gap.start, gap.end)
-                    self._fill_gap(missing)
-            
-            # Provide logs to peer if they're missing
-            for gap in their_info.gaps:
-                if self.has_logs(gap.start, gap.end):
-                    logs = self.get_logs(gap.start, gap.end)
-                    peer.receive_repair_logs(logs)
-    
-    def detect_gaps(self):
-        """
-        Detect gaps in log sequence.
-        
-        Gaps occur when some writes didn't reach us.
-        """
-        self.gaps = []
-        lsns = sorted(self.log_records.keys())
-        
-        for i in range(len(lsns) - 1):
-            if lsns[i+1] - lsns[i] > 1:
-                self.gaps.append(Gap(
-                    start=lsns[i] + 1,
-                    end=lsns[i+1] - 1
-                ))
-    
-    def _fill_gap(self, logs: list):
-        """Fill gap with received logs."""
-        for log in logs:
-            self.log_records[log.lsn] = log
-        
-        # Re-detect gaps
-        self.detect_gaps()
+## Architecture review questions
 
+1. Which bytes cross the compute/storage boundary: logical operations, redo, or full pages?
+2. What contiguous and transaction-consistent frontier makes an acknowledgement safe?
+3. How do read and write quorums intersect for every allowed failure pattern?
+4. Can storage repair keep the vulnerable window below the correlated-failure budget?
+5. What state must compute rebuild before serving, and what can recover lazily?
+6. Does one writer have enough CPU, lock, log-allocation, and network capacity?
+7. Are comparisons matched for durability, replicas, cache size, instance, and workload compliance?
 
-class SegmentRepair:
-    """
-    Fast segment repair after node failure.
-    
-    10GB segment can be repaired in ~10 seconds.
-    """
-    
-    def repair_segment(self, failed_node, segment_id):
-        """
-        Repair segment by copying from healthy nodes.
-        
-        Parallel copy from multiple sources.
-        """
-        # Find healthy nodes with this segment
-        healthy_nodes = self.get_healthy_nodes(segment_id)
-        
-        # Divide segment into chunks
-        chunks = self.divide_into_chunks(segment_id, num_chunks=100)
-        
-        # Parallel copy from different nodes
-        futures = []
-        for i, chunk in enumerate(chunks):
-            source = healthy_nodes[i % len(healthy_nodes)]
-            future = self.copy_chunk_async(source, chunk)
-            futures.append(future)
-        
-        # Wait for all chunks
-        for future in futures:
-            future.wait()
-        
-        # Verify integrity
-        self.verify_segment(segment_id)
-```
+## Primary sources
 
-## Performance
-
-### Key Metrics
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                   Aurora Performance                            │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  Throughput:                                                    │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │  5x throughput of MySQL on same hardware                │    │
-│  │  Up to 200K writes/sec on r4.16xlarge                   │    │
-│  └─────────────────────────────────────────────────────────┘    │
-│                                                                  │
-│  Latency:                                                       │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │  Commit latency: 4-6ms (vs 20ms for traditional)        │    │
-│  │  Replica lag: <20ms typically                           │    │
-│  └─────────────────────────────────────────────────────────┘    │
-│                                                                  │
-│  Recovery:                                                      │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │  Crash recovery: Seconds (vs minutes/hours)             │    │
-│  │  Failover: ~30 seconds                                  │    │
-│  │  Segment repair: ~10 seconds for 10GB                   │    │
-│  └─────────────────────────────────────────────────────────┘    │
-│                                                                  │
-│  Storage:                                                       │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │  Max size: 128 TB                                       │    │
-│  │  Automatic scaling (10GB increments)                    │    │
-│  │  6-way replication included                             │    │
-│  └─────────────────────────────────────────────────────────┘    │
-│                                                                  │
-│  Cost:                                                          │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │  1/10th cost of traditional enterprise databases        │    │
-│  │  Pay for storage used, not provisioned                  │    │
-│  └─────────────────────────────────────────────────────────┘    │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-## Influence and Legacy
-
-### Impact on Cloud Databases
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│                    Aurora's Influence                        │
-├──────────────────────────────────────────────────────────────┤
-│                                                               │
-│  Innovations:                                                │
-│  ┌─────────────────────────────────────────────────────┐     │
-│  │  - Log-is-the-database architecture                 │     │
-│  │  - Separation of compute and storage                │     │
-│  │  - Push redo application to storage                 │     │
-│  │  - Cloud-native durability model                    │     │
-│  └─────────────────────────────────────────────────────┘     │
-│                                                               │
-│  Inspired:                                                   │
-│  ┌─────────────────────────────────────────────────────┐     │
-│  │  - Azure SQL Hyperscale                             │     │
-│  │  - Google AlloyDB                                   │     │
-│  │  - Snowflake (similar compute/storage separation)   │     │
-│  │  - PolarDB (Alibaba)                                │     │
-│  └─────────────────────────────────────────────────────┘     │
-│                                                               │
-│  Key Lesson:                                                 │
-│  ┌─────────────────────────────────────────────────────┐     │
-│  │  Traditional database architecture doesn't fit      │     │
-│  │  the cloud. Redesigning storage layer enables       │     │
-│  │  dramatic improvements in durability, performance,  │     │
-│  │  and cost.                                          │     │
-│  └─────────────────────────────────────────────────────┘     │
-│                                                               │
-└──────────────────────────────────────────────────────────────┘
-```
-
-## Key Takeaways
-
-1. **Log is the database**: Ship logs, not pages - 35x I/O reduction
-2. **Separate compute and storage**: Independent scaling and failure domains
-3. **Quorum writes, single reads**: 4/6 write quorum, optimized read path
-4. **Segment for repairability**: 10GB segments repair in seconds
-5. **Push work to storage**: Redo application happens on read, not write
-6. **Near-instant recovery**: Just find consistency point, don't replay
-7. **Shared storage for replicas**: No data copying, sub-20ms lag
+- [Verbitski et al., *Amazon Aurora: Design Considerations for High Throughput Cloud-Native Relational Databases* (SIGMOD 2017), official Amazon Science PDF](https://cdn.amazon.science/dc/2b/4ef2b89649f9a393d37d3e042f4e/amazon-aurora-design-considerations-for-high-throughput-cloud-native-relational-databases.pdf)
+- [Amazon Science publication record for the 2017 paper](https://www.amazon.science/publications/amazon-aurora-design-considerations-for-high-throughput-cloud-native-relational-databases)
+- [Verbitski et al., *Amazon Aurora: On Avoiding Distributed Consensus for I/Os, Commits, and Membership Changes* (SIGMOD 2018)](https://www.amazon.science/publications/amazon-aurora-on-avoiding-distributed-consensus-for-i-os-commits-and-membership-changes)

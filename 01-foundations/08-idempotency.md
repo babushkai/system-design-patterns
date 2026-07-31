@@ -1,718 +1,636 @@
-# Idempotency
+# Idempotency and Operation Identity
 
 ## TL;DR
 
-An operation is idempotent if executing it multiple times produces the same result as executing it once. In distributed systems with retries, timeouts, and partial failures, idempotency prevents duplicate effects. Implement idempotency using idempotency keys, deduplication, and careful API design. Without idempotency, retries can cause double-charges, duplicate emails, and corrupt data.
+Idempotency makes repeated attempts of one logical operation converge to one effect and one compatible result. It is not “ignore duplicate messages,” and it is not achieved by checking a cache before doing work.
+
+A production protocol needs:
+
+- a stable operation identity reused by every attempt;
+- a scope that includes tenant, caller, endpoint/effect, and business epoch;
+- a canonical request digest so the same key cannot mean two operations;
+- an atomic boundary between deduplication state and the owned effect;
+- explicit `IN_PROGRESS`, terminal, conflict, and expired states;
+- a retention horizon at least as long as every possible retry/replay;
+- fencing or downstream idempotency across non-transactional boundaries;
+- query, reconciliation, and repair for ambiguous outcomes.
+
+Idempotency does not make execution literally once. It makes retries, redelivery, failover, and replay safe within a declared scope and time horizon.
 
 ---
 
-## Why Idempotency Matters
+## 1. Semantics and System Model
 
-### The Fundamental Problem
+Mathematically, an operation `f` is idempotent when:
 
-```
-Client → Server: "Charge $100"
-Server: Process payment ✓
-Server → Client: "Success"
-[network drops response]
-Client: No response, retry?
-
-Client → Server: "Charge $100" (retry)
-Server: Process payment ✓ (again!)
-
-Result: Customer charged $200 for one purchase
+```text
+f(f(x)) = f(x)
 ```
 
-### When Retries Happen
+For distributed effects, the useful contract is:
 
-- Network timeout (response lost)
-- Client crashed, restarted, retries
-- Load balancer retry on backend failure
-- Message queue redelivery
-- User double-click
-- Kubernetes pod restart during request
-
-**Assume every operation will be executed multiple times.**
-
----
-
-## Idempotent vs Non-Idempotent Operations
-
-### Naturally Idempotent
-
-```
-SET x = 5          ✓ Idempotent (same result every time)
-DELETE user:123    ✓ Idempotent (already deleted = no-op)
-PUT /users/123     ✓ Idempotent (replace entire resource)
-GET /users/123     ✓ Idempotent (read-only)
+```text
+execute(operation_key, semantic_request)
+  -> one accepted effect
+  -> same compatible outcome for duplicate attempts
 ```
 
-### NOT Naturally Idempotent
+Assume:
 
-```
-x = x + 1          ✗ Each execution adds 1
-INSERT row         ✗ Creates duplicate rows
-POST /orders       ✗ Creates new order each time
-send_email()       ✗ Sends email each time
-charge_card()      ✗ Charges each time
-```
+- requests and responses can be lost;
+- a server may commit then crash before replying;
+- clients, queues, and workflow engines retry;
+- attempts can execute concurrently;
+- stale workers can resume;
+- delayed replay can occur after failover or restore;
+- clocks cannot establish global ownership.
+
+### 1.1 Core invariants
+
+1. **Stable key:** all attempts of one logical operation use the same key.
+2. **Unique scope:** the same key cannot collide across tenants, callers, operations, or business epochs.
+3. **Parameter binding:** a key reused with a different semantic request is rejected.
+4. **Atomic owned effect:** dedup state and any local effect commit together.
+5. **Single terminal outcome:** terminal success/failure is monotonic.
+6. **Concurrent convergence:** duplicate attempts do not execute unbounded parallel effects.
+7. **Bounded guarantee:** retention is explicit and covers all valid repeats.
+8. **No false completion:** `IN_PROGRESS` is not interpreted as success.
+9. **Replay authorization:** returning a stored outcome does not bypass current tenant/resource access checks.
+10. **Repairability:** ambiguous/stuck operations have a query and reconciliation path.
 
 ---
 
-## Implementing Idempotency
+## 2. Natural and Keyed Idempotency
 
-### Pattern 1: Idempotency Keys
+### 2.1 Naturally idempotent state transitions
 
-Client generates unique key for each logical operation.
+Prefer setting a desired state over applying an unbounded delta:
 
-```
-Request 1:
-  POST /payments
-  Idempotency-Key: abc123
-  Body: {amount: 100}
-  
-  Server: Process payment, store key
-  Response: 201 Created
-
-Request 2 (retry, same key):
-  POST /payments
-  Idempotency-Key: abc123
-  Body: {amount: 100}
-  
-  Server: Key exists, return cached response
-  Response: 201 Created (same as before, no new payment)
+```text
+SET subscription_status = 'cancelled'  # naturally convergent
+increment balance by -50               # repeats change state again
 ```
 
-**Storage schema:**
-```sql
-CREATE TABLE idempotency_keys (
-  key VARCHAR(255) PRIMARY KEY,
-  request_hash VARCHAR(64),
-  response_code INT,
-  response_body JSONB,
-  created_at TIMESTAMP,
-  expires_at TIMESTAMP
-);
+Conditional state machines can be idempotent:
+
+```text
+UPDATE orders
+SET status = 'shipped', shipped_at = ?
+WHERE order_id = ?
+  AND status = 'paid'
 ```
 
-### Pattern 2: Request Deduplication
+A duplicate observes `shipped` and returns the stored transition result. The transition must still distinguish “already shipped by this operation” from “shipped by a different operation with incompatible parameters.”
 
-Server detects and ignores duplicates.
+### 2.2 Resource identity
 
-```
-// Message queue consumer
-func process_message(msg):
-  if seen_before(msg.id):
-    return ack()  // Already processed
-  
-  process(msg)
-  mark_seen(msg.id)
-  return ack()
-```
+`PUT /resources/{stable-id}` can be idempotent when the client chooses the resource identity and repeated payloads replace it consistently. `POST /resources` with a server-generated identity is not naturally idempotent; add an operation key or client-provided resource key.
 
-**Deduplication storage:**
-```
-// Simple: in-memory set with TTL
-seen_ids = ExpiringSet(ttl=24h)
+HTTP method semantics are a protocol contract, not a database guarantee. A nominally idempotent `DELETE` can still send duplicate emails or ledger entries if its implementation is not.
 
-// Scalable: Bloom filter (probabilistic)
-// False positives OK (skip legitimate message)
-// False negatives NOT OK (never miss duplicate)
-bloom_filter.add(msg_id)
-if bloom_filter.contains(msg_id): skip
+### 2.3 Keyed effects
+
+Non-idempotent effects (charge, shipment, notification, increment, external call) need a logical operation key. Examples:
+
+```text
+tenant-4/order-82/payment-intent-1
+tenant-4/order-82/confirmation-email/v1
+tenant-9/report/2026-07-18
+workflow-51/step-reserve-inventory/sequence-3
 ```
 
-### Pattern 3: Conditional Operations
-
-Make non-idempotent operations conditional.
-
-```sql
--- Instead of: UPDATE balance SET amount = amount - 100
--- Use conditional update:
-
-UPDATE balance 
-SET amount = amount - 100, version = version + 1
-WHERE user_id = 123 AND version = 5;
-
--- If version changed (already processed), 0 rows affected
-```
-
-```
-// Compare-and-swap style
-func transfer(from, to, amount, expected_version):
-  if from.version != expected_version:
-    return AlreadyProcessed
-  
-  from.balance -= amount
-  to.balance += amount
-  from.version += 1
-```
-
-### Pattern 4: Natural Idempotency Keys
-
-Use business identifiers that are naturally unique.
-
-```
-// Payment for order 12345
-// Order can only be paid once
-// Order ID is the idempotency key
-
-func pay_order(order_id, amount):
-  order = get_order(order_id)
-  if order.payment_status == 'paid':
-    return order.payment  // Already done
-  
-  payment = process_payment(amount)
-  order.payment_status = 'paid'
-  order.payment = payment
-  return payment
-```
+Do not include retry attempt number or random value generated inside each attempt. That turns duplicates into distinct operations.
 
 ---
 
-## Idempotency at Different Layers
+## 3. Key Scope and Request Identity
 
-```
-API Layer:         Idempotency-Key header, response caching (see HTTP Idempotency Patterns)
-Message Queue:     Producer assigns message ID, consumer dedup table, built-in dedup (SQS FIFO, Kafka)
-Database Layer:    UPSERT, optimistic locking, ON CONFLICT (see Database-Level Idempotency)
-Application Layer: State machines — only valid transitions execute, duplicates are no-ops
+A raw caller string is not globally unique. Construct internal identity:
+
+```text
+internal_key = hash(
+  tenant_id,
+  authenticated_client_id,
+  operation_namespace,
+  caller_key
+)
 ```
 
-```
-// State machine prevents duplicate transitions
-func complete_order(order_id):
-  order = get_order(order_id)
+Include a business epoch when the same entity can legitimately undergo the operation again. `cancel-subscription/{subscription_id}` may be sufficient if cancellation is terminal; `charge/{order_id}` is insufficient if an order supports multiple payment attempts.
 
-  match order.status:
-    'pending' ->
-      process()
-      order.status = 'completed'
-    'completed' ->
-      return ok()  // Already done
-    'cancelled' ->
-      return error("Cannot complete cancelled order")
+### 3.1 Canonical request digest
+
+Bind the key to semantic input:
+
+```text
+request_digest = SHA-256(
+  canonical_encode(
+    tenant,
+    operation_version,
+    resource_id,
+    amount,
+    currency,
+    destination,
+    relevant_preconditions
+  )
+)
 ```
+
+Canonicalization defines:
+
+- field ordering;
+- Unicode normalization;
+- number/decimal representation;
+- absent versus null;
+- defaults;
+- excluded transport-only fields;
+- schema/operation version.
+
+Do not hash raw JSON bytes if semantically equivalent encodings should match. Do not omit a field that changes the effect.
+
+If an existing key has a different digest, return a conflict. Replaying the old outcome would falsely claim that the new parameters executed.
 
 ---
 
-## Real-World Examples
+## 4. Deduplication State Machine
 
-### Stripe Payments
+```text
+ABSENT -> IN_PROGRESS -> SUCCEEDED
+                    -> FAILED_FINAL
+                    -> UNKNOWN
 
-```http
-POST /v1/charges
-Idempotency-Key: unique-charge-key-123
-Content-Type: application/json
-
-{
-  "amount": 1000,
-  "currency": "usd",
-  "source": "tok_visa"
-}
+IN_PROGRESS -> EXPIRED/RECLAIMABLE
+UNKNOWN -> RECONCILING -> SUCCEEDED | FAILED_FINAL | MANUAL_REPAIR
 ```
 
-- Keys stored for 24 hours
-- Same key + same parameters = cached response
-- Same key + different parameters = error
-- Retries are safe
+Record:
 
-### AWS SQS FIFO
-
+```text
+idempotency_record:
+  internal_key
+  tenant_id
+  operation_namespace
+  request_digest
+  state
+  owner_epoch
+  created_at
+  lease_expires_at
+  completed_at
+  response_status
+  response_schema_version
+  response_ref_or_digest
+  external_operation_id
+  retention_until
 ```
-Message:
-  MessageDeduplicationId: "unique-id-123"
-  MessageGroupId: "group-1"
 
-SQS deduplicates messages with same ID within 5-minute window
-```
+### 4.1 First request
 
-### Kafka Exactly-Once
+Atomically insert `IN_PROGRESS` if absent. A unique constraint or compare-and-swap elects the owner.
 
-```
-Producer:
-  enable.idempotence = true
-  transactional.id = "my-producer-1"
+### 4.2 Concurrent duplicate
 
-Broker:
-  Tracks producer sequence numbers
-  Rejects duplicate messages
-  Supports transactions across partitions
-```
+Policy options:
+
+- wait/poll for the first outcome within the caller deadline;
+- return `202 Accepted` plus status URL;
+- return a specific “operation in progress” response;
+- join a singleflight future inside one process as an optimization.
+
+Do not immediately run the effect again.
+
+### 4.3 Terminal duplicate
+
+Verify tenant/caller authorization and request digest, then return the stored semantic outcome. The response may need re-encoding for a newer API version; preserve the original business result separately from transient headers.
+
+### 4.4 Abandoned `IN_PROGRESS`
+
+An owner may crash. Use a lease and monotonically increasing `owner_epoch`; a new attempt claims after expiry. Any local commit accepts only the current epoch. A timeout alone does not prove the old worker stopped, so fencing or effect-level idempotency is still necessary.
 
 ---
 
-## Common Pitfalls
+## 5. Atomicity With a Local Effect
 
-### Pitfall 1: Storing Key After Processing
+When dedup record and effect share a database:
 
-```
-// WRONG
-response = process(request)
-store_key(key, response)  // Crash here = key not stored, will retry
+```text
+BEGIN
+  INSERT operation(internal_key, digest, state='IN_PROGRESS')
+    ON CONFLICT -> load and verify
 
-// RIGHT
-begin_transaction()
-store_key(key, 'processing')
-response = process(request)
-update_key(key, response)
-commit_transaction()
-```
+  apply business mutation guarded by internal_key
 
-### Pitfall 2: Not Validating Request
-
-```
-Request 1: POST /pay {amount: 100, key: "abc"}
-Request 2: POST /pay {amount: 200, key: "abc"}  // Same key, different amount!
-
-// WRONG: Just return cached response
-// RIGHT: Return error - request mismatch
-
-func check_idempotency(key, request):
-  existing = lookup(key)
-  if existing:
-    if hash(request) != existing.request_hash:
-      return error("Request mismatch for idempotency key")
-    return existing.response
+  UPDATE operation
+    SET state='SUCCEEDED', response_ref=...
+    WHERE internal_key=? AND owner_epoch=?
+COMMIT
 ```
 
-### Pitfall 3: Side Effects Outside Transaction
+The unique operation identity can be embedded directly in a ledger/event row. A separate dedup table is not mandatory if the business table enforces the same invariant and stores enough result state.
 
-```
-// WRONG
-begin_transaction()
-  create_order()
-commit_transaction()
-send_email()  // If this fails after retry, email sent twice
+### 5.1 Wrong order: effect then record
 
-// RIGHT
-begin_transaction()
-  create_order()
-  queue_email()  // Idempotent queue with dedup
-commit_transaction()
-// Email worker handles deduplication
-```
+1. effect commits;
+2. process crashes;
+3. no dedup success exists;
+4. retry executes effect again.
 
-### Pitfall 4: Using Timestamps as Keys
+### 5.2 Wrong order: record then effect
 
-```
-// WRONG
-key = f"user:{user_id}:payment:{timestamp}"
-// Clock skew, timing variance = different keys for retry
+1. record marked success;
+2. process crashes;
+3. effect never occurs;
+4. retry returns false success.
 
-// RIGHT
-key = f"user:{user_id}:payment:{client_generated_uuid}"
-// Client generates consistent key
-```
+Only a shared atomic transaction closes both gaps. Across external systems, use their idempotency contract, an outbox/inbox, or reconciliation; see [Effect Commit Protocols for Workflows](../18-workflow-job-systems/06-retry-idempotency-compensation.md).
 
 ---
 
-## Testing Idempotency
+## 6. API Contract
 
-### Unit Tests
+A write API should document:
 
-```python
-def test_idempotent_charge():
-  key = "test-key-123"
-  
-  # First request
-  response1 = charge(amount=100, key=key)
-  assert response1.status == "success"
-  
-  # Duplicate request (retry)
-  response2 = charge(amount=100, key=key)
-  assert response2.status == "success"
-  assert response1.charge_id == response2.charge_id
-  
-  # Only charged once
-  assert get_total_charges() == 100
+- header/field carrying the key;
+- maximum key length and allowed character set;
+- uniqueness scope;
+- operation types requiring it;
+- parameter-reuse conflict behavior;
+- concurrent in-progress behavior;
+- terminal replay behavior;
+- retention horizon;
+- status-query endpoint;
+- whether authentication/tenant changes invalidate replay;
+- response fields that are stable versus regenerated.
+
+Example:
+
+```text
+POST /payments
+Idempotency-Key: order-82-payment-1
+
+201 Created        first success
+201 Created        compatible replay of success
+409 Conflict       same key, different semantic request
+202 Accepted       original attempt is still in progress
+422/4xx            deterministic final rejection, if contract stores it
 ```
 
-### Integration Tests
+### 6.1 Which failures are cached?
 
-```python
-def test_concurrent_idempotent_requests():
-  key = "concurrent-key"
-  
-  # Send 10 concurrent requests with same key
-  responses = parallel_execute([
-    lambda: charge(100, key) for _ in range(10)
-  ])
-  
-  # All should return same response
-  charge_ids = set(r.charge_id for r in responses)
-  assert len(charge_ids) == 1
-  
-  # Only one charge created
-  assert count_charges() == 1
+Store deterministic terminal outcomes when repeating cannot change them under the same preconditions. Do not permanently cache transient infrastructure failure merely because the first attempt saw it.
+
+Possible policy:
+
+- validation/auth failure before operation ownership: not stored as operation outcome;
+- deterministic domain rejection after ownership: store with domain version/preconditions;
+- transient dependency failure: keep retryable or release ownership safely;
+- ambiguous external timeout: `UNKNOWN`, reconcile;
+- success: store.
+
+Authorization can change. Always authenticate the duplicate request before returning a stored outcome, and decide whether current authorization is required to reveal it.
+
+### 6.2 Status resource
+
+```text
+GET /operations/{key}
+
+state: in_progress | succeeded | failed | unknown
+result/reference
+created_at
+updated_at
 ```
 
-### Chaos Testing
-
-```
-1. Start operation
-2. Kill process mid-operation
-3. Restart and retry
-4. Verify single execution
-
-Test scenarios:
-- Crash before processing
-- Crash during processing
-- Crash after processing, before response
-- Network timeout (response lost)
-```
+Authorize this lookup like the underlying resource. A predictable key must not expose another tenant's operation.
 
 ---
 
-## Idempotency Key Design
+## 7. Message Consumers and Inbox Transactions
 
-### Client-Generated vs Server-Generated Keys
+Broker message IDs may identify deliveries, not business operations. Redelivery after republish or across topics can carry a new message ID. Prefer a producer-defined event/operation identity.
 
-```
-Client-generated (recommended):
-  Client creates UUID before sending request.
-  On retry, client resends the same UUID.
-  Server uses UUID to detect duplicates.
+Consumer transaction:
 
-  ✓ Key survives response loss — client still has it
-  ✓ Stripe, PayPal, Square all use this approach
+```text
+BEGIN
+  INSERT inbox(consumer, event_id, digest)
+    ON CONFLICT -> verify and return stored outcome
 
-Server-generated (problematic):
-  Server creates key, returns it in response.
-  If response is lost, client has no key to retry with.
+  apply local projection/effect
+  append outgoing outbox events
+  mark inbox complete
+COMMIT
 
-  ✗ Defeats the purpose if the response never arrives
-  ✗ Only works when the client can query for existing records
+ack broker after commit
 ```
 
-### Key Format Options
+If the broker redelivers before ack, the inbox detects the committed event. If the database transaction fails, the broker redelivery retries.
 
-```
-UUID v4 (random):
-  "550e8400-e29b-41d4-a716-446655440000"
-  ✓ No coordination needed
-  ✗ Poor database index locality (random distribution)
+Inbox scope includes the logical consumer/effect. Two independent projections may both legitimately process one event; a global `event_id` unique constraint across all consumers would suppress valid work.
 
-UUID v7 (time-ordered, RFC 9562):
-  "018f3e5c-7a1b-7000-8000-000000000001"
-  ✓ Monotonically increasing — B-tree friendly
-  ✓ Encodes creation timestamp
-  ✓ Preferred for high-write idempotency tables
-
-Composite key (domain-aware):
-  key = sha256(f"{user_id}:{action}:{reference_id}")
-  ✓ Deterministic — same intent always produces same key
-  ✓ Natural deduplication without client tracking
-  ✗ Requires careful design to avoid collisions
-```
-
-### Key Storage Strategy
-
-```
-Same database as business data (transactional):
-  BEGIN;
-    INSERT INTO idempotency_keys (key, response) VALUES (...);
-    INSERT INTO payments (id, amount) VALUES (...);
-  COMMIT;
-  ✓ Atomic — key and operation always consistent
-  ✓ No split-brain between key store and data store
-
-Redis (fast, ephemeral):
-  SET idem:abc123 response_json EX 86400
-  ✓ Sub-millisecond lookups
-  ✗ Key can be lost on Redis restart (unless persistence is on)
-  ✗ Not transactional with your main database
-
-Dedicated dedup table:
-  Separate table or service for idempotency keys.
-  ✓ Clean separation of concerns
-  ✗ Adds latency and a consistency boundary
-```
-
-### Key Expiration
-
-```
-How long to keep processed keys:
-  Stripe:        24 hours
-  AWS SQS FIFO:  5 minutes
-  Most REST APIs: 1–7 days
-
-Formula:
-  retention = max_retry_window × safety_factor
-
-  Example: clients retry for up to 1 hour, safety_factor = 24
-  retention = 1h × 24 = 24 hours
-
-Trade-off:
-  Short TTL → less storage, risk of duplicate processing on late retries
-  Long TTL  → more storage, stronger guarantee against duplicates
-```
-
-### Concurrent Duplicate Requests
-
-```
-Problem: Two requests with same key arrive at the same instant.
-Both pass the "key not found" check before either inserts.
-
-Solution 1 — Database unique constraint:
-  INSERT INTO idempotency_keys (key, status)
-  VALUES ('abc123', 'processing');
-  -- Second insert fails with unique violation → return 409 or wait
-
-Solution 2 — Distributed lock on the key:
-  lock = redis.set("lock:abc123", owner, NX, EX=30)
-  if not lock:
-    wait_or_return_conflict()
-```
+Ordering and idempotency are separate. Deduplication does not repair out-of-order state transitions; use sequence/precondition handling from [Message Ordering](../05-messaging/03-message-ordering.md).
 
 ---
 
-## HTTP Idempotency Patterns
+## 8. External Effects and Ambiguity
 
-### Natural Idempotency by HTTP Method
+For a remote API with idempotency, pass your stable key and bind parameters. Persist the provider's operation ID/result.
 
-```
-GET    → Read-only, always idempotent by definition
-PUT    → Full resource replacement — same payload = same result
-DELETE → Deleting an already-deleted resource is a no-op (return 204 or 404)
-POST   → Creates a new resource each time — NOT idempotent without explicit design
-PATCH  → Depends on payload semantics — NOT guaranteed idempotent
-```
+For a remote API without idempotency:
 
-### The Idempotency-Key Header (Stripe Pattern)
+1. commit a durable intent;
+2. send a unique business reference;
+3. on timeout, query/search provider by that reference;
+4. reconcile callbacks/events;
+5. retry only when evidence says no effect exists;
+6. use manual repair if existence cannot be determined.
 
-```http
-POST /v1/payments HTTP/1.1
-Idempotency-Key: 7c4a8d09-ca95-4c28-a1ad-8c3e2f5b3e72
-Content-Type: application/json
+An application-side “processed keys” table cannot atomically cover a payment provider. Marking local completion before or after the call recreates the gap.
 
-{"amount": 5000, "currency": "usd"}
-```
-
-```
-Server processing flow:
-  1. Receive request with Idempotency-Key header
-  2. Look up key in idempotency store
-  3. If found and status = "completed" → return cached response
-  4. If found and status = "processing" → return 409 Conflict (or wait)
-  5. If not found → insert key with status "processing", execute operation
-  6. On completion → update key with status "completed" and store full response
-```
-
-### Response Caching for Idempotent Replays
-
-```sql
--- Store the complete response alongside the key
-UPDATE idempotency_keys
-SET status = 'completed',
-    response_code = 201,
-    response_body = '{"id": "pay_abc", "amount": 5000}',
-    completed_at = NOW()
-WHERE key = '7c4a8d09-ca95-4c28-a1ad-8c3e2f5b3e72';
-
--- On retry, return the exact same response — status code and body
--- The client sees no difference between the original and the replay
-```
-
-### Conditional Requests with ETag
-
-```http
--- Client fetches resource with ETag
-GET /users/123 HTTP/1.1
-→ 200 OK
-→ ETag: "v5"
-→ {"name": "Alice", "email": "alice@example.com"}
-
--- Client updates with If-Match to prevent lost updates
-PUT /users/123 HTTP/1.1
-If-Match: "v5"
-{"name": "Alice", "email": "alice@new.com"}
-
-→ 200 OK (if version still v5)
-→ 412 Precondition Failed (if another write changed it)
-```
-
-### Making PATCH Safe
-
-```
-PATCH is not naturally idempotent:
-  PATCH /counter {"op": "increment"} → each call changes state
-
-Make PATCH idempotent with versioning:
-  PATCH /users/123
-  If-Match: "v5"
-  {"email": "new@example.com"}
-
-  First call:  v5 matches → apply update, bump to v6
-  Retry call:  v5 ≠ v6 → 412 Precondition Failed (client knows it already applied)
-```
+For message publication, use a transactional outbox. For local consumers, use an inbox. The canonical design is [Transactional Outbox, Inbox, and CDC Publication](../05-messaging/07-outbox-pattern.md).
 
 ---
 
-## Database-Level Idempotency
+## 9. Retention and Expiry
 
-### UPSERT / INSERT ON CONFLICT
+The guarantee exists only while identity is retained:
 
-```sql
--- Idempotent write in a single statement
-INSERT INTO events (id, type, payload, created_at)
-VALUES ('evt-001', 'order.created', '{"order_id": 42}', NOW())
-ON CONFLICT (id) DO NOTHING;
-
--- Rows affected = 1 on first call, 0 on retry — no error, no duplicate
-
--- UPSERT variant: update if exists (useful for "last write wins")
-INSERT INTO user_preferences (user_id, theme, updated_at)
-VALUES (123, 'dark', NOW())
-ON CONFLICT (user_id) DO UPDATE
-SET theme = EXCLUDED.theme, updated_at = EXCLUDED.updated_at;
+```text
+retention >= max(
+  client retry horizon,
+  queue redelivery/retention,
+  workflow replay,
+  offline operation,
+  disaster restore/replay,
+  manual repair
+) + safety margin
 ```
 
-### Exactly-Once Processing with Outbox
+Document what happens after expiry:
 
-```sql
--- Process message and record it in the same transaction
-BEGIN;
-  -- Business logic
-  UPDATE accounts SET balance = balance - 100 WHERE id = 'acc-123';
+- key may be treated as new;
+- request must use a new business epoch;
+- API rejects keys older than a timestamp;
+- provider offers durable operation identity beyond the hot dedup tier.
 
-  -- Mark message as processed (dedup record)
-  INSERT INTO processed_messages (message_id, processed_at)
-  VALUES ('msg-789', NOW())
-  ON CONFLICT (message_id) DO NOTHING;
+Separate hot outcome response from long-lived identity. Terminal records can compact to key, digest, outcome code/reference, and audit metadata.
 
-  -- Queue outgoing event via outbox (see 05-messaging/07-outbox-pattern.md)
-  INSERT INTO outbox (id, event_type, payload)
-  VALUES ('out-456', 'balance.updated', '{"account": "acc-123"}');
-COMMIT;
+### 9.1 Cleanup race
 
--- If message_id already exists, the ON CONFLICT makes the INSERT a no-op
--- The entire transaction is atomic — no partial processing
-```
-
-### Idempotent Schema Design: SET vs INCREMENT
-
-```
-Non-idempotent (INCREMENT semantics):
-  UPDATE accounts SET balance = balance - 100 WHERE id = 'acc-123';
-  -- Each execution subtracts another $100
-
-Idempotent (SET semantics — final state):
-  UPDATE accounts SET balance = 400 WHERE id = 'acc-123' AND version = 5;
-  -- Repeated execution has no additional effect once version advances
-
-Rule of thumb:
-  ✓ SET balance = new_value        (idempotent)
-  ✗ SET balance = balance - amount (not idempotent)
-
-  Compute the final state in application code, then SET it.
-  Pair with optimistic locking (version check) to prevent lost updates.
-```
-
-### Tombstone Pattern for Idempotent Deletes
-
-```sql
--- Soft-delete with timestamp — delete operation is always idempotent
-UPDATE users
-SET deleted_at = NOW()
-WHERE id = 123 AND deleted_at IS NULL;
-
--- Re-deleting a deleted record: 0 rows affected, no error
--- Application treats deleted_at IS NOT NULL as "does not exist"
-
--- Advantage over hard DELETE:
---   Hard DELETE is idempotent too (deleting nothing is fine)
---   But tombstone preserves audit trail and enables undo
-```
+Cleanup must not delete a record while an attempt can still commit. Use `retention_until` after terminal state, partition lifecycle, and compare state/epoch during deletion. Coordinate with backups: restoring a database snapshot without more recent dedup records can resurrect repeatable effects.
 
 ---
 
-## Distributed Idempotency Challenges
+## 10. Multi-Region Design
 
-### Cross-Service Idempotency
+Options:
 
-```
-Scenario: Order service → Payment service → Notification service
+### Home region per operation
 
-  1. Payment service processes charge      ✓
-  2. Notification service sends email      ✓
-  3. Order service crashes before committing
-  4. Retry: payment succeeds (dedup), notification sends AGAIN ✗
+Route by tenant/entity/key to one region. Regional store provides uniqueness. Failover transfers authority and restores dedup state before issuing effects.
 
-Problem: Each service saw a "new" request from its perspective.
+### Globally consistent operation store
 
-Solution: Each service maintains its own idempotency/dedup table.
-  Payment service:  dedup on payment_idempotency_key
-  Notification svc: dedup on notification_id (derived from order_id + event_type)
+All regions perform compare-and-swap against one logical keyspace. Strong uniqueness; adds write latency and global dependency.
 
-  On retry, payment returns cached result AND notification skips the duplicate.
-```
+### Downstream-owned global idempotency
 
-### Side Effects That Cannot Be Undone
+Regions may race locally, but the effect provider deduplicates the global key. Still coordinate local response/outcome state.
 
-```
-Sending an email is not idempotent — you cannot "unsend" it.
-Sending an SMS, calling a webhook, printing a receipt — same problem.
+### Region-scoped identity
 
-Approach: event-driven dedup at the side-effect layer.
+Safe only if the business effect itself is region-scoped. Prefixing a global payment key with region makes duplicates more likely, not safer.
 
-  1. Business service writes an event: "send welcome email for user 123"
-  2. Email service consumes the event
-  3. Email service checks: have I already sent this? (dedup on event_id)
-  4. If not sent → send and record event_id
-  5. If already sent → ack and skip
+Two eventually consistent regional `seen` sets do not guarantee global uniqueness. Both regions can observe absence and execute.
 
-  The dedup boundary is at the service that performs the irreversible action.
-  See 05-messaging/04-delivery-guarantees.md for delivery guarantee details.
-```
-
-### Clock Skew and Key Expiration
-
-```
-Scenario:
-  Server A sets idempotency key TTL = 24 hours at T=0
-  Client retries at T=23h59m
-  Request routed to Server B whose clock is 5 minutes ahead
-  Server B sees key as expired → processes request again → duplicate!
-
-Mitigations:
-  - Use generous expiration windows (add buffer beyond max retry window)
-  - Synchronize clocks with NTP and monitor drift
-  - Use logical timestamps (version numbers) instead of wall-clock TTLs where possible
-  - Set expiration based on creation time from the key itself (UUID v7 encodes timestamp)
-```
-
-### Idempotency vs Exactly-Once Semantics
-
-```
-Idempotency:
-  A property of an operation — calling it N times has the same effect as calling it once.
-  It is a mechanism, a building block.
-
-Exactly-once:
-  A delivery guarantee — the message is processed exactly one time.
-  It is an end-to-end guarantee, much harder to achieve.
-
-Relationship:
-  at-least-once delivery + idempotent processing = effectively exactly-once
-
-  The network gives you at-least-once (retries ensure delivery).
-  Your application adds idempotency (dedup ensures single processing).
-  The combination behaves like exactly-once from the caller's perspective.
-
-  See 05-messaging/04-delivery-guarantees.md for full treatment.
-  See 02-distributed-databases/07-distributed-transactions.md for transactional guarantees.
-```
+During disaster recovery, restore business state, operation records, outbox/inbox state, and external outcome references as one consistency set. Replay should query known outcomes before reissuing effects.
 
 ---
 
-## Key Takeaways
+## 11. Capacity and Storage
 
-1. **Assume multiple executions** - Network is unreliable, retries will happen
-2. **Use idempotency keys** - Client-generated, unique per logical operation
-3. **Store before processing** - Prevent race conditions
-4. **Same transaction** - Key storage and operation atomically
-5. **Validate request match** - Same key must have same parameters
-6. **Handle side effects** - Queue, deduplicate, or make idempotent
-7. **Set appropriate TTL** - Balance storage vs. retry window
-8. **Test explicitly** - Concurrent requests, crash scenarios
+Assume:
+
+- 25,000 logical write operations per second;
+- mean 1.06 attempts per logical operation;
+- 1.1 KiB hot outcome record;
+- 30-day retention;
+- storage/index/replication factor 3.0;
+- 2 percent of operations receive at least one duplicate status/read.
+
+Attempt rate:
+
+```text
+25,000 * 1.06 = 26,500 attempts/s
+```
+
+Raw retained storage:
+
+```text
+25,000/s * 86,400 s/day * 30 days * 1.1 KiB
+= about 66.4 TiB
+```
+
+With factor 3:
+
+```text
+about 199 TiB
+```
+
+This requires partitioning and compaction. Store large responses in object storage by digest/reference; keep enough immutable semantic result to reproduce the contract.
+
+Hot keys can serialize repeated attempts. That is correct for one logical operation, but an attacker can create contention by replaying it. Rate-limit by authenticated client/tenant and avoid locks held during slow remote calls.
+
+Dedup lookups add a write-path dependency. Provision N-minus-one capacity and define behavior during store outage. For effectful operations, “dedup unavailable, execute anyway” is usually unsafe.
+
+---
+
+## 12. Security and Privacy
+
+- derive internal scope from authenticated tenant/client, not caller input alone;
+- authorize before returning stored outcomes;
+- reject cross-tenant key lookup;
+- rate-limit key creation and polling;
+- cap key/payload size;
+- hash opaque random keys before storage when appropriate;
+- avoid secrets and personal data in keys;
+- encrypt sensitive response records;
+- redact keys/digests from broad logs if they are correlatable;
+- audit manual outcome overrides;
+- prevent a client from probing whether another operation key exists.
+
+An idempotency key is not an authentication credential. Possessing it should not grant result access or authority to repeat an action under another principal.
+
+Parameter binding must include security-relevant fields: tenant, account, amount, destination, privilege context, and operation version. Omitting destination can replay a stored “success” for the wrong recipient.
+
+---
+
+## 13. Failure Traces
+
+### 13.1 New key per retry
+
+1. client times out after payment commits;
+2. retry library generates a new UUID;
+3. provider sees a new operation;
+4. customer is charged twice.
+
+**Prevention:** generate key once per logical operation above retry loop.
+
+### 13.2 Check-then-act race
+
+1. two workers query `seen(key)` and both see false;
+2. both execute;
+3. both insert completion.
+
+**Prevention:** unique insert/transaction or atomic compare-and-swap before effect.
+
+### 13.3 Key reused with new amount
+
+1. first request under key charges 40.
+2. caller changes amount to 55 but reuses key.
+3. server returns prior 40 success.
+4. caller records 55 as charged.
+
+**Prevention:** canonical request digest conflict.
+
+### 13.4 `IN_PROGRESS` treated as done
+
+1. owner crashes before effect.
+2. duplicate sees record exists and returns success.
+3. effect is lost.
+
+**Prevention:** explicit state and reclaim/reconciliation protocol.
+
+### 13.5 Stale owner overwrites terminal result
+
+1. epoch 7 pauses.
+2. epoch 8 reclaims and succeeds.
+3. epoch 7 wakes and writes failure.
+
+**Prevention:** fenced epoch and monotonic terminal state.
+
+### 13.6 Dedup expires before replay
+
+1. broker retains messages seven days.
+2. dedup records expire after one day.
+3. delayed redelivery executes again.
+
+**Prevention:** align retention horizons.
+
+### 13.7 Backup restore repeats external effect
+
+1. application database restores to yesterday.
+2. provider still contains today's successful charge.
+3. restored local dedup state lacks it.
+4. workflow replays and charges again.
+
+**Prevention:** provider query/reconciliation and DR-consistent outcome state.
+
+### 13.8 Cross-tenant response leak
+
+1. cache key is caller-provided key only.
+2. tenant B guesses tenant A's key.
+3. server returns A's stored result before authorization.
+
+**Prevention:** internal tenant/client scope and authorization-first replay.
+
+---
+
+## 14. Observability and Repair
+
+Track:
+
+- logical operations and attempts;
+- duplicate/replay rate;
+- key-parameter conflicts;
+- time in `IN_PROGRESS` and `UNKNOWN`;
+- reclaim/fencing events;
+- terminal outcome and response-replay rate;
+- dedup lookup/write latency and saturation;
+- storage growth/retention cleanup;
+- external reconciliation backlog and age;
+- expired-key repeats;
+- cross-tenant/auth rejection;
+- manual repair count.
+
+Use operation key/digest in traces/logs under controlled cardinality and privacy rules, not metric labels.
+
+Repair operations:
+
+- query by internal key/business entity/external ID;
+- attach provider proof;
+- transition `UNKNOWN` to verified terminal outcome;
+- reclaim abandoned work with new epoch;
+- issue a genuinely new operation key linked to prior one;
+- quarantine inconsistent records.
+
+Never delete a dedup row simply to “retry.” That erases the safety boundary.
+
+---
+
+## 15. Verification
+
+1. **Property tests:** same key/input converges; different input conflicts.
+2. **Concurrency tests:** many simultaneous attempts produce one local effect.
+3. **Crash injection:** before/after ownership, effect, outcome, response, and ack.
+4. **Lease tests:** stale owner cannot commit after reclaim.
+5. **Canonicalization vectors:** identical semantics across languages/SDKs.
+6. **Retention tests:** replay near/beyond expiry and after backup restore.
+7. **External ambiguity tests:** commit-with-lost-response, delayed callback, status outage.
+8. **Message tests:** redelivery, republish with new broker ID, out-of-order event.
+9. **Multi-region tests:** partition, concurrent absence, failover, stale replica.
+10. **Security tests:** key guessing, cross-tenant reuse, changed principal, result leakage.
+11. **Schema tests:** replay old stored outcome to new client/API version.
+12. **Repair game day:** resolve a stuck/unknown high-value operation without manual database edits.
+
+Fault injection at commit boundaries is essential. A happy-path duplicate unit test does not exercise ambiguity.
+
+---
+
+## 16. Decision Framework
+
+| Operation | Preferred mechanism |
+|---|---|
+| Set resource to known state | natural idempotent transition + precondition |
+| Create client-addressable resource | stable resource ID / PUT |
+| Local database effect | unique operation identity in same transaction |
+| Broker consumer effect | transactional inbox + local mutation |
+| Publish after local commit | transactional outbox |
+| Remote idempotent API | stable key + request digest + status query |
+| Remote queryable but non-idempotent API | durable intent + reconciliation |
+| Remote irreversible, non-queryable API | redesign/mediate or supervised execution |
+
+Before accepting retries:
+
+1. What is one logical operation?
+2. Where is its stable key generated and retained?
+3. What tenant/client/operation/epoch scope makes it unique?
+4. Which fields bind its semantics?
+5. Where is the atomic effect boundary?
+6. What does a concurrent duplicate receive?
+7. How does abandoned `IN_PROGRESS` recover?
+8. How long can any retry, replay, callback, or restore repeat it?
+9. Is uniqueness global across every region that can execute?
+10. How is stored outcome access authorized?
+11. What happens when the dedup store is unavailable?
+12. How does an operator reconcile ambiguity?
+
+If these answers are absent, “the endpoint supports idempotency keys” is an interface decoration, not a guarantee.
+
+---
+
+## Primary References
+
+- [RFC 9110: HTTP Semantics, Idempotent Methods](https://www.rfc-editor.org/rfc/rfc9110#section-9.2.2)
+- [Amazon Builders' Library: Making Retries Safe with Idempotent APIs](https://aws.amazon.com/builders-library/making-retries-safe-with-idempotent-APIs/)
+- [Stripe API: Idempotent Requests](https://docs.stripe.com/api/idempotent_requests)
+- [PostgreSQL: Constraints](https://www.postgresql.org/docs/current/ddl-constraints.html)
+- [Kleppmann: Designing Data-Intensive Applications, Transactions and Distributed Systems](https://dataintensive.net/)
+
+---
+
+## Related Chapters
+
+- [Delivery Guarantees and Effect Boundaries](../05-messaging/04-delivery-guarantees.md)
+- [Transactional Outbox, Inbox, and CDC Publication](../05-messaging/07-outbox-pattern.md)
+- [Effect Commit Protocols for Workflows](../18-workflow-job-systems/06-retry-idempotency-compensation.md)
+- [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md)
+- [Distributed Locks](./09-distributed-locks.md)

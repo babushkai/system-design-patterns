@@ -1,157 +1,432 @@
 # Workflow Observability and Replay
 
-## TL;DR
+## Operational Questions and Scope
 
-Service observability was built for a world of short-lived, stateless calls: a request arrives, work happens, a response leaves, and the only durable record is whatever aggregate metrics and traces you sampled along the way. A workflow breaks every assumption in that model. It is a long-lived, stateful entity that can run for hours or days, retry the same step a dozen times, sleep durably between actions, and wait indefinitely on an external signal. Observing it well means answering a fundamentally different question — not "what is the error rate?" but "where is *this specific execution* right now, what has it already done, what is it waiting on, and why did attempt 4 of step 7 fail?" The substrate that makes this possible is the same append-only execution history that durable engines use for replay-based recovery: one artifact serves recovery, debugging, and audit at once. The discipline is to treat each execution as a first-class observable object, keep a per-execution view and an aggregate view side by side, and alert on stalled progress rather than only on errors.
+Workflow operations must answer questions that request telemetry cannot:
 
----
+- What authoritative facts exist for this one run?
+- What state can be derived from those facts, and how fresh is the view?
+- Can this history be reconstructed with a particular code version?
+- Does “replay” mean read-only reconstruction, re-executing unfinished work, or creating a new lineage?
+- What is the workflow waiting for, and is that wait expected?
+- Which operator changed it, under what authorization, and with what effect?
 
-## Why Request-Service Observability Doesn't Transfer
+History-derived observability covers visibility projections, replay/debug/snapshot/reset/fork semantics, stuck-state diagnosis, lineage, history evolution, privacy, and repair commands. [Distributed Tracing](../11-observability/01-distributed-tracing.md), [Metrics and Monitoring](../11-observability/02-metrics-monitoring.md), [Production Logging](../11-observability/03-logging.md), and [Alerting](../11-observability/04-alerting.md) cover generic telemetry collection and delivery.
 
-The dominant observability stack — RED metrics, distributed traces, structured logs — was shaped by stateless request/response services, and its core assumption is that the unit of work is *ephemeral*. A request lives for milliseconds to seconds, holds its state in memory and on the stack, and then vanishes. When it fails, the interesting state is already gone; you reconstruct what happened from whatever you sampled. This works because requests are individually cheap and statistically interchangeable. You rarely care about request #4,832,109 specifically; you care about the p99 of the million requests around it.
+The central rule is:
 
-A workflow inverts all of this. The unit of work is a *durable, individually meaningful entity*. An order-fulfillment workflow, a user-onboarding saga, a nightly data DAG run — each one is a thing someone can name, owns money or obligations, and persists across process restarts, deploys, and outages. When it misbehaves, you do not want the p99; you want to open *that exact execution* and see its life story. The aggregate question "how many onboarding workflows failed today?" is real but secondary to the operational question "customer 88123 has been stuck in onboarding for three days — what is `onboarding-88123` waiting on?" Request observability has no good answer to the second question because requests are not addressable after they end. Workflow observability must make the answer a lookup.
-
-This difference forces a different mental model. In a service you observe *flows of traffic*; in a workflow system you observe *individual stateful executions and their populations*. The execution is not a transient event but a long-lived object with identity, current state, history, and pending obligations — closer to a row in a database than to a span in a trace. Everything else about workflow observability follows from taking that object seriously.
-
----
-
-## The Execution History Is the Observability Substrate
-
-Durable-execution engines (Temporal, AWS Step Functions, Azure Durable Functions, Cadence) and DAG orchestrators (Airflow, Dagster, Prefect) share a structural property: they record an append-only history of everything an execution does. Every step start, every attempt, every input, every output, every state transition, every timer set and fired, every signal received — appended in order, with sequence numbers, to a durable log. Temporal calls it the *event history*; Step Functions calls it *execution history* and exposes it event by event in the console and API; Airflow materializes it as task instance rows and logs keyed by DAG run. The names differ; the idea is identical.
-
-The crucial insight is that this is the *same* artifact that powers replay-based recovery, covered in [Durable Execution and Workflow Engines](./04-durable-execution-workflow-engines.md). A durable engine recovers a crashed workflow by re-reading its history and reconstructing in-memory state deterministically. That same history, read by a human or a UI instead of the engine, *is* the observability data. You do not bolt observability onto a durable workflow system as a separate concern — you get it for free from the mechanism that makes the system durable in the first place. One log serves three masters: the engine reads it to recover, the operator reads it to debug, and the auditor reads it to reconstruct what the system did and why.
-
-This is a profound economy compared to stateless services, where the recovery story (retry the request) and the observability story (sample some telemetry) are entirely separate and the observability data is lossy by design. A workflow's history is *complete and exact* by construction, because the engine's correctness depends on it being so. The price is that history can grow large — a workflow with thousands of activities accumulates thousands of events — and that the history must remain replayable, which constrains how it can be stored and queried. But the payoff is an observability substrate that no amount of after-the-fact instrumentation on a stateless service could match: a deterministic, gap-free record of one execution's entire life.
+> Identify the authoritative record for each runtime, then make every view declare how far it has derived that record. Do not promote a convenient search index, log stream, or mutable metadata row into an execution history it is not.
 
 ---
 
-## Replay as a Debugging Superpower
+## Not Every Workflow Product Has the Same History
 
-Because the engine can reconstruct an execution from its history, debugging a workflow is qualitatively different from debugging a request. When a stateless request fails, the failing state is gone the instant the response is sent; you are left inferring what happened from logs and hoping you logged the right thing. When a durable workflow fails, the failing state is *still there*, encoded in the history, and you can replay it deterministically to watch exactly what happened — which branch it took, what each activity returned, when each timer fired, why the code reached the line it did.
+“Workflow history” is not a portable storage contract.
 
-Replay has two distinct meanings, and conflating them is a common source of incidents. *Deterministic state-rebuild replay* is the engine reconstructing workflow state by re-executing workflow code against the recorded history; it produces no new side effects because every previously completed activity result is served from history rather than re-invoked. This is the replay that enables recovery, and it is also the replay that lets you reproduce a bug: in a durable engine you can take a problematic production history and replay it against a new build of your workflow code to see whether your fix changes the outcome — a regression test drawn from a real failure. The hard constraint is that workflow code must be deterministic; if it reads the wall clock, generates a random number, or iterates a map in nondeterministic order outside the engine's controlled APIs, replay diverges from history and the reconstruction breaks. Non-determinism is to replay what a leaked feature is to a model: invisible until it silently corrupts everything.
+| Runtime shape | Typical authoritative execution state | What replay can mean |
+|---|---|---|
+| Deterministic durable engine | Ordered event history sufficient to rebuild workflow state | Re-execute deterministic workflow code against recorded events without reissuing recorded effects |
+| State-machine service with retained history | Service-owned execution state plus a bounded execution-event history | Inspect transitions, redrive or start another execution according to product semantics; not necessarily code replay |
+| DAG orchestrator | Metadata database rows, task-attempt records, scheduler state, and external logs/artifacts | Clear/retry/rerun tasks or backfill a new run; usually not deterministic reconstruction from one immutable log |
+| Queue and workers | Job row, attempts, queue state, checkpoints, and effect receipts | Retry/resume from durable boundaries, not reconstruct an arbitrary historical process |
 
-*Operational replay* is the other meaning: deliberately re-running failed work or re-issuing side effects — restarting a failed DAG task, reprocessing a batch, re-driving a stuck activity. This is enormously useful and enormously dangerous, because re-issuing a side effect that already partially succeeded duplicates it. Operational replay is safe only when the underlying steps are idempotent, which is exactly why observability, retry, and idempotency are inseparable concerns — see [Retry, Idempotency, and Compensation](./06-retry-idempotency-compensation.md). A "replay" button without idempotency guarantees and an audit trail is not an observability feature; it is an incident generator with a friendly label.
+Temporal’s architecture explicitly treats a workflow execution history as sufficient to recover mutable execution state. AWS Step Functions Standard records execution details and exposes execution history for a bounded retention period, while Express does not record execution history in Step Functions and relies on configured CloudWatch Logs for its console details. Airflow, Dagster, and Prefect expose rich run/task metadata and logs, but that does not make them interchangeable with a deterministic event-history engine.
 
----
+Write a **history profile** for every workflow type:
 
-## The Two Views Every Workflow System Needs
+1. Which store is authoritative for current and terminal state?
+2. Is there an ordered, complete event record? What omissions are allowed?
+3. How long is it retained, and can it be exported before expiry?
+4. Does reconstruction require a specific definition or worker build?
+5. Which fields are mutable metadata, derived visibility, telemetry, or external artifacts?
+6. Which repair operations change the same run, and which create a successor?
 
-A workflow observability system is incomplete unless it offers two views, because each hides precisely what the other reveals.
-
-The **per-execution view** is the timeline or graph of a single run: the ordered sequence of steps and attempts, the current state, the input and output of each completed step, and — most importantly — what the execution is *waiting on* right now. This is the view an operator opens when one named workflow is stuck or wrong. Temporal's Web UI renders the event history as a navigable timeline; Step Functions draws the state machine as a visual graph with each state colored by status and a per-state event log; Airflow's Grid and Graph views show every task instance of a DAG run, color-coded, drillable into logs. The defining property of a good per-execution view is that it answers "what is happening with *this* execution" without forcing the operator to correlate logs across five services by hand. The history already correlates them; the UI just has to show it.
-
-The **aggregate view** is the population-level picture: success and failure rates by workflow type, latency distributions, backlog depth, retry rates, the age of the oldest running execution, the count of executions stuck in each state. This is the view that tells you a *class* of workflows is degrading — that onboarding success dropped from 99% to 94% after this morning's deploy, or that the payment-charge activity's retry rate tripled. No per-execution view can show this; you would have to open ten thousand timelines to notice a 5-point drop in success rate.
-
-The trap is building only one. A system with only aggregate dashboards can tell you 6% of workflows are failing but cannot tell you *which* ones or *why* any specific one is stuck — the operator is blind at exactly the moment a customer is on the phone. A system with only per-execution timelines lets you debug any single run beautifully but cannot tell you that a systemic regression is underway until enough individual complaints accumulate. Both views read from the same history; they differ only in whether they aggregate across executions or drill into one. A mature system makes moving between them a single click: see the failure spike in the aggregate view, filter to the affected executions, open one, read its timeline.
-
----
-
-## Metrics That Are Specific to Workflows
-
-Generic service metrics — request rate, error rate, duration — apply to a workflow system's API surface but miss everything that makes workflows distinctive. The metrics that actually matter are the ones that exploit the stateful, multi-attempt, long-lived nature of the work.
-
-The most important and most frequently omitted distinction is **queue wait versus execution time**. A workflow step that took ten minutes to finish might have *executed* for ten seconds and *waited in a queue* for nine minutes and fifty seconds because no worker was free. These are opposite problems with opposite fixes — the first wants faster code, the second wants more workers or better prioritization (see [Priority, Fairness, and Backpressure](./07-priority-fairness-backpressure.md)) — and a single "step duration" metric that fuses them tells you nothing. Measuring schedule-to-start latency separately from start-to-close latency is the single highest-value workflow-specific instrumentation.
-
-**Attempt counts and retry rates** turn invisible struggle into a signal. A step that eventually succeeds on attempt 6 looks identical, in a success-rate metric, to one that succeeded on attempt 1, but it is consuming six times the resources and signaling an unhealthy dependency. A rising retry histogram is an early warning that precedes outright failure. **Age of the oldest non-terminal execution** is the canary for stuck work: in a healthy system it stays bounded; when it grows without limit, something is wedged. **Critical-path duration** matters for DAGs, where total runtime is set by the longest dependent chain, not the slowest individual task — optimizing an off-critical-path step changes nothing. For data DAGs, **dataset freshness and SLA-miss rate** are the metrics the business actually feels: not "did the DAG run" but "is the table that feeds the morning dashboard up to date by 6 a.m.?" And **backlog depth** — runnable work waiting versus capacity to do it — is the leading indicator of whether the system is keeping up or falling behind.
-
-| Metric | What a service equivalent misses |
-|---|---|
-| Schedule-to-start vs start-to-close | Conflates "slow because it waited" with "slow because it ran" |
-| Attempt count / retry rate per step | Eventual success hides expensive, unhealthy struggle |
-| Age of oldest running execution | Aggregate latency stays fine while one execution is wedged forever |
-| Critical-path duration (DAGs) | Total runtime is set by the longest chain, not the mean task |
-| Dataset freshness / SLA-miss | "Job succeeded" says nothing about whether the data is on time |
+Without that profile, an operator may mistake missing logs for missing execution, or stale search results for authoritative state.
 
 ---
 
-## The Stuck-Workflow Detection Problem
+## Canonical Record and Derived Views
 
-The signature failure of a long-running stateful system is the execution that simply *stops making progress* without failing. It is not throwing errors — error-rate dashboards stay green — but it is also not advancing. It is waiting on an external signal that will never arrive, blocked on an event that an upstream system forgot to send, or expecting a timer that should have fired and did not. A stateless service cannot get stuck in this way; if its request blocks, the request times out and the failure surfaces. A workflow is *designed* to wait, often for legitimate days, so "waiting" and "wedged" look identical from the outside. Distinguishing them is the central detection problem.
+For an event-history engine, a canonical event envelope can contain:
 
-The mechanisms that catch it all rely on the per-execution state being inspectable. **Per-step and per-workflow timeouts** convert silent waiting into an explicit failure event: a charge activity that has not completed in five minutes, or a workflow that has not reached a terminal state in its expected maximum duration, transitions to a timed-out state that alerting can see. **Maximum-duration alerts** catch the workflow-level version: an execution older than the 99th-percentile-plus-margin runtime for its type is, by definition, anomalous. **Last-meaningful-event inspection** is the diagnostic complement — surfacing, per stuck execution, what the most recent history event was, because the cure depends entirely on the cause. A workflow whose last event is "waiting for approval signal" needs the signal chased down; one whose last event is "timer set, fires in 2h" that is now overdue points at a timer-service fault; one that says it is runnable but has no corresponding queue task has a lost-wakeup bug. The taxonomy of stuck causes — never-arriving signal, missing event, unfired timer, no available workers, downstream outage, lost wakeup, non-determinism after a bad deploy — maps to genuinely different repair paths, so the observability system's job is not just to flag "stuck" but to expose enough of the execution's state to tell the causes apart.
+~~~text
+namespace_id, workflow_id, run_id
+event_sequence, event_id, event_type, event_schema_version
+command_id, activity_id, attempt_id
+causation_event_id, correlation_id, parent_run_id
+definition_version, worker_build_id
+recorded_at, observed_external_time
+actor_type, actor_id, authorization_context
+payload_ref, payload_digest, data_classification
+integrity_metadata
+~~~
 
----
+event_sequence orders facts inside one run. A wall-clock timestamp supports diagnosis but should not replace the sequence. causation_event_id answers “which fact caused this command?” correlation_id connects external interactions without pretending they share a transaction. Payload indirection keeps large or sensitive data outside broadly indexed structural history.
 
-## Correlation and Lineage to Downstream Traces
+An event-sourced engine should enforce:
 
-A workflow does not act in isolation; its activities call services, and those services have their own request traces. The observability question that spans the boundary is "this workflow's payment step was slow — was it the workflow engine, or the payment service it called?" Answering it requires stitching the workflow's per-step timeline to the distributed traces of the services its activities invoke.
+1. **A run has one append order.** Event IDs are unique and sequence numbers do not silently fork except through an explicit, represented branch model.
+2. **Execution state is derived from a history prefix.** A state transition that is absent from the authoritative prefix is not made true by a log line or index row.
+3. **Projection application is idempotent and monotonic per run.** Duplicate events do not duplicate counters or regress status.
+4. **Every derived view exposes a watermark.** “Running as of event 382, projected at 10:14:03” is honest; an unqualified “Running” may be stale.
+5. **Snapshots bind to one exact prefix.** Run ID, last event sequence, prefix digest, state schema, and compatible definition/build accompany the snapshot.
+6. **Read-only replay issues no external effects.** Recorded activity results, signals, timers, and side-effect markers are inputs, not invitations to call dependencies again.
+7. **Reset and fork preserve lineage.** They do not rewrite the evidence of the original run.
+8. **Operator commands are authorized, idempotent, version-checked, and audited.**
+9. **Redaction preserves structural meaning and provenance.** It may remove payload availability, but it must not silently invent a different execution.
 
-The technique is trace-context propagation, the lineage of Google's Dapper (2010) and now standardized by [OpenTelemetry](../11-observability/01-distributed-tracing.md). When a workflow activity calls a downstream service, it propagates a trace context — a trace ID and span ID — into that call, and records the same identifiers in its own event history. The downstream service's spans then carry the same trace ID, so a single query can assemble the workflow step and the service request it triggered into one causal picture. The wrinkle unique to workflows is *duration*: a distributed trace is conventionally a single short-lived tree, but a workflow may span days, far longer than any tracing backend keeps a trace open or any sampling window covers. The pragmatic pattern is therefore not one giant trace per workflow but *correlation by stable identifiers* — store the workflow ID, run ID, and per-activity trace IDs in the history, and emit one bounded trace per activity invocation linked back to the workflow by those IDs. The workflow timeline becomes the spine, and each activity's short-lived downstream trace hangs off the relevant event. This connects the long-lived stateful view to the short-lived request view without pretending a three-day workflow is one trace.
-
----
-
-## Auditability and Alerting on Long-Running Entities
-
-Because the execution history is a complete, ordered, durable record of everything an execution did and why, it doubles as an **audit trail**. For a workflow that moves money, provisions access, or makes a regulated decision, "what did the system do, in what order, on whose behalf, and what did it decide at each branch?" is answerable directly from history — including which operator actions (a manual retry, a forced signal, a cancellation) were taken and by whom, provided those interventions are themselves appended as history events rather than performed as out-of-band database edits. The heavy governance and compliance treatment lives elsewhere; the point here is that the same substrate that serves recovery and debugging also serves audit, so a system that takes its history seriously gets auditability nearly for free.
-
-**Alerting** on a long-running entity differs from alerting on a service, and missing the difference produces both blind spots and fatigue. A service alerts primarily on error rate and latency over a short window. A workflow's most important alert is on *stalled progress and SLA breach* — conditions that a request-style error-rate alert cannot express, because a stuck workflow is not erroring. The valuable alerts are state-aware: oldest runnable task age exceeding the SLO (not raw queue depth, which is noisy and lacks business meaning), a timer overdue beyond its scheduled fire time, a workflow exceeding its maximum expected duration, a compensation that itself failed (a far worse condition than a primary failure, because it means the system could neither finish nor cleanly undo), a dataset that missed its freshness SLA. Each of these alerts on *user or business impact*, which is the discipline that keeps a workflow alerting system from drowning operators. Alerting on every internal counter — every retry, every transient activity error that the engine will itself recover — trains operators to ignore the pager; alerting on "this customer's onboarding has been stuck for longer than our promise" keeps the signal worth waking up for. The general principles of good alerting carry over from [Alerting](../11-observability/04-alerting.md); what is workflow-specific is that the leading indicator of trouble is *absence of progress*, not presence of errors.
-
----
-
-## Failure Modes
-
-Workflow observability fails in recognizable ways, and naming them is most of preventing them.
-
-**The invisible stuck workflow** is the defining failure: an execution waits forever on a signal that will never come, while every error-rate dashboard stays green because nothing is technically failing. The defense is timeouts and maximum-duration alerts that convert silent waiting into a visible event, plus an "oldest non-terminal execution age" metric that climbs when work wedges.
-
-**History too large to inspect** afflicts long-lived or high-fan-out workflows whose event log grows to tens of thousands of events, at which point both the engine's replay and a human's reading slow to a crawl. The defenses are bounding workflow size (the *continue-as-new* pattern, which closes one history and starts a fresh one carrying forward only essential state) and storing large payloads by reference rather than inline, so the history records pointers and metadata, not megabytes.
-
-**Missing correlation to downstream traces** leaves operators unable to tell whether a slow step was the engine or the service it called, because no trace context was propagated and no identifiers were recorded in history. The defense is disciplined trace-context propagation and storing trace IDs per activity from the start, not after the first incident proves they were needed.
-
-**Aggregate metrics hiding one pathological execution** is the failure of having only the population view: a single workflow burning a thousand retries or wedged for a week is statistically invisible in a success-rate metric computed over millions. The defense is the per-execution view and outlier-oriented metrics — oldest age, max attempt count — that surface the individual rather than averaging it away.
-
-**Non-replayable history** is the quiet corruption: workflow code that used wall-clock time, randomness, or nondeterministic iteration produces a history that no longer deterministically reconstructs, so replay diverges and both recovery and replay-based debugging break. The defense is enforcing determinism in workflow code through the engine's controlled APIs and testing replay against recorded histories as part of CI.
+For a metadata-driven orchestrator, translate these invariants rather than inventing an append log. The metadata database may be authoritative, task logs may be partial, and the audit record may need a transactional outbox. A task status update and an external log line can disagree; document which wins.
 
 ---
 
-## Decision Framework
+## The History-to-Visibility Data Path
 
-The observability a system needs scales with where it sits on the durability axis, and over-building it for simple work is as wasteful as under-building it for complex work.
+Keep the write path for execution authority narrow:
 
-For **fire-and-forget background jobs** (see [Background Jobs and Worker Pools](./02-background-jobs-worker-pools.md)), the unit of work is short and individually disposable, so request-style observability is mostly sufficient: success/failure counts, queue depth, processing latency, and a dead-letter queue for what fails. There is little per-execution state worth inspecting because a failed job is simply retried or dropped. The one workflow-specific metric worth adding even here is queue wait versus execution time, because a backed-up worker pool is the most common cause of "slow jobs."
+~~~text
+worker or scheduler command
+          |
+          v
+authoritative execution transition
+          |
+          +--> ordered history or metadata transaction
+          |
+          +--> projection feed / transactional outbox
+                    |
+                    +--> current-state visibility store
+                    +--> search index
+                    +--> aggregate metrics
+                    +--> audit export
+                    +--> notification rules
+~~~
 
-For **scheduled and DAG workloads** (see [DAG Orchestration](./05-dag-orchestration.md)), executions become individually meaningful — a specific nightly run can fail in a way that matters — so a per-run view (Grid/Graph-style), critical-path timing, retry visibility, and dataset-freshness/SLA-miss metrics become necessary. The aggregate view tracks run success rates and backlog; the per-run view supports debugging a specific failed run.
+The visibility store answers common queries: open runs by tenant, workflows waiting on a signal, failed attempts by definition version, or runs whose deadline passed. It is deliberately denormalized and may lag. Store source sequence/watermark with each row and expose projection lag globally.
 
-For **durable, long-running workflows** (see [Durable Execution and Workflow Engines](./04-durable-execution-workflow-engines.md)), the full apparatus is justified: a complete per-execution event-history view, replay for deterministic debugging, stuck-workflow detection via timeouts and max-duration alerts, trace correlation to downstream services, compensation-failure alerting, and history-size management. The defining question to ask of any such system is the same one that separates a real workflow platform from a job queue with delusions: *can I open one named execution and see its entire life — what it did, what it is waiting on, and why its last attempt failed — without reading logs from five services by hand?* If the answer is no, the system is observable in aggregate but blind in the particular, and the particular is where workflows live.
+The UI should read the authoritative run when an operator opens a critical execution, or clearly label a projection-only view. Never use a search-index result alone to decide that a run is absent, terminal, or safe to retry. If the projector is broken:
+
+- execution continues on the authoritative path;
+- search and dashboards show a degraded/freshness warning;
+- projector consumers resume from a durable offset;
+- the index is rebuilt from retained source facts;
+- no “repair” writes flow backward from the index into execution authority.
+
+Projection state is disposable only if the complete source and deterministic projection code remain available. If the source retention is shorter than rebuild time, the index has quietly become a second authority; either extend retention, archive the source, or admit and design for that role.
 
 ---
 
-## Key Takeaways
+## Six Operations Commonly Called Replay
 
-1. Workflow observability answers a different question than service observability: not "what is the error rate?" but "where is this specific execution, what has it done, what is it waiting on, and why did this attempt fail?"
-2. A workflow is a long-lived stateful entity, not an ephemeral request; observe each execution as a first-class, addressable object, not just as a contributor to aggregate rates.
-3. The append-only execution history is the observability substrate — the same artifact that powers replay-based recovery also makes a workflow debuggable and auditable, so one log serves recovery, debugging, and audit.
-4. Replay is a debugging superpower: deterministic state-rebuild replay lets you reproduce a real failure against new code, but it requires deterministic workflow code, and operational replay requires idempotency or it duplicates side effects.
-5. Every workflow system needs both a per-execution view (one run's timeline and current wait state) and an aggregate view (rates, backlog, outliers); each hides what the other shows.
-6. The highest-value workflow-specific metric is queue wait versus execution time — slow-because-it-waited and slow-because-it-ran are opposite problems with opposite fixes.
-7. The signature failure is the invisible stuck workflow that waits forever without erroring; detect it with timeouts, max-duration alerts, oldest-age metrics, and last-meaningful-event inspection.
-8. Correlate workflow steps to downstream service traces via OpenTelemetry-style context propagation, but correlate long-lived workflows by stored identifiers rather than one impossibly long trace.
-9. Alert on stalled progress and SLA breach, not just error rate, and alert on business impact to avoid drowning operators in recoverable transient noise.
-10. Scale observability with the durability axis: RED-style metrics for background jobs, per-run views for DAGs, the full history/replay/stuck-detection apparatus for durable workflows.
+The word “replay” is unsafe in an operator interface unless it names the operation.
+
+### 1. State reconstruction
+
+A deterministic engine re-executes workflow code against recorded history to rebuild in-memory state. Completed activity results, timer firings, signals, version markers, and recorded nondeterministic values come from history. Reconstruction must not call an API, send a message, charge a card, or read the current wall clock.
+
+It reconstructs state represented by the engine at event boundaries. It is **not** arbitrary time-travel debugging: unrecorded heap values, external database contents at that time, unsampled network traffic, and deleted payloads are unavailable. Preserve the raw stored history even when a new build is replay-incompatible; incompatibility is evidence about the code, not permission to discard the record.
+
+### 2. Offline debug replay
+
+Export an immutable production history and run it in an isolated tool against the original and candidate workflow builds. Block network and production credentials. Capture the first divergent command, event sequence, code version, and payload decoder. This is a compatibility test and a bug reproducer, not a live state change.
+
+### 3. Redrive or resume
+
+Redrive schedules incomplete or failed logical work again. It may append a command to the same execution, mutate orchestrator metadata through a supported API, or create a new attempt. External effects can happen. The operation therefore requires the effect guarantees in [Retry, Idempotency, and Compensation](./06-retry-idempotency-compensation.md) and the attempt authority in [Leases, Heartbeats, and Recovery](./08-leases-heartbeats-recovery.md).
+
+### 4. Reset
+
+A reset chooses a supported prior boundary and creates a new execution branch or successor whose initial state derives from that boundary. Later events in the original remain evidence; they are not erased. The reset plan must state what happens to activities and effects after the boundary:
+
+- reuse a recorded result;
+- schedule the logical effect again under the same idempotency identity;
+- schedule a deliberately new effect under a new identity;
+- require reconciliation before proceeding.
+
+Using the old effect ID indiscriminately can suppress work that should happen in the reset. Generating all-new IDs indiscriminately can duplicate money movement or notifications.
+
+### 5. Fork
+
+A fork creates an isolated what-if execution with a new run identity, parent pointer, source event sequence, data classification, and environment. Default-deny every production effect. A fork is useful for debugging, migration rehearsal, and simulation; it must never masquerade as continuation of the production run.
+
+### 6. Snapshot plus suffix
+
+A snapshot is a derived cache of execution state at a precise history prefix. Recovery validates the binding and replays only the suffix. This is related to the broader problem of recording consistent distributed state studied by Chandy and Lamport, but a workflow-engine snapshot is not automatically a Chandy–Lamport global snapshot: it covers only the state and in-flight facts the engine’s protocol defines.
+
+If the snapshot digest, schema, run ID, definition compatibility, or prefix is wrong, discard it and rebuild from the retained history. Never “make it fit” by skipping unknown suffix events.
 
 ---
 
-## References
+## State-Aware Stuck Detection
 
-1. [Dapper, a Large-Scale Distributed Systems Tracing Infrastructure](https://research.google/pubs/pub36356/) — Sigelman et al., Google, 2010
-2. [Temporal Documentation: Event History and the Web UI](https://docs.temporal.io/workflows#event-history)
-3. [AWS Step Functions: Viewing and Debugging Executions](https://docs.aws.amazon.com/step-functions/latest/dg/concepts-state-machine-data.html)
-4. [Apache Airflow: Grid and Graph Views](https://airflow.apache.org/docs/apache-airflow/stable/ui.html)
-5. [OpenTelemetry: Traces and Context Propagation](https://opentelemetry.io/docs/concepts/signals/traces/)
-6. [Dagster: Observability and Asset-Based Orchestration](https://docs.dagster.io/concepts/ops-jobs-graphs/op-events)
-7. [Azure Durable Functions: Diagnostics and Replay](https://learn.microsoft.com/en-us/azure/azure-functions/durable/durable-functions-diagnostics)
+Age alone does not identify a stuck workflow. A three-day approval wait may be correct; a runnable task that has not been dispatched for three minutes may be an incident. Detection needs the expected state machine plus liveness, progress, and deadline evidence.
+
+| Observed state | Required evidence | Possible diagnosis | Safe first action |
+|---|---|---|---|
+| Waiting on timer | fire time, timer registration, timer-queue watermark | Healthy before due; overdue timer or lost wake-up after due | Reconcile timer index against authority |
+| Waiting on signal | signal contract, optional business deadline, correlation identity | Healthy indefinite wait, missing callback, or mismatched correlation | Inspect source and dedup record; do not fabricate signal |
+| Runnable, not scheduled | runnable transition sequence, queue/outbox offset, scheduler watermark | Lost enqueue, projector lag, admission block | Reconcile runnable fact to dispatch path |
+| Activity scheduled, no attempt | task-queue publication, worker poll/capacity, tenant admission | Queue outage, no compatible worker, starvation | Restore capacity or route; preserve original schedule fact |
+| Attempt live, no durable progress | accepted heartbeat, state-specific progress marker and deadline | Deadlock, dependency hang, or legitimate non-incremental phase | Apply phase-specific timeout/cancel policy |
+| Attempt lease expired | grant epoch, last accepted renewal, reclaim backlog | Worker loss or authority overload | Run idempotent reclaim; protect renewals from storm |
+| Compensation pending/failed | original effect receipt, compensation identity, retry policy | Unresolved business obligation | Escalate with effect evidence |
+| Projection says running, authority terminal | source sequence versus projection watermark | Projection lag or poison event | Repair/rebuild projection only |
+
+Define a stuck predicate per state:
+
+~~~text
+state is expected to make progress
+AND authority has not observed durable progress since state-specific threshold
+AND no documented wait condition explains the silence
+AND relevant deadline or recovery objective has been breached
+~~~
+
+Population percentiles help set expectations but are not correctness thresholds. A global “older than p99 equals stuck” alert mixes valid long waits with failures. Attach business deadline, state, tenant impact, and last authoritative event to every stuck alert.
+
+---
+
+## Lineage and Causality
+
+Stable lineage turns repair into an explainable graph:
+
+~~~text
+schedule or API request
+        |
+        v
+workflow run ----continue-as-new----> successor run
+     |  \
+     |   +----reset at event 214----> reset branch
+     |
+     +----child workflow------------> child run
+     |
+     +----activity------------------> attempts
+     |
+     +----fork at event 187---------> isolated debug run
+~~~
+
+Record typed edges: parent/child, continue-as-new, reset-from, fork-from, retried-by, compensates, caused-by-signal, consumes-artifact, and produces-artifact. Include source event sequence and namespace. Enforce acyclic lineage where the relationship demands it, while allowing correlation links that are not parentage.
+
+Workflow ID, run ID, activity ID, attempt ID, command ID, logical effect ID, trace ID, and business key solve different identity problems. Do not overload one field. In particular, a retry shares a logical activity/effect identity but receives a new attempt identity; a reset or fork receives a new run identity but retains explicit ancestry.
+
+The [W3C PROV model](https://www.w3.org/TR/prov-o/) provides portable vocabulary around entities, activities, agents, and derivation. Use it as an interchange model where cross-system provenance matters, not as a requirement to store RDF on the execution write path.
+
+---
+
+## Audit, Integrity, Privacy, and Redaction
+
+Execution history is evidence only if access and mutation are controlled. For every operator or automated repair action, capture:
+
+- authenticated actor and actor type;
+- authorization decision and policy version;
+- command, normalized parameters, and idempotency key;
+- expected source version or event sequence;
+- reason, incident/change ticket, and approval when required;
+- before/after run identity and lineage;
+- observed outcome and any external references.
+
+Protect integrity with append-only permissions, restricted service identities, backups, and independently monitored exports. Hash chaining, signed checkpoints, Merkle structures, or WORM storage can make tampering detectable, but only if roots/keys are protected separately and verification is exercised. Do not label an ordinary mutable table “tamper-proof.”
+
+Separate structural events from payloads:
+
+~~~text
+structural event: type, sequence, causation, actor class, payload digest/ref
+payload object: encrypted content, tenant key, classification, retention policy
+visibility fields: allowlisted, minimized, separately indexed
+~~~
+
+This permits payload deletion, field-level redaction, or cryptographic erasure while retaining that an event occurred. A redaction record should identify scope, authority, time, and prior digest. It must not silently renumber events or change causation.
+
+Privacy creates a real trade-off: deleting a payload may make replay, debugging, or legal proof incomplete. Classify fields at design time:
+
+- **control-critical:** required for future execution or replay; retain or transform compatibly;
+- **forensic:** useful for investigation but not execution; retain under a justified policy;
+- **visibility:** allowlisted search fields with bounded retention;
+- **secret/regulated:** tokenize, encrypt with scoped keys, minimize, or keep out of history.
+
+Enforce tenant isolation and purpose-based access in APIs and UIs. Audit payload reads as well as repair writes. Apply retention holds explicitly; a hidden backup that indefinitely restores “deleted” payloads defeats the policy.
+
+---
+
+## Capacity, Cardinality, and Retention
+
+Let:
+
+- $R$ = mean authoritative events per second across retained runs;
+- $B$ = mean encoded bytes per event including payload references but excluding index overhead;
+- $T$ = retention in seconds;
+- $r$ = physical replication/storage multiplier;
+- $C$ = projector processing capacity in events per second;
+- $L$ = projection backlog in events;
+- $S$ = snapshot interval in events.
+
+Raw retained history is approximately:
+
+$$
+H = R B T r
+$$
+
+Add separate budgets for indices, object payloads, backups, integrity metadata, and compaction overhead. Model burst rate and event fan-out per workflow type; one mean hides a runaway workflow that emits millions of tiny events.
+
+If arrivals remain $R$ and $C > R$, a projection backlog drains in:
+
+$$
+T_{projection\_drain} = \frac{L}{C-R}
+$$
+
+If $C \le R$, scaling consumers without fixing a poison event or hot partition does not restore freshness. Expose both event-count lag and time lag.
+
+With a valid snapshot every $S$ events, and assuming restart points are uniformly distributed between snapshots, the average suffix to replay is about:
+
+$$
+E[events_{suffix}] \approx \frac{S}{2}
+$$
+
+Snapshot creation, validation, storage, and invalidation cost may dominate when runs are short. Measure replay CPU and latency by history shape, not only event count.
+
+Keep unbounded identities out of metric labels. workflow_id, run_id, business key, exception text, and payload-derived values belong in an indexed store or exemplars, not time-series dimensions. Metrics use bounded workflow type, state, error class, queue, region, and tenant tier; links lead from an aggregate signal to filtered runs.
+
+Retention must cover the longest of operational recovery, replay compatibility, audit, dispute, and regulatory windows, or explicitly archive the evidence needed for each. Verify restore time: a cheap archive that takes days to hydrate may not satisfy the repair objective.
+
+---
+
+## History and Projection Evolution
+
+Treat recorded events as immutable protocol messages:
+
+1. Assign each event type an explicit schema version.
+2. Preserve raw bytes or a lossless canonical representation.
+3. Decode with deterministic, side-effect-free readers/upcasters.
+4. Fail closed on an unknown event needed for state; do not skip it and continue with plausible-looking corruption.
+5. Regression-test old histories against every supported workflow build and decoder.
+6. Retain the original build or a reproducible artifact manifest for the promised replay window.
+7. Version deterministic workflow branches with recorded markers or route histories to compatible builds.
+8. Bind snapshots to decoder and definition compatibility; invalidate them when either changes.
+9. Rebuild visibility under a versioned projection, compare it with the old projection, then cut over with watermarks.
+
+An upcaster that reads the current timezone database, feature flag, network service, or mutable lookup table is nondeterministic. Its output may change on the next replay. Make transformations pure and pin any reference data.
+
+When new code is incompatible, quarantine execution advancement, preserve history, and route to a compatible worker or a reviewed migration/reset plan. Never delete the “bad” history to make the dashboard green.
+
+---
+
+## Repair Commands as a Control Plane
+
+Offer typed commands rather than direct database access:
+
+| Command | Authority affected | Required guard |
+|---|---|---|
+| Signal/update | Live execution | expected run identity, signal ID, payload schema |
+| Cancel/terminate | Desired state or terminal state | current version, reason, effect/compensation policy |
+| Retry/redrive | Attempt or failed logical step | retry policy, stable effect identities, expected state |
+| Reset | New branch/successor from prior boundary | source event, compatibility and effect plan |
+| Fork | Isolated new run | namespace/environment isolation, effects disabled |
+| Reconcile timer/queue/effect | Derived obligation versus external fact | evidence source, idempotency, conditional transition |
+| Rebuild projection/reindex | Derived store only | source range, projection version, checksum/watermark |
+
+Each command supports dry-run planning, authenticated authorization, idempotency, expected history/version checks, reason, and outcome recording. In an event-history engine, represent the accepted command and result in history when the runtime’s protocol supports it. In a metadata orchestrator, commit the state change and an audit/outbox record atomically. Do not claim an append-only history where none exists.
+
+Projection repair never changes execution truth. Actual authoritative-history repair should be exceptional: quarantine the run, preserve original bytes, record provenance and approvals, create a derived repaired copy or explicitly supported branch, and test reconstruction before resuming.
+
+---
+
+## Specialized Failure Traces
+
+### A stale visibility row triggers duplicate repair
+
+The search index says RUNNING at event 82; the authoritative run completed at event 89. An operator retries from the index and duplicates work. The UI must show the watermark and re-read authority before issuing a version-checked command.
+
+### A snapshot belongs to another prefix
+
+A cache-key collision loads state from event 500 while the run’s history is at event 470. Replaying the “suffix” skips facts that never occurred in this run. Bind snapshot to namespace, run, exact prefix sequence/digest, schema, and build.
+
+### Debug replay calls production
+
+The replay tool imports an activity implementation with network credentials and sends an email. Reconstruction must substitute recorded results and run in a network-denied, credential-free sandbox; effecting redrive is a separate command.
+
+### Reset chooses the wrong effect identity
+
+A payment completed after the reset boundary. A new ID charges again; blindly reusing the old ID may also suppress a deliberately new order. Require an effect-by-effect reset plan and reconcile ambiguous outcomes before starting the branch.
+
+### An upcaster changes with current configuration
+
+History decoded yesterday but diverges after a feature flag changes. Pin pure conversion rules by event version and test the stored bytes; configuration-dependent transformation is not history evolution.
+
+### A direct row edit erases causality
+
+An operator changes FAILED to RUNNING in the metadata database. No task is enqueued, no actor is recorded, and later reconciliation cannot explain the state. Supported repair must update authority, dispatch obligation, and audit atomically.
+
+### Redaction removes control data
+
+A deletion job removes a signal field needed to select the deterministic branch. Future reconstruction fails. Classify control-critical payload before collection and use compatible tokenization or a policy that terminates/migrates the execution before deletion.
+
+### Run IDs explode metric storage
+
+Publishing one time series per run creates millions of labels, slows queries, and raises cost while still retaining incomplete history. Keep bounded aggregates in metrics and resolve individual runs through visibility/history.
+
+### Express logs are mistaken for Standard history
+
+CloudWatch logging is disabled or filtered for an Express state machine, and the console cannot reconstruct full details. The team assumes the execution never ran. The history profile must record that Express detail depends on configured logs and retention, unlike Standard execution history.
+
+---
+
+## Verification Strategy
+
+Test the data and control planes independently:
+
+1. Reconstruct from full history and from every supported snapshot plus suffix; compare canonical state and pending commands.
+2. Crash projectors before/after checkpointing offsets, duplicate and reorder deliveries where the feed permits, and rebuild an empty index.
+3. Compare old and candidate workflow builds against a corpus of production histories; retain the first divergent event and command.
+4. Run offline replay and fork in a network-denied environment and prove no production credential or effect path exists.
+5. Race duplicate repair commands and stale expected versions; exactly one authorized transition should win.
+6. Inject projection lag and verify UIs, alerts, and APIs expose watermarks and re-read authority before mutation.
+7. Exercise every stuck predicate with healthy long waits, overdue timers, lost dispatch, live/no-progress attempts, and delayed projections.
+8. Reset on each effect boundary and verify reuse/new/reconcile policy per logical effect.
+9. Evolve event decoders, definition versions, and snapshots across the full supported compatibility matrix.
+10. Corrupt, truncate, reorder, or substitute history/payload objects; integrity checks should fail closed and preserve evidence.
+11. Test cross-tenant reads, payload redaction, key destruction, retention holds, archive restore, and audit of both reads and writes.
+12. Rebuild visibility at production volume and prove capacity exceeds arrival while meeting the freshness objective.
+
+Verification should produce artifacts: replay-compatibility reports, projection checksums and watermarks, lineage graphs for reset/fork tests, effect-free sandbox evidence, and restore timing.
+
+---
+
+## Design Decisions to Record
+
+Before production, document:
+
+- the history profile and authoritative store for each workflow runtime;
+- visibility freshness objective, watermark semantics, and rebuild source;
+- supported meanings of replay and the permissions for each;
+- snapshot interval, binding, compatibility, and fallback;
+- state-specific stuck predicates and owners;
+- lineage identities and effect-ID policy for retry, reset, and fork;
+- event, definition, and projection evolution windows;
+- payload classes, access controls, retention, deletion, and audit-integrity mechanism;
+- capacity assumptions for history, payloads, projection, archive, and restore;
+- the typed repair catalog and the exceptional history-repair procedure.
+
+A workflow platform is operationally mature when an operator can explain one run from authoritative evidence, distinguish stale views from truth, reproduce compatible state without effects, and change execution only through a guarded, attributable command.
+
+---
+
+## Primary Sources
+
+1. [Temporal History Service architecture](https://github.com/temporalio/temporal/blob/main/docs/architecture/history-service.md): official description of event history, mutable state, tasks, and reset branching.
+2. [Temporal Python SDK: Workflow Replay](https://github.com/temporalio/sdk-python#workflow-replay): official replay API and determinism guidance.
+3. [AWS Step Functions execution details](https://docs.aws.amazon.com/step-functions/latest/dg/concepts-view-execution-details.html) and [GetExecutionHistory API](https://docs.aws.amazon.com/step-functions/latest/apireference/API_GetExecutionHistory.html): official Standard/Express history and retention distinctions.
+4. [Distributed Snapshots: Determining Global States of Distributed Systems](https://doi.org/10.1145/214451.214456): Chandy and Lamport, ACM TOCS 1985.
+5. [PROV-O: The PROV Ontology](https://www.w3.org/TR/prov-o/): W3C Recommendation for entities, activities, agents, and provenance relationships.
+
+---
 
 ## Related Patterns
 
 - [Durable Execution and Workflow Engines](./04-durable-execution-workflow-engines.md)
 - [DAG Orchestration](./05-dag-orchestration.md)
 - [Retry, Idempotency, and Compensation](./06-retry-idempotency-compensation.md)
-- [Priority, Fairness, and Backpressure](./07-priority-fairness-backpressure.md)
+- [Leases, Heartbeats, and Recovery](./08-leases-heartbeats-recovery.md)
 - [Background Jobs and Worker Pools](./02-background-jobs-worker-pools.md)
-- [Distributed Tracing](../11-observability/01-distributed-tracing.md)
-- [Alerting](../11-observability/04-alerting.md)
-- [Logging](../11-observability/03-logging.md)
-- [Incident Management and Postmortems](../11-observability/07-incident-management.md)
+- [Distributed Tracing and Telemetry Pipelines](../11-observability/01-distributed-tracing.md)
+- [Metrics and Monitoring](../11-observability/02-metrics-monitoring.md)
+- [Production Logging Architecture](../11-observability/03-logging.md)
+- [Alert Evaluation and Notification](../11-observability/04-alerting.md)
+- [Incident Command and Learning](../11-observability/07-incident-management.md)
 - [Disaster Recovery](../15-deployment/05-disaster-recovery.md)

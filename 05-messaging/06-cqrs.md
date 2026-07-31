@@ -1,677 +1,258 @@
-# CQRS (Command Query Responsibility Segregation)
+# CQRS and Projection Architecture
 
-## TL;DR
+Command Query Responsibility Segregation separates the model that validates writes from models built for specific reads. The write side owns invariants and produces committed changes; projection pipelines maintain replaceable read models with explicit freshness, publication, and rebuild state. CQRS is useful only when that separation buys measurable query, scale, or ownership advantages.
 
-CQRS separates read and write operations into different models. Commands modify state; Queries read state. Each model can be optimized for its purpose. Write model ensures invariants; Read model optimized for queries. Often paired with event sourcing. Benefits: independent scaling, optimized models. Costs: complexity, eventual consistency.
+A CQRS projection needs an explicit read-model lifecycle covering query ownership, rebuild, atomic application, publication, freshness, and read-after-write behavior. [Event Sourcing](05-event-sourcing.md) owns authoritative domain logs; CQRS does not require event sourcing. [Outbox and Inbox](07-outbox-pattern.md) owns the publication and dedup atomicity patterns used here.
 
----
+## Workload and contract
 
-## The Problem
+Commands express intent and return command outcomes:
 
-### Traditional Architecture
-
-```mermaid
-graph TD
-    subgraph Single Model
-        DO["Domain Objects<br/>(used for reads AND writes)"]
-        DB[("Database<br/>(same tables for both)")]
-        DO --> DB
-    end
+```text
+SubmitCommand(command_id, aggregate_id, expected_version, payload)
+  -> accepted/rejected, committed_source_version, result
 ```
 
-```
-Problems:
-  - Read and write patterns differ
-  - Single model compromises both
-  - Scaling challenges
-```
+Queries read a named projection:
 
-### Read vs Write Characteristics
-
-```
-Writes:
-  - Low volume (relative)
-  - Complex validation
-  - Transactional
-  - Strong consistency needed
-
-Reads:
-  - High volume (typically 10-100x writes)
-  - No validation needed
-  - Often denormalized
-  - Eventual consistency often OK
+```text
+Query(read_model, query, consistency_token?, deadline)
+  -> rows, projection_generation, applied_source_position, stale/incomplete
 ```
 
----
-
-## CQRS Architecture
-
-### Basic Structure
-
-```mermaid
-graph TD
-    subgraph Application
-        subgraph Command Side
-            C[Commands] --> CH[Command Handlers]
-            CH --> WM["Write Model<br/>(Domain)"]
-            WM --> WDB[("Write DB")]
-        end
-        subgraph Query Side
-            Q[Queries] --> QH[Query Handlers]
-            QH --> RM["Read Model<br/>(Projections)"]
-            RM --> RDB[("Read DB")]
-        end
-        WM -.-> RM
-    end
-```
-
-### Command Side
-
-```python
-# Command: Intent to change state
-@dataclass
-class CreateOrderCommand:
-    customer_id: str
-    items: List[OrderItem]
-
-# Handler: Validates and executes
-class CreateOrderHandler:
-    def handle(self, cmd: CreateOrderCommand):
-        # Load domain object
-        customer = self.customer_repo.get(cmd.customer_id)
-        
-        # Business logic and validation
-        order = customer.create_order(cmd.items)
-        
-        # Persist
-        self.order_repo.save(order)
-        
-        # Publish event for read side
-        self.events.publish(OrderCreated(order))
-```
-
-### Query Side
-
-```python
-# Query: Request for data
-@dataclass
-class GetOrderSummaryQuery:
-    order_id: str
-
-# Handler: Retrieves from read model
-class GetOrderSummaryHandler:
-    def handle(self, query: GetOrderSummaryQuery):
-        # Simple read from optimized store
-        return self.read_db.get(
-            f"order_summary:{query.order_id}"
-        )
-```
-
----
-
-## Synchronization
-
-### Event-Based Sync
-
-```mermaid
-graph LR
-    WS[Write Side] -->|Save order| WDB[("Write DB")]
-    WDB -->|OrderCreated| EB[Event Bus]
-    EB -.-> P[Projector]
-    P --> RDB[("Read DB")]
-```
-
-### Projector Implementation
-
-```python
-class OrderProjector:
-    def handle(self, event):
-        if isinstance(event, OrderCreated):
-            summary = OrderSummary(
-                id=event.order_id,
-                customer_name=event.customer_name,
-                total=event.total,
-                status="created"
-            )
-            self.read_db.save(f"order_summary:{event.order_id}", summary)
-        
-        elif isinstance(event, OrderShipped):
-            summary = self.read_db.get(f"order_summary:{event.order_id}")
-            summary.status = "shipped"
-            summary.shipped_at = event.timestamp
-            self.read_db.save(f"order_summary:{event.order_id}", summary)
-```
-
----
+Define per read model:
 
-## Read Model Optimization
+- owned query shapes, filters, sort, pagination, aggregation, and authorization;
+- authoritative source and event/change contract;
+- freshness objective in position/version and elapsed time;
+- read-your-writes policy using source/projection tokens;
+- projection idempotency and ordering requirements;
+- schema and generation lifecycle;
+- rebuild source, duration, storage reserve, and cutover/rollback;
+- behavior under missing events, poison data, and source retention gaps;
+- reconciliation proof and repair authority.
 
-### Denormalization
-
-```
-Write model (normalized):
-  Orders:     id, customer_id, total
-  Customers:  id, name, email
-  Items:      id, order_id, product_id, qty
+Do not expose a “read database” as a shared data dump. A projection service owns a contract for one bounded set of queries; downstream teams do not write its tables or depend on undocumented columns.
 
-Read model (denormalized):
-  OrderSummary:
-    order_id
-    customer_name      ← Copied from Customers
-    customer_email     ← Copied from Customers
-    total
-    item_count         ← Computed
-    product_names[]    ← Copied from Products
-```
-
-### Multiple Read Models
-
-```mermaid
-graph TD
-    E["OrderCreated, ItemAdded,<br/>OrderShipped events"] --> OSP[OrderSummaryProjection<br/>for order page]
-    E --> COP[CustomerOrdersProjection<br/>for customer page]
-    E --> SD[ShippingDashboard<br/>for logistics]
-    E --> AP[AnalyticsProjection<br/>for reports]
-```
-
-### Read Store Options
-
-```
-Different stores for different needs:
-
-Order summary:       Redis (fast key-value)
-Full-text search:    Elasticsearch
-Analytics:           ClickHouse (columnar)
-Customer dashboard:  PostgreSQL (relational)
-
-Each optimized for its use case
-```
-
----
-
-## Eventual Consistency
-
-### The Trade-off
-
-```
-Command completes at T=0
-Event processed at T=100ms → Read model updated
-Query at T=50ms: Sees old data! "Write succeeded but I don't see my change"
-```
-
-### Handling Strategies
-
-**Optimistic UI:** Update the client immediately on submit, before the server confirms. The UI already shows the expected state while the projection catches up.
-
-**Read from Write Model:** For consistency-sensitive reads, fall back to the write database. See "Consistency Between Read and Write Models" below for detailed patterns (read-your-writes, versioned reads, synchronous projections).
-
----
-
-## CQRS + Event Sourcing
-
-### Natural Fit
-
-```
-Event Sourcing:
-  Events are source of truth
-
-CQRS:
-  Write: Append events
-  Read: Project events to read models
-```
-
-```mermaid
-graph LR
-    CMD[Commands] --> ES[("Event Store<br/>(write side)")]
-    ES --> PROJ["Projections<br/>(read side)"]
-```
-
-### Implementation
-
-```python
-# Write side: Event sourcing
-def handle_withdraw(cmd):
-    account = event_store.load(cmd.account_id)
-    
-    # Validate using events
-    if account.balance < cmd.amount:
-        raise InsufficientFunds()
-    
-    # Append event
-    event_store.append(
-        cmd.account_id,
-        MoneyWithdrawn(amount=cmd.amount)
-    )
-
-# Read side: Projection
-class BalanceProjection:
-    def project(self, event):
-        if isinstance(event, MoneyWithdrawn):
-            current = redis.get(f"balance:{event.account_id}")
-            redis.set(f"balance:{event.account_id}", current - event.amount)
-```
-
----
-
-## Without Event Sourcing
-
-### Simpler CQRS
-
-```python
-# Write side: Traditional ORM
-def create_order(cmd):
-    order = Order(
-        customer_id=cmd.customer_id,
-        items=cmd.items
-    )
-    db.session.add(order)
-    db.session.commit()
-    
-    # Publish event for read side
-    publish(OrderCreated(order.id, order.total))
-
-# Read side: Separate database
-@event_handler(OrderCreated)
-def project_order(event):
-    summary = {
-        "id": event.order_id,
-        "total": event.total,
-        "status": "created"
-    }
-    read_db.orders.insert(summary)
-```
-
-### Shared Database
-
-```
-Simplest CQRS: Same database, different access patterns
-
-Write:
-  Use ORM, complex objects
-  Transactional writes
-
-Read:
-  Raw SQL or simple queries
-  Read replicas
-  Cached results
-```
-
----
-
-## When to Use CQRS
-
-### Good Fit
-
-```
-✓ High read-to-write ratio
-✓ Complex domain with business rules
-✓ Need for different read models
-✓ Performance requirements differ for reads vs writes
-✓ Team comfortable with complexity
-```
-
-### Poor Fit
-
-```
-✗ Simple CRUD applications
-✗ Low traffic systems
-✗ Need for immediate consistency
-✗ Small team, tight deadline
-✗ Reads and writes have same patterns
-```
-
-### Evolution Path
-
-```
-Start simple:
-  1. Single model, single database
-  
-Add read replicas:
-  2. Write to primary, read from replica
-  
-Introduce projections:
-  3. Separate read models, event-driven sync
-  
-Full CQRS:
-  4. Different databases, full separation
-  
-Add Event Sourcing:
-  5. Event store as write model
-```
-
----
-
-## Common Patterns
-
-### Task-Based UI
-
-```
-Traditional: CRUD form with all fields
-
-CQRS: Specific commands
-
-Instead of:
-  UpdateUser(id, name, email, phone, address, ...)
-
-Use:
-  ChangeUserEmail(id, email)
-  UpdateUserAddress(id, address)
-  ChangePhoneNumber(id, phone)
-
-Benefits:
-  - Clear intent
-  - Specific validation
-  - Better audit trail
-```
-
-### Read Model per View
-
-```
-Each UI view has its own projection
-
-Dashboard:     DashboardProjection
-Order List:    OrderListProjection
-Order Detail:  OrderDetailProjection
-
-No joins at query time
-Each projection denormalized for its view
-```
-
-### Synchronous Read-After-Write
-
-```python
-def create_and_return_order(cmd):
-    # Create order (write side)
-    order_id = command_handler.create_order(cmd)
-    
-    # Wait for read model to sync
-    summary = poll_until_exists(
-        f"order_summary:{order_id}",
-        timeout=5s
-    )
-    
-    return summary
-```
-
----
-
-## Testing CQRS
-
-### Command Testing
-
-```python
-def test_withdraw_insufficient_funds():
-    # Given account with balance 100
-    account = Account(balance=100)
-    
-    # When withdrawing 200
-    cmd = WithdrawCommand(account_id=account.id, amount=200)
-    
-    # Then should raise error
-    with pytest.raises(InsufficientFundsError):
-        handler.handle(cmd)
-```
-
-### Projection Testing
-
-```python
-def test_order_projection():
-    # Given events
-    events = [
-        OrderCreated(order_id="1", total=100),
-        ItemAdded(order_id="1", item="Widget"),
-        OrderShipped(order_id="1")
-    ]
-    
-    # When projected
-    projection = OrderProjection()
-    for event in events:
-        projection.handle(event)
-    
-    # Then summary correct
-    summary = projection.get("1")
-    assert summary.status == "shipped"
-    assert summary.total == 100
-```
-
----
-
-## Read Model Projection Patterns
-
-### Flat Denormalized Tables
-
-Pre-join all data needed for a specific query into a single table. No joins at query time.
-
-```
-Write model (normalized):              Read model (flat):
-  orders(id, customer_id, status)        order_summary:
-  customers(id, name, email)               order_id, customer_name, customer_email,
-  order_items(id, order_id, product_id)    product_names[], item_count, total, status
-
-One SELECT, zero JOINs. Projection handles denormalization on write.
-```
-
-### Materialized View per Use Case
-
-Different screens need different shapes of the same data. Build a separate projection for each.
-
-```
-Same event stream → multiple projections:
-  Mobile list view:   { order_id, status, total, created_at }
-  Web detail view:    { order_id, status, total, items[], customer, shipping_address }
-  Admin dashboard:    { order_id, customer_name, total, status, fraud_score, region }
-Each stores exactly what its consumer needs — nothing more.
-```
-
-### Elasticsearch as Read Model
-
-Project events into denormalized Elasticsearch documents for full-text search and filtering.
-
-```python
-@event_handler(ProductUpdated)
-def project_product(event):
-    es.index(index="products", id=event.product_id, body={
-        "name": event.name, "description": event.description,
-        "category": event.category, "price": event.price, "tags": event.tags
-    })
-
-# Query: full-text search + filter in one call
-results = es.search(index="products", body={
-    "query": {"bool": {
-        "must": {"match": {"description": "wireless"}},
-        "filter": {"range": {"price": {"lte": 50}}}
-    }}
-})
-```
-
-### Redis as Read Model
-
-Sorted sets for leaderboards, hashes for profile cards. Sub-millisecond reads.
-
-```python
-@event_handler(ScoreUpdated)
-def project_leaderboard(event):
-    redis.zadd("leaderboard:global", {event.user_id: event.score})
-    redis.hset(f"profile:{event.user_id}", mapping={
-        "name": event.user_name, "score": event.score
-    })
-
-# Top 10 in <1ms
-top_10 = redis.zrevrange("leaderboard:global", 0, 9, withscores=True)
-```
-
-### GraphQL Read Model
-
-Design projections to match your GraphQL schema directly. Store nested documents so each query resolves with a single read — no resolver chains, no N+1.
-
-```
-Projection document mirrors GraphQL type:
-  { "id": "order-1",
-    "customer": { "id": "c-1", "name": "Alice" },
-    "items": [{ "product": "Widget", "qty": 2, "price": 10 }] }
-```
+## State and invariants
 
-### Projection Rebuilding
+A projection has:
 
-If projection logic changes, replay all events to rebuild from scratch. This is the killer feature of CQRS+ES: deploy new code, create a new read store, replay events, swap traffic, tear down old store. Zero downtime, no migration scripts. The event stream is the source of truth.
+| State | Purpose |
+|---|---|
+| read rows/indexes | denormalized query representation |
+| inbox identities | proves which source records committed to this projection |
+| source checkpoint | greatest contiguous applied source position per scope |
+| per-entity version | detects stale/out-of-order changes where needed |
+| generation manifest | schema/code/source checkpoint and publication status |
+| rebuild state | snapshot position, catch-up position, validation evidence |
+| query routing | active/canary/rollback generation |
 
----
+Enforce:
 
-## Consistency Between Read and Write Models
+**Single write authority.** Only the projection pipeline mutates a read model. Query handlers are read-only.
 
-### Eventual Consistency Is the Default
+**Atomic apply.** Inbox insert, read-model mutation, entity version, and projection checkpoint commit in one transaction when they share a store. Broker acknowledgement follows that commit.
 
-Write model updates, event published, read model updated asynchronously. The gap is **projection lag**.
+**Contiguous progress.** A checkpoint means all required source changes through that point are reflected or explicitly skipped by governed policy.
 
-```
-T=0ms   Command accepted, event stored    T=15ms  Consumer picks up event
-T=5ms   Event published to bus            T=20ms  Read model updated
-→ Any query between T=0 and T=20 sees stale data.
-```
+**Monotonic entity state.** An older source version cannot overwrite a newer projection row.
 
-### Measuring Projection Lag
+**Published generation is closed.** Query routing points only to a complete schema/index generation with a known source checkpoint and validation result.
 
-Track the delta between event timestamp and projection update timestamp. Alert when lag exceeds your SLA.
+**Projection is disposable.** It can be rebuilt from the authoritative source plus retained suffix without manual reconstruction from itself.
 
-```python
-class MonitoredProjector:
-    def project(self, event):
-        self.do_project(event)
-        lag_ms = (datetime.utcnow() - event.timestamp).total_seconds() * 1000
-        metrics.histogram("projection.lag_ms", lag_ms,
-                          tags=[f"projection:{self.__class__.__name__}"])
-        if lag_ms > 500:
-            metrics.increment("projection.lag_sla_breach")
-```
+**Authorization is query-complete.** Access restrictions shape rows, filters, counts, aggregations, caches, and exports, not only final objects.
 
-### Read-Your-Writes Pattern
+## Data plane and control plane
 
-After a write, read from the write model for that user's session until the projection catches up. Store the latest write version in the session; on read, check if the projection version meets it — if not, fall back to the write model.
+The **write data plane** validates commands and commits authoritative state plus a durable change record. The **projection data plane** consumes that record, applies deterministic transformations, commits progress, and serves queries. The two can scale and deploy independently.
 
-```python
-def get_order(order_id, user_session):
-    min_version = session_store.get(f"last_write:{user_session}")
-    summary = read_db.get(order_id)
-    if min_version and (not summary or summary.version < min_version):
-        return write_db.get_order(order_id)  # fallback
-    return summary
-```
+The **control plane** registers projection types, schemas, source contracts, checkpoints, generations, ownership, freshness/retention policy, build jobs, validation gates, and query routing. It publishes immutable generation manifests and atomically changes aliases/routes.
 
-### Synchronous Projections
+The query hot path should not ask the control plane per request. It consumes a cached signed/versioned routing snapshot and returns the active generation in response metadata. During a short control-plane outage, serving can continue from a pinned generation while builds/cutovers pause.
 
-Update the read model in the same transaction as the write. Eliminates lag but couples the models. Only viable for single-DB deployments.
+## Designing read models from queries
 
-```python
-def create_order(cmd):
-    with db.transaction():
-        order = Order(customer_id=cmd.customer_id, items=cmd.items)
-        db.session.add(order)
-        summary = OrderSummary.from_order(order)  # same transaction
-        db.session.add(summary)
-```
+Start with access patterns and invariants. A read model may be:
 
-Trades independent scalability for strong consistency. Appropriate when you share one database and cannot tolerate any projection lag.
+- a denormalized row/document per screen or entity;
+- a search index for text/filter/ranking;
+- a time-series or aggregate table;
+- a graph/relationship index;
+- a cache-like key/value view;
+- an analytical materialization.
 
-### Versioned Reads
+Store fields needed to answer the owned query without synchronous calls back to multiple services. Otherwise the “read model” is a distributed join at request time and inherits all dependencies’ latency/availability.
 
-Include a version number in the read model. Clients check if the version reflects their latest write.
+Denormalization duplicates data and creates maintenance obligations. Record source owner/version for copied fields. A customer-name change may update millions of order rows; alternatives include late binding from a local customer projection, grouping updates, or accepting a named freshness bound. Avoid copying sensitive fields unless the query requires them.
 
-```
-POST /orders → 201 Created { "id": "o-1", "version": 7 }
+Indexes and partition keys follow measured filters/sorts. Include stable tie-breakers for pagination. Bound unbounded collections: “all followers in one document” creates hot rewrites and size limits. Use child/bucket rows with explicit query pagination.
 
-GET /orders/o-1?min_version=7
-  → if read model version >= 7: return 200
-  → if read model version < 7:  return 202 Accepted (retry later)
-```
+One generic projection serving every consumer tends to recreate a coupled operational database. Prefer a small number of models aligned to coherent query workloads and ownership, while avoiding one model per trivial UI widget.
 
----
+## Atomic projection application
 
-## When CQRS Adds Unnecessary Complexity
+For a transactional read store, consume one source record as:
 
-### Simple CRUD Applications
+1. validate event type/schema, source identity, and authorization/tenant metadata;
+2. begin transaction;
+3. insert `(projection, generation, event_id)` into an inbox with a unique constraint;
+4. on exact duplicate, verify request/source digest and finish without reapplying;
+5. check expected source/entity version and gap policy;
+6. update/insert/delete every affected read row;
+7. update entity version and contiguous source checkpoint;
+8. commit;
+9. acknowledge the broker.
 
-If reads and writes have the same shape — a form that saves and displays the same fields — CQRS adds a synchronization layer with no benefit. A single model with REST endpoints is simpler and sufficient.
+A separate “has processed?” lookup then mutation then marker has two races: concurrent consumers can both pass, and a crash between steps can duplicate or lose the effect. Atomicity must include the actual projection mutation.
 
-### Small Team Overhead
+Some stores cannot transact the inbox and all derived structures together. For example, one transaction may not span a database row and a remote search index. Options are:
 
-Maintaining separate read and write models doubles the code surface. Every schema change touches both sides. Need team discipline, clear ownership, and experience with eventual consistency debugging.
+- make one durable projection table authoritative and derive the remote index via its own outbox/checkpoint;
+- use versioned idempotent writes in the remote store and reconcile;
+- build immutable batches/generations and publish a manifest;
+- accept/document a repairable inconsistency window.
 
-### Single Database, No Scaling Pressure
+Calling two stores and then checkpointing is not an atomic projection.
 
-If you are not scaling reads independently from writes, a well-indexed table behind an ORM handles both paths. Adding projections and an event bus is overhead without a scaling payoff.
+## Ordering, gaps, and deletes
 
-### Low Read/Write Asymmetry
+Projection semantics determine ordering needs. Replacement events with monotonic source versions can ignore stale arrivals. Deltas require ordered application or commutative identities. Cross-entity aggregates may require one source partition/checkpoint or a transactional batch marker.
 
-CQRS shines when reads vastly outnumber writes (100:1 or higher). If reads and writes are roughly equal, the complexity of maintaining separate models is harder to justify.
+On a gap, stop the affected strict scope, persist future records, fetch missing events from the source, or rebuild. Do not advance the global checkpoint through missing required work because other partitions are healthy. See [Message Ordering](03-message-ordering.md).
 
-### Anti-Pattern: CQRS Everywhere
+Deletes are versioned domain changes. Use tombstones carrying source version so a delayed update cannot resurrect a row. Tombstone retention must cover maximum replay/out-of-order window or the store must retain the highest source version independently after payload deletion.
 
-Apply CQRS to bounded contexts with clear read/write asymmetry — product catalog, analytics dashboards, search. Do not apply it uniformly across the entire system. Most services are fine with simple CRUD.
+Projection code is deterministic over event plus declared reference snapshots. Network lookups to “current” data during replay make rebuild results depend on when they run. If enrichment is necessary, consume a versioned local projection or record the chosen reference version.
 
-### Decision Checklist
+## Freshness and read-your-writes
 
-```
-5 questions before adopting CQRS ("no" to 3+ → likely premature):
+Transport offset lag and time lag measure different things. Track:
 
-1. Do reads and writes have fundamentally different shapes?
-2. Is the read-to-write ratio > 50:1?
-3. Do you need multiple read model representations?
-4. Can your users tolerate eventual consistency?
-5. Does your team have experience with event-driven systems?
-```
+- last source position available;
+- last contiguous position applied;
+- source recorded time at that position;
+- oldest pending/gap time;
+- read-model generation.
 
----
+Client event time is not a reliable pipeline clock. Use source/broker recorded time plus domain effective time where needed.
 
-## Production CQRS Architecture
+For read-your-writes, the command response returns a consistency token such as `(source_stream, committed_version/position)`. A query can:
 
-### Event Bus Selection
+- wait until the selected projection has applied at least that token within a deadline;
+- route to a write-side read path for that entity;
+- overlay the command result locally in the client/UI;
+- return a typed `not_yet_projected` response.
 
-```
-Kafka:     Durable, ordered per partition, replay from offset.
-           Best for high-throughput, multi-consumer architectures.
-RabbitMQ:  Simpler ops, flexible routing (fanout, topic).
-           Best for lower throughput, simpler topologies.
-```
+Sleeping for a fixed delay is neither correct nor efficient. A token scoped to one aggregate cannot imply global projection progress unless the source order provides that relation.
 
-### Projection Service Design
+Waiters need bounds and cancellation. Register by position/entity, wake on checkpoint progress, expire on deadline, and cap per-tenant waiters. During projection outage, fail clearly rather than holding every request until the fleet exhausts connections.
 
-Stateless consumer that reads events and updates the read store. Must be idempotent — processing the same event twice produces the same result (cross-ref `04-delivery-guarantees.md`). Use event ID as a dedup key: check before projecting, mark after.
+## Rebuild and generation publication
 
-```python
-class ProjectionConsumer:
-    def process(self, event):
-        if self.read_db.has_processed(event.event_id):
-            return
-        self.projector.project(event)
-        self.read_db.mark_processed(event.event_id)
-```
+Rebuilds are normal operations, not emergencies. Use blue/green generations:
 
-### Monitoring
+1. register immutable projection code/schema generation `g+1`;
+2. pin a source snapshot/checkpoint `S`;
+3. bulk-build `g+1` from authoritative state/history through `S`;
+4. consume the suffix after `S` with independent checkpoint/inbox;
+5. reach the freshness gate;
+6. reconcile counts, IDs, versions, aggregates, sampled fields, and business invariants;
+7. shadow queries or mirror a stable sample and compare results/latency;
+8. canary query routing, then atomically switch the alias;
+9. keep `g` caught up or readable for a bounded rollback window;
+10. stop and reclaim it only after rollback/evidence retention expires.
 
-```
-Projection lag:       event_timestamp - projection_timestamp (alert > 500ms)
-Failed projections:   events routed to dead-letter queue (alert: any DLQ entry)
-Read model staleness: last_projection_update_timestamp (alert: no update > 30s)
-Consumer group lag:   Kafka consumer offset - latest offset (backpressure signal)
-```
+Do not truncate the active model and rebuild in place; it converts a data migration into an outage and removes rollback. Do not dual-write from projection code to old/new tables without independent checkpoints; a bug can mark both complete while omitting the same records.
 
-### Deployment Independence
+Publication manifest includes projection type, generation, schema/code digests, source snapshot/checkpoints, compatible query API version, validation artifact, created time, and owner. Query nodes reject an incomplete/incompatible generation.
 
-Read and write models deploy independently. Read model can be rebuilt without affecting writes — deploy new projection logic, replay events, swap traffic. A domain logic change in the write service does not require a read service release, and vice versa.
+## Schema and query evolution
 
-### Scaling
+Additive read columns can be populated lazily only if queries define absence. Breaking changes use a new generation. Query APIs version semantics, not merely table columns; changing sort/tie-break, total-count accuracy, or authorization filtering can be breaking even if schema is compatible.
 
-Scale read model replicas independently from the write model. Write side: single primary (writes are sequential per aggregate). Read side: add Elasticsearch nodes for search, Redis replicas for cache, PostgreSQL read replicas for relational queries — each scaled to its own traffic pattern.
+Projection consumers accept old/new source event forms through tested adapters. Deploy readers/consumers in a compatible order, then stop old event production after the documented window. Keep golden events from every retained schema.
 
----
+When a projection changes ownership, transfer source contract, checkpoint history, rebuild artifacts, runbooks, privacy classification, and query SLO, not just database credentials.
 
-## Key Takeaways
+## Capacity and cost model
 
-1. **Separate reads and writes** - Different models for different needs
-2. **Optimize each side** - Write for invariants, read for queries
-3. **Sync via events** - Publish on write, project on read
-4. **Accept eventual consistency** - Or pay for immediate
-5. **Multiple read models OK** - Different views from same events
-6. **Pairs well with Event Sourcing** - Natural combination
-7. **Not always needed** - Adds complexity
-8. **Start simple, evolve** - Don't over-engineer initially
+Illustrative read model:
+
+- source produces 30,000 changes/s, average 900 bytes;
+- each change updates 1.4 projection rows on average;
+- measured transaction service time is 1.8 ms per 100-record batch plus 0.05 ms per row;
+- 18 months of source history contains 1.2 trillion events;
+- projection is 14 TiB per generation including indexes;
+- query traffic peaks at 90,000/s.
+
+Row mutation rate is 42,000/s. A 100-event batch updates 140 rows and consumes `1.8 + 140*0.05 = 8.8 ms` measured CPU/service work, or 0.088 ms per event under this batch shape. At 30,000/s that is 2.64 CPU-seconds/s before I/O/replication; shard by write locality and measure lock/index amplification.
+
+Blue/green rebuild needs at least 28 TiB for two generations plus build spill, logs, backups, and reserve. If source replay sustains 4 million events/s, 1.2 trillion events take about 83 hours before catch-up and validation. A snapshot/export at source checkpoint can reduce rebuild time dramatically, but it must include exact stream positions.
+
+At 90,000 queries/s and a measured 3.2 ms mean query CPU, demand is 288 CPU-seconds/s. At 55% target utilization, plan about 524 logical cores before cache misses and failure reserve. Read/write capacity and rebuild I/O need separate budgets so a rebuild cannot destroy query tails.
+
+## Concrete failure trace: checkpoint commits outside projection
+
+A consumer updates a search document, then writes its broker checkpoint to a separate metadata database. The search update times out but may have succeeded; the checkpoint commits. After restart, the event is skipped. Later a rebuild from the search index itself preserves the missing/ambiguous state.
+
+Containment compares source versions and rebuilds the affected partition from the authoritative source. Repair introduces versioned idempotent search writes plus a durable local projection outbox/checkpoint, and makes rebuild read the source, not the derived index. Prevention fault-injects every cross-store boundary and requires reconciliation before checkpoint promotion.
+
+## Operations and observability
+
+Track by projection, generation, source partition/schema, tenant, and query class:
+
+- received/applied/duplicate/rejected rates and transaction latency;
+- source available versus contiguous applied positions and time lag;
+- gaps, buffered bytes, stale-version rejects, and tombstone age;
+- inbox/checkpoint storage, unique conflicts, and retention horizon;
+- read-model rows/bytes, index health, query latency/errors/count accuracy;
+- consistency-token wait latency/timeouts and fallback path;
+- rebuild snapshot/catch-up positions, throughput, ETA, validation failures;
+- active/canary/rollback routing and result disagreement;
+- source-to-projection reconciliation mismatches.
+
+Runbooks cover lag, poison schema, permanent gap, corrupt generation, query regression, failed cutover, rebuild overload, and privacy deletion. Operators need per-entity repair and partition rebuild tools with audit/dry-run.
+
+## Security and privacy
+
+Projection consumers authenticate the source and derive tenant/authority from trusted envelope fields. Query authorization is enforced in the model/query plan; post-filtering top results leaks counts and can produce incomplete responses. Separate tenant partitions/stores when policy requires stronger isolation.
+
+Read models multiply sensitive data. Minimize copied fields, encrypt stores/backups, propagate deletion/legal hold, and maintain lineage. Query logs, caches, rebuild snapshots, old generations, and shadow comparisons are additional copies.
+
+Restrict projection publication, checkpoint seek, bulk export, repair, and generation deletion. Validate event and query sizes. A malicious high-fanout change can cause write amplification; enforce per-event mutation bounds or route large expansions through controlled backfills.
+
+## Verification strategy
+
+- reducer golden/property tests for every event schema and delete/version edge;
+- crash/concurrency tests proving inbox, rows, version, and checkpoint atomicity;
+- differential replay against a simple reference model;
+- snapshot-plus-suffix rebuild tests during concurrent source changes;
+- blue/green cutover/rollback with query-result and invariant comparison;
+- authorization tests across rows, counts, facets, caches, export, and old generations;
+- load tests combining query peak, source peak, backlog catch-up, and rebuild;
+- reconciliation drills that corrupt/drop/duplicate a partition and repair it.
+
+## Decision framework
+
+Adopt CQRS when write invariants and read workloads genuinely need different models, read scale/query shape justifies denormalization, or independent projection ownership/rebuild adds value. Avoid it for ordinary CRUD where one transactional model answers queries adequately.
+
+Before creating a projection:
+
+1. Which exact query contract owns it?
+2. What source is authoritative and retained long enough to rebuild?
+3. How do inbox, mutation, entity version, and checkpoint commit atomically?
+4. What freshness/read-your-writes behavior do callers need?
+5. What storage/time reserve makes blue/green rebuild feasible?
+6. How are generation publication, reconciliation, and rollback proved?
+7. How are authorization, privacy deletion, and query semantics preserved across copies?
+
+## References
+
+- [Martin Fowler: CQRS](https://martinfowler.com/bliki/CQRS.html)
+- [Microsoft: CQRS Journey](https://learn.microsoft.com/en-us/previous-versions/msp-n-p/jj554200(v=pandp.10))
+- [Pat Helland: Data on the Outside versus Data on the Inside](https://www.cidrdb.org/cidr2005/papers/P12.pdf)
+- [PostgreSQL: Materialized Views](https://www.postgresql.org/docs/current/rules-materializedviews.html)
+- [Elasticsearch: Index Aliases](https://www.elastic.co/guide/en/elasticsearch/reference/current/aliases.html)
+- [CloudEvents Specification](https://github.com/cloudevents/spec)

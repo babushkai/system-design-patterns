@@ -1,804 +1,343 @@
 # Database Sharding
 
-## TL;DR
+Sharding is an application and operational contract, not the expression `hash(key) % N`. Once data lives on multiple independently operated database groups, every request needs authoritative placement, every cross-shard operation needs explicit semantics, and every capacity change becomes an online data migration.
 
-Database sharding horizontally partitions data across multiple database instances (shards), where each shard holds a subset of the total data. This enables write scalability beyond single-server limits but adds complexity around shard key selection, cross-shard queries, and rebalancing.
+Sharding operations span directory and request routing, isolation, resharding, tenant moves, and safe cutover. [Partitioning Strategies](../02-distributed-databases/05-partitioning-strategies.md) covers range, hash, and consistent-hash mechanics; [Single-Leader Replication](../02-distributed-databases/01-single-leader-replication.md) covers replication within a shard.
 
----
+Evidence labels distinguish **Documented** claims backed by dated primary or official sources, **Inference** derived without asserting a private implementation, and unmarked **Reference design** guidance that is reusable rather than provider-attributed.
 
-## Why Sharding?
+## When sharding is justified
 
-Single database limitations:
+**Reference design.** Start with a workload envelope, not a shard count:
 
-```mermaid
-graph TD
-    DB[("Single Database<br/>16 TB · 50k w/s · 5k conn · 512 GB RAM")] -->|Sharding| S0
-    DB --> S1
-    DB --> S2
-    DB --> S3
+- peak and sustained read/write operations by access path;
+- live bytes, daily growth, index amplification, and retention;
+- connection, memory, WAL, compaction, and replication ceilings;
+- tenant/key skew and burst correlation;
+- availability and regional-failover headroom;
+- maximum acceptable move duration and cutover pause;
+- query locality and transaction boundaries.
 
-    S0[("Shard 0<br/>4 TB · 12.5k w/s<br/>1,250 conn · 128 GB")]
-    S1[("Shard 1<br/>4 TB · 12.5k w/s<br/>1,250 conn · 128 GB")]
-    S2[("Shard 2<br/>4 TB · 12.5k w/s<br/>1,250 conn · 128 GB")]
-    S3[("Shard 3<br/>4 TB · 12.5k w/s<br/>1,250 conn · 128 GB")]
-```
+Shard only after a single replicated database group can no longer meet the envelope economically or operationally after sound schema/indexing, vertical scaling, read replicas, caching, and archival. Sharding may raise aggregate capacity, but it turns placement metadata, migration bandwidth, and partial failure into correctness concerns.
 
----
+**Documented, MongoDB 8.0 guidance.** MongoDB's sharding FAQ advises beginning unsharded when the dataset fits on one server. Its operational guidance also warns that adding a shard starts balancing work and that the existing cluster needs enough capacity for migration without harming production traffic. These are product-specific statements, but the capacity lesson generalizes. [MongoDB sharding FAQ](https://www.mongodb.com/docs/manual/faq/sharding/), [adding shards](https://www.mongodb.com/docs/manual/tutorial/add-shards-to-shard-cluster/)
 
-## Sharding Strategies
+## Contract and invariants
 
-### 1. Hash-Based Sharding
+**Reference design.** Define these objects independently:
 
-```python
-import hashlib
-from typing import Any
+| Object | Meaning |
+|---|---|
+| logical dataset | application-visible table/collection and schema |
+| routing unit | the smallest independently movable key range, bucket, or tenant |
+| shard | one replicated database group that owns routing units |
+| placement record | routing unit → shard, epoch, migration state |
+| router | resolves and enforces placement for a request |
+| migration | durable workflow that changes placement |
 
-class HashBasedRouter:
-    def __init__(self, shard_count: int):
-        self.shard_count = shard_count
-    
-    def get_shard(self, shard_key: Any) -> int:
-        """Hash the key to determine shard"""
-        key_bytes = str(shard_key).encode()
-        hash_value = int(hashlib.md5(key_bytes).hexdigest(), 16)
-        return hash_value % self.shard_count
-    
-    def route_query(self, user_id: int) -> str:
-        shard = self.get_shard(user_id)
-        return f"shard_{shard}.database.internal"
+The minimum invariants are:
 
-# Example distribution
-router = HashBasedRouter(shard_count=4)
-# user_id=1000 → shard_2
-# user_id=1001 → shard_0
-# user_id=1002 → shard_3
-# user_id=1003 → shard_1
-```
+### Single write authority
 
-```
-Hash Distribution:
+For routing unit `u` at epoch `e`, exactly one shard may accept authoritative writes:
 
-user_id    hash(user_id) % 4    Shard
-────────────────────────────────────────
-   1            1                  1
-   2            2                  2
-   3            3                  3
-   4            0                  0
-   5            1                  1
-  ...          ...                ...
+$$
+owner(u,e) = s \quad\land\quad |write\_authorities(u,e)| = 1
+$$
 
-┌─────────────────────────────────────────────────────────┐
-│                    Hash Function                         │
-│                        │                                 │
-│    user_id ──────► hash(user_id) % N ──────► shard_id   │
-│                                                          │
-└─────────────────────────────────────────────────────────┘
-```
+During migration, multiple physical copies may exist. That is not multiple authority. Source, target, and routers enforce the same epoch so a stale route fails closed rather than accepting a divergent write.
 
-### 2. Range-Based Sharding
+### Complete and non-overlapping placement
 
-```python
-from dataclasses import dataclass
-from typing import Optional
+Every routable key belongs to exactly one active routing unit, and active units do not overlap. A directory publication is atomic from the router's perspective: a request never observes half of a split manifest.
 
-@dataclass
-class ShardRange:
-    shard_id: int
-    min_key: int  # inclusive
-    max_key: int  # exclusive
-    host: str
+### Monotonic routing epoch
 
-class RangeBasedRouter:
-    def __init__(self):
-        self.ranges = [
-            ShardRange(0, 0, 1_000_000, "shard0.db.internal"),
-            ShardRange(1, 1_000_000, 2_000_000, "shard1.db.internal"),
-            ShardRange(2, 2_000_000, 3_000_000, "shard2.db.internal"),
-            ShardRange(3, 3_000_000, float('inf'), "shard3.db.internal"),
-        ]
-    
-    def get_shard(self, user_id: int) -> ShardRange:
-        for range_info in self.ranges:
-            if range_info.min_key <= user_id < range_info.max_key:
-                return range_info
-        raise ValueError(f"No shard found for user_id: {user_id}")
-    
-    def split_shard(self, shard_id: int, split_point: int):
-        """Split a shard into two when it gets too large"""
-        # Find the shard to split
-        for i, shard in enumerate(self.ranges):
-            if shard.shard_id == shard_id:
-                # Create new shard
-                new_shard = ShardRange(
-                    shard_id=len(self.ranges),
-                    min_key=split_point,
-                    max_key=shard.max_key,
-                    host=f"shard{len(self.ranges)}.db.internal"
-                )
-                # Update existing shard
-                shard.max_key = split_point
-                # Insert new shard
-                self.ranges.insert(i + 1, new_shard)
-                return new_shard
-```
+Each placement change increments an epoch. Shards reject commands whose routing epoch is older than their accepted epoch. Routers treat a stale-epoch rejection as evidence to refresh placement, not as a generic availability retry to the same destination.
 
-```
-Range-Based Distribution:
+### Migration completeness
 
-        ┌────────────────────────────────────────────────────────┐
-        │                    Key Space                           │
-        │   0         1M         2M         3M         4M        │
-        │   ├──────────┼──────────┼──────────┼──────────┤        │
-        │   │  Shard0  │  Shard1  │  Shard2  │  Shard3  │        │
-        │   │ 0-999999 │ 1M-1.99M │ 2M-2.99M │ 3M+      │        │
-        └────────────────────────────────────────────────────────┘
+Before target authority, the target contains a base copy plus every committed source change through cutover watermark `w`:
 
-Pros: Range queries efficient within shard
-Cons: Hot spots if recent data accessed more
-      (e.g., recent user_ids all on newest shard)
-```
+$$
+target = snapshot(t_0) \cup changes(t_0, w]
+$$
 
-### 3. Directory-Based Sharding
+Validation must cover record identity, values, tombstones, schema transformations, and relevant secondary indexes, not only row count.
 
-```python
-import redis
-from typing import Dict
+### Tenant isolation
 
-class DirectoryBasedRouter:
-    def __init__(self, redis_client: redis.Redis):
-        self.directory = redis_client
-    
-    def get_shard(self, entity_id: str, entity_type: str) -> str:
-        """Look up shard location in directory"""
-        key = f"shard_directory:{entity_type}:{entity_id}"
-        shard = self.directory.get(key)
-        
-        if shard is None:
-            # Assign to shard with least data
-            shard = self._assign_new_entity(entity_id, entity_type)
-        
-        return shard.decode()
-    
-    def _assign_new_entity(self, entity_id: str, entity_type: str) -> str:
-        """Assign entity to least loaded shard"""
-        shard_loads = {}
-        for i in range(4):
-            count = self.directory.get(f"shard_count:{i}") or 0
-            shard_loads[f"shard_{i}"] = int(count)
-        
-        # Pick least loaded shard
-        target_shard = min(shard_loads, key=shard_loads.get)
-        
-        # Record in directory
-        key = f"shard_directory:{entity_type}:{entity_id}"
-        self.directory.set(key, target_shard)
-        self.directory.incr(f"shard_count:{target_shard[-1]}")
-        
-        return target_shard
-    
-    def move_entity(self, entity_id: str, entity_type: str, 
-                    from_shard: str, to_shard: str):
-        """Move entity to different shard (for rebalancing)"""
-        key = f"shard_directory:{entity_type}:{entity_id}"
-        self.directory.set(key, to_shard)
-        self.directory.decr(f"shard_count:{from_shard[-1]}")
-        self.directory.incr(f"shard_count:{to_shard[-1]}")
-```
+Placement never bypasses authorization, quota, encryption, or residency policy. Moving a tenant changes location, not its security identity.
+
+## Data plane and control plane
+
+**Reference design.** Keep placement decisions off the normal database path while enforcing their result on that path:
 
 ```mermaid
-graph TD
-    Dir["Directory Service<br/>user:1234 → shard_2<br/>user:5678 → shard_0<br/>user:9012 → shard_1<br/>order:100 → shard_3"]
-    Q["Query: get_shard(user:1234)"] --> Dir
-    Dir --> R["Returns: shard_2"]
+flowchart LR
+    A[Application] --> R[Stateless routing proxy or library]
+    R --> C[(Shard A replica group)]
+    R --> D[(Shard B replica group)]
+    R --> E[(Shard C replica group)]
+    M[(Versioned placement directory)] --> R
+    P[Placement controller] --> M
+    P --> W[Migration workers]
+    W --> C
+    W --> D
+    T[Metrics and heat stream] --> P
 ```
 
-Pros: Flexible, can move entities between shards
-Cons: Extra lookup latency, directory is SPOF
+The **data plane** resolves a routing unit, sends the request to its shard, supplies the epoch, and returns or merges results. The **control plane** observes load/capacity, plans moves, copies data, validates, changes directory versions, and retires old copies. Routers cache signed/versioned directory snapshots so a transient control-plane outage does not stop correctly routable traffic.
 
-### 4. Consistent Hashing
+**Documented, Slicer paper, OSDI 2016.** Google's Slicer separated a reliable request-forwarding data plane from a global control plane that optimized assignments off the critical path. The paper reported 2–6 million requests/s across production users at publication and described dynamic assignment based on load and health. Slicer assigned application work, not necessarily database rows, but the plane separation is directly relevant. [Adya et al., Slicer](https://www.usenix.org/system/files/conference/osdi16/osdi16-adya.pdf)
 
-```python
-import hashlib
-from bisect import bisect_left
-from collections import defaultdict
+**Documented, Stripe snapshot, June 2024.** Stripe described database proxies that route through a chunk metadata service, plus a Data Movement Platform for online shard splitting, consolidation, and engine/tenancy migration. At publication its DocDB platform served more than five million queries/s over 2,000+ shards. Those numbers are a dated system snapshot, not generic shard targets. [Stripe, DocDB Data Movement Platform](https://stripe.dev/blog/how-stripes-document-databases-supported-99.999-uptime-with-zero-downtime-data-migrations)
 
-class ConsistentHashShardRouter:
-    def __init__(self, virtual_nodes: int = 150):
-        self.virtual_nodes = virtual_nodes
-        self.ring = []
-        self.node_map = {}
-    
-    def _hash(self, key: str) -> int:
-        return int(hashlib.sha256(key.encode()).hexdigest(), 16)
-    
-    def add_shard(self, shard_id: str):
-        """Add a shard with virtual nodes"""
-        for i in range(self.virtual_nodes):
-            virtual_key = f"{shard_id}:vn{i}"
-            hash_value = self._hash(virtual_key)
-            self.ring.append(hash_value)
-            self.node_map[hash_value] = shard_id
-        self.ring.sort()
-    
-    def remove_shard(self, shard_id: str):
-        """Remove a shard and its virtual nodes"""
-        for i in range(self.virtual_nodes):
-            virtual_key = f"{shard_id}:vn{i}"
-            hash_value = self._hash(virtual_key)
-            self.ring.remove(hash_value)
-            del self.node_map[hash_value]
-    
-    def get_shard(self, key: str) -> str:
-        if not self.ring:
-            raise ValueError("No shards available")
-        
-        hash_value = self._hash(key)
-        idx = bisect_left(self.ring, hash_value)
-        
-        if idx >= len(self.ring):
-            idx = 0
-        
-        return self.node_map[self.ring[idx]]
-    
-    def get_data_movement(self, new_shard: str) -> dict:
-        """Calculate what data moves when adding a shard"""
-        # Before adding the new shard, calculate which keys
-        # would move to the new shard
-        movements = defaultdict(list)
-        
-        for i in range(self.virtual_nodes):
-            virtual_key = f"{new_shard}:vn{i}"
-            hash_value = self._hash(virtual_key)
-            
-            # Find which shard currently owns this position
-            idx = bisect_left(self.ring, hash_value)
-            if idx >= len(self.ring):
-                idx = 0
-            current_owner = self.node_map[self.ring[idx]]
-            
-            movements[current_owner].append(hash_value)
-        
-        return movements
-```
+## Placement directory and routing
 
-```
-Consistent Hash Ring:
+**Reference design.** A placement record contains:
 
-              0°
-              │
-     ┌────────┴────────┐
-    S3                  S1
-     │                   │
-90° ─┼───────────────────┼─ 270°
-     │                   │
-    S2                  S1
-     └────────┬────────┘
-              │
-            180°
+- dataset and routing-unit bounds/identity;
+- active shard and read-replica policy;
+- routing epoch and directory generation;
+- migration source/target and workflow state, if any;
+- schema/key-format version;
+- residency and isolation class;
+- checksum/signature and publication time.
 
-Adding Shard S4:
-- Only ~25% of data moves (from adjacent shard)
-- Other 75% stays in place
-```
+Routers obtain a consistent directory generation, derive the routing unit from request key, verify policy, and send the epoch with the database operation. A bounded cache reduces directory load; shards remain the last line of defense against stale routers.
 
----
+### Directory availability
 
-## Shard Key Selection
+The directory must be strongly consistent for publication but highly cacheable for reads. If it is unavailable, existing placements continue from the last known-good snapshot. Creating a new tenant or completing a move waits because those actions require a new authoritative generation.
 
-### Good Shard Keys
+**Inference.** Once routers are allowed to cache placement for availability, directory consistency alone cannot prevent stale writes: a disconnected router can retain a formerly valid assignment. Shard-side epoch fencing is therefore required even when the directory itself never returns two owners.
 
-```python
-# 1. User ID for user-centric data
-# - Each user's data on single shard
-# - User operations don't cross shards
+Do not make a general-purpose cache the directory authority. Eviction, stale replicas, or split-brain updates would become data corruption. Cache invalidation principles still help distribution, but authority remains in a consensus-backed metadata store. See [consensus](../02-distributed-databases/08-consensus-algorithms.md) and [distributed caching](../04-caching/03-distributed-caching.md).
 
-CREATE TABLE orders (
-    order_id BIGINT,
-    user_id BIGINT,  -- Shard key
-    amount DECIMAL,
-    created_at TIMESTAMP,
-    PRIMARY KEY (user_id, order_id)
-);
+### Scatter/gather
 
-# 2. Tenant ID for multi-tenant SaaS
-# - Tenant data isolation
-# - Easy per-tenant scaling
+If a query lacks the routing key, the router must either reject it, query a separate index, or scatter to multiple shards. For `N` shards with independent latency CDF `F(t)`, the probability all responses arrive by `t` is approximately:
 
-CREATE TABLE documents (
-    doc_id BIGINT,
-    tenant_id INT,  -- Shard key
-    content TEXT,
-    PRIMARY KEY (tenant_id, doc_id)
-);
+$$
+P(T_{max} \le t) = F(t)^N
+$$
 
-# 3. Geographic region for location-based data
-# - Data locality
-# - Regulatory compliance
+Fanout therefore worsens tail latency and multiplies work. Bound concurrency, deadline each subquery, return explicit partial-result semantics where allowed, and prohibit unbounded shard enumeration on user-facing endpoints.
 
-CREATE TABLE transactions (
-    txn_id BIGINT,
-    region VARCHAR(10),  -- Shard key: 'us-east', 'eu-west'
-    user_id BIGINT,
-    amount DECIMAL,
-    PRIMARY KEY (region, txn_id)
-);
-```
+Global secondary indexes introduce their own authority and consistency contract; see [secondary indexes](../02-distributed-databases/06-secondary-indexes.md). Cross-shard atomicity belongs to [distributed transactions](../02-distributed-databases/07-distributed-transactions.md).
 
-### Bad Shard Keys
+## Choosing the routing unit
 
-```python
-# 1. Auto-incrementing ID (monotonic)
-# - All new writes go to same shard
-# - Hot spot problem
+The routing unit is more consequential than the hash function.
 
-CREATE TABLE events (
-    event_id BIGSERIAL,  # BAD: monotonic
-    data JSONB
-);
+### Tenant or aggregate root
 
-# Problem visualization:
-# Time ──────────────────────────────►
-# Shard0: [████████] ← Old events (cold)
-# Shard1: [████████] ← Old events (cold)
-# Shard2: [████████] ← Old events (cold)
-# Shard3: [████████████████████████] ← All new events (HOT!)
+**Reference design.** Co-locate data that changes transactionally, often one tenant, account, workspace, or aggregate root. This preserves local transactions and makes tenant moves possible. A few very large tenants may exceed one shard and require sub-partitioning; that must be designed before a “tenant ID is always local” assumption reaches every query.
 
-# 2. Low cardinality keys
-# - Limited number of distinct values
-# - Can't scale beyond key count
+### Fine-grained ranges or buckets
 
-CREATE TABLE orders (
-    order_id BIGINT,
-    status VARCHAR(20),  # BAD: only ~5 possible values
-    data JSONB
-);
+Smaller units improve balancing precision and migration recovery but enlarge the directory and control workload. Coarser units reduce metadata but may be immovable hotspots. The unit should be far below shard capacity so a split/move completes while both source and target retain safe headroom.
 
-# 3. Timestamp-based keys
-# - Similar to monotonic IDs
-# - Recent data all on same shard
+### Compound locality
 
-CREATE TABLE logs (
-    log_time TIMESTAMP,  # BAD: all recent logs on one shard
-    message TEXT
-);
-```
+A typical logical key is `(tenant_id, entity_id)`: the tenant anchors locality and a suffix distributes a tenant that has opted into multiple routing units. Time belongs in a key only when the application's range/query and retention contract supports it; monotonic time can concentrate all new writes in one unit.
 
----
+The mechanics of key distribution are intentionally not repeated here; use [partitioning strategies](../02-distributed-databases/05-partitioning-strategies.md).
 
-## Cross-Shard Operations
+## Online resharding protocol
 
-### Cross-Shard Queries
-
-```python
-import asyncio
-from dataclasses import dataclass
-from typing import List
-
-@dataclass
-class ShardResult:
-    shard_id: int
-    rows: list
-    count: int
-
-class CrossShardQueryExecutor:
-    def __init__(self, shard_connections: dict):
-        self.shards = shard_connections
-    
-    async def scatter_gather(self, query: str, params: dict) -> List[ShardResult]:
-        """Execute query on all shards and gather results"""
-        tasks = []
-        for shard_id, conn in self.shards.items():
-            task = self._execute_on_shard(shard_id, conn, query, params)
-            tasks.append(task)
-        
-        results = await asyncio.gather(*tasks)
-        return results
-    
-    async def _execute_on_shard(self, shard_id: int, conn, 
-                                 query: str, params: dict) -> ShardResult:
-        async with conn.execute(query, params) as cursor:
-            rows = await cursor.fetchall()
-            return ShardResult(
-                shard_id=shard_id,
-                rows=rows,
-                count=len(rows)
-            )
-    
-    async def aggregate_count(self, table: str, 
-                               where_clause: str = "") -> int:
-        """Count across all shards"""
-        query = f"SELECT COUNT(*) FROM {table} {where_clause}"
-        results = await self.scatter_gather(query, {})
-        return sum(r.rows[0][0] for r in results)
-    
-    async def global_top_n(self, query: str, order_by: str, 
-                           n: int, params: dict) -> list:
-        """Get top N across all shards"""
-        # Get top N from each shard
-        shard_query = f"{query} ORDER BY {order_by} LIMIT {n}"
-        results = await self.scatter_gather(shard_query, params)
-        
-        # Merge and get global top N
-        all_rows = []
-        for result in results:
-            all_rows.extend(result.rows)
-        
-        # Sort merged results
-        all_rows.sort(key=lambda x: x[order_by], reverse=True)
-        return all_rows[:n]
-```
+**Reference design.** Model resharding as a persisted, resumable state machine:
 
 ```mermaid
-graph TD
-    QR["Query Router<br/>SELECT * FROM orders<br/>WHERE total > 100"]
-    QR -->|Scatter| S0[("Shard 0<br/>500 rows")]
-    QR -->|Scatter| S1[("Shard 1<br/>300 rows")]
-    QR -->|Scatter| S2[("Shard 2<br/>450 rows")]
-    S0 -->|Gather| Merge["Query Router<br/>Merge Results<br/>1,250 rows"]
-    S1 -->|Gather| Merge
-    S2 -->|Gather| Merge
+stateDiagram-v2
+    [*] --> Planned
+    Planned --> Copying: allocate targets
+    Copying --> CatchingUp: base snapshot complete
+    CatchingUp --> Validating: lag within bound
+    Validating --> Fencing: semantic checks pass
+    Fencing --> Switched: source rejects old epoch
+    Switched --> Soaking: directory points to target
+    Soaking --> Complete: rollback window closes
+    Planned --> Aborted
+    Copying --> Aborted
+    CatchingUp --> Aborted
+    Validating --> Aborted
+    Soaking --> RolledBack: reverse traffic safely
 ```
 
-### Cross-Shard Transactions
+1. **Plan.** Choose source units, target shards, bandwidth, and an epoch transition. Prove source and target can survive foreground peak plus migration.
+2. **Copy.** Read a stable snapshot into targets. Persist per-range checkpoints and make copy idempotent.
+3. **Catch up.** Apply source WAL/change-data-capture events after the snapshot watermark. Preserve order per key and tombstones. See [change data capture](../13-data-pipelines/04-change-data-capture.md).
+4. **Validate.** Compare keys, values, aggregates, indexes, and sampled read semantics continuously; explain every mismatch.
+5. **Fence.** Raise the source's accepted routing epoch so it rejects old requests. Drain in-flight writes and advance target through the final watermark.
+6. **Switch.** Atomically publish the target placement and new epoch. Routers refresh on notification or stale-epoch response.
+7. **Soak.** Keep the source read-only and monitor semantic/operational signals. Rollback changes routing only if the source remains sufficiently current or reverse replication is active.
+8. **Retire.** After rollback, backup, audit, and retention windows, securely delete the source copy and deregister the migration.
 
-```python
-from enum import Enum
-from typing import List, Dict
-import uuid
+**Documented, Stripe 2024.** Stripe described versioned gating: source shards reject requests after their version token is raised, outstanding writes replicate, and the chunk directory switches to targets. The article reports the traffic switch taking under two seconds in that implementation, with failed source requests succeeding on retry. Treat the timing as a dated Stripe measurement, not a design threshold. [Stripe, DocDB](https://stripe.dev/blog/how-stripes-document-databases-supported-99.999-uptime-with-zero-downtime-data-migrations)
 
-class TxnState(Enum):
-    PENDING = "pending"
-    PREPARED = "prepared"
-    COMMITTED = "committed"
-    ABORTED = "aborted"
+**Documented, Vitess 25.0.** Vitess VReplication documents online, reversible `Reshard` and `MoveTables` workflows with traffic switching, reverse traffic, validation, and completion. Its cutover documentation refuses a switch when participating tablets cannot refresh topology state. This is one production-grade implementation of the state machine, not a mandatory product choice. [Vitess VReplication overview](https://vitess.io/docs/25.0/reference/vreplication/vreplication/), [Vitess cutover internals](https://vitess.io/docs/23.0/reference/vreplication/internal/cutover/)
 
-class TwoPhaseCommitCoordinator:
-    def __init__(self, shards: Dict[int, 'ShardConnection']):
-        self.shards = shards
-        self.transactions = {}
-    
-    async def begin_transaction(self) -> str:
-        txn_id = str(uuid.uuid4())
-        self.transactions[txn_id] = {
-            'state': TxnState.PENDING,
-            'participants': set(),
-            'prepared': set()
-        }
-        return txn_id
-    
-    async def execute(self, txn_id: str, shard_id: int, 
-                      query: str, params: dict):
-        """Execute query as part of distributed transaction"""
-        self.transactions[txn_id]['participants'].add(shard_id)
-        await self.shards[shard_id].execute(txn_id, query, params)
-    
-    async def commit(self, txn_id: str) -> bool:
-        """Two-phase commit"""
-        txn = self.transactions[txn_id]
-        participants = txn['participants']
-        
-        # Phase 1: Prepare
-        prepare_results = []
-        for shard_id in participants:
-            result = await self.shards[shard_id].prepare(txn_id)
-            prepare_results.append((shard_id, result))
-        
-        # Check if all prepared successfully
-        all_prepared = all(result for _, result in prepare_results)
-        
-        if all_prepared:
-            # Phase 2: Commit
-            txn['state'] = TxnState.PREPARED
-            for shard_id in participants:
-                await self.shards[shard_id].commit(txn_id)
-            txn['state'] = TxnState.COMMITTED
-            return True
-        else:
-            # Phase 2: Abort
-            for shard_id in participants:
-                await self.shards[shard_id].rollback(txn_id)
-            txn['state'] = TxnState.ABORTED
-            return False
-```
+## Tenant moves and isolation changes
 
-```mermaid
-sequenceDiagram
-    participant C as Coordinator
-    participant S0 as Shard 0
-    participant S1 as Shard 1
-    participant S2 as Shard 2
+**Reference design.** A tenant move is a resharding workflow whose routing unit is the tenant and whose policy may also change:
 
-    Note over C,S2: Phase 1: PREPARE
-    C->>S0: PREPARE?
-    C->>S1: PREPARE?
-    C->>S2: PREPARE?
-    S0-->>C: YES
-    S1-->>C: YES
-    S2-->>C: YES
+- shared shard → another shared shard for balance;
+- shared shard → dedicated shard for isolation;
+- region A → region B for residency;
+- legacy schema/engine → new storage generation.
 
-    Note over C: All YES → COMMIT
+The directory record must bind tenant, location, encryption-key domain, residency, and routing epoch. Copy jobs assume the tenant's authorization context but do not broaden it. Audit who approved the move and which validation evidence allowed cutover.
 
-    Note over C,S2: Phase 2: COMMIT
-    C->>S0: COMMIT
-    C->>S1: COMMIT
-    C->>S2: COMMIT
-    S0-->>C: COMMITTED
-    S1-->>C: COMMITTED
-    S2-->>C: COMMITTED
-```
+Large tenants may have external side effects (object blobs, search indexes, queues, analytics) that are not transactionally moved with the primary database. Treat them as derived systems with independent convergence and rollback plans. Do not switch the primary and assume every projection follows automatically.
 
----
+## Capacity and cost model
 
-## Resharding (Adding/Removing Shards)
+### Shard count: illustrative assumptions
 
-```python
-import asyncio
-from enum import Enum
+**Reference design.** Suppose peak traffic is 1.2 million database operations/s. A shard is benchmarked at 35,000 operations/s at the required tail latency, but normal operation is capped at 55% to retain failover and migration headroom:
 
-class ReshardingState(Enum):
-    IDLE = "idle"
-    COPYING = "copying"
-    CATCHING_UP = "catching_up"
-    SWITCHING = "switching"
-    COMPLETE = "complete"
+$$
+N_{throughput} = \left\lceil \frac{1{,}200{,}000}{35{,}000 \times 0.55} \right\rceil = 63
+$$
 
-class OnlineResharder:
-    def __init__(self, source_shards: list, target_shards: list):
-        self.source = source_shards
-        self.target = target_shards
-        self.state = ReshardingState.IDLE
-        self.new_router = None
-    
-    async def expand_shards(self, old_count: int, new_count: int):
-        """Double-write approach for online resharding"""
-        
-        # Step 1: Set up new shards
-        self.state = ReshardingState.COPYING
-        self.new_router = ConsistentHashShardRouter()
-        for i in range(new_count):
-            self.new_router.add_shard(f"shard_{i}")
-        
-        # Step 2: Enable double-writes
-        # (Write to both old and new shard locations)
-        await self._enable_double_writes()
-        
-        # Step 3: Background copy existing data
-        await self._copy_existing_data()
-        
-        # Step 4: Catch up on writes during copy
-        self.state = ReshardingState.CATCHING_UP
-        await self._replay_write_log()
-        
-        # Step 5: Atomic switch to new routing
-        self.state = ReshardingState.SWITCHING
-        await self._atomic_switch()
-        
-        # Step 6: Clean up old shard data
-        self.state = ReshardingState.COMPLETE
-        await self._cleanup_old_data()
-    
-    async def _copy_existing_data(self):
-        """Copy data to new shard locations"""
-        for source_shard in self.source:
-            async for batch in source_shard.scan_all_data(batch_size=1000):
-                for row in batch:
-                    # Determine new shard location
-                    new_shard = self.new_router.get_shard(row['shard_key'])
-                    if new_shard != row['current_shard']:
-                        # Copy to new location
-                        await new_shard.insert(row)
-    
-    async def _enable_double_writes(self):
-        """Route writes to both old and new shard locations"""
-        # Implemented at application layer or proxy layer
-        pass
-```
+If live data is 780 TiB and one shard may hold 12 TiB at 60% storage occupancy:
 
-```
-Online Resharding Timeline:
+$$
+N_{storage} = \left\lceil \frac{780}{12 \times 0.60} \right\rceil = 109
+$$
 
-Time ──────────────────────────────────────────────────────►
+The initial floor is at least 109 shards, then increase for skew, replica topology, regional evacuation, and operational isolation. These numbers are illustrative.
 
-Phase 1: Double-Write Enabled
-┌──────────────────────────────────────────────────────────┐
-│ Write ──► Old Shard                                      │
-│       └─► New Shard (new location)                       │
-│                                                          │
-│ Read ───► Old Shard (still primary)                      │
-└──────────────────────────────────────────────────────────┘
+### Skew
 
-Phase 2: Background Copy
-┌──────────────────────────────────────────────────────────┐
-│ Existing Data ════════════════════════► New Shards       │
-│                    (batch copy)                          │
-│                                                          │
-│ New Writes still double-written                          │
-└──────────────────────────────────────────────────────────┘
+Average load does not size shards. Let routing unit `i` have rate `\lambda_i` and the hottest shard receive set `H`:
 
-Phase 3: Catch-up
-┌──────────────────────────────────────────────────────────┐
-│ Replay writes that happened during copy                  │
-│ Wait for replication lag → 0                             │
-└──────────────────────────────────────────────────────────┘
+$$
+\lambda_{hot} = \sum_{i \in H}\lambda_i
+$$
 
-Phase 4: Switch
-┌──────────────────────────────────────────────────────────┐
-│ Read/Write ──► New Shards (atomic flip)                  │
-│                                                          │
-│ Old shards: read-only, then decommission                 │
-└──────────────────────────────────────────────────────────┘
-```
+Capacity is valid only if `\lambda_hot` stays within the shard's safe envelope after a replica or zone failure. Track maximum-to-mean and high-percentile unit heat, not only uniform-hash simulations.
 
----
+### Migration bandwidth
 
-## Application-Level Sharding
+For `D` bytes, effective copy throughput `B`, catch-up/write amplification factor `a`, and usable duty cycle `d`:
 
-```python
-from functools import wraps
-from typing import Callable
+$$
+T_{move} \ge \frac{D(1+a)}{Bd}
+$$
 
-class ShardedRepository:
-    def __init__(self, shard_router: 'ShardRouter', 
-                 shard_connections: dict):
-        self.router = shard_router
-        self.connections = shard_connections
-    
-    def _get_connection(self, shard_key):
-        shard = self.router.get_shard(shard_key)
-        return self.connections[shard]
-    
-    # User operations - sharded by user_id
-    async def get_user(self, user_id: int) -> dict:
-        conn = self._get_connection(user_id)
-        return await conn.fetchone(
-            "SELECT * FROM users WHERE id = $1", user_id
-        )
-    
-    async def create_order(self, user_id: int, order_data: dict) -> int:
-        conn = self._get_connection(user_id)
-        return await conn.execute(
-            """
-            INSERT INTO orders (user_id, amount, status)
-            VALUES ($1, $2, $3) RETURNING id
-            """,
-            user_id, order_data['amount'], 'pending'
-        )
-    
-    async def get_user_orders(self, user_id: int) -> list:
-        # Same shard as user - efficient
-        conn = self._get_connection(user_id)
-        return await conn.fetch(
-            "SELECT * FROM orders WHERE user_id = $1", user_id
-        )
-    
-    async def get_all_orders_by_date(self, date: str) -> list:
-        # Cross-shard query - scatter/gather
-        results = []
-        for shard, conn in self.connections.items():
-            shard_results = await conn.fetch(
-                "SELECT * FROM orders WHERE DATE(created_at) = $1",
-                date
-            )
-            results.extend(shard_results)
-        return results
+A 9 TiB unit copied at an effective 180 MiB/s with `a=0.15` and `d=0.7` needs at least about 23.9 hours before validation and cutover. If the source will exhaust capacity in six hours, the routing unit is already too large or the move started too late.
 
-# Decorator for automatic sharding
-def sharded(shard_key_param: str):
-    def decorator(func: Callable):
-        @wraps(func)
-        async def wrapper(self, *args, **kwargs):
-            shard_key = kwargs.get(shard_key_param) or args[0]
-            conn = self._get_connection(shard_key)
-            return await func(self, conn, *args, **kwargs)
-        return wrapper
-    return decorator
+Migration cost includes source reads, target writes, WAL retention, replication, validation reads, network egress, temporary duplicate storage, and operator attention. Budget and rate-limit it separately from foreground traffic.
 
-class OrderService:
-    def __init__(self, shard_router, connections):
-        self.router = shard_router
-        self.connections = connections
-    
-    def _get_connection(self, shard_key):
-        shard = self.router.get_shard(shard_key)
-        return self.connections[shard]
-    
-    @sharded('user_id')
-    async def place_order(self, conn, user_id: int, items: list):
-        # conn is automatically the correct shard connection
-        return await conn.execute(...)
-```
+## Specialized failure traces
 
----
+### Stale router during cutover
 
-## Vitess: MySQL Sharding
+**Reference-design trace.** Unit `u` moves from shard A at epoch 41 to shard B at epoch 42:
 
-```yaml
-# Vitess VSchema (sharding configuration)
-{
-  "sharded": true,
-  "vindexes": {
-    "user_hash": {
-      "type": "hash"
-    },
-    "order_user_id": {
-      "type": "consistent_lookup",
-      "params": {
-        "table": "user_order_idx",
-        "from": "order_id",
-        "to": "user_id"
-      }
-    }
-  },
-  "tables": {
-    "users": {
-      "column_vindexes": [
-        {
-          "column": "id",
-          "name": "user_hash"
-        }
-      ]
-    },
-    "orders": {
-      "column_vindexes": [
-        {
-          "column": "user_id",
-          "name": "user_hash"
-        },
-        {
-          "column": "order_id",
-          "name": "order_user_id"
-        }
-      ]
-    }
-  }
-}
-```
+1. Copy and catch-up reach final watermark.
+2. The controller raises A's minimum epoch to 42; A rejects further epoch-41 operations.
+3. Directory generation 900 publishes `(u,B,42)`.
+4. One router misses the invalidation and sends a write to A with epoch 41.
+5. A rejects it before mutation. The router refreshes generation 900 and retries B within the original deadline and retry budget.
+6. B deduplicates the operation identity in case the client also retried.
 
-```mermaid
-graph TD
-    App["Application<br/>(MySQL Protocol)"]
-    App --> VTGate["VTGate<br/>Query Router & Planner<br/>Parses SQL · Target shards<br/>Scatter-gather · Connection pooling"]
+Without shard-side fencing, a stale router can create a split brain even when the directory itself is consistent.
 
-    VTGate --> VT0
-    VTGate --> VT1
-    VTGate --> VT2
+### CDC gap after source cleanup
 
-    subgraph Shard0 ["Shard 0"]
-        VT0[VTTablet] --> M0[("MySQL")]
-    end
-    subgraph Shard1 ["Shard 1"]
-        VT1[VTTablet] --> M1[("MySQL")]
-    end
-    subgraph Shard2 ["Shard 2"]
-        VT2[VTTablet] --> M2[("MySQL")]
-    end
-```
+**Reference-design trace.** A migration worker records snapshot watermark `w0`, copies data, and applies changes to `w8`. A corrupt checkpoint incorrectly claims `w10`, validation samples miss two deletes, and cutover succeeds. If the source is immediately deleted, the loss is permanent.
 
----
+The safe design verifies source and target at the final watermark, retains the immutable change log and source through a soak window, audits checkpoint monotonicity, and runs anti-entropy over all key ranges. Cleanup is an explicit irreversible transition, never an automatic timer after “switch succeeded.”
 
-## Comparison of Sharding Strategies
+### Hot tenant overwhelms both sides
 
-| Strategy | Pros | Cons | Best For |
-|----------|------|------|----------|
-| Hash | Even distribution | Range queries hit all shards | Random access patterns |
-| Range | Range queries efficient | Hot spots on recent data | Time-series with range queries |
-| Directory | Flexible, can rebalance | Extra lookup, SPOF | Complex routing rules |
-| Consistent Hash | Minimal data movement | Complex implementation | Dynamic shard count |
+A hot tenant is copied while foreground writes continue. Copy scans evict source cache; target apply lag grows; application retries amplify both. Per-migration I/O and concurrency budgets yield to foreground SLOs, and the controller pauses before either shard crosses its safe envelope. Resharding is subject to [backpressure](07-backpressure.md) and [retry budgets](10-retries-timeouts-hedging.md), not exempt maintenance traffic.
 
----
+## Overload and failure policy
 
-## Key Takeaways
+Routers enforce per-tenant and per-shard admission. A saturated shard should reject early with retry metadata rather than allow connection pools and queues to exhaust across the fleet. Scatter/gather has a stricter cost budget than point routing. Migration workers use separate queues and cannot consume the last replica, I/O, or WAL headroom.
 
-1. **Choose shard key carefully**: High cardinality, even distribution, query-aligned—changing shard keys later is extremely difficult
+Directory failure modes are explicit:
 
-2. **Avoid cross-shard operations**: Design schema so common queries stay within a single shard
+- **read unavailable:** continue last known-good assignments; block new placements;
+- **stale route:** shard fencing rejects and triggers refresh;
+- **controller unavailable:** active migrations pause safely at persisted states;
+- **target unhealthy before switch:** abort or wait; source remains authority;
+- **target unhealthy after switch:** forward-fix or reverse only with proven source currency;
+- **source loss during copy:** recover source replica or restart from a new consistent snapshot.
 
-3. **Plan for resharding**: Eventually you'll need to add shards; design for online resharding from day one
+## Multi-region sharding
 
-4. **Test at scale**: Sharding bugs often only appear at scale; test with production-like data volumes
+**Reference design.** Separate placement from replication. A routing unit has one write home/epoch even if it has read replicas in several regions. Moving the home is a failover or tenant-mobility protocol requiring fencing and replication evidence, not a DNS update.
 
-5. **Consider alternatives first**: Read replicas, caching, and vertical scaling are simpler—shard only when necessary
+The directory itself is globally replicated, but routers use regional snapshots. Do not require a cross-ocean consensus read for every database request. Regional capacity must satisfy evacuation scenarios, and residency constraints can restrict eligible targets. See [multi-region architecture](09-multi-region-architecture.md) and [cell-based architecture](11-cell-based-architecture.md).
 
-6. **Tooling matters**: Use proven sharding solutions (Vitess, Citus, ProxySQL) rather than building from scratch
+## Security and abuse boundaries
 
-7. **Monitor shard balance**: Regularly check for hot shards and data skew
+The routing key is untrusted input. Authenticate tenant identity independently and verify that request credentials are authorized for the resolved routing unit. Never accept a caller-supplied shard hostname. Routers use mutually authenticated connections to an allowlisted shard inventory and sign or integrity-check directory snapshots.
+
+The directory reveals tenant placement and can become a high-value enumeration target. Apply least privilege, audit reads/writes, encrypt sensitive policy metadata, and separate migration approval from execution. Dedicated shards improve noisy-neighbor isolation but do not replace row/database authorization.
+
+During moves, temporary copies and change streams inherit the original classification, encryption, retention, and deletion obligations. Verify cryptographic erasure or physical cleanup after completion. See [multi-tenancy](12-multi-tenancy.md), [zero trust](../10-security/05-zero-trust-architecture.md), and [encryption](../10-security/06-encryption.md).
+
+## Observability and verification
+
+Operate the lifecycle, not only shard CPU:
+
+- point-route vs scatter rate and shards touched/query;
+- directory generation age, lookup latency, and stale-epoch rejection;
+- load/storage skew by shard and routing unit;
+- connection/WAL/compaction/replication saturation;
+- migration bytes, checkpoint, CDC lag, validation mismatches, and ETA;
+- source/target semantic divergence by key range;
+- cutover retry, pause duration, rollback readiness, and stale-writer attempts;
+- tenant-move policy/residency violations;
+- cross-shard transaction and index lag;
+- temporary duplicate storage and migration network cost.
+
+Verification includes property tests that every key maps exactly once, router/shard epoch tests, duplicate/reordered CDC events, crash/restart at every workflow state, full and sampled anti-entropy, overloaded source/target tests, stale routers, directory partitions, rollback after new-target writes, and secure source deletion.
+
+The migration controller should be model-checked or systematically fault-injected around the fencing/switch states. “Happy-path copy completed” gives little confidence in the only seconds where two locations can contend for authority.
+
+## Migration from an unsharded database
+
+**Reference design.** Introduce sharding without a flag day:
+
+1. add a stable routing key to every authoritative record and write path;
+2. reject or inventory queries that cannot name a routing scope;
+3. place a router/proxy in front while it still routes everything to the original database;
+4. create the directory with one initial placement generation;
+5. deploy destination shards and stream a canary routing unit;
+6. shadow reads and validate semantics;
+7. fence and switch canaries, then expand gradually;
+8. retain rollback and anti-entropy until all routing units move;
+9. remove fallback-to-original routing so bugs fail visibly;
+10. retire the source only after completeness, backup, and audit evidence.
+
+This is an online [migration strategy](../15-deployment/06-migration-strategies.md), not merely a schema migration.
+
+## Design review questions
+
+1. Which measured single-shard limit requires sharding now?
+2. What is the routing unit, and can the largest unit move within the safety window?
+3. Which operations are guaranteed shard-local, and how are violations detected?
+4. What is authoritative for placement, and what fences stale routers?
+5. How are snapshot and changes joined without a gap?
+6. What semantic validation blocks cutover?
+7. Can rollback include writes committed after the switch?
+8. How much foreground headroom remains during copy, repair, and regional failure?
+9. How are scatter queries and global indexes bounded?
+10. How do residency, encryption, retention, and deletion follow a tenant move?
+
+## Primary sources
+
+- [Adya et al., “Slicer: Auto-Sharding for Datacenter Applications,” OSDI 2016](https://www.usenix.org/system/files/conference/osdi16/osdi16-adya.pdf)
+- [Stripe Engineering, “How Stripe's document databases supported 99.999% uptime with zero-downtime data migrations,” 2024](https://stripe.dev/blog/how-stripes-document-databases-supported-99.999-uptime-with-zero-downtime-data-migrations)
+- [Vitess 25.0 documentation, VReplication overview](https://vitess.io/docs/25.0/reference/vreplication/vreplication/)
+- [Vitess documentation, traffic cutover internals](https://vitess.io/docs/23.0/reference/vreplication/internal/cutover/)
+- [MongoDB 8.0 documentation, resharding a collection](https://www.mongodb.com/docs/v8.0/core/sharding-reshard-a-collection/)
+- [MongoDB documentation, adding shards and capacity considerations](https://www.mongodb.com/docs/manual/tutorial/add-shards-to-shard-cluster/)

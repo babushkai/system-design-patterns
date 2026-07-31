@@ -2,11 +2,13 @@
 
 ## TL;DR
 
-Retrieval-augmented generation (RAG) is not “put embeddings in a vector database and prepend nearest chunks.” It is a versioned search and evidence-publication system coupled to a probabilistic generator. Its correctness depends on document identity, parsing, update and deletion semantics, authorization before retrieval, query understanding, hybrid candidate generation, reranking, evidence-budget allocation, citation provenance, abstention, and separate evaluation of retrieval and generation.
+Retrieval-augmented generation (RAG) is a versioned search and evidence-publication system coupled to a probabilistic generator. Correctness depends on document identity, parsing, update and deletion semantics, authorization before retrieval, query understanding, hybrid candidate generation, reranking, evidence-budget allocation, citation provenance, abstention, and separate evaluation of retrieval and generation.
 
 A production design has two planes. The **indexing control plane** discovers sources, creates immutable document revisions, parses and enriches content, builds versioned sparse/dense indexes, validates them, and atomically publishes a corpus snapshot. The **query data plane** authenticates the caller, plans a retrieval request, applies mandatory filters, retrieves and reranks candidates, assembles an evidence packet, generates an answer under a grounded-output contract, and records claim-to-source provenance.
 
 Use long context when the authoritative corpus is small and request-scoped; use pipeline RAG when retrieval steps are stable; use agentic retrieval when query decomposition must adapt at runtime and each extra search has an evidence-based stopping rule. Fine-tuning changes model behavior, not current factual memory, and is not a substitute for retrieval.
+
+The Search section covers [index architecture](../14-search-systems/01-inverted-indexes.md), [lexical execution](../14-search-systems/02-full-text-search.md), [vector retrieval](../14-search-systems/03-vector-search.md), and [ranking/evaluation](../14-search-systems/04-ranking-algorithms.md). RAG adds corpus and ACL publication, evidence-packet assembly, grounded generation, claim provenance, abstention, and joint retrieval/generation evaluation. A vector database is one query-plane component, not the RAG system boundary.
 
 ---
 
@@ -140,7 +142,7 @@ Evaluate chunking using the real query distribution. For each labeled question, 
 
 ### Enrichment without laundering facts
 
-Generated titles, summaries, hypothetical questions, entities, and keywords can improve matching, but they are retrieval metadata—not authoritative source content. Store them as derived fields with model and prompt versions. Never present a generated summary as verbatim evidence. If enrichment changes, rebuild or version the affected representation so results are reproducible.
+Generated titles, summaries, hypothetical questions, entities, and keywords can improve matching, but they are retrieval metadata, not authoritative source content. Store them as derived fields with model and prompt versions. Never present a generated summary as verbatim evidence. If enrichment changes, rebuild or version the affected representation so results are reproducible.
 
 ## Index and Representation Lifecycle
 
@@ -213,7 +215,7 @@ If prefiltering creates tiny partitions, use an architecture that preserves both
 
 Candidate retrieval optimizes recall under a wide budget; reranking spends more compute to improve precision. Cross-encoders or LLM rerankers see the query and candidate jointly and can capture relationships lost in independent embeddings.
 
-Reranking inputs should include enough structural context to judge relevance but not hidden unauthorized fields. Batch candidates, set a deadline, and define fallback behavior if the reranker fails. Preserve both initial and final ranks for diagnosis. A reranker may improve topical relevance while preferring fluent summaries over exact primary evidence, so label evidence sufficiency—not merely topical similarity.
+Reranking inputs should include enough structural context to judge relevance but not hidden unauthorized fields. Batch candidates, set a deadline, and define fallback behavior if the reranker fails. Preserve both initial and final ranks for diagnosis. A reranker may improve topical relevance while preferring fluent summaries over exact primary evidence, so label evidence sufficiency, not merely topical similarity.
 
 ### Diversity and deduplication
 
@@ -410,11 +412,12 @@ Do not select an embedding model from a generic leaderboard before building a re
 
 ## References
 
-- [Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks](https://arxiv.org/abs/2005.11401) — original RAG formulation
-- [Dense Passage Retrieval for Open-Domain Question Answering](https://arxiv.org/abs/2004.04906) — dual-encoder dense retrieval
-- [Lost in the Middle: How Language Models Use Long Contexts](https://arxiv.org/abs/2307.03172) — position-dependent context utilization
-- [RAGAS: Automated Evaluation of Retrieval Augmented Generation](https://aclanthology.org/2024.eacl-demo.16/) — reference-free RAG evaluation dimensions
-- [ARES: An Automated Evaluation Framework for Retrieval-Augmented Generation Systems](https://aclanthology.org/2024.naacl-long.20/) — synthetic training plus human-calibrated RAG judges
-- [BEIR: A Heterogeneous Benchmark for Zero-shot Evaluation of Information Retrieval Models](https://arxiv.org/abs/2104.08663) — heterogeneous retrieval evaluation
-- [ColBERT: Efficient and Effective Passage Search via Contextualized Late Interaction](https://arxiv.org/abs/2004.12832) — late-interaction retrieval
-- [OWASP: LLM Prompt Injection Prevention Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/LLM_Prompt_Injection_Prevention_Cheat_Sheet.html) — injection threats and structural mitigations
+- [Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks](https://arxiv.org/abs/2005.11401): original RAG formulation
+- [Dense Passage Retrieval for Open-Domain Question Answering](https://arxiv.org/abs/2004.04906): dual-encoder dense retrieval
+- [Lost in the Middle: How Language Models Use Long Contexts](https://arxiv.org/abs/2307.03172): position-dependent context utilization
+- [RAGAS: Automated Evaluation of Retrieval Augmented Generation](https://aclanthology.org/2024.eacl-demo.16/): reference-free RAG evaluation dimensions
+- [ARES: An Automated Evaluation Framework for Retrieval-Augmented Generation Systems](https://aclanthology.org/2024.naacl-long.20/): synthetic training plus human-calibrated RAG judges
+- [BEIR: A Heterogeneous Benchmark for Zero-shot Evaluation of Information Retrieval Models](https://arxiv.org/abs/2104.08663): heterogeneous retrieval evaluation
+- [ColBERT: Efficient and Effective Passage Search via Contextualized Late Interaction](https://arxiv.org/abs/2004.12832): late-interaction retrieval
+- [Vector Retrieval Systems](../14-search-systems/03-vector-search.md) and [Ranking and Evaluation Systems](../14-search-systems/04-ranking-algorithms.md): canonical retrieval-engine internals and evaluation boundaries
+- [OWASP: LLM Prompt Injection Prevention Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/LLM_Prompt_Injection_Prevention_Cheat_Sheet.html): injection threats and structural mitigations

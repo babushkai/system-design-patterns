@@ -1,359 +1,145 @@
 # B-Trees
 
-## TL;DR
+A database B-tree is an ordered map engineered around fixed-size pages, a buffer pool, concurrent structural changes, and crash recovery. Its value is not the textbook `O(log n)` claim; many structures have that asymptotic cost. The value is high fanout: a handful of page accesses locates a key among billions, upper levels remain cached, and linked leaves turn an ordered range into mostly sequential work.
 
-The B-tree is the default index structure of nearly every OLTP database, and it has survived 50+ years for one reason: it matches the shape of the memory hierarchy. A tree of page-sized nodes with fanout in the hundreds keeps a billion keys reachable in 4 page reads — of which 3 are usually cached, so a point lookup costs one disk I/O or none. The parts the textbook picture omits are where production behavior lives: B-trees are really *buffer-pool structures* (a "disk read" is usually a memory read plus bookkeeping); write amplification is page-sized, not row-sized (a 100-byte update dirties a 8–16KB page, plus WAL, plus possibly a full-page image); concurrent access is governed by latch protocols (crabbing, optimistic descent, B-link sideways pointers) that determine multicore scalability; and key choice — sequential vs random — swings insert throughput and index size by integer factors. This chapter builds the cost model from the page up, covers splits/merges, concurrency, recovery interplay, PostgreSQL/InnoDB specifics, and the failure modes (bloat, UUID keys, over-indexing) that actually page people.
+A B+-tree implementation must account for page structure, search and mutation algorithms, latching, split recovery, and the physical cost model. [Secondary Indexes](../02-distributed-databases/06-secondary-indexes.md) owns distributed placement and consistency of alternate access paths. [Write-Ahead Logging](./04-write-ahead-logging.md) owns transaction recovery theory, while [LSM Trees](./02-lsm-trees.md) covers the write-buffered alternative.
 
----
+## Workload and storage contract
 
-## The Cost Model: Pages, Fanout, and the Memory Hierarchy
+Characterize point lookups, bounded ranges, ordered scans, inserts, in-place updates, and deletes separately. Record key and payload width distributions, ordering and skew, buffer-pool budget, page size, concurrent readers and writers, durability mode, snapshot lifetime, and latency percentiles. A tree serving immutable 8-byte keys with 99% cache hits is a different system from one indexing variable-length URLs under random updates.
 
-Storage is read in pages, not bytes. A random read costs roughly the same whether you use 8 bytes of the page or all of it:
+Define what the leaf value means. In a heap-organized table it is usually a stable or version-aware row locator. In a clustered table the primary tree’s leaf contains the row, while each secondary leaf often contains the primary key. A wide clustered key therefore widens every secondary index. Covering payloads save a second lookup but enlarge leaves and make more updates touch the index.
 
-```
-Access cost (order of magnitude):
-  L1/L2 cache hit:      ~1-10 ns
-  DRAM (buffer pool):   ~100 ns
-  NVMe SSD random 4KB:  ~20-100 μs      (~1,000× DRAM)
-  SATA SSD random:      ~100-200 μs
-  HDD random (seek):    ~5-10 ms        (~100,000× DRAM)
+The API contract should distinguish logical locks from physical latches. A transaction lock protects a key or predicate for isolation. A latch protects page bytes for microseconds while a thread reads or modifies them. Holding a page latch while waiting for network, user input, or a transaction lock is a convoy bug.
 
-Design consequence: the only number that matters for a disk-resident
-index is PAGE READS PER OPERATION. Comparisons are free by comparison.
-```
+## Page state and structural invariants
 
-The B-tree's answer: make each node a full page, so each page read narrows the search by a factor of the *fanout* — the number of children per node — rather than a factor of 2:
+Most database “B-trees” are B+-trees: internal pages contain separator keys and child page IDs; leaves contain all logical entries and form an ordered sibling chain. A slotted page supports variable-size records:
 
-```
-Fanout arithmetic (8 KB page, ~16-byte keys + 8-byte child pointers):
-  entries per internal page ≈ 8192 / 24 ≈ 340 → call it ~300
+```text
++---------------- page ----------------+
+| header | slot array -> free <- records|
++---------------------------------------+
 
-  Height 1:  ~300 keys
-  Height 2:  ~90,000
-  Height 3:  ~27,000,000
-  Height 4:  ~8,100,000,000
-
-A billion-row table is a 4-level tree. And the top of the tree is tiny:
-  root:               1 page
-  level 2:          ~300 pages   (~2.4 MB)
-  level 3:       ~90,000 pages   (~700 MB)
-→ root + level 2 always cached; level 3 mostly cached.
-  A point lookup is typically 3 buffer-pool hits + at most 1 real I/O.
+header: page type, format version, generation, page LSN,
+        lower/upper free-space bounds, sibling IDs, high key, checksum
+slot:   key order plus offset/length into the record area
 ```
 
-This is the whole game: **log_fanout(n) page accesses, of which almost all are cache hits because upper levels are microscopic relative to the data**. Binary search trees, skip lists, and hash tables lose on disk not because their asymptotics are worse but because their per-step narrowing factor doesn't pay for a page-sized I/O.
+The tree’s persistent state includes a root page ID and generation, allocation metadata, page contents, and recovery log coordinates. Readers may also pin a root or page generation for a snapshot. The implementation maintains these invariants:
 
----
+1. Keys are ordered within a page according to one versioned comparator and collation.
+2. An internal separator covers every key reachable through its child, without gaps or ambiguous ownership.
+3. Every live leaf is reachable from the root and the sibling chain preserves global order.
+4. Non-root pages respect implementation occupancy rules, except during logged transitions.
+5. A page is not reused while a reader, WAL record, backup, or parent pointer can still identify its old generation.
+6. A page whose update is visible on disk has a page LSN no greater than the durable WAL frontier required to redo it.
+7. A structural operation is recoverable from every crash point; readers see the old route, the new route, or a valid sideways path.
 
-## Structure: B+-Trees, Since That's What Everyone Builds
+Separator keys need not duplicate a complete user key. Prefix or suffix truncation can retain only the shortest value that distinguishes adjacent children, increasing fanout. The comparator and truncation rules are persistent-format semantics; upgrading them requires validation or rebuild.
 
-What databases call a "B-tree" is almost always a **B+-tree**: values live only in the leaves; internal nodes hold routing keys and child pointers; leaves are chained with sibling pointers.
+## Cost model: fanout, height, and cache
 
-```
-     ┌─────────────┐
-     │  30  |  60   │                ← internal: routing keys only
-     └──┬────┬────┬─┘
-        ↓    ↓    ↓
-   ┌──────┐ ┌──────┐ ┌──────┐
-   │10|20 │→│30|40 │→│60|80 │       ← leaves: keys + values, sibling-linked
-   └──────┘ └──────┘ └──────┘
+For page size `P`, header and slot overhead `H`, average internal separator bytes `K`, and child-pointer bytes `C`, approximate fanout is:
 
-Why values-only-in-leaves wins:
-  1. Internal nodes stay small (key + pointer, no payload)
-     → maximum fanout → minimum height
-  2. Every lookup has identical depth → predictable latency
-  3. Range scan = locate start leaf, then walk sibling pointers
-     sequentially — no re-traversal
-  4. Internal keys are only separators: they can be truncated to the
-     shortest prefix that still routes correctly ("suffix truncation"),
-     raising fanout further
+```text
+fanout F ~= floor((P - H) / (K + C + slot_overhead))
+height h ~= ceil(log_F(number_of_leaf_pages)) + 1
+leaf pages ~= live_entry_bytes / (P * target_leaf_fill)
 ```
 
-The classical B-tree (values in every node) survives mainly in textbooks; SQLite uses it for index b-trees but B+ for tables, and everything else — PostgreSQL nbtree, InnoDB, SQL Server, Oracle, WiredTiger — is B+ with refinements.
+With an 8 KiB page and roughly 24 bytes per separator-plus-pointer, fanout is on the order of hundreds. Four levels can cover billions of entries. The root and first internal levels occupy little memory, so a point lookup usually performs several buffer hits and zero or one storage reads, not four independent random I/Os.
 
-### Inside a page: the slotted layout
+A range returning `Krows` costs one descent plus approximately `ceil(Krows / entries_per_leaf)` leaf visits, adjusted for visibility checks and heap fetches. If the leaf contains only row locators, unordered heap access may dominate the apparently sequential index scan. A covering or clustered layout changes that cost, at the price of wider entries.
 
-```
-┌──────────────────────────────────────────────────────┐
-│ header │ slot array →   ...free space...   ← records │
-└──────────────────────────────────────────────────────┘
-  header: page LSN, record count, free-space pointers
-  slots:  (offset, length) pairs, kept sorted by key
-  records: variable-length, grow from the end
+Capacity must use measured cache misses. If point-query rate is `Qp`, tree height is `h`, and per-level miss probabilities are `m_i`, expected page reads are:
 
-Binary search runs over the slot array (fixed-width, cache-friendly);
-records never move on insert — only slots do. Deletion marks a slot
-dead; space is reclaimed by in-page compaction when needed.
+```text
+random page reads/s ~= Qp * sum(m_i) + heap_fetch_misses
+index bytes         ~= leaf_pages * P + internal_pages * P
 ```
 
-The page LSN in the header is the hook into [Write-Ahead Logging](./04-write-ahead-logging.md): recovery compares it against log records to decide which changes are already on the page — the mechanism that makes redo idempotent.
+Once randomly touched leaves outgrow the buffer pool, `m_leaf` rises sharply and latency follows device IOPS. Adding CPU does not fix that phase change.
 
-### Clustered vs. secondary: what a "value" is
+## Read and write paths
 
-```
-Heap tables (PostgreSQL):
-  index leaf holds (key → TID), a pointer into the heap
-  every index on the table is equal; row lives in the heap
+A point read pins the current root, compares the search key with separators, follows child IDs, and searches the leaf slot array. With B-link-style pages, each page carries a high key and right-sibling pointer. If a concurrent split moved the desired key to the right, the reader follows the sibling rather than restarting or trusting a temporarily stale parent.
 
-Clustered index (InnoDB, SQL Server default):
-  the PRIMARY KEY B+-tree's leaves ARE the rows
-  secondary index leaves hold (key → primary key value)
-  → secondary lookup = two B-tree descents (secondary, then PK)
-  → a fat primary key silently fattens EVERY secondary index
-```
+An ordered range descends once, then walks leaves. The scan records enough page generation and key state to resume after concurrent splits. It must not hold an entire leaf chain latched. Snapshot visibility is evaluated by the transaction layer; physical key order alone does not decide which row version is visible.
 
-That last line is a recurring production surprise: a 36-byte UUID-string primary key in InnoDB adds 36 bytes to every entry of every secondary index on the table.
+### Insert and split protocol
 
----
+The common insert path latches one leaf, verifies that the search route is still valid, writes the record or slot, emits WAL, and releases. If the leaf lacks space, a robust B-link split proceeds conceptually as follows:
 
-## Operations, and Where the Cost Actually Is
+1. allocate and initialize a new right page;
+2. move the upper key range and copy the old right sibling into it;
+3. set the old page’s high key and right pointer to the new page;
+4. WAL-log the transition so both pages are recoverable;
+5. install the new separator in the parent, splitting ancestors if needed.
 
-### Search and range scan
+Publishing the sideways link before depending on the parent prevents a concurrent reader from losing the new page. The parent update may be helped by another thread or completed during recovery. A root split creates a new root and changes the root metadata atomically under its own logged protocol.
 
-```
-Point lookup:  descend root → leaf, binary search each page
-  cost = height page accesses ≈ 3-4, nearly all cached
+Sequential keys repeatedly touch the rightmost leaf. They pack cache and pages efficiently but can contend on one latch. Random keys distribute latch ownership, yet touch the entire leaf working set and tend to leave more split slack. Time-ordered distributed IDs often balance locality and decentralised generation, but they still need a primary-key width and hotspot analysis.
 
-Range scan [a, b):  descend to leaf containing a,
-  then walk sibling pointers until b
-  cost = height + ⌈K / entries_per_leaf⌉ sequential page reads
-  — sequential after the seek, which is why B-trees serve
-    ORDER BY ... LIMIT and time-range queries so well
-```
+### Update, delete, and space reuse
 
-### Insert and the split cascade
+An update that leaves indexed columns unchanged may avoid the tree entirely or only change a clustered leaf. Changing a key is logically delete-old plus insert-new. In heap databases, a row relocation also requires stable indirection or updates to every referring index.
 
-```
-insert(k, v):
-  descend to leaf; if room → write into page (common case: 1 dirty page)
-  if full → SPLIT:
-    allocate new page, move upper half of entries there,
-    insert separator key into parent
-    if parent full → split parent … possibly up to the root
-    root split → tree grows one level (the ONLY way height increases,
-    which is why B-trees stay balanced with no rebalancing pass)
-```
+Production engines rarely merge every underfull page as textbooks suggest. They mark entries dead, compact within a page, unlink wholly empty pages, and merge only when benefit exceeds latch and WAL cost. This avoids merge/split oscillation but permits bloat after mass deletes. Reclamation waits for the oldest reader and recovery/backup frontier; only then may the allocator reuse a page ID with a new generation.
 
-Two facts keep splits cheap in aggregate. First, they're rare: a leaf absorbs on the order of `entries_per_leaf / 2` inserts between splits, so amortized cost per insert is a fraction of a page write. Second, engines special-case the pattern that would be worst: **rightmost splits for sequential keys**. Inserting monotonically increasing keys always hits the rightmost leaf; a naive half split would leave a trail of half-empty pages. Instead, engines split "at the insertion point" (PostgreSQL's fastpath, InnoDB's sequential-insert heuristic), leaving left pages ~full and packing the index to 90%+ density for append-only keys.
+## Concurrency and recovery
 
-```
-Split economics, 8 KB leaves, ~150 entries/leaf:
+Classical latch crabbing acquires a child before releasing its parent and retains ancestors only while a split could propagate through them. Modern fast paths descend optimistically with shared latches or version counters, acquire an exclusive leaf latch, validate that nothing relevant changed, and restart rarely. B-link high keys make structure changes observable without blocking readers on parent repair.
 
-  Sequential keys (timestamps, sequences):
-    splits only at right edge, pages left ~100% full
-    index density ~90-100%, minimal page count
+Logical key and predicate locks remain separate. A range scan under serializable isolation may lock gaps or use predicate-conflict tracking even though its physical latches are already released. Confusing these layers either destroys concurrency or admits phantoms.
 
-  Random keys (UUIDv4):
-    every leaf equally likely to split; steady-state fill ≈ 2/3 (ln 2 ≈ 69%)
-    → ~1.4× more leaf pages for the same data
-    → 1.4× more buffer-pool pressure, 1.4× more pages to WAL-image
-    AND: every insert touches a random page → the working set is the
-    ENTIRE leaf level; with a 700 MB leaf level and a smaller buffer
-    pool, every insert is a read-modify-write with a real disk read.
-```
+WAL makes dirty-page writeback safe only if the log describing a page change reaches durable storage first. Page LSNs make redo idempotent. Full-page images, doublewrite buffers, checksums, or copy-on-write protect against torn pages; those mechanisms are detailed in [Write-Ahead Logging](./04-write-ahead-logging.md). Structural changes spanning pages use one atomic log record, a mini-transaction, or a recoverable sequence with explicit completion state.
 
-That second block is the "UUID primary keys are slow" phenomenon, quantified. Time-ordered IDs (ULID, UUIDv7, Snowflake IDs) restore the sequential pattern while keeping distributed generation — usually the right fix.
+Copy-on-write B-trees take another route: write a new leaf and every changed ancestor, then atomically publish a new root. Readers pin immutable roots and need almost no page latching. The cost is path-copy write amplification, delayed garbage collection, and often restricted writer concurrency. This is attractive for read-heavy embedded stores and filesystem metadata, not an automatic OLTP replacement.
 
-### Delete: lazier than the textbook
+## Specialized failure traces
 
-CLRS merges underfull nodes eagerly. Real systems mostly don't: PostgreSQL marks index tuples dead and lets VACUUM recycle *empty* pages only (it never merges partially-full ones); InnoDB merges only when a page drops below a threshold (`MERGE_THRESHOLD`, default 50%). Rationale: workloads that delete often re-insert in the same range, and merge-then-resplit thrashing costs more than carrying slack. Consequence: **B-tree indexes only grow tighter via rebuild** — a mass-delete leaves the index the same size until `REINDEX` / `OPTIMIZE TABLE`.
+### Crash makes a split page unreachable
 
----
+The engine allocates a right page and moves half the keys, then crashes before either linking it from the old leaf or logging a parent route. Recovery sees allocated bytes but no reachable path; acknowledged keys disappear. The split protocol must WAL-log and publish a recoverable sibling relationship before the old page stops owning those keys.
 
-## Write Amplification: Page-Sized, Plus the Log
+### Reused page ID causes an ABA read
 
-The unit of B-tree I/O is the page, so the write amplification for small rows is structural:
+A long reader remembers child page 900. Vacuum unlinks 900, the allocator immediately reuses it for an unrelated leaf, and the reader follows its stale pointer into valid but wrong bytes. Pin/epoch reclamation and page generations prevent reuse until no old route can survive.
 
-```
-UPDATE of a 100-byte row, 8 KB pages, worst case (PostgreSQL-flavored):
-  WAL record:                        ~150 bytes
-  full-page image (first touch of the page after a checkpoint):
-                                     ~8 KB into the WAL
-  heap page write (at checkpoint):    8 KB
-  index page write (if index updated): 8 KB
-  ────────────────────────────────────────────
-  ~24 KB of I/O for 100 logical bytes ≈ 240×  (worst case)
+### Random-key cache cliff
 
-Steady state is far better: pages absorb many updates between
-checkpoints (one page write amortizes over all of them), and only the
-first touch per checkpoint pays the full-page image. Realistic WA for
-OLTP: ~2-10×. But the WORST case is what sizes your disks and your
-checkpoint tuning — spiky WAL volume right after each checkpoint is
-the visible symptom.
-```
+An index grows beyond the buffer pool while UUID-like keys distribute inserts uniformly. Each insert now reads a cold leaf before dirtying it; device queue depth rises, checkpoint writes compete with reads, and p99 jumps although QPS changed little. The working-set model, not tree height, explains the incident.
 
-Full-page images exist because of **torn pages** — an 8 KB page write is not atomic on 4 KB-sector devices; the defenses (FPIs, InnoDB's doublewrite buffer) are covered in [Write-Ahead Logging](./04-write-ahead-logging.md).
+### Right-edge latch convoy
 
-Contrast with the [LSM tree](./02-lsm-trees.md): the LSM converts random page-sized writes into sequential batched writes (great for ingest) but pays repeatedly at compaction (10–30× WA on the *logical data*, spread over time). B-tree WA is per-update and immediate; LSM WA is deferred and background. Which is cheaper depends on update locality: hot rows updated repeatedly are nearly free in a B-tree (same page, one eventual write) and expensive in an LSM (every version rewritten through every level).
+A monotonically increasing key sends every writer to one leaf. The pages are dense and cached, yet threads wait on the same exclusive latch and throughput stops scaling with cores. Partitioning the key space, batching inserts, shortening the critical section, or using engine-specific sequential-insert mitigation addresses contention; replacing the disk does not.
 
-### Mitigations engines actually use
+### Comparator upgrade corrupts routing
 
-```
-- Buffer pool absorbs re-writes: dirty page written once per checkpoint,
-  not per update — checkpoint interval is a WA knob
-- Group/async commit amortize the WAL fsync (see WAL chapter)
-- HOT updates (PostgreSQL): update that changes no indexed column
-  rewrites only the heap page — zero index writes
-- Change buffering (InnoDB): secondary-index modifications for pages
-  not in memory are buffered and merged later — turns random index I/O
-  into batched I/O
-- B^ε-trees push this to the limit: each internal node carries a buffer
-  of pending messages flushed downward in batches — write-optimized
-  B-trees (TokuDB/PerconaFT lineage), trading read latency for write WA
-```
+Old pages were ordered with collation version X. New code compares with version Y, where two strings reverse order. A search follows the wrong separator and reports a missing row that is physically present. Persist comparator identity and rebuild into a new tree before activating new ordering semantics.
 
----
+## Operations, isolation, and migration
 
-## Concurrency: Latches, Crabbing, and Going Sideways
+Observe height, internal and leaf density, split rate by level, rightmost versus random splits, latch wait time by page role, buffer hits and physical reads, dirty-page age, WAL bytes per logical write, empty-page reclaim backlog, scan pages per returned row, and corruption/checksum errors. Relate them to key distribution and tenant, not only table totals. A hot tenant can monopolize a leaf range, cache, and latch even when aggregate load is normal.
 
-A B-tree under concurrent access must protect physical page integrity (latches, microsecond-scale) separately from transactional isolation (locks, transaction-scale). The interesting engineering is in the latches — with hundreds of cores, how you latch determines whether the index scales.
+Tenant prefixes improve locality and make range deletion possible, but expose tenant size and create hot contiguous ranges; hashing tenant plus key spreads load but makes tenant scans expensive. Enforce authorization above every index-only path, because avoiding a heap fetch must not bypass row security. Encrypt pages and backups, authenticate page-level repair sources, and treat index keys as sensitive: emails or document titles leak even when payload columns are encrypted.
 
-```
-Latch crabbing (the classical protocol):
-  descend holding parent latch until child latch acquired;
-  release parent as soon as child is "safe"
-  (safe = can't split for insert / can't underflow for delete)
+Page-size, collation, key-encoding, and clustered-key changes generally require a side-by-side rebuild. Create a new tree at snapshot frontier `L`, capture later mutations, apply them in key/version order, validate counts and sampled ranges, then atomically swap the root or catalog entry. Keep the old tree readable through rollback and cursor/snapshot lifetime. Page headers should carry format versions so recovery and upgrade binaries can reject rather than misparse an old page.
 
-  Readers: shared latches, release immediately → cheap
-  Writers: exclusive latches; the root is the choke point —
-  a pessimistic writer holds it until it knows no split will cascade
-```
+Verification combines a structural checker with a reference ordered map. Randomized tests insert, update, delete, split, and scan variable-width keys while checking reachability, separator coverage, leaf order, and uniqueness. Concurrency tests pause threads at every latch transition. Crash tests cut power after each WAL and page-write boundary, including root splits and page reuse. Corruption tests flip sectors and checksums; upgrade tests open N-1 data and recover N-1 WAL with the new binary.
 
-```
-Optimistic descent (what modern engines do):
-  descend with SHARED (or no) latches assuming no split will happen
-  latch exclusively only the leaf; if it turns out to split,
-  restart the descent pessimistically
-  → splits are rare, so the fast path wins almost always
-  Optimistic Lock Coupling generalizes this with per-page version
-  counters: readers don't latch at all, they validate versions —
-  reads scale linearly with cores
-```
+## Decision framework
 
-```
-B-link trees (Lehman & Yao 1981): every node gets a HIGH KEY and a
-RIGHT-SIBLING pointer. A split first creates the right sibling, then
-updates the parent — and a concurrent reader that lands on the old
-page mid-split detects (key > high key) and simply follows the sibling
-pointer sideways. Readers never block on splits; writers latch at most
-2-3 pages. This is PostgreSQL's actual implementation, and the reason
-its index scans don't stall behind concurrent inserts.
-```
+Choose a B+-tree when predictable point reads, ordered ranges, and repeated updates to a cacheable working set dominate. It is the natural general-purpose OLTP index. Choose an [LSM tree](./02-lsm-trees.md) when foreground random page modification is the ingest bottleneck and background rewrite capacity is available. Choose a hash index only when equality dominates and ordered operations truly have no value; choose specialized spatial, inverted, or vector structures for their corresponding predicates.
 
-Recovery interacts here too: a crash mid-split must not leave an unreachable page. PostgreSQL WAL-logs the split as one atomic record plus a deferred parent insert that is completed on redo; InnoDB uses mini-transactions (atomic multi-page redo groups). The invariant: **structural changes are atomic in the log even when they span pages** — see [Write-Ahead Logging](./04-write-ahead-logging.md).
+The most consequential B-tree choices are often outside the algorithm: key width and order, clustered versus heap layout, number of maintained indexes, buffer-pool residency, and snapshot lifetime. Model those before tuning split thresholds.
 
-### Copy-on-write B-trees: the other road
+## Primary references
 
-LMDB, BoltDB, and btrfs skip latching-for-writers entirely: never modify a page in place; write new copies of the changed leaf and its path to the root, then atomically swap the root pointer.
-
-```
-+ readers need NO latches ever (any root they hold is a consistent snapshot)
-+ crash recovery is free — old root is always valid, no WAL required
-+ snapshots/MVCC are a pointer copy
-- every logical write rewrites height pages (WA multiplied by tree height)
-- single writer at a time (LMDB), space reclamation needs GC
-→ superb for read-dominated embedded workloads; wrong shape for
-  write-heavy multi-writer OLTP
-```
-
----
-
-## PostgreSQL and InnoDB: The Knobs That Matter
-
-```
-PostgreSQL nbtree:
-  fillfactor (default 90): headroom per leaf to absorb inserts without
-    splitting — drop to 70-80 for heavy random-update columns
-  HOT updates: keep frequently-updated columns OUT of indexes so
-    updates skip index maintenance entirely
-    (check pg_stat_user_tables.n_tup_hot_upd / n_tup_upd)
-  B-tree deduplication (PG 13+): duplicate keys stored once with a
-    TID list — low-cardinality indexes shrink 3-10×
-  Bottom-up index deletion (PG 14+): kills dead index tuples at the
-    moment a page would split, preventing bloat from update churn
-  REINDEX CONCURRENTLY: the only way to un-bloat; VACUUM never
-    merges partially-empty index pages
-  Diagnostics: pgstatindex() → avg_leaf_density (<50% = bloated),
-    bt_metap() for height; pg_stat_user_indexes.idx_scan = 0 → drop it
-```
-
-```
-InnoDB:
-  clustered PK: keep it SHORT and MONOTONIC (bigint auto-inc or UUIDv7)
-    — every secondary index carries a copy of it
-  change buffer: batches secondary-index updates for cold pages
-  adaptive hash index: hash shortcut over hot B-tree pages, built
-    automatically (and sometimes worth disabling under contention)
-  innodb_fill_factor, MERGE_THRESHOLD per index
-```
-
-```
-When a B-tree is the wrong index (PostgreSQL menu):
-  BRIN: physically-ordered append-only data (time series) —
-    min/max per block range, ~1000× smaller than B-tree
-  GIN: contains-style queries (arrays, JSONB, full text)
-  Hash: equality-only, marginal wins; rarely worth it
-  Partial/covering indexes: cheaper than another full B-tree —
-    index only the rows (WHERE ...) or add INCLUDE payload columns
-    to enable index-only scans
-Multi-column indexes route by leftmost prefix: (a,b,c) serves
-  a / a,b / a,b,c — never b alone. Order columns by equality-first,
-  then range; a range predicate stops index use for later columns.
-```
-
----
-
-## Failure Modes
-
-**Index bloat from update/delete churn.** Dead index tuples accumulate; pages sit half-empty; the same logical index costs 2–5× the pages, cache hit rate falls, and scans slow down *gradually* — no error, just drift, exactly like an overfilled bloom filter. Watch `avg_leaf_density`, and schedule `REINDEX CONCURRENTLY` for write-churned indexes. The PG 13/14 dedup + bottom-up-deletion features cut this dramatically; on older versions bloat management is a standing operational duty.
-
-**Random-key insertion working sets.** UUIDv4 keys make every insert touch a uniformly random leaf. Once the leaf level exceeds the buffer pool, each insert = 1 random read + eventually 1 random write, and throughput falls off a cliff that looks like "the database got slow at 200 GB". Fix the key (UUIDv7/ULID), not the hardware.
-
-**The hot right edge.** Monotonic keys concentrate all inserts on the rightmost leaf — a latch hotspot under high concurrency (SQL Server's "last page insert contention", mitigated with OPTIMIZE_FOR_SEQUENTIAL_KEY; PostgreSQL's fastpath relieves most of it). Ironically the opposite pathology of the previous one: sequential keys stress one latch, random keys stress the whole cache.
-
-**Over-indexing.** Every index is a full extra B-tree maintained on every write: 5 secondary indexes ≈ 6 page-dirtying operations per insert plus their WAL. Write-heavy tables with double-digit index counts spend most of their I/O maintaining indexes nobody queries. Audit `idx_scan` and delete.
-
-**Long-running transactions defeating cleanup.** HOT pruning, bottom-up deletion, and VACUUM all respect the oldest visible snapshot; one forgotten `idle in transaction` session holds back index cleanup database-wide and converts churn directly into bloat.
-
-**Fat keys.** Wide text keys shrink fanout (fewer separators per page → taller tree → more I/O per lookup) and, in InnoDB, replicate into every secondary index. Index a hash or prefix of long strings; keep PKs to 8–16 bytes.
-
----
-
-## Decision Framework
-
-| Situation | Reach for |
-|---|---|
-| OLTP point lookups + short range scans, moderate write rate | B+-tree (the default for a reason) |
-| Write-heavy ingest, few point reads, key-ordered data | [LSM tree](./02-lsm-trees.md) — sequential writes beat page RMW |
-| Append-only time series, range scans by time | BRIN (PostgreSQL) or LSM with time-ordered keys |
-| Distributed ID generation + B-tree PK | UUIDv7/ULID/Snowflake — never UUIDv4 as a PK |
-| Read-mostly embedded store, snapshot reads | COW B-tree (LMDB/BoltDB) |
-| Update-heavy columns | Keep them out of indexes (enable HOT); lower fillfactor |
-| Low-cardinality index (status, type) | PG 13+ dedup B-tree, or partial index per hot value |
-| Index larger than buffer pool, random access | Expect I/O-bound behavior; shrink keys, drop unused indexes, or accept the cache-miss economics |
-
----
-
-## Key Takeaways
-
-1. **Count page reads, and count which of them are cached** — a B-tree lookup is height accesses, of which the top 2–3 levels are effectively free; the whole design exists to maximize fanout.
-2. **B+ everywhere**: values in leaves, truncated separators in internal nodes, sibling-linked leaves for scans.
-3. **Write amplification is page-sized plus log-sized** — worst case ~hundreds×, amortized 2–10×; checkpoint frequency and full-page images set the spikes.
-4. **Key order is a first-class design decision** — sequential keys pack pages and cache beautifully (but contend on the right edge); random UUIDs bloat the tree ~1.4× and turn the whole leaf level into the working set.
-5. **Deletes don't shrink B-trees** — only rebuilds do; bloat is a monitored, managed quantity, not an anomaly.
-6. **Modern concurrency is optimistic + sideways** — version-validated descents and B-link sibling pointers, not root-latch convoys.
-7. **In clustered designs the PK is part of every index** — short, monotonic primary keys are a storage decision, not a style preference.
-8. **The B-tree/LSM choice is about update locality** — repeated updates to hot rows favor B-trees; high-volume unique-key ingest favors LSMs.
-
----
-
-## References
-
-- Bayer, R., & McCreight, E. (1972). *Organization and Maintenance of Large Ordered Indexes*. Acta Informatica.
-- Comer, D. (1979). *The Ubiquitous B-Tree*. ACM Computing Surveys.
-- Lehman, P., & Yao, S. B. (1981). *Efficient Locking for Concurrent Operations on B-Trees*. TODS. (B-link trees.)
-- Graefe, G. (2011). *Modern B-Tree Techniques*. Foundations and Trends in Databases. (The comprehensive survey.)
-- Leis, V., et al. (2019). *Optimistic Lock Coupling: A Scalable and Efficient General-Purpose Synchronization Method*. IEEE Data Eng. Bulletin.
-- Brodal, G., & Fagerberg, R. (2003); Bender, M., et al. — B^ε-tree / write-optimization line of work behind TokuDB/PerconaFT.
-- PostgreSQL documentation: *nbtree README*, B-tree deduplication (13), bottom-up deletion (14); `pageinspect`, `pgstattuple`.
-- MySQL/InnoDB documentation: clustered indexes, change buffer, adaptive hash index.
+- Bayer, R., and McCreight, E. [Organization and Maintenance of Large Ordered Indices](https://doi.org/10.1007/BF00288683). Acta Informatica, 1972.
+- Lehman, P. L., and Yao, S. B. [Efficient Locking for Concurrent Operations on B-Trees](https://doi.org/10.1145/319628.319663). ACM TODS, 1981.
+- Mohan, C., and Levine, F. [ARIES/IM: An Efficient and High Concurrency Index Management Method Using Write-Ahead Logging](https://doi.org/10.1145/128765.128770). SIGMOD, 1992.
+- Graefe, G. [Modern B-Tree Techniques](https://doi.org/10.1561/1900000028). Foundations and Trends in Databases, 2011.
+- PostgreSQL source documentation. [B-Tree implementation README](https://github.com/postgres/postgres/blob/master/src/backend/access/nbtree/README).
+- SQLite. [Database File Format: The B-Tree Pages](https://www.sqlite.org/fileformat.html#b_tree_pages).

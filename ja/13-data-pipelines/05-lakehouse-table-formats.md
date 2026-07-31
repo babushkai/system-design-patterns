@@ -90,7 +90,7 @@ graph LR
     MAINT["Maintenance jobs:<br/>compact · expire · cleanup"] -.-> BRONZE & SILVER & GOLD
 ```
 
-[CDC](./04-change-data-capture.md)でブロンズへ([ストリーミング](./02-stream-processing.md)はIceberg/Deltaのトランザクショナルなコミットでexactly-onceシンク)、メダリオンで精錬し、すべてのコンシューマ — 対話的SQL、ウェアハウス、ML — が*同じ*統治されたテーブルを読みます。これは[lambda/kappa](./03-lambda-kappa-architecture.md)論争の解消です: コミットが安価でアトミックだから、1つのストレージ層がバッチとストリーミングの両方に仕えます。
+[CDC](./04-change-data-capture.md)でブロンズへ([ストリーミング](./02-stream-processing.md)はIceberg/Deltaのトランザクショナルなコミットでexactly-onceシンク)、メダリオンで精錬し、すべてのコンシューマ — 対話的SQL、ウェアハウス、ML — が*同じ*統治されたテーブルを読みます。これは[バッチ](./01-batch-processing.md)とストリームを別実装にする議論の解消です: コミットが安価でアトミックだから、1つのストレージ層が両方に仕えます。
 
 ### それでもウェアハウスが勝つ場面
 

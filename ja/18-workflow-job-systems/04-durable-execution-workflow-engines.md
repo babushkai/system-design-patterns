@@ -84,7 +84,7 @@ TimerFired(id=payment-settlement)
 idempotency_key = workflow_id + ":" + activity_id + ":" + logical_operation
 ```
 
-Durable workflow engineは[Saga](../05-messaging/09-saga-pattern.md)の自然な実装です。
+Durable workflow engineは[分散トランザクションとSaga](../02-distributed-databases/07-distributed-transactions.md#saga-pattern-deep-dive)の自然な実装です。
 
 ```mermaid
 flowchart LR
@@ -122,6 +122,6 @@ flowchart LR
 ## 関連パターン
 
 - [Event Sourcing](../05-messaging/05-event-sourcing.md)
-- [Saga Pattern](../05-messaging/09-saga-pattern.md)
+- [Effect Commit Protocols](./06-retry-idempotency-compensation.md)
 - [Outbox Pattern](../05-messaging/07-outbox-pattern.md)
 - [Failure Modes](../01-foundations/06-failure-modes.md)

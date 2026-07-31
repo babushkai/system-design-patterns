@@ -1,798 +1,483 @@
-# Cache Strategies
+# Cache Semantics and Economics
 
 ## TL;DR
 
-Caching reduces latency and database load by storing frequently accessed data in fast storage. Key strategies: Cache-aside (lazy loading), Read-through, Write-through, Write-behind, and Write-around. Choose based on read/write ratios, consistency requirements, and failure tolerance. Cache hit rate is the primary metric—optimize for your access patterns.
+A cache is a disposable, incomplete, and potentially stale projection of an authoritative system. The design is not complete when a team chooses Redis, a TTL, or an eviction policy. It is complete when the team can state:
+
+- which system owns the truth;
+- exactly which reads are eligible;
+- how keys and values are versioned;
+- the maximum acceptable age of a response;
+- what happens on a miss, cache timeout, or stale hit;
+- how much origin load a cold cache creates;
+- which capacity, cost, and correctness measurements justify the cache.
+
+Cache-aside and read-through describe who performs a load. Write-through, write-around, and write-behind describe where writes flow. None of them creates atomicity between an independent cache and database. Treat a cache hit as an optimization that must preserve the application's correctness contract.
+
+A cache design must state its policy, tier placement, sizing, and economics. Freshness and invalidation are covered in [Cache Invalidation and Coherence](02-cache-invalidation.md), cluster mechanics in [Distributed Cache Internals](03-distributed-caching.md), and refill protection in [Stampede, Cold Start, and Warming](04-cache-stampede.md).
 
 ---
 
-## Why Cache?
+## 1. Start With the Cache Contract
 
-### The Latency Problem
+### 1.1 A cache entry is derived state
 
-```
-Access times:
-  L1 cache:         1 ns
-  L2 cache:         4 ns
-  RAM:              100 ns
-  SSD:              100 μs
-  Network (DC):     500 μs
-  Disk:             10 ms
+For an authoritative value $S(k)$, a cache entry is better modeled as metadata plus a value, not merely a byte string:
 
-Database query: 1-100 ms (with network)
-Cache hit: 1-10 ms (in-memory)
+~~~text
+CacheEntry {
+    key_schema_version
+    payload_schema_version
+    source_version          # row version, event offset, object generation, or ETag
+    generated_at            # when the value was read or computed
+    fresh_until
+    stale_until             # optional availability window
+    value | NOT_FOUND
+}
+~~~
 
-10-100x improvement possible
-```
+The useful invariants are:
 
-### Benefits
+1. **Authority:** loss of the entire cache does not lose authoritative data.
+2. **Key determinism:** equivalent requests map to the same key; requests with different authorization or result semantics do not.
+3. **Version safety:** old serializers, deployments, and invalidations cannot silently overwrite a newer source version.
+4. **Bounded reuse:** a response is served only while its age and version satisfy the endpoint's freshness contract.
+5. **Miss safety:** the origin remains protected when the cache is empty or unavailable.
+6. **Observability:** every response can be classified as fresh hit, stale hit, negative hit, miss, bypass, or error.
 
-```
-1. Reduced latency
-   Cache hit: 1ms vs DB query: 50ms
+If the first invariant is false (for example, acknowledged writes live only in Redis), the component is a database or durable write buffer. It needs durability, recovery, and consistency analysis beyond ordinary caching.
 
-2. Reduced database load
-   1000 QPS → 100 QPS to DB (90% hit rate)
+### 1.2 Contract worksheet
 
-3. Cost reduction
-   Cache memory cheaper than DB scaling
+Record a contract per cacheable object or query class:
 
-4. Improved availability
-   Can serve from cache during DB issues
-```
+| Decision | Example question | Evidence required |
+|---|---|---|
+| Source of truth | Which committed version is authoritative? | Database transaction, object generation, or log offset |
+| Eligibility | Which requests may share a value? | Tenant, locale, permissions, query shape |
+| Freshness | How old may a successful response be? | Product or safety requirement, not a guessed TTL |
+| Failure behavior | Serve stale, bypass, reject, or degrade? | Failure-mode review and origin capacity |
+| Load ownership | Application, cache library, proxy, or CDN? | One named owner for miss and refresh logic |
+| Admission | Which objects deserve memory? | Reuse-distance or request-trace measurement |
+| Eviction | What may be discarded first? | Miss cost, size, frequency, and recency |
+| Invalidation | TTL, delete, event, generation, or revalidation? | [Invalidation race analysis](02-cache-invalidation.md) |
+| Cold start | How much origin traffic appears at zero hit rate? | Load test and rollout budget |
+| Privacy | Can two principals observe the same entry? | Cache-key and response-header review |
 
----
-
-## Cache-Aside (Lazy Loading)
-
-### How It Works
-
-```mermaid
-graph LR
-    Client["Client"] -->|1. Check cache| Cache[("Cache")]
-    Cache -->|2. Miss| DB[("Database")]
-    DB -->|3. Fetch from DB| Cache
-    Cache -->|4. Store in cache<br/>5. Return| Client
-```
-
-```
-Application manages cache explicitly
-```
-
-### Implementation
-
-```python
-def get_user(user_id):
-    # Check cache first
-    cached = cache.get(f"user:{user_id}")
-    if cached:
-        return cached
-    
-    # Cache miss - fetch from database
-    user = db.query("SELECT * FROM users WHERE id = ?", user_id)
-    
-    # Store in cache for next time
-    cache.set(f"user:{user_id}", user, ttl=3600)
-    
-    return user
-```
-
-### Pros & Cons
-
-```
-Pros:
-  + Only requested data is cached
-  + Cache failures don't break reads
-  + Simple to implement
-  + Works with any data store
-
-Cons:
-  - First request always misses (cold start)
-  - Data can become stale
-  - Application must handle cache logic
-  - "Cache stampede" on cold cache
-```
+A statement such as “profiles use Redis for one hour” is not a contract. It omits source ownership, authorization, propagation, miss behavior, and the effect of a cache failure.
 
 ---
 
-## Read-Through
+## 2. Read and Write Policies
 
-### How It Works
+### 2.1 Cache-aside versus read-through
 
-```mermaid
-graph LR
-    Client["Client"] --> Cache[("Cache<br/>(handles fetch)")]
-    Cache -->|load on miss| DB[("Database")]
-```
+Both policies normally have the same state transition:
 
-```
-Cache transparently loads from DB on miss
-Application only talks to cache
-```
+~~~text
+ABSENT --load authoritative value--> FRESH --expiry/invalidation--> ABSENT
+~~~
 
-### Implementation
+They differ in ownership:
 
-```python
-class ReadThroughCache:
-    def __init__(self, cache, db):
-        self.cache = cache
-        self.db = db
-    
-    def get(self, key):
-        value = self.cache.get(key)
-        if value is None:
-            # Cache handles the fetch
-            value = self.db.query_by_key(key)
-            self.cache.set(key, value)
-        return value
+- **Cache-aside:** application code checks the cache, loads the origin on a miss, and fills the entry.
+- **Read-through:** a cache library or service owns the loader and exposes one read interface.
 
-# Application code is simpler
-user = cache.get(f"user:{user_id}")
-```
+Read-through centralizes timeouts, coalescing, serialization, and metrics. It does not make a stale value correct, and a remote read-through service can become an additional availability dependency.
 
-### Pros & Cons
+A safe read path is explicit about outcomes:
 
-```
-Pros:
-  + Simpler application code
-  + Cache logic centralized
-  + Consistent caching behavior
+~~~text
+read(key, deadline):
+    if request is not cache-eligible:
+        return origin.read(deadline), BYPASS
 
-Cons:
-  - Cache must understand data schema
-  - Harder to customize per-query
-  - Cache failure = read failure
-```
+    entry = cache.get(key, cache_budget)
+    if entry is fresh and schema-compatible:
+        return entry.value, FRESH_HIT
+    if entry is NOT_FOUND and still fresh:
+        return not_found, NEGATIVE_HIT
 
----
+    value, source_version = protected_origin_load(key, remaining_deadline)
+    best_effort_fill_if_newer(key, value, source_version)
+    return value, MISS
+~~~
 
-## Write-Through
+The phrase **protected origin load** is deliberate. A raw fallback during a cache outage can turn a cache incident into a database incident. [Stampede, Cold Start, and Warming](04-cache-stampede.md) covers coalescing, concurrency budgets, stale serving, and warming.
 
-### How It Works
+### 2.2 Write policy semantics
 
-```mermaid
-graph LR
-    Client["Client"] -->|1. Write| Cache[("Cache")]
-    Cache -->|2. Sync write| DB[("Database")]
-```
+| Policy | Acknowledged authority | Cache action | Principal risk |
+|---|---|---|---|
+| Write-around | Database commit | Delete or let expire | Miss immediately after a write |
+| Populate-after-commit | Database commit | Set committed value | Cache-set failure or reordered fills |
+| Write-through adapter | Usually database commit | Adapter writes both systems | Still a dual write unless one transaction owns both |
+| Write-behind | Durable cache or queue | Persist later | Data loss, replay, backlog, and ordering |
+| Invalidate from log | Database commit log | Consumer deletes/refreshes | Propagation lag and consumer failure |
 
-```
-1. Write to cache
-2. Cache synchronously writes to DB
-3. Return success after both complete
-```
+**Write-through is not a consistency guarantee.** If the database commits and the cache write fails, readers may see an older entry. If the cache is written first and the database transaction rolls back, readers may see a value that never committed. A correct design still needs ordering, retry, invalidation, or version validation.
 
-### Implementation
+For ordinary derived caches, the most auditable default is:
 
-```python
-class WriteThroughCache:
-    def set(self, key, value):
-        # Write to database first (must succeed)
-        self.db.write(key, value)
-        
-        # Then update cache
-        self.cache.set(key, value)
-        
-        return True
+1. commit the database transaction;
+2. durably record or derive an invalidation event;
+3. delete the cached projection;
+4. let a protected reader repopulate it.
 
-# Every write goes to both
-cache.set(f"user:{user_id}", user_data)
-```
+Updating instead of deleting can avoid a miss, but only when the updater has the committed value and source version and the cache can reject an older write.
 
-### Pros & Cons
+### 2.3 Write-behind changes the system boundary
 
-```
-Pros:
-  + Cache always consistent with DB
-  + No stale reads
-  + Simple mental model
+Returning success before the authoritative database accepts a write means the buffer is now authoritative for some interval. The minimum design includes:
 
-Cons:
-  - Write latency increased (cache + DB)
-  - Every write hits cache (may cache unused data)
-  - Cache failure blocks writes
-```
+- a durable log before acknowledgement;
+- idempotency keys and deterministic replay;
+- per-key ordering or conflict rules;
+- bounded backlog and producer backpressure;
+- recovery point and recovery time objectives;
+- reconciliation between buffered and persisted state;
+- an explicit response when the buffer cannot accept durable writes.
+
+An in-memory dirty-key set is not write-behind durability. It is acknowledged data-loss risk.
+
+### 2.4 Negative caching
+
+Caching an authoritative “not found” result protects the origin from repeated misses, typo traffic, and enumeration attacks. Use a distinct sentinel rather than overloading null.
+
+The negative key must include the same tenant and authorization dimensions as the positive key. Its TTL is usually shorter because creation can make the result stale. Creation must invalidate the negative entry. Do not negative-cache transient upstream errors as absence.
 
 ---
 
-## Write-Behind (Write-Back)
+## 3. Place Each Cache Tier Deliberately
 
-### How It Works
+### 3.1 A request may cross several coherence domains
 
-```mermaid
-graph LR
-    Client["Client"] -->|1. Write| Cache[("Cache")]
-    Cache -.->|2. Async batch persist| DB[("Database")]
-```
+~~~mermaid
+flowchart LR
+    B["Browser cache"] --> E["CDN / edge"]
+    E --> P["Reverse proxy / origin shield"]
+    P --> A["Application"]
+    A --> L1["L1: process memory"]
+    L1 --> L2["L2: distributed cache"]
+    L2 --> O[("Authoritative origin")]
+~~~
 
-```
-1. Write to cache immediately
-2. Return success
-3. Asynchronously persist to DB (batched)
-```
+These are not interchangeable copies:
 
-### Implementation
+| Tier | Scope | Best fit | Main correctness hazard |
+|---|---|---|---|
+| Browser | One user agent | Immutable assets, private revalidation | Cannot centrally enumerate or purge every client |
+| CDN/edge | Many users per point of presence | Public objects and responses | Cache-key mistakes can cross users or locales |
+| Reverse proxy/origin shield | Region or service | Request collapsing, stale-on-error | Hidden reuse of personalized responses |
+| L1 process cache | One process | Extremely hot, read-mostly objects | Every process is an independent stale copy |
+| L2 distributed cache | Service or region | Shared hot working set | Node loss, hot shards, topology changes |
+| Database buffer pool | Database instance | Pages and indexes | Managed by the engine, not application invalidation |
 
-```python
-class WriteBehindCache:
-    def __init__(self):
-        self.dirty_keys = set()
-        self.flush_interval = 1000  # ms
-        
-    def set(self, key, value):
-        self.cache.set(key, value)
-        self.dirty_keys.add(key)
-        # Return immediately
-    
-    async def flush_loop(self):
-        while True:
-            await sleep(self.flush_interval)
-            if self.dirty_keys:
-                batch = list(self.dirty_keys)
-                self.dirty_keys.clear()
-                # Batch write to DB
-                for key in batch:
-                    self.db.write(key, self.cache.get(key))
-```
+Add a tier only when a measured latency, bandwidth, or origin-load problem remains after the preceding tier. Every tier adds another failure mode, key definition, metric, and invalidation path.
 
-### Pros & Cons
+### 3.2 HTTP cache semantics are part of system design
 
-```
-Pros:
-  + Very fast writes (only cache)
-  + Batch DB writes (efficient)
-  + Absorbs write spikes
+For HTTP responses:
 
-Cons:
-  - Data loss risk (cache crash before flush)
-  - Complex failure handling
-  - Inconsistency window
-  - Hard to debug
-```
+- **no-store** tells caches not to store the response.
+- **no-cache** permits storage but requires validation before reuse.
+- **private** prevents storage by shared caches; a browser may still cache it.
+- **public** explicitly permits shared caching when other rules allow it.
+- **max-age** controls freshness for recipients; **s-maxage** can override it for shared caches.
+- **ETag** and **Last-Modified** support conditional validation.
+- **Vary** adds selected request headers to the cache key and can multiply variants.
+- **immutable** is appropriate for content-addressed or versioned resources whose URL changes with content.
 
----
+Treat authenticated and cookie-bearing responses as private unless a reviewed design explicitly makes them shareable. A CDN cache key must include every request property that can change the representation (tenant, locale, encoding, selected query parameters, and sometimes authorization class), while excluding tracking noise that only destroys hit rate.
 
-## Write-Around
+Content-addressed assets avoid invalidation:
 
-### How It Works
+~~~text
+/app.7f3a91.js
+Cache-Control: public, max-age=31536000, immutable
+~~~
 
-```mermaid
-graph LR
-    Client["Client"] -->|Write directly| DB[("Database")]
-    Client -.->|Read (cache-aside)| Cache[("Cache")]
-    Cache -.->|Miss| DB
-```
+Mutable APIs should usually use validation or short bounded freshness rather than pretending their URL is immutable.
 
-```
-Writes go directly to DB, skip cache
-Cache populated only on read
-```
+### 3.3 L1 plus L2
 
-### Implementation
+L1 removes a network hop; L2 shares capacity across instances. Their contract should be asymmetric:
 
-```python
-def write_user(user_id, data):
-    # Write directly to database
-    db.write(f"user:{user_id}", data)
-    # Optionally invalidate cache
-    cache.delete(f"user:{user_id}")
+- L1 is small, short-lived, and expendable.
+- L2 holds the regional working set.
+- An L2 hit may populate L1 only with the original source timestamp and version.
+- L1 must not reset the age of an already-old L2 value.
+- L1 invalidation uses a replayable mechanism or a TTL safety bound; transient pub/sub alone is not sufficient.
+- Process memory is multiplied by fleet size. A 500 MB L1 on 200 instances consumes 100 GB and increases garbage-collector or allocator pressure.
 
-def read_user(user_id):
-    # Cache-aside for reads
-    cached = cache.get(f"user:{user_id}")
-    if cached:
-        return cached
-    user = db.query(user_id)
-    cache.set(f"user:{user_id}", user)
-    return user
-```
+Server-assisted tracking, when supported by the client and cache, can target invalidations more precisely. Its disconnect behavior must be understood: local entries generally need flushing or revalidation when tracking continuity is lost.
 
-### Pros & Cons
+### 3.4 Freshness does not reset at every tier
 
-```
-Pros:
-  + Avoids caching infrequently read data
-  + No cache pollution from writes
-  + Simple write path
+Suppose an edge stores a response for 60 seconds, refills from a proxy holding a 5-minute-old copy, and then resets its own timer. The user can see data older than the apparent edge TTL.
 
-Cons:
-  - Recent writes not in cache
-  - Higher read latency after writes
-  - Need cache invalidation strategy
-```
+Carry **generated_at**, **source_version**, HTTP **Age**, or an equivalent origin timestamp through every tier. Compute remaining freshness from the authoritative generation time:
+
+~~~text
+remaining_freshness = freshness_budget - (now - generated_at)
+~~~
+
+Do not grant a fresh TTL to a value merely because it moved between caches. [Cache Invalidation and Coherence](02-cache-invalidation.md) derives the full coherence budget.
 
 ---
 
-## Eviction Policies
+## 4. Hit Rate, Latency, and Origin Load
 
-### LRU (Least Recently Used)
+### 4.1 Conditional hit rates
 
-```
-Access pattern: A, B, C, D, A, E (capacity: 4)
+In a hierarchy, report the hit rate at each tier **conditioned on reaching that tier**. If $h_i$ is the conditional hit rate at tier $i$, then:
 
-[A]           → A accessed
-[A, B]        → B accessed  
-[A, B, C]     → C accessed
-[A, B, C, D]  → D accessed (full)
-[B, C, D, A]  → A accessed (move to end)
-[C, D, A, E]  → E accessed, B evicted (least recent)
-```
+$$
+P(\text{origin}) = \prod_{i=1}^{n}(1-h_i)
+$$
 
-### LFU (Least Frequently Used)
+and:
 
-```
-Track access count per item
-Evict item with lowest count
+$$
+h_{\text{effective}} = 1 - P(\text{origin})
+$$
 
-Better for skewed access patterns
-More memory overhead (counters)
-```
+Example: L1 hits 80% of application reads and L2 hits 90% of the reads that miss L1.
 
-### TTL (Time To Live)
+~~~text
+effective hit rate = 1 - (1 - 0.80)(1 - 0.90) = 98%
+20,000 requests/s -> 400 origin reads/s
+~~~
 
-```
-Each entry has expiration time
-Evict when expired
+Calling both tiers “90% hit rate” without saying whether rates are conditional leads to double-counting.
 
-set("key", value, ttl=3600)  # Expires in 1 hour
+### 4.2 Expected latency
 
-Good for:
-  - Data that changes periodically
-  - Bounding staleness
-```
+Let $l_i$ be the lookup cost at tier $i$, $m_i$ the probability of missing every preceding tier, and $L_o$ the origin service time. A first-order model is:
 
-### Random Eviction
+$$
+E[L] = \sum_{i=1}^{n} m_i l_i + P(\text{origin})L_o
+$$
 
-```
-Randomly select items to evict
-Surprisingly effective for uniform access
-Very simple to implement
-Redis uses approximated LRU (random sampling)
-```
+Averages are insufficient when a miss consumes a database connection, fans out to several services, or creates a large payload. Model p95/p99 hit and miss latency separately and include deadline propagation.
 
----
+A cache can reduce average latency while worsening tail latency if cache timeouts are long enough that requests pay both the failed cache lookup and the full origin lookup.
 
-## Cache Sizing
+### 4.3 Useful hit rate
 
-### Hit Rate Formula
+Count a hit as useful only if it:
 
-```
-Hit rate = Hits / (Hits + Misses)
+- returns a schema-compatible value;
+- meets the freshness and authorization contract;
+- avoids work at the protected origin;
+- finishes within the cache latency budget.
 
-Working set: Frequently accessed data
-If cache > working set → high hit rate
+Track these separately:
 
-Diminishing returns:
-  10% cache: 80% hit rate
-  20% cache: 90% hit rate
-  50% cache: 95% hit rate
-```
+~~~text
+fresh_hit
+stale_hit
+negative_hit
+miss_absent
+miss_expired
+miss_evicted
+miss_schema
+miss_error
+bypass
+~~~
 
-### Memory Calculation
+A high raw hit rate can hide stale responses, oversized objects, or a cache that is slower than the origin for cheap queries. Byte hit rate and avoided-origin-work rate are often more informative than object hit rate.
 
-```
-Per-item overhead:
-  Key: ~50 bytes avg
-  Value: varies
-  Metadata: ~50 bytes (pointers, TTL, etc.)
-  
-Example:
-  1 million items
-  100 bytes avg value
-  Total: 1M × (50 + 100 + 50) = 200 MB
-```
+### 4.4 Cold-cache envelope
 
-### Monitoring
+For request rate $\lambda$ and effective hit rate $h$:
 
-```
-Key metrics:
-  - Hit rate (target: >90%)
-  - Eviction rate
-  - Memory usage
-  - Latency percentiles
-  
-Alert on:
-  - Hit rate drop
-  - Memory pressure
-  - High eviction rate
-```
+$$
+\lambda_{\text{origin}} = \lambda(1-h) + \lambda_{\text{refresh}}
+$$
+
+The design must be safe at the lowest hit rate expected during restart, failover, resharding, or deploy, not only at steady state. If zero-hit traffic exceeds origin capacity, the service needs admission control, staged traffic, pre-warming, stale serving, or a smaller cacheable surface.
 
 ---
 
-## Comparison
+## 5. Economic Model
 
-| Strategy | Read Latency | Write Latency | Consistency | Complexity |
-|----------|--------------|---------------|-------------|------------|
-| Cache-aside | Low (hit) | N/A | Eventual | Low |
-| Read-through | Low | N/A | Eventual | Medium |
-| Write-through | Low | High | Strong | Medium |
-| Write-behind | Low | Very Low | Weak | High |
-| Write-around | Medium | Low | Eventual | Low |
+### 5.1 Break-even equation
 
----
+Evaluate a cache against the work it avoids:
 
-## Choosing a Strategy
+~~~text
+monthly benefit =
+    avoided origin CPU and I/O
+  + avoided database replicas or provisioned headroom
+  + avoided network/egress work
+  + latency or conversion value
+  - cache compute and memory
+  - replication and cross-zone traffic
+  - invalidation and telemetry infrastructure
+  - operational and incident cost
+~~~
 
-### Decision Tree
+Do not paste a cloud instance price into a timeless design rule. Measure the marginal cost curve of the actual origin and cache in the deployment region.
 
-```
-Is write latency critical?
-  Yes → Write-behind (if data loss acceptable)
-      → Write-around (if not)
-  No  → Write-through (if consistency critical)
-      → Cache-aside (otherwise)
+A cache is justified when the cache's total operating cost is lower than the value of avoided origin work **and** its failure modes fit the service objective.
 
-Is read latency critical?
-  Yes → Any caching helps
-  No  → May not need cache
+### 5.2 Miss-ratio curve, not folklore
 
-Is consistency critical?
-  Yes → Write-through or no cache
-  No  → Cache-aside or write-behind
-```
+The working set is not “20% of the database.” Derive a miss-ratio curve from representative access traces:
 
-### Common Patterns
+1. canonicalize requests into proposed cache keys;
+2. replay at least a full business cycle, including peaks;
+3. compute reuse distance or simulate candidate admission/eviction policies;
+4. plot miss rate against bytes, not only item count;
+5. repeat for tenant, region, and endpoint because one aggregate hides skew;
+6. test scans, launches, and failover traffic separately.
 
-```
-User profiles: Cache-aside + TTL
-  - Read-heavy
-  - Staleness OK for seconds
-  
-Session data: Write-through
-  - Consistency important
-  - Lost sessions = bad UX
-  
-Analytics: Write-behind
-  - High write volume
-  - Batch aggregation OK
-  
-Inventory: Write-around + invalidation
-  - Writes change rarely-read data
-  - Fresh data on read
-```
+Choose the knee of the measured curve. A power-law workload may have a small valuable hot set; a uniform or scan-heavy workload may not.
 
----
+### 5.3 Capacity equation
 
-## Hit Rate Economics
+A practical memory estimate is:
 
-Hit rate is not a vanity metric — it directly determines how much load your database absorbs.
-
-### The Core Formula
-
-```
-DB_QPS = total_QPS × (1 - hit_rate)
-```
-
-A seemingly small improvement in hit rate yields dramatic DB load reduction at scale:
-
-| Total QPS | Hit Rate | DB QPS | DB Load Reduction vs 80% |
-|-----------|----------|--------|--------------------------|
-| 10,000    | 80%      | 2,000  | —                        |
-| 10,000    | 90%      | 1,000  | 50%                      |
-| 10,000    | 95%      | 500    | 75%                      |
-| 10,000    | 99%      | 100    | 95%                      |
-
-Going from 95% to 99% cuts DB QPS by 5x. This is why the last few percent of hit rate are worth engineering effort — each percentage point removed from misses has outsized impact.
-
-### Break-Even Analysis
-
-Cache infrastructure is justified when:
-
-```
-cost_of_cache_infra < cost_of_DB_scaling_to_handle_misses
-```
-
-In practice, a 3-node Redis cluster (~$1,500/mo on cloud) can absorb millions of reads that would require scaling a primary database from a db.r6g.xlarge ($1,200/mo) to a db.r6g.4xlarge ($4,800/mo). The cache pays for itself when it prevents even one DB tier jump.
-
-### The 80/20 Rule of Caching
-
-Most production workloads follow a power-law distribution. Caching the top 20% most-accessed keys typically captures 80%+ of all read traffic. This means you rarely need to cache your entire dataset — identify the hot subset and cache aggressively there. Use access frequency analysis before blindly caching everything.
-
-### When Caching Hurts
-
-If your workload has a uniform random access pattern (every key equally likely), cache hit rate scales linearly with cache size — no shortcut. In such cases, caching may cost more than it saves. Scan-heavy analytics workloads also pollute caches with one-time-use data.
-
----
-
-## Cache Sizing in Production
-
-The basic memory calculation from the sizing section above gets you started. Production sizing requires deeper analysis.
-
-### Working Set Estimation
-
-Your working set is the subset of data actively accessed within a given time window. To estimate it:
-
-1. **Sample access logs** over 1 full TTL window (e.g., if TTL = 1 hour, analyze 1 hour of logs)
-2. **Count unique keys** accessed in that window
-3. **Use the 90th percentile** across multiple windows to account for traffic variance
-4. Add 20-30% headroom for burst traffic and growth
-
-```bash
-# Quick Redis working set estimate from slowlog + keyspace analysis
-redis-cli INFO keyspace
-# db0:keys=2450000,expires=2100000,avg_ttl=3580000
-# 2.45M keys in use, most with TTL ~ 1 hour
-```
-
-### Redis Memory Overhead
-
-Redis is not a simple key-value byte store. Every key carries metadata:
-
-```
-String type:
-  key overhead:    ~56 bytes (dictEntry + SDS header + redisObject)
-  value overhead:  ~16 bytes (redisObject) + SDS header
-  total per entry: key_bytes + value_bytes + ~90 bytes fixed overhead
-
-Hash type (ziplist encoding, < 64 entries by default):
-  Stores fields compactly in a contiguous block
-  ~2x more memory-efficient than equivalent string keys
-  Threshold controlled by: hash-max-ziplist-entries (default 128)
-                           hash-max-ziplist-value   (default 64 bytes)
-  Exceeding thresholds → hashtable encoding (more memory, faster O(1) access)
-```
-
-Use `redis-cli MEMORY USAGE <key>` to measure actual per-key cost in production.
-
-### Memcached Slab Allocator
-
-Memcached pre-allocates memory into slab classes with fixed chunk sizes (64B, 128B, 256B, ...):
-
-```
-Slab class 1: 96-byte chunks
-Slab class 2: 120-byte chunks
-...
-Slab class 42: 1 MB chunks
-
-A 65-byte item → stored in a 96-byte chunk → 31 bytes wasted (slab waste)
-```
-
-Key flags:
-- `-I 2m` — max item size (default 1 MB, max 128 MB). Increasing this creates large slab classes.
-- Fragmentation is inherent: items rarely fit chunk boundaries exactly. Monitor `stats slabs` for `mem_wasted`.
-- If >30% memory is wasted, consider tuning `-f` (growth factor) to create more granular slab classes.
-
-### Production Sizing Formula
-
-```
-memory_required = avg_item_size × estimated_unique_keys × overhead_factor
+$$
+M = N \times (B_k + B_v + B_m) \times F_a \times F_h \times R
+$$
 
 where:
-  avg_item_size   = key_bytes + value_bytes (measure from production samples)
-  unique_keys     = working set estimate from access log analysis
-  overhead_factor = 1.2 (Redis, well-tuned) to 1.5 (Memcached, high fragmentation)
-```
 
-Always validate estimates with a shadow deploy or canary before committing to instance sizes.
+- $N$ is admitted entries in the target working set;
+- $B_k$, $B_v$, and $B_m$ are measured key, value, and metadata bytes;
+- $F_a$ covers allocator and fragmentation overhead;
+- $F_h$ is growth and failure headroom;
+- $R$ is the physical copy count, including replicas.
 
----
+Example:
 
-## Production Configuration
+~~~text
+8,000,000 entries
+48 B key + 512 B value + 80 B measured metadata = 640 B/entry
+logical data = 5.12 GB
+allocator factor 1.25, headroom 1.30, two physical copies
 
-### Redis Annotated Config
+required memory = 5.12 * 1.25 * 1.30 * 2 = 16.64 GB
+~~~
 
-```
-maxmemory 4gb
-# Hard memory ceiling. When hit, eviction policy kicks in.
-# Set to ~75% of instance RAM to leave room for fork (BGSAVE) overhead.
+Validate with production-shaped serialized values and the cache's own memory-accounting command. Include replication/AOF buffers, fork copy-on-write exposure, client buffers, operating-system memory, and failover headroom where applicable.
 
-maxmemory-policy allkeys-lru
-# Evict any key using approximated LRU when memory is full.
-# Use 'volatile-lru'  → only evict keys WITH a TTL set (safe for mixed workloads)
-# Use 'allkeys-lru'   → evict any key (best for pure cache, no persistent data)
-# Use 'allkeys-lfu'   → evict least-frequently-used (better for skewed access patterns)
-# Use 'noeviction'    → return errors on writes when full (use for session stores)
+### 5.4 Admission and eviction are different decisions
 
-lazyfree-lazy-eviction yes
-# Evict keys in a background thread instead of blocking the main thread.
-# Critical at high eviction rates — prevents latency spikes during memory pressure.
+- **Admission** asks whether a new object deserves cache space.
+- **Eviction** chooses what to discard when space is needed.
+- **Expiration** decides when freshness ends.
 
-lazyfree-lazy-expire yes
-# Delete expired keys in a background thread.
-# Same rationale: large keys expiring can block the event loop for milliseconds.
+| Workload | Useful policy direction | Failure to test |
+|---|---|---|
+| Recency-heavy | LRU or segmented LRU | One scan evicts the hot set |
+| Stable popularity | LFU or frequency-aware admission | Old popularity survives a regime change |
+| Mixed recency/frequency | TinyLFU-style admission plus recency window | Sketch aging and burst behavior |
+| Uniform random | Small or no cache | Memory buys little reuse |
+| Objects with different costs | Cost/size-aware admission | Large cheap objects evict small expensive ones |
 
-tcp-keepalive 300
-# Send TCP keepalive probes every 300 seconds to detect dead connections.
-# Cloud load balancers often drop idle connections at 350-400s.
-# Set this lower than your LB idle timeout.
-```
-
-### When to Use Which Eviction Policy
-
-```
-allkeys-lru    → Pure cache. Every key is expendable.
-                  Most common in production.
-
-volatile-lru   → Mixed use: some keys are cache, some are persistent.
-                  Only keys with TTL are eviction candidates.
-                  Risk: if you forget to set TTL, those keys are never evicted.
-
-allkeys-lfu    → Access frequency matters more than recency.
-                  Better for CDN-style workloads where popular items
-                  should stay cached even if not accessed in the last minute.
-                  Redis 4.0+ only.
-
-volatile-ttl   → Evict keys with shortest remaining TTL first.
-                  Useful when TTL encodes priority (shorter TTL = lower value).
-```
-
-### Memcached Production Flags
-
-```bash
-memcached -m 4096 -I 2m -c 10000 -t 4
-#   -m 4096   → 4 GB memory limit
-#   -I 2m     → max item size 2 MB (default 1 MB)
-#   -c 10000  → max concurrent connections (default 1024)
-#   -t 4      → worker threads (match to available cores, not more)
-```
-
-Additional production flags:
-- `-o modern` — enables newer optimizations (slab rebalancing, LRU crawler)
-- `-v` / `-vv` — verbose logging (use in staging, not production)
-- `-R 200` — max requests per event (prevents starvation under load)
+Redis's LRU and LFU policies are approximations. A **volatile** eviction policy considers only keys with expiration; non-expiring keys can consume the memory and leave no useful eviction candidates. For a pure derived cache, an all-keys policy is usually easier to reason about. For mixed durable and cache data, split workloads rather than depending on TTL discipline to create safety.
 
 ---
 
-## Cache Key Design
+## 6. Key and Value Design
 
-Good key design prevents collisions, simplifies debugging, and enables bulk invalidation.
+### 6.1 Key schema
 
-### Namespacing Convention
+A key should encode all semantic dimensions and no accidental ones:
 
-Use a hierarchical `service:entity:id` pattern:
+~~~text
+service:tenant:entity:key-schema-version:identity-or-query-hash
+catalog:t-42:product:v3:sku-123
+search:t-42:results:v7:sha256(canonical-query)
+~~~
 
-```
-user-svc:profile:12345
-order-svc:order:abc-789
-catalog-svc:product:SKU-001
-```
+Requirements:
 
-Benefits:
-- Instantly identifies which service owns the key (critical during incidents)
-- Enables pattern-based monitoring: `redis-cli --scan --pattern "user-svc:*"` to audit one service's footprint
-- Prevents cross-service key collisions without coordination
+- use a stable, language-independent hash when hashing composite keys;
+- canonicalize query parameters before hashing;
+- include tenant, locale, permission class, model/index generation, and feature variant when they affect the result;
+- never put secrets or unnecessary personal data in observable keys;
+- bound key length and reject unbounded user-controlled cardinality;
+- document ownership so two services do not mutate the same namespace.
 
-### Version-Based Invalidation
+A schema generation changes reachability without scanning and deleting old keys. Old generations still consume memory until expiry, so set a TTL and monitor orphaned bytes.
 
-Prefix keys with a version number to enable instant bulk invalidation:
+### 6.2 Payload schema
 
-```
-v3:user:12345
-v3:user:67890
-```
+Store enough metadata to reject unsafe reuse:
 
-When schema changes or a data migration occurs, increment to `v4:`. All `v3:` keys become unreachable and expire naturally via TTL. No need to enumerate and delete thousands of keys individually.
+~~~text
+{
+  "payload_schema": 4,
+  "source_version": 981274,
+  "generated_at_ms": 1784389200123,
+  "fresh_until_ms": 1784389230123,
+  "stale_until_ms": 1784389530123,
+  "value": ...
+}
+~~~
 
-This is cheaper than `SCAN` + `DEL` at scale, especially in clustered Redis where keys are spread across shards.
+During rolling deploys, readers must either understand both old and new payloads or use different key generations. Deserialization failures are misses, not request crashes. Compression saves memory and network bytes but consumes CPU and can make small objects slower; choose it from measured payload distributions.
 
-### Hot Key Detection and Mitigation
+### 6.3 Do not cache authorization decisions blindly
 
-A hot key is a single key receiving disproportionate traffic, creating a bottleneck on one cache shard.
-
-Detection:
-```bash
-redis-cli --hotkeys
-# Requires maxmemory-policy to be LFU-based for accurate results.
-
-# Alternative: sample commands in real time
-redis-cli MONITOR | head -10000 | sort | uniq -c | sort -rn | head -20
-# WARNING: MONITOR is expensive. Run briefly and only in emergencies.
-```
-
-Mitigation strategies:
-- **Local L1 cache**: application-level in-process cache (e.g., Caffeine, Guava) with 1-5s TTL in front of Redis
-- **Key replication**: append a random suffix (`hot-key:{rand(1..8)}`) and read from a random replica. Write to all 8 copies on update.
-
-### Key Size Guidelines
-
-- Keep keys **under 200 bytes**. Redis stores keys in memory; bloated keys waste RAM at scale.
-- For long composite keys (e.g., multi-field lookups), hash the components:
-  ```
-  Instead of: user-svc:profile:region=us-east-1:plan=enterprise:cohort=2024Q1:id=12345
-  Use:        user-svc:profile:sha256(region=us-east-1:plan=enterprise:cohort=2024Q1):12345
-  ```
-- Document your key schema in a shared wiki. Teams will inevitably need to decode keys during incidents.
+A response cache and an authorization system have different failure consequences. If a permission revocation must take effect immediately, validate a current authorization version or bypass the cache. Never share a personalized object solely because the URL matches. Include the principal or a reviewed authorization cohort in the key, and avoid caching sensitive responses in shared HTTP caches.
 
 ---
 
-## Negative Caching
+## 7. Rollout and Verification
 
-### The Pattern
+### 7.1 Safe introduction
 
-Cache "not found" results to prevent repeated database queries for entities that do not exist:
+1. **Baseline:** measure origin QPS, service time, dependency fan-out, and capacity without the cache.
+2. **Shadow keying:** compute proposed keys and sizes without serving cached values; detect cardinality and privacy mistakes.
+3. **Dark fill:** populate a small isolated cache and derive the miss-ratio curve.
+4. **Canary reads:** serve a small cohort while shadow-reading the origin and comparing source versions or payload digests.
+5. **Failure tests:** inject timeout, empty cache, eviction pressure, malformed payload, and unavailable cache.
+6. **Traffic ramp:** increase only while useful hit rate, origin load, freshness, and tail latency meet gates.
+7. **Kill switch:** retain a bounded, protected bypass path and a way to disable fills independently of reads.
 
-```python
-def get_user(user_id):
-    cached = cache.get(f"user:{user_id}")
-    if cached == SENTINEL_NOT_FOUND:
-        return None              # Known miss — skip DB entirely
-    if cached is not None:
-        return cached
+Never validate a cache only with a warm benchmark. Run the miss path and recovery path at production concurrency.
 
-    user = db.query(user_id)
-    if user is None:
-        cache.set(f"user:{user_id}", SENTINEL_NOT_FOUND, ttl=60)  # Short TTL
-        return None
+### 7.2 Required telemetry
 
-    cache.set(f"user:{user_id}", user, ttl=3600)
-    return user
-```
+Per tier, key class, tenant, and region:
 
-### Why It Matters
+- request rate and conditional useful hit rate;
+- hit, miss, bypass, stale, and error latency distributions;
+- miss reason and origin work caused;
+- entry age and source-version lag at serve time;
+- logical bytes, resident bytes, fragmentation, and allocator pressure;
+- admissions, expirations, evictions, rejected writes, and oversized items;
+- hot-key and hot-shard contribution;
+- serialization errors and key-generation distribution;
+- cache spend and avoided-origin cost.
 
-Without negative caching, every lookup for a non-existent entity hits the database. Common scenarios:
-- **User lookup by email** for unregistered emails (login attempts, invite checks)
-- **Product catalog** lookups for discontinued SKUs still linked in old URLs
-- **Permission checks** for resources that were deleted
+Use sampling for per-key telemetry; logging every key can create a new cost and privacy incident.
 
-A single bot or scraper can generate thousands of QPS for non-existent keys, hammering your DB with queries that always return zero rows.
+### 7.3 Decision checklist
 
-### Risks and Mitigation
-
-**Race condition**: a negative cache entry is written, then the entity is created (e.g., user registers). The short TTL window returns stale "not found" results.
-
-Mitigations:
-- **Short TTL** (30-60s) — bounds the staleness window
-- **Invalidate on create** — when inserting a new entity, explicitly delete its negative cache entry
-- **Use a distinct sentinel value** (not `None` or empty string) to distinguish "cached miss" from "not in cache"
-
----
-
-## Production Failure Modes
-
-Caches fail in predictable ways. Recognizing these patterns early prevents cascading outages.
-
-### Memory Fragmentation
-
-```bash
-redis-cli INFO memory | grep mem_fragmentation_ratio
-# mem_fragmentation_ratio: 1.12    → healthy
-# mem_fragmentation_ratio: 1.8     → 80% overhead, wasting RAM
-# mem_fragmentation_ratio: 0.8     → swapping to disk, critical
-```
-
-- **Ratio > 1.5**: Redis allocated memory is heavily fragmented. Caused by variable-size key churn (frequent create/delete of different-sized values).
-- Fix: `MEMORY PURGE` (Redis 4+), or schedule a rolling restart. Use `activedefrag yes` for online defragmentation.
-- Prevention: prefer uniform value sizes, avoid mixing tiny and large keys in the same instance.
-
-### Eviction Storms
-
-When `maxmemory` is hit under high write rates, Redis enters a continuous eviction cycle:
-
-```
-write → evict to make room → write → evict → ...
-```
-
-Hit rate collapses because entries are evicted before they can be read again. Latency spikes as eviction competes with serving reads. Symptoms: `evicted_keys` counter climbing rapidly, hit rate plummeting.
-
-Fix: increase `maxmemory`, reduce TTLs to expire data before eviction kicks in, or shard to distribute the keyspace.
-
-### Cache Poisoning
-
-A stale or incorrect value is written to cache — and never corrected:
-
-```
-1. Request A reads DB (value = 100)
-2. Request B updates DB (value = 200) and invalidates cache
-3. Request A (slow, still running) writes its stale read (value = 100) to cache
-4. Cache now holds value = 100 with no TTL → permanently wrong
-```
-
-Prevention: always set a TTL, even on write-through entries. A 24-hour TTL is a safety net that bounds the damage from race conditions. For critical data, use versioned writes (CAS / `SET ... NX`).
-
-### Further Reading
-
-→ see `04-cache-stampede.md` for thundering herd and cache stampede solutions
+- [ ] Cache is derived from a named authoritative source.
+- [ ] Freshness, stale serving, and negative caching are product decisions.
+- [ ] Key semantics include tenant and authorization boundaries.
+- [ ] Read and write races have version-aware handling.
+- [ ] Effective hit rate and origin load are calculated across all tiers.
+- [ ] Capacity comes from measured values and a miss-ratio curve.
+- [ ] The cold-cache envelope fits origin or admission-control capacity.
+- [ ] Cache timeouts consume only a small part of the request deadline.
+- [ ] Rollout includes shadow comparison and an independently tested kill switch.
+- [ ] Metrics distinguish useful hits from stale, incompatible, or slow hits.
 
 ---
 
-## Key Takeaways
+## Primary References
 
-1. **Cache-aside is most common** - Simple, resilient, flexible
-2. **Write-through for consistency** - At cost of write latency
-3. **Write-behind for write speed** - Accept data loss risk
-4. **Hit rate is king** - Optimize for your access patterns
-5. **Size for working set** - Not total dataset
-6. **TTL provides freshness bounds** - Eventual consistency guarantee
-7. **Monitor everything** - Hit rate, latency, evictions
-8. **Failure modes matter** - Cache down shouldn't mean app down
+- [RFC 9111: HTTP Caching](https://www.rfc-editor.org/rfc/rfc9111.html)
+- [RFC 5861: stale-while-revalidate and stale-if-error](https://www.rfc-editor.org/rfc/rfc5861.html)
+- [Redis key eviction](https://redis.io/docs/latest/develop/reference/eviction/)
+- [Redis server-assisted client-side caching](https://redis.io/docs/latest/develop/reference/client-side-caching/)
+- [Caffeine: eviction and admission efficiency](https://github.com/ben-manes/caffeine/wiki/Efficiency)
+- [Scaling Memcache at Facebook, NSDI 2013](https://www.usenix.org/conference/nsdi13/technical-sessions/presentation/nishtala)

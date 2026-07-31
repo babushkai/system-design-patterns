@@ -1,754 +1,154 @@
 # Leaderless Replication
 
-## TL;DR
+Leaderless replication assigns each key to a replica set but lets any reachable node coordinate its reads and writes. There is no elected per-key primary in the foreground path. Availability comes from completing against a subset of replicas; the cost is that versions, repair debt, and topology changes become part of normal request processing.
 
-Leaderless replication eliminates the leader entirely. Clients write to multiple nodes directly and read from multiple nodes, using quorums to ensure consistency. No single point of failure for writes. Trade-offs: requires quorum math, eventual consistency semantics, and careful conflict handling. Popularized by Dynamo; used by Cassandra, Riak, and Voldemort.
+A leaderless-replication design must specify quorum coordination, replica selection, hinted handoff, anti-entropy, and membership interaction. [Conflict Resolution](./04-conflict-resolution.md) owns the semantics of siblings, last-writer-wins registers, and CRDTs. [Partitioning Strategies](./05-partitioning-strategies.md) owns how logical partitions map to nodes, and [SSTables and Compaction](../03-storage-engines/03-sstables-compaction.md) owns on-disk tombstone collection. A system may use leaderless replication above any of those storage choices.
 
----
+## Contract and failure model
 
-## How It Works
+For each operation, define a replication factor `N`, acknowledgement requirement `W`, read response requirement `R`, whether the coordinator may substitute non-home replicas, and the version relation used to reconcile responses. Also define the failure model: crash-stop or crash-recovery nodes, lossy and reordered messages, network partitions, bounded or unbounded clock skew, and whether disks can lose acknowledged writes.
 
-### Basic Concept
+An acknowledgement normally means that at least `W` selected replicas durably recorded a version. It does not mean every replica has it, that a later low-consistency read will find it, or that a timed-out attempt did not commit. Likewise, “eventual consistency” needs a liveness condition: after writes stop, communication recovers, topology stabilizes, and repair continues, every live home replica converges.
 
-```
-No leader. All nodes are equal.
-
-Write request → send to ALL replicas
-Read request → read from MULTIPLE replicas
-Use quorum to determine success/latest value
-```
-
-### Write Path
-
-```
-Client writes to N replicas simultaneously:
-
-┌────────┐
-│ Client │───write(x=1)───┬─────────┬─────────┐
-└────────┘                │         │         │
-                          ▼         ▼         ▼
-                     ┌───────┐ ┌───────┐ ┌───────┐
-                     │Node A │ │Node B │ │Node C │
-                     │  ✓    │ │  ✓    │ │  ✗    │
-                     └───────┘ └───────┘ └───────┘
-                          │         │
-                          ▼         ▼
-                     2 of 3 succeeded → write succeeds (if W=2)
-```
-
-### Read Path
-
-```
-Client reads from R replicas, takes latest:
-
-┌────────┐
-│ Client │───read(x)───┬─────────┬─────────┐
-└────────┘             │         │         │
-                       ▼         ▼         ▼
-                  ┌───────┐ ┌───────┐ ┌───────┐
-                  │Node A │ │Node B │ │Node C │
-                  │ x=1   │ │ x=1   │ │ x=0   │
-                  │ v=5   │ │ v=5   │ │ v=3   │
-                  └───────┘ └───────┘ └───────┘
-                       │         │
-                       ▼         ▼
-                  Compare versions → return x=1 (v=5 is latest)
-```
-
----
-
-## Quorum Math
-
-### Parameters
-
-```
-N = Number of replicas
-W = Write quorum (how many must acknowledge write)
-R = Read quorum (how many to read from)
-```
-
-### The Quorum Condition
-
-For strong consistency: **W + R > N**
-
-```
-Example: N=3, W=2, R=2
-
-Write to any 2: {A, B} or {A, C} or {B, C}
-Read from any 2: {A, B} or {A, C} or {B, C}
-
-Overlap guaranteed:
-  Write set ∩ Read set ≠ ∅
-  At least one node has latest value
-```
-
-### Visual Proof
-
-```
-N=5, W=3, R=3
-
-Nodes:     [A] [B] [C] [D] [E]
-            │   │   │
-Write to:   ✓   ✓   ✓           (any 3)
-            │   │   │   │   │
-Read from:          ✓   ✓   ✓   (any 3)
-                    │
-              Overlap at C
-```
-
-### Common Configurations
-
-| Configuration | N | W | R | Properties |
-|---------------|---|---|---|------------|
-| Strong consistency | 3 | 2 | 2 | W+R=4 > 3 |
-| Read-heavy | 3 | 3 | 1 | Fast reads, slow writes |
-| Write-heavy | 3 | 1 | 3 | Fast writes, slow reads |
-| Eventually consistent | 3 | 1 | 1 | Fastest, may read stale |
-
----
-
-## Consistency Guarantees
-
-### When W + R > N
-
-**Strong consistency** (linearizability possible, not guaranteed):
-- Every read sees latest write
-- But: concurrent operations can still yield anomalies
-
-```
-Scenario: W=2, R=2, N=3
-
-Write(x=1) to A, B succeeds
-Read from B, C:
-  B has x=1
-  C has x=0 (hasn't received write yet)
-  
-Return x=1 (latest version wins)
-```
-
-### When W + R ≤ N
-
-**Eventual consistency:**
-- Might read stale data
-- Eventually converges
-
-```
-Scenario: W=1, R=1, N=3
-
-Write(x=1) to A only
-Read from C only:
-  C has x=0
-  
-Stale read! But eventually C will get x=1
-```
-
-### Sloppy Quorums
-
-When N nodes unavailable, write to "substitute" nodes.
-
-```
-Normal: Write to {A, B, C}
-A and B down: Write to {C, D, E} (D, E are substitutes)
-
-Later: "Hinted handoff" moves data back to A, B
-```
-
-Trade-off:
-- Better availability
-- Weaker consistency (quorum may not overlap)
-
----
-
-## Version Conflicts
-
-### Concurrent Writes
-
-```
-Client 1: write(x, "A") → nodes {1, 2}
-Client 2: write(x, "B") → nodes {2, 3}  (concurrent)
-
-State after writes:
-  Node 1: x = "A"
-  Node 2: x = "A" or "B" (last one wins locally)
-  Node 3: x = "B"
-
-Read from {1, 3}: get {"A", "B"} — conflict!
-```
-
-### Vector Clocks for Conflict Detection
-
-Each write carries a vector clock:
-
-```
-Write 1 at node A: {A:1}
-Write 2 at node B: {B:1}
-
-Compare:
-  {A:1} vs {B:1}
-  Neither dominates → concurrent → conflict
-
-Merge or use LWW
-```
-
-### Siblings
-
-Return all conflicting values to application:
-
-```
-Read(x) → {
-  values: ["A", "B"],
-  context: merged_vector_clock
-}
-
-Application decides how to merge
-Next write includes context → system knows what was merged
-```
-
----
-
-## Read Repair and Anti-Entropy
-
-### Read Repair
-
-Fix stale replicas on read:
-
-```
-Read from A, B, C:
-  A: x=1, version=5
-  B: x=1, version=5
-  C: x=0, version=3  ← stale
-
-Return x=1 to client
-
-Background: update C with version=5
-```
-
-**Opportunistic:** Only repairs nodes you happen to read from.
-
-### Anti-Entropy (Background Repair)
-
-Proactively sync replicas:
-
-```
-Periodically:
-  for each pair of nodes (A, B):
-    compare merkle trees
-    for each different key:
-      sync latest version
-```
-
-**Merkle trees** enable efficient comparison:
-```
-         [root hash]
-         /          \
-    [hash L]      [hash R]
-    /      \      /      \
- [h1]   [h2]   [h3]   [h4]
-
-Compare roots: different? → compare children
-O(log n) to find differences in large datasets
-```
-
----
-
-## Hinted Handoff
-
-When a node is temporarily unavailable:
-
-```
-Normal write target: A, B, C
-A is down
-
-Write to: B, C, D (D is hint recipient)
-D stores: {key: x, value: 1, hint_for: A}
-
-When A recovers:
-  D sends hinted data to A
-  D deletes hints
-```
-
-**Purpose:**
-- Maintain write availability
-- Don't lose writes during temporary failures
-
-**Limitation:**
-- Doesn't help with permanent failures
-- Hints may accumulate if target stays down
-
----
+Classify invariants before choosing consistency levels. Immutable blobs and add-wins sets can tolerate reconciliation. Unique usernames, non-negative balances, and compare-and-set require a conditional authority or a linearizable protocol; `QUORUM` as a product label does not manufacture those semantics.
 
-## Handling Failures
+## Replica state and invariants
 
-### Read/Write Resilience
+A stored version needs more than `(key, value)`. Depending on the resolution model, it includes a logical tag or causal context, mutation identity, tombstone flag, schema version, origin, and expiry. Each node also keeps its topology epoch, natural replica ranges, durable hints, repair metadata, and bootstrap or decommission state.
 
-```
-With N=5, W=3, R=3:
-  Tolerate 2 failed nodes for writes
-  Tolerate 2 failed nodes for reads
-  
-With N=5, W=2, R=4:
-  Tolerate 3 failed nodes for writes
-  Tolerate 1 failed node for reads
-```
-
-### Detecting Stale Data
-
-```
-def read_with_quorum(key, R):
-  responses = parallel_read(key, all_replicas)
-  wait_for(R, responses)
-  
-  latest = max(responses, key=lambda r: r.version)
-  
-  # Trigger read repair for stale replicas
-  for r in responses:
-    if r.version < latest.version:
-      async_repair(r.node, key, latest)
-  
-  return latest.value
-```
-
----
-
-## Real-World Systems
-
-### Amazon Dynamo
-
-Original leaderless system (2007 paper):
-
-```
-- Consistent hashing for partitioning
-- Vector clocks for versioning
-- Sloppy quorums for availability
-- Merkle trees for anti-entropy
-- Hinted handoff for temporary failures
-
-Design goal: "Always writable" shopping cart
-```
-
-### Apache Cassandra
-
-```sql
--- Write with quorum
-INSERT INTO users (id, name) VALUES (1, 'Alice')
-USING CONSISTENCY QUORUM;
-
--- Read with one replica (fast, possibly stale)
-SELECT * FROM users WHERE id = 1
-USING CONSISTENCY ONE;
-
--- Configurable per-query
-```
-
-Configuration:
-```yaml
-# cassandra.yaml
-num_tokens: 256
-hinted_handoff_enabled: true
-max_hint_window_in_ms: 10800000  # 3 hours
-```
-
-### Riak
-
-```erlang
-%% Write with W=2
-riakc_pb_socket:put(Pid, Object, [{w, 2}]).
-
-%% Read with R=2, return siblings
-riakc_pb_socket:get(Pid, <<"bucket">>, <<"key">>, [{r, 2}]).
-
-%% Application resolves siblings
-resolve_siblings(Siblings) ->
-    %% Custom merge logic
-    merged_value.
-```
-
----
-
-## Tunable Consistency
-
-### Per-Request Configuration
-
-```
-Request 1: Strong consistency
-  W=quorum, R=quorum
-  
-Request 2: Fast write
-  W=1, R=quorum
-  
-Request 3: Fast read
-  W=quorum, R=1
-  
-Request 4: Fastest (eventual)
-  W=1, R=1
-```
-
-### Consistency Levels (Cassandra)
-
-| Level | Meaning |
-|-------|---------|
-| ONE | One replica |
-| TWO | Two replicas |
-| THREE | Three replicas |
-| QUORUM | Majority in datacenter |
-| EACH_QUORUM | Majority in each datacenter |
-| LOCAL_QUORUM | Majority in local datacenter |
-| ALL | All replicas |
-| ANY | Any node (including hinted) |
-
----
-
-## Edge Cases and Pitfalls
-
-### Write-Read Race
-
-```
-Time:     T1          T2          T3
-Client A: write(x=1, W=2)
-Client B:             read(x, R=2)
-
-If B's read arrives before write propagates to quorum:
-  B might read stale value
-
-Not linearizable even with W+R > N
-```
-
-### Last-Write-Wins Data Loss
-
-```
-Concurrent writes:
-  Client A: write(x, "A") at t=100
-  Client B: write(x, "B") at t=101
-
-LWW resolves to "B"
-Client A's write is lost
-
-No error returned to Client A!
-```
+The protocol should preserve these invariants:
 
-### Quorum Size During Failures
+1. A successful write is durable on at least the promised replica set under the request’s stated topology epoch.
+2. Replaying a mutation has one logical effect; a retry identity is not confused with a version identity.
+3. A read never compares versions using a relation that can disagree across coordinators.
+4. Repair cannot replace a causally newer version with an older one.
+5. A tombstone is removed only after no legal replica, hint, snapshot, or repair source can reintroduce the shadowed value.
+6. Topology transitions do not let coordinators form incompatible replica sets without an explicit joint phase.
+7. Per-tenant limits apply to foreground requests, hints, streaming, and repair, not just API traffic.
 
-```
-N=5, W=3, R=3 normally
-
-2 nodes permanently fail, not replaced:
-  Effective N=3
-  W=3 → requires all remaining nodes (less resilient)
-  
-Solution: Replace failed nodes, or adjust quorum settings
-```
-
----
-
-## Monitoring Leaderless Systems
-
-### Key Metrics
-
-| Metric | Description | Action |
-|--------|-------------|--------|
-| Read repair rate | Repairs per second | High = inconsistency |
-| Hint queue size | Pending hints | Growing = node issue |
-| Quorum success rate | % achieving quorum | <100% = availability issue |
-| Read latency p99 | Slow reads | Check straggler nodes |
-| Version conflicts | Siblings created | High = concurrent writes |
-
-### Health Checks
-
-```python
-def check_cluster_health():
-  for node in nodes:
-    # Check responsiveness
-    if not ping(node):
-      alert(f"Node {node} unreachable")
-    
-    # Check hint queue
-    hints = get_hint_count(node)
-    if hints > threshold:
-      alert(f"Node {node} hint queue: {hints}")
-    
-    # Check anti-entropy
-    last_repair = get_last_repair_time(node)
-    if now() - last_repair > max_repair_interval:
-      alert(f"Node {node} repair overdue")
-```
-
----
-
-## When to Use Leaderless
-
-### Good Fit
-
-- High write availability critical
-- Multi-datacenter deployment
-- Tolerance for eventual consistency
-- Simple key-value workloads
-- Known conflict resolution strategy
-
-### Poor Fit
-
-- Transactions required
-- Strong consistency required
-- Complex queries
-- Applications can't handle conflicts
-- Small datasets (overhead not worth it)
-
----
+Wall-clock timestamps are convenient tags, but they depend on clocks for correctness when used as last-writer-wins authority. A stable tie-breaker makes the order total; it does not make it reflect real-time causality. See [Conflict Resolution](./04-conflict-resolution.md) for the distinction.
 
-## Quorum Edge Cases
+## Data path: write and read quorums
 
-### Sloppy Quorums and Hinted Handoff Pitfalls
+For key `k`, a coordinator reads the current topology epoch and computes an ordered preference list. The first `N` eligible nodes are the natural replicas. In a strict quorum write it sends the same immutable mutation to those nodes, waits for `W` durable acknowledgements, and returns the mutation identity and observed version context. Late acknowledgements are still recorded; a client timeout is an unknown outcome, not proof of failure.
 
-Dynamo-style sloppy quorums allow writes to non-home nodes during a network partition. This keeps the system writable but **breaks the strict quorum guarantee**:
-
-```
-Home nodes for key K: {A, B, C}
-Partition isolates A and B
-
-Sloppy quorum write (W=2): writes to {C, D}
-Sloppy quorum read  (R=2): reads from {A, B}
-
-Overlap = ∅ → stale read despite W + R > N
-```
-
-Hinted handoff eventually delivers data back to A and B, but there is **no upper bound** on how long that takes. During the gap, clients observe stale state with no indication that the quorum was sloppy.
-
-### Read Repair Races
-
-When multiple coordinators perform read repair concurrently on the same key, their repair writes can conflict:
-
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant Q as Coordinator
+    participant A as Replica A
+    participant B as Replica B
+    participant D as Replica C
+    C->>Q: put(k, value, request_id)
+    par fan-out
+      Q->>A: mutation(version, epoch)
+      Q->>B: mutation(version, epoch)
+      Q->>D: mutation(version, epoch)
+    end
+    A-->>Q: durable
+    B-->>Q: durable
+    Q-->>C: success at W=2
 ```
-Coordinator X reads key K → sees v5 on A, v3 on B → repairs B to v5
-Coordinator Y reads key K → sees v5 on A, v4 on C → repairs C to v5
-                         → also sees v3 on B (before X's repair lands)
-                         → repairs B to v5 again (duplicate but harmless)
-
-Dangerous case: if a new write v6 lands between the read and the repair,
-the repair can overwrite v6 with v5 → data regression
-```
-
-Cassandra mitigates this by using cell-level timestamps: the repair write carries the original timestamp, so a newer write with a higher timestamp is never overwritten by a stale repair.
-
-### Write Timeout with Persisted Data
 
-A write can succeed on W nodes but the coordinator times out before receiving acknowledgements. The client sees an error and retries:
+A read queries enough natural replicas to obtain `R` acceptable responses. The coordinator compares their version metadata, returns the value or siblings required by the contract, and may repair stale replicas. Waiting only for the fastest `R` reduces latency but biases reads toward healthy, nearby replicas; that is useful only if the consistency promise accounts for it. Digest-first reads save response bytes but add another round trip when digests disagree.
 
-```
-Attempt 1: write(x=1, id=abc) → W nodes store it → coordinator timeout → client error
-Attempt 2: write(x=1, id=abc) → W nodes store again
-
-Without idempotency keys, both writes are recorded.
-For counters or append operations, this causes double-counting.
-```
+### What `W + R > N` actually proves
 
-Mitigation: use client-generated idempotency tokens or make all writes idempotent by design (full-state replacement rather than delta).
+If every successful write stores on `W` members and every read samples `R` members of the **same fixed set of `N` natural replicas**, then `W + R > N` guarantees that a read quorum intersects the replica set of every completed write. That set argument is valuable, but it is not by itself a proof of linearizability.
 
-### Weighted Quorums for Heterogeneous Nodes
+The reader must still identify the newest intersecting version correctly. Concurrent writes may be incomparable. Sloppy quorums may use different nodes. A write in progress may have reached fewer than `W` replicas: one read can observe it, while a later read misses it and returns an older version. The Attiya–Bar-Noy–Dolev atomic-register protocol closes this “new/old inversion” by assigning ordered tags and writing the selected value back to a quorum during reads. Most Dynamo-style eventually consistent stores choose lower read cost instead.
 
-Not all replicas have equal latency or reliability. A cross-region replica might be 100ms away while local replicas are sub-millisecond. Weighted quorums assign higher weight to local or faster nodes:
+Two other quorum conditions serve different purposes. `W > N/2` forces successful write quorums to intersect, useful for detecting competing versions under an appropriate tag protocol. `R > N/2` makes read quorums intersect each other, but without read write-back it still does not fully order concurrent operations.
 
-```
-Node A (local):        weight=2
-Node B (local):        weight=2
-Node C (cross-region): weight=1
+### Sloppy quorums and hints
 
-Total weight = 5
-W = 3 (majority of weight)
+During failure, a sloppy quorum may store a mutation on healthy nodes outside the natural set. The substitute keeps a durable hint saying which home replica should eventually receive it. This increases write availability, but the equation above no longer applies to natural replicas:
 
-Writing to A + B satisfies W=4 ≥ 3 without waiting for cross-region C
+```text
+home set for k:       {A, B, C}
+partitioned write:    {C, D}       W=2, D holds a hint for A
+partitioned read:     {A, B}       R=2
+intersection:         empty, despite W + R > N
 ```
-
-This reduces tail latency but increases the risk of data loss if both local nodes fail simultaneously.
-
----
-
-## Anti-Entropy and Repair
 
-### Merkle Tree Comparison
+Hints are a short-outage optimization, not repair and not a second source of truth. They need byte and age limits, topology-aware delivery, checksums, and an explicit policy when the target is removed. Expiring a hint before another home replica receives its version reduces acknowledged durability.
 
-Each replica maintains a Merkle (hash) tree over its token ranges. To detect divergence, two replicas compare trees top-down:
+## Repair and convergence
 
-```
-Replica A tree          Replica B tree
-     [H_root]               [H_root']        ← roots differ
-     /       \               /       \
-  [H_L]    [H_R]         [H_L]    [H_R']     ← right subtree differs
-  /    \    /    \        /    \    /    \
-[h1] [h2] [h3] [h4]    [h1] [h2] [h3] [h4'] ← only h4 segment differs
-
-Result: only keys in segment 4 need synchronization
-Comparison cost: O(log n) instead of O(n)
-```
-
-Trees are rebuilt periodically (Cassandra rebuilds on `nodetool repair`). Between rebuilds, the tree may be stale, so repair is a point-in-time snapshot reconciliation.
+Read repair compares only keys that clients happen to read. It improves hot-key convergence but leaves cold data untouched and can add writes to latency-sensitive reads. Apply repairs with the original version identity; issuing a new “repair timestamp” can make stale data defeat a legitimate concurrent write.
 
-### Cassandra Repair Operations
+Active anti-entropy compares all owned ranges. Replicas take compatible snapshots or stable version views, exchange range summaries such as Merkle-tree hashes, descend only into mismatching subranges, and stream the missing versions. A Merkle tree reduces comparison traffic when replicas are mostly equal; building trees and streaming differences still consume disk, network, cache, and compaction capacity.
 
-Cassandra provides `nodetool repair` with two modes:
+Deletion makes convergence proof-sensitive. A tombstone can disappear only after every relevant replica has either observed it or can no longer legally contribute an older value. A time-based grace period is a conservative proxy for that proof, so the maximum repair interval and maximum node outage must remain shorter than the grace period. A node returning after the supported horizon should bootstrap from a current replica rather than join with old data.
 
-| Mode | Behavior | Use Case |
-|------|----------|----------|
-| Full repair | Compares all data in token ranges via Merkle trees | After node replacement, schema changes |
-| Incremental repair | Only compares SSTables written since last repair | Regular maintenance, lower I/O cost |
+The repair controller owns range scheduling, concurrency, checkpoints, and fairness. It must distinguish “range compared successfully” from “job launched,” retain enough state to resume after crashes, and avoid synchronizing every replica pair at once. Repair traffic needs an I/O budget below the point where it causes the foreground timeouts that create yet more hints.
 
-**Critical interaction with `gc_grace_seconds`:**
+## Membership and topology changes
 
-```
-gc_grace_seconds = 864000 (10 days, default)
-
-Day 1:  DELETE key K → tombstone created on nodes A, B
-Day 5:  Node C comes back online (was down since before Day 1)
-Day 11: gc_grace expires → A, B discard tombstone
-Day 12: Anti-entropy runs → C still has key K, A and B do not
-         → C's value propagates back → zombie data resurrection
-
-Prevention: always run repair within gc_grace_seconds window
-```
+Coordinators cannot safely switch replica maps independently. A new node first joins as a non-serving learner, receives a snapshot at a declared frontier, streams later mutations, validates range digests, and only then enters a joint routing epoch. During the joint phase, writes reach enough members of old and new sets to preserve the stated durability contract. After old coordinators have stopped using the prior epoch, ownership can finalize.
 
-### Read Repair vs Active Anti-Entropy
+Removing or replacing a node likewise drains hints, streams its ranges, and fences the old identity. Reusing a node ID with an empty disk is dangerous: peers may interpret it as the old replica that has already seen tombstones. Use a fresh incarnation epoch and require explicit bootstrap. Logical partition movement itself is covered in [Partitioning Strategies](./05-partitioning-strategies.md).
 
-| Property | Read Repair (passive) | Anti-Entropy (active) |
-|----------|----------------------|----------------------|
-| Trigger | Client read | Background scheduled task |
-| Coverage | Only keys that are read | All keys in token range |
-| Latency impact | Adds repair writes to read path | No client-facing impact |
-| Cold data | Never repaired if never read | Repaired on schedule |
-| Resource cost | Proportional to read traffic | Proportional to data size |
+## Specialized failure traces
 
-Production systems use both: read repair catches hot-path inconsistencies immediately, while scheduled anti-entropy ensures cold data converges.
+### Timeout followed by a non-idempotent retry
 
-### Repair Scheduling Best Practices
+Two replicas durably store `increment(+1)`, but their acknowledgements arrive after the client deadline. The client retries with a new identity and two replicas apply another increment. Both attempts were valid; the counter is now two. Reuse an idempotency key, or replicate a convergent counter operation whose identity is deduplicated.
 
-- Run full repair at least once within `gc_grace_seconds` (typically weekly for a 10-day grace)
-- Stagger repairs across nodes to avoid I/O storms
-- Monitor `nodetool netstats` for streaming throughput during repair
-- Sub-range repair (`-st`, `-et` flags) parallelizes across token ranges
+### Read observes an incomplete write, then time goes backward
 
----
+Write `v2` reaches only A before its coordinator pauses. Read X queries A and B and returns `v2`. Read Y starts after X finishes but queries B and C, returning completed `v1`. `W=2, R=2, N=3` did not help because `v2` had not completed on W replicas. Atomic-register read-back, a leader, or consensus is required if this inversion violates the API.
 
-## Dynamo vs Cassandra Differences
+### Repair resurrects a delete
 
-The original Dynamo paper and Cassandra diverge significantly in how they handle concurrent writes. Understanding these differences prevents incorrect assumptions when switching systems.
+A and B store tombstone `t9`; C is offline with value `v7`. The grace period expires, compaction drops `t9`, and C returns before being rebuilt. Anti-entropy sees a value on C and absence elsewhere, so `v7` becomes live again. The root cause is an unsupported outage beyond the repair-and-retention contract, not “eventual consistency being slow.”
 
-### Conflict Detection and Resolution
+### Topology split creates two quorums
 
-| Feature | Dynamo | Cassandra | Riak | ScyllaDB |
-|---------|--------|-----------|------|----------|
-| Versioning | Vector clocks | Cell-level timestamps | Vector clocks (dotted) | Cell-level timestamps |
-| Conflict detection | Detects concurrent writes | No detection — LWW always | Detects concurrent writes | No detection — LWW always |
-| Resolution strategy | Client-side merge | Last-writer-wins (silent) | Sibling merge (client) | Last-writer-wins (silent) |
-| Client complexity | High — must handle siblings | Low — read returns one value | High — must handle siblings | Low — read returns one value |
-| Data loss on conflict | No (client sees both) | Yes (earlier timestamp dropped) | No (client sees both) | Yes (earlier timestamp dropped) |
+Half the coordinators use epoch 41 with replicas `{A,B,C}`; the rest use epoch 42 with `{C,D,E}`. Each accepts `W=2` on disjoint pairs. Later reads cannot infer a unique latest value from quorum intersection. Membership must be versioned, and activation must bridge old and new replica sets.
 
-### Dynamo: Vector Clocks and Client Merge
+### Clock skew silently loses a write
 
-Dynamo's shopping cart is the canonical example. Two concurrent `add-to-cart` operations produce siblings that the client must union-merge:
+A’s clock is five minutes fast. Its earlier value receives timestamp 500; B’s causally later correction receives 220 and loses under LWW everywhere. NTP monitoring limits frequency but cannot prove order. Use causal versions, a logical sequencer, or a merge that does not interpret physical time as truth.
 
-```
-Cart v1: {widget}
+## Capacity, overload, and cost
 
-Client A: add(gadget) → v2a: {widget, gadget}  [clock: {A:1}]
-Client B: add(gizmo)  → v2b: {widget, gizmo}   [clock: {B:1}]
+Let logical writes and reads be `Qw` and `Qr` operations/s, value plus metadata size be `B`, replication factor be `N`, and a replica sustain `Cw` durable writes/s at the chosen compaction budget. Approximate foreground work is:
 
-Neither dominates → conflict → client receives both siblings
-Client merges: {widget, gadget, gizmo} → writes v3 [clock: {A:1, B:1}]
+```text
+replica write requests/s       ~= Qw * N          if fan-out targets all N
+minimum write acknowledgements = Qw * W
+read responses/s               >= Qr * R          plus speculative requests
+stored live bytes              ~= logical_bytes * N * space_amplification
+write network bytes/s          ~= Qw * N * B
 ```
 
-Trade-off: no data loss, but every client must implement merge logic. Deleted items can reappear if not tracked with a "removed" set (see CRDT discussion in `04-consistency-models.md`).
+Sending only until `W` acknowledgements reduces immediate work only if the remaining replicas are deliberately repaired later; it does not erase the replication obligation. Quorum latency is an order statistic of replica latencies, not simply their mean. Increasing `R` or `W` can improve confidence while moving the request deeper into the straggler tail.
 
-### Cassandra: Last-Writer-Wins Simplicity
+For data size `D` per replica and maximum full-repair interval `Trepair`, baseline sequential repair scan must exceed `D / Trepair`, before mismatch streaming. A failed node absent for `Tout` at incoming mutation rate `λ` creates roughly `λTout` versions of catch-up debt. Reserve measured headroom for hints, bootstrap, and repair simultaneously; a cluster whose foreground load consumes all sustainable I/O has no recovery capacity.
 
-Cassandra avoids client-side complexity by always picking the highest timestamp. This is safe when:
+Backpressure begins per destination and per tenant. Bound coordinator in-flight requests, hint bytes, repair streams, and mutation queues. Reject or degrade weak-consistency traffic before memory exhaustion. Do not lower `W` automatically during an incident unless the API explicitly allows a durability-mode change and records which writes received it.
 
-- Each key has a single writer (no concurrent updates)
-- Writes are full-state replacements (not partial updates)
-- Clock skew across nodes is small (NTP synchronized)
+## Security, isolation, and observability
 
-When these assumptions break, data is silently lost. There is no mechanism to detect that a concurrent write was dropped.
+Replica RPC is an authorization boundary. Use mutual authentication, encryption, topology-epoch validation, and per-node identities; a compromised coordinator must not write arbitrary tenant ranges. Repair and bootstrap paths need the same row-level policy and auditability as foreground writes because they bypass normal application authorization.
 
-### Riak and ScyllaDB
+Include `tenant_id` in the authenticated key namespace, encrypt sensitive values and hints, and isolate keys where equality or size leaks matter. Fair schedulers should cap per-tenant request, hint, and repair debt. Deletion obligations include every replica, hint store, snapshot, and quarantine stream; tombstone retention cannot be shortened merely to meet a storage target.
 
-**Riak** uses dotted version vectors (an optimization over classic vector clocks) and is the closest production system to the original Dynamo model. It supports configurable sibling resolution with `allow_mult=true`.
+Observe coordinator latency separately from replica latency. Core signals are successful acknowledgements by consistency level, timeout-with-late-success count, unavailable versus timed-out requests, stale-version and sibling rates, per-node version age, hint bytes and oldest age, repair coverage frontier, streamed mismatch bytes, tombstone age, topology-epoch rejects, speculative requests, disk saturation, and per-tenant queueing. Periodic digest comparisons and end-to-end canary keys detect silent divergence that request success rates miss.
 
-**ScyllaDB** is wire-compatible with Cassandra and inherits the same LWW semantics, but its C++ implementation delivers significantly lower tail latencies (p99). Same consistency trade-offs apply.
+Verification should model arbitrary message loss, duplication, reordering, coordinator crashes, and membership changes. Jepsen-style history checking can test the advertised register or set semantics. Deterministic simulations should pause a write after every acknowledgement subset, overlap reads, advance tombstone GC, restore old disks, exhaust hint storage, and restart repair. Assert not only convergence but also acknowledgement durability, no new/old inversion when linearizability is claimed, monotonic topology epochs, idempotent retries, and tenant isolation.
 
----
+## Decision framework
 
-## Production Configuration
+Leaderless replication fits high-availability key-value workloads where any node may coordinate, per-request consistency is useful, and repair capacity is a first-class subsystem. It is strongest when mutations are naturally idempotent or mergeable and the working set partitions evenly.
 
-### Cassandra Replication and Consistency
+Choose [single-leader replication](./01-single-leader-replication.md) or a consensus-backed register when real-time order, conditional updates, or non-mergeable invariants dominate. Choose [multi-leader replication](./02-multi-leader-replication.md) when writable sites have explicit regional identity and asynchronous cross-site streams are the central concern. Whatever the choice, state the consistency contract in histories a client can observe, not in `ONE`, `QUORUM`, or `ALL` labels alone.
 
-```sql
--- SimpleStrategy: single datacenter, development
-CREATE KEYSPACE myapp
-  WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 3};
-
--- NetworkTopologyStrategy: multi-datacenter production
-CREATE KEYSPACE myapp
-  WITH replication = {
-    'class': 'NetworkTopologyStrategy',
-    'us-east': 3,
-    'eu-west': 3
-  };
-
--- Per-query consistency level
-SELECT * FROM users WHERE id = ? USING CONSISTENCY LOCAL_QUORUM;
-INSERT INTO events (id, data) VALUES (?, ?) USING CONSISTENCY EACH_QUORUM;
-```
-
-`LOCAL_QUORUM` is the most common production choice: it avoids cross-region latency while maintaining quorum guarantees within a single datacenter.
-
-### DynamoDB Configuration
-
-| Setting | Eventually Consistent Read | Strongly Consistent Read |
-|---------|---------------------------|-------------------------|
-| Latency | Lower | Higher (must read from leader) |
-| Cost | 0.5 RCU per 4 KB | 1.0 RCU per 4 KB |
-| Staleness | Up to ~1 second | None |
-| Availability | Higher | Lower during partitions |
-
-DynamoDB defaults to eventually consistent reads. Strongly consistent reads require `ConsistentRead=true` and cost twice as much. On-demand capacity mode eliminates provisioning but has higher per-request cost — suitable for unpredictable workloads.
-
-### Monitoring and Observability
-
-Key metrics for operating leaderless systems at scale:
-
-```
-Coordinator latency vs replica latency:
-  coordinator_latency = max(replica_latencies) + coordination_overhead
-  If p99 coordinator >> p99 replica → straggler problem
-
-Speculative retries:
-  Send read to extra replica if first R haven't responded within p50
-  Reduces tail latency but increases read amplification
-  Cassandra: speculative_retry = '99p'  (retry if slower than p99)
-
-Read repair rate:
-  Sustained high rate → nodes falling behind or frequent restarts
-  Sudden spike → possible clock skew or network partition recovery
-```
+## Primary references
 
-### When to Relax Consistency
-
-Not every query needs quorum. Reducing consistency for specific use cases saves latency and cost:
-
-| Use Case | Recommended CL | Rationale |
-|----------|---------------|-----------|
-| Analytics / reporting queries | ONE | Staleness acceptable, reduces cluster load |
-| Search index building | ONE | Index will be refreshed; stale data is temporary |
-| Cache warming | ONE | Cache miss falls back to stronger read anyway |
-| User activity feeds | LOCAL_ONE | Feeds tolerate brief staleness |
-| Financial transactions | LOCAL_QUORUM / EACH_QUORUM | Correctness required |
-| Cross-region disaster recovery reads | LOCAL_QUORUM | Avoid cross-region latency |
-
----
-
-## Key Takeaways
-
-1. **No single point of failure** - Any node can serve reads/writes
-2. **Quorum determines consistency** - W + R > N for strong consistency
-3. **Conflicts are application's problem** - LWW or sibling resolution
-4. **Read repair is opportunistic** - Anti-entropy provides background sync
-5. **Hinted handoff helps availability** - But not consistency
-6. **Sloppy quorums trade consistency** - For availability during partitions
-7. **Tune per-request** - Different operations need different guarantees
-8. **Not linearizable** - Even with strong quorums, concurrent ops cause anomalies
+- DeCandia, G., et al. [Dynamo: Amazon’s Highly Available Key-value Store](https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf). SOSP, 2007.
+- Attiya, H., Bar-Noy, A., and Dolev, D. [Sharing Memory Robustly in Message-Passing Systems](https://doi.org/10.1145/200836.200869). Journal of the ACM, 1995.
+- Lakshman, A., and Malik, P. [Cassandra: A Decentralized Structured Storage System](https://www.cs.cornell.edu/projects/ladis2009/papers/lakshman-ladis2009.pdf). LADIS, 2009.
+- Apache Cassandra. [Dynamo](https://cassandra.apache.org/doc/latest/cassandra/architecture/dynamo.html) and [Repair](https://cassandra.apache.org/doc/latest/cassandra/managing/operating/repair.html) architecture documentation.
+- Basho Technologies. [Riak KV Concepts: Vector Clocks](https://riak.com/posts/technical/vector-clocks-revisited/index.html).

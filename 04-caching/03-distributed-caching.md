@@ -1,782 +1,514 @@
-# Distributed Caching
+# Distributed Cache Internals
 
 ## TL;DR
 
-Distributed caching spreads cache data across multiple nodes for scale and availability. Key challenges: partitioning data, maintaining consistency, handling node failures. Redis Cluster and Memcached are popular choices. Use consistent hashing to minimize rebalancing. Design for partial availability—cache failures shouldn't crash your application.
+A distributed cache is a sharded, replicated, memory-constrained data plane plus a routing and topology control plane. It scales only when keys distribute evenly, clients agree on ownership, one hot key cannot saturate a shard, and node loss does not send more misses to the origin than it can survive.
+
+For ordinary caching, asynchronous replication and occasional lost cache writes are acceptable because the authoritative source can rebuild them. The same semantics are not automatically safe for sessions, locks, rate limits, or acknowledged write-behind data. Name the role before choosing the product.
+
+A distributed cache must define partitioning, replication, topology changes, hot-key handling, network behavior, and cluster-failure containment. Policy and sizing of the cached working set are in [Cache Semantics and Economics](01-cache-strategies.md), invalidation ordering in [Cache Invalidation and Coherence](02-cache-invalidation.md), and cold refill control in [Stampede, Cold Start, and Warming](04-cache-stampede.md).
 
 ---
 
-## Why Distributed Cache?
+## 1. System Model
 
-### Single Node Limits
+### 1.1 Components
 
-```
-Single Redis instance:
-  Memory: ~100 GB practical limit
-  Throughput: ~100K ops/sec
-  Availability: Single point of failure
+~~~mermaid
+flowchart LR
+    C1["Client A\nrouting map epoch 42"] --> N1[("Shard 1")]
+    C1 --> N2[("Shard 2")]
+    C2["Client B\nrouting map epoch 42"] --> N2
+    C2 --> N3[("Shard 3")]
+    CP["Topology control plane"] -.-> C1
+    CP -.-> C2
+    N1 -.-> R1["Replica 1"]
+    N2 -.-> R2["Replica 2"]
+    N3 -.-> R3["Replica 3"]
+    N1 --> O[("Authoritative origin")]
+    N2 --> O
+    N3 --> O
+~~~
 
-When you need:
-  - More memory (TB of cached data)
-  - More throughput (millions ops/sec)
-  - High availability (no single point of failure)
+A production design has at least four concerns:
 
-→ Distributed cache
-```
+1. **Key placement:** deterministic mapping from a key to an owner.
+2. **Topology:** membership, health, ownership epochs, and migration state.
+3. **Data plane:** GET, SET, DELETE, expiry, admission, and eviction.
+4. **Origin protection:** bounded fallback and refill when cache state is absent.
 
-### Scaling Options
+A topology is not correct merely because every server is healthy. All active clients must converge on compatible ownership, and transitions must preserve bounded miss load.
 
-```
-Vertical: Bigger machine
-  - Simple
-  - Has limits
-  - Still single point of failure
+### 1.2 Cache role classification
 
-Horizontal: More machines
-  - Partition data across nodes
-  - Replicate for availability
-  - More complex
-  - Unlimited scale
-```
+| Role | May lose entries? | Eviction acceptable? | Required analysis |
+|---|---:|---:|---|
+| Derived object/query cache | Yes | Yes | Freshness, origin protection, rebuild |
+| Negative cache | Yes | Yes | Short age, create invalidation |
+| Session store | Often no | Usually no | Durability, revocation, failover |
+| Rate-limit counter | Depends on abuse model | Usually no | Atomicity, partition behavior, fail-safe mode |
+| Distributed lock | No silent split ownership | No | Lease, fencing, clock and pause assumptions |
+| Write-behind buffer | No acknowledged loss | No | Durable log, replay, backpressure |
 
----
-
-## Partitioning
-
-### Hash-Based Partitioning
-
-```python
-# Simple hash mod
-node_id = hash(key) % num_nodes
-
-key = "user:123"
-hash("user:123") = 7429
-7429 % 3 = 1
-→ Node 1
-
-Problem: Adding/removing node reshuffles most keys
-```
-
-### Consistent Hashing
-
-```mermaid
-graph TD
-    Ring(("Hash Ring"))
-    A["Node A (45°)"]
-    B["Node B (180°)"]
-    C["Node C (270°)"]
-
-    Ring --- A
-    Ring --- B
-    Ring --- C
-```
-
-```
-Key hash = 100° → next node clockwise = Node B
-
-Add Node D at 135°:
-  Only keys between 90° and 135° move to D
-  Other nodes unaffected
-```
-
-### Virtual Nodes
-
-```
-Without vnodes:
-  Node A: 1 position on ring
-  Uneven distribution likely
-
-With vnodes (e.g., 150 per node):
-  Node A: 150 positions on ring
-  Better distribution
-  Smoother rebalancing
-  
-  Also handles heterogeneous hardware:
-    Powerful node: 200 vnodes
-    Smaller node: 100 vnodes
-```
+Do not use “Redis is already available” to collapse these roles into one cluster. A volatile cache eviction policy and an authoritative session or lock have conflicting failure requirements.
 
 ---
 
-## Replication
+## 2. Partitioning and Routing
 
-### Primary-Replica
+### 2.1 Stable hashing is a protocol
 
-```mermaid
-graph TD
-    W["Writes"] --> Primary[("Primary")]
-    Primary -.->|replication| R1["Replica 1"]
-    Primary -.->|replication| R2["Replica 2"]
-    Primary -.->|replication| R3["Replica 3"]
-    Reads["Reads"] --> R1
-    Reads --> R2
-    Reads --> R3
-```
+Never use a language runtime's default hash for distributed placement. Some runtimes randomize it between processes; implementations and versions may differ. Define:
 
-### Replication Trade-offs
+- hash algorithm and exact byte encoding;
+- normalization and namespace;
+- seed or domain separator;
+- placement algorithm;
+- topology epoch;
+- test vectors shared by every client language.
 
-```
-Synchronous:
-  + No data loss on primary failure
-  - Higher write latency
-  - Replica failure blocks writes
+A routing change without a versioned protocol can make two clients store and read the same key on different nodes.
 
-Asynchronous:
-  + Fast writes
-  - Data loss window
-  - Stale reads possible
+### 2.2 Modular hashing
 
-Common: 1 sync replica + N async replicas
-```
+~~~text
+owner = stable_hash(key) mod N
+~~~
 
----
+It balances well when hashes are uniform, but changing $N$ remaps approximately $(N-1)/N$ of keys when one node is added. For an ephemeral cache that can be acceptable only when the origin can absorb an almost complete cold start.
 
-## Redis Cluster
+### 2.3 Consistent, rendezvous, and jump hashing
 
-### Architecture
+| Algorithm | Lookup state/cost | Movement | Operational fit |
+|---|---|---|---|
+| Hash ring with virtual nodes | Sorted ring, $O(\log V)$ | Near proportional | Arbitrary weighted membership |
+| Rendezvous / highest-random-weight | Score candidate nodes, $O(N)$ | Only keys won by changed node | Small node sets, simple membership |
+| Jump consistent hash | $O(\log N)$, constant memory | Minimal when bucket count grows | Sequential bucket IDs |
+| Fixed logical slots | Slot table plus stable key-to-slot hash | Move selected slots | Explicit control over resharding |
 
-```mermaid
-graph TD
-    subgraph Slots 0-5460
-        M1[("Master 1")] -.-> R1a["Replica 1a"]
-    end
-    subgraph Slots 5461-10922
-        M2[("Master 2")] -.-> R2a["Replica 2a"]
-    end
-    subgraph Slots 10923-16383
-        M3[("Master 3")] -.-> R3a["Replica 3a"]
-    end
-```
+Virtual-node count and weights are control-plane parameters, not magic constants. Validate distribution with the real key trace and include object bytes, not only key counts.
 
-```
-16384 hash slots distributed across masters
-Each master has replicas for failover
-```
+### 2.4 Skew-aware placement
 
-### Slot Assignment
+Uniform hash output does not imply uniform load:
 
-```python
-def key_slot(key):
-    # If key contains {}, hash only that part
-    # Allows co-locating related keys
-    if "{" in key and "}" in key:
-        hash_part = key[key.index("{")+1:key.index("}")]
-    else:
-        hash_part = key
-    
-    return crc16(hash_part) % 16384
+- one key can receive a million requests;
+- tenants can have different object sizes;
+- commands have different CPU cost;
+- multi-key requests co-locate work;
+- a launch can change popularity faster than rebalancing.
 
-# Examples:
-key_slot("user:123")         # Based on "user:123"
-key_slot("{user:123}:profile") # Based on "user:123"
-key_slot("{user:123}:orders")  # Same slot as above
-```
+Measure per-shard request rate, bytes, CPU, event-loop utilization, and top-key contribution. A balanced key count can hide a saturated shard.
 
-### Failover
+### 2.5 Routing map continuity
 
-```
-1. Replica detects master failure (no heartbeat)
-2. Replica promotes itself to master
-3. Cluster updates routing
-4. Old master rejoins as replica (if recovers)
+A client should retain the last known good map during a transient control-plane outage. It must also:
 
-Automatic failover: No manual intervention
-Typical failover time: 1-2 seconds
-```
+- attach or log the map epoch used;
+- refresh on explicit redirection or topology notification;
+- cap refresh frequency to prevent a control-plane storm;
+- fail boundedly when no owner is known;
+- stop using removed nodes after a drain deadline;
+- expose stale-map and redirection metrics.
 
-### Client Configuration
-
-```python
-from redis.cluster import RedisCluster
-
-rc = RedisCluster(
-    host="redis-cluster.example.com",
-    port=7000,
-    # Client maintains slot mapping
-    # Automatically routes to correct node
-)
-
-rc.set("user:123", "Alice")  # Routes to correct slot
-```
+Static stability matters: an unavailable topology service should not immediately make a healthy cache data plane unreachable.
 
 ---
 
-## Memcached
+## 3. Redis Cluster as a Concrete Slot System
 
-### Architecture
+### 3.1 Slots and hash tags
 
-```
-No replication (by design)
-Clients partition data using consistent hashing
+Redis Cluster maps keys into 16,384 logical hash slots and assigns slots to primary nodes. A hash tag (the non-empty substring inside braces) can co-locate related keys:
 
-Client ─────► [Memcached 1]
-       └────► [Memcached 2]
-       └────► [Memcached 3]
+~~~text
+{order:789}:summary
+{order:789}:items
+~~~
 
-Client is responsible for:
-  - Deciding which node to query
-  - Handling node failures
-```
+Co-location permits multi-key operations for those keys but can create a hot slot. Use it for an operation that genuinely needs atomic same-slot access, not merely because entities look related.
 
-### Client-Side Sharding
+### 3.2 Client behavior
 
-```python
-import pylibmc
+A cluster-aware client normally caches the slot ownership map:
 
-servers = ["10.0.0.1", "10.0.0.2", "10.0.0.3"]
-client = pylibmc.Client(
-    servers,
-    behaviors={
-        "ketama": True,  # Consistent hashing
-        "dead_timeout": 60,  # Mark dead for 60s
-    }
-)
+- **MOVED** indicates the durable owner and should update routing.
+- **ASK** is temporary during migration; the client sends **ASKING** to the target for that operation without treating it as permanent ownership.
+- **CLUSTER SHARDS** is the current topology discovery interface; older clients may use the deprecated **CLUSTER SLOTS** response.
 
-client.set("user:123", "Alice")
-# Client hashes key, picks server
-```
+Redirections are part of normal resharding, but a persistent rise means stale clients, topology churn, or an incomplete migration.
 
-### Comparison: Redis Cluster vs Memcached
+### 3.3 Live resharding
 
-| Aspect | Redis Cluster | Memcached |
-|--------|--------------|-----------|
-| Replication | Built-in | None |
-| Data types | Rich (lists, sets, etc.) | String only |
-| Persistence | Optional | None |
-| Sharding | Server-side | Client-side |
-| Failover | Automatic | Manual/client |
-| Memory efficiency | Lower | Higher |
+For a slot moving from A to B:
+
+~~~text
+A marks slot MIGRATING to B
+B marks slot IMPORTING from A
+existing keys remain readable on A
+missing/migrated keys receive temporary ASK routing to B
+keys are migrated in bounded batches
+all nodes converge on B as the slot owner
+clients eventually receive MOVED and refresh maps
+~~~
+
+Large values make migration pauses and network usage unpredictable. Bound value and collection size before relying on live resharding.
+
+### 3.4 Multi-key limitations
+
+Multi-key commands, transactions, and scripts generally require all involved keys to share a slot. Designing hash tags around every possible transaction can destroy distribution. If an operation spans natural partitions, redesign it as an application workflow rather than forcing a cache cluster to behave like a distributed relational database.
 
 ---
 
-## Consistency Challenges
+## 4. Memcached as a Client-Partitioned System
 
-### Read-After-Write
+Memcached servers do not coordinate a cluster membership or replicate values as part of the core server. Clients or a proxy choose an owner, commonly with consistent hashing.
 
-```
-Client writes to Node A (primary)
-Client reads from Node B (replica)
-Replica hasn't received update yet
+Consequences:
 
-Solutions:
-  - Read from primary after write
-  - Read-your-writes guarantee (sticky sessions)
-  - Wait for replication before ack
-```
+- every client fleet needs the same server list and hash protocol;
+- node loss means those entries are absent unless a proxy writes replicas;
+- adding a node changes placement and creates misses for the moved range;
+- there is no server-side ownership redirect to repair a stale client;
+- simplicity and memory-efficient key/value caching are advantages when entries are truly disposable.
 
-### Split-Brain
-
-```
-Network partition:
-  Partition 1: Master A, Replica B
-  Partition 2: Replica C, Replica D
-
-C or D might be promoted to master
-Two masters accepting writes
-
-Prevention:
-  - Require quorum for writes
-  - Fencing tokens
-  - Redis: min-replicas-to-write
-```
-
-### Cache Coherence
-
-```
-Multiple app servers, each with local + distributed cache
-
-App Server 1: Local cache: user:123 = v1
-App Server 2: Local cache: user:123 = v1
-Distributed:  Redis: user:123 = v2
-
-Local caches are stale!
-
-Solutions:
-  - No local cache (always distributed)
-  - Short TTL on local cache
-  - Publish invalidation events
-```
+A routing proxy can centralize membership, replication, failover, request coalescing, and observability, but it becomes another data-plane dependency that needs horizontal capacity and static routing fallback.
 
 ---
 
-## Handling Node Failures
+## 5. Replication and Failover Semantics
 
-### Graceful Degradation
+### 5.1 Asynchronous replication
 
-```python
-def get_with_fallback(key):
-    try:
-        value = distributed_cache.get(key)
-        if value:
-            return value
-    except CacheConnectionError:
-        log.warn("Cache unavailable, falling back to DB")
-    
-    # Fallback to database
-    return database.get(key)
-```
+Many cache clusters acknowledge a primary write before replicas have applied it. On primary failure:
 
-### Rehashing on Node Removal
+~~~text
+SET version 12 acknowledged
+primary fails before replica receives it
+replica promoted with version 11 or no key
+next read misses or returns older cache state
+~~~
 
-```
-With consistent hashing:
-  Node B removed
-  Only keys that were on B need to move
-  ~1/N of keys affected
+For a derived cache, the correct reaction is reload or invalidate against the authoritative source. For authoritative use, this is acknowledged data loss and requires a different design.
 
-Without consistent hashing:
-  Almost all keys rehash to different nodes
-  Cache becomes effectively empty
-```
+### 5.2 Redis Cluster write safety
 
-### Hot Standby
+Redis Cluster uses asynchronous replication and can lose acknowledged writes, especially around failures and minority partitions. It is designed for high performance and best-effort write safety, not linearizable consensus.
 
-```
-For critical caches:
-  Active: Redis Cluster (3 masters, 3 replicas)
-  Standby: Cold replica in another DC
-  
-  On cluster failure:
-    Promote standby
-    Redirect traffic
-```
+Settings that require a primary to observe a minimum number of sufficiently current replicas can reduce the risk of accepting isolated writes. They do **not** create a majority quorum protocol or fencing guarantee. On heal, one lineage wins and cache writes on the discarded lineage can disappear.
 
----
+### 5.3 Failover preconditions
 
-## Performance Optimization
+A cache failover design should state:
 
-### Connection Pooling
+- how failure is suspected and confirmed;
+- which nodes vote or authorize promotion;
+- whether a sufficiently current replica exists;
+- how clients discover the new owner;
+- how long requests wait before bypass or rejection;
+- what happens to in-flight writes;
+- how the recovered old primary is prevented from serving as owner;
+- how missing entries are refilled without overloading the origin.
 
-```python
-# Bad: New connection per request
-def get_user(user_id):
-    conn = redis.Redis()  # New connection
-    return conn.get(f"user:{user_id}")
+Do not document a fixed “one-second failover” without measuring detection, election, client refresh, DNS/proxy behavior, and refill under the deployed configuration.
 
-# Good: Reuse connections
-pool = redis.ConnectionPool(max_connections=50)
+### 5.4 Replicas are not free read scale
 
-def get_user(user_id):
-    conn = redis.Redis(connection_pool=pool)
-    return conn.get(f"user:{user_id}")
-```
+Reading cache replicas can increase throughput but introduces:
 
-### Pipelining
+- read-after-write lag;
+- version regression across requests;
+- extra network and memory copies;
+- more refill paths after failover;
+- hot-key load on every replica.
 
-```python
-# Bad: Round-trip per command
-for id in user_ids:
-    users.append(redis.get(f"user:{id}"))  # 100 round-trips
-
-# Good: Batch commands
-pipe = redis.pipeline()
-for id in user_ids:
-    pipe.get(f"user:{id}")
-users = pipe.execute()  # 1 round-trip
-```
-
-### Local Caching
-
-```
-Two-tier:
-  L1: Local in-memory (per-process)
-  L2: Distributed cache (Redis)
-
-Read path:
-  1. Check L1 (microseconds)
-  2. Check L2 (milliseconds)
-  3. Check database (tens of milliseconds)
-
-Write path:
-  1. Update database
-  2. Invalidate L2
-  3. Broadcast invalidation to L1s
-```
+Use primary reads when a caller requires a just-written cache value, or attach a minimum source version and reject older entries.
 
 ---
 
-## Monitoring
+## 6. Capacity and Failure Headroom
 
-### Key Metrics
+### 6.1 Size against three independent resources
 
-```
-Hit rate:
-  hits / (hits + misses)
-  Target: >90%
+Let:
 
-Latency:
-  p50, p95, p99
-  Watch for outliers
+- $M$ = logical cached bytes after admission;
+- $F$ = allocator, metadata, growth, and failure factor;
+- $C_m$ = usable dataset bytes per primary;
+- $Q$ = peak operations per second;
+- $C_q$ = safe operations per second per primary at target p99;
+- $B$ = peak payload bytes per second;
+- $C_b$ = safe network bytes per second per primary;
+- $S$ = measured skew factor greater than or equal to 1.
 
-Memory usage:
-  Used vs max
-  Eviction rate
+A first-order primary count is:
 
-Connections:
-  Current vs max
-  Connection errors
+$$
+N \geq \max\left(
+  \frac{MF}{C_m},
+  \frac{QS}{C_q},
+  \frac{BS}{C_b}
+\right)
+$$
 
-Replication lag:
-  Seconds behind master
-```
+Then add replication and enough spare primaries or slots to survive the declared failure. Measure $C_q$ with production command mix, payload sizes, persistence settings, network path, and pipelining. Generic “operations per second” tables are not capacity plans.
 
-### Alerting
+### 6.2 N-minus-one test
 
-```yaml
-alerts:
-  - name: CacheHitRateLow
-    condition: hit_rate < 80%
-    for: 5m
-    
-  - name: CacheLatencyHigh
-    condition: p99_latency > 100ms
-    for: 1m
-    
-  - name: CacheMemoryHigh
-    condition: memory_usage > 90%
-    for: 5m
-    
-  - name: ReplicationLag
-    condition: lag_seconds > 10
-    for: 1m
-```
+If load is evenly distributed, losing one of $N$ primaries multiplies surviving average load by approximately:
 
----
+$$
+\frac{N}{N-1}
+$$
 
-## Common Patterns
+That says nothing about a hot key or a large migrating slot. Run the failure test with observed skew, while replicas promote and clients refresh maps.
 
-### Caching with Fallback
+Capacity gates should include:
 
-```python
-def get_user(user_id):
-    # Try cache
-    user = cache.get(f"user:{user_id}")
-    if user:
-        return deserialize(user)
-    
-    # Cache miss or error
-    user = db.get_user(user_id)
-    
-    # Populate cache (best effort)
-    try:
-        cache.set(f"user:{user_id}", serialize(user), ex=3600)
-    except:
-        pass  # Don't fail the request
-    
-    return user
-```
+- p99 latency within SLO after one failure;
+- CPU/event-loop and network below safe saturation;
+- memory below eviction cliff;
+- origin miss QPS below its protected budget;
+- enough room to reshard or rebuild a replica.
 
-### Circuit Breaker for Cache
+### 6.3 Memory cliffs
 
-```python
-class CacheCircuitBreaker:
-    def __init__(self, threshold=5, reset_time=60):
-        self.failures = 0
-        self.threshold = threshold
-        self.reset_time = reset_time
-        self.last_failure = 0
-        
-    def call(self, func):
-        if self.is_open():
-            raise CacheBypassException()
-        
-        try:
-            result = func()
-            self.failures = 0
-            return result
-        except:
-            self.failures += 1
-            self.last_failure = time.time()
-            raise
-    
-    def is_open(self):
-        if self.failures >= self.threshold:
-            if time.time() - self.last_failure < self.reset_time:
-                return True
-            self.failures = 0
-        return False
-```
+A memory cache does not degrade smoothly when full. It may:
+
+- evict useful entries, increasing origin load;
+- reject writes under no-eviction policy;
+- fragment resident memory;
+- consume buffers outside the configured dataset limit;
+- pause on large expiry, deletion, persistence, or fork work;
+- trigger host swapping, which destroys latency.
+
+Separate logical dataset bytes from resident memory and from host memory. Leave capacity for client buffers, replication or persistence buffers, allocator fragmentation, the operating system, and failover.
 
 ---
 
-## Consistent Hashing Deep Dive
+## 7. Hot Keys and Large Objects
 
-### Why Modular Hashing Breaks
+### 7.1 A hot key defeats horizontal sharding
 
-```
-3 nodes: hash(key) % 3
-  key "session:abc" → hash=14 → 14 % 3 = 2 → Node 2
-Add a 4th node: hash(key) % 4
-  key "session:abc" → hash=14 → 14 % 4 = 2 → Node 2 (lucky)
-  key "user:456"    → hash=19 → 19 % 3 = 1, but 19 % 4 = 3 (remapped!)
+If one key's request rate exceeds a node's safe capacity, adding ordinary shards does not move that key across CPUs. Detect top-key contribution with sampled access telemetry, frequency sketches, or product-level counters.
 
-On average: (N-1)/N keys remap when adding 1 node
-  3→4 nodes: ~75% keys remap | 9→10 nodes: ~90% keys remap
-  → Massive cache miss storm
-```
+Mitigations:
 
-### Consistent Hashing Ring Mechanics
+1. **L1 replication:** copy a short-lived value to each application process.
+2. **Read replicas:** spread reads when replica lag is acceptable.
+3. **Application replication:** write $K$ deterministic copies and choose one on read.
+4. **Compute or embed locally:** remove the network lookup for static configuration.
+5. **Hierarchical shield:** one regional proxy collapses requests from many clients.
 
-```
-1. Hash both keys AND nodes onto the same ring (0 to 2^32 - 1)
-2. Walk clockwise from key's position to find the first node
-3. Adding a node only steals keys from its clockwise neighbor
+Application replication multiplies write and invalidation work by $K$. Use a stable suffix mapping, update all copies with source versions, and retain TTL safety.
 
-Adding Node D between A and B:
-  Before: keys in (A, B] → served by B
-  After:  keys in (A, D] → served by D, keys in (D, B] → served by B
-  Only keys in (A, D] move. Expected key movement: 1/N of total keys.
-```
+### 7.2 Hot-key budget
 
-### Virtual Nodes (Vnodes)
+For a key with rate $q_k$ and average command service time $s_k$, its direct server utilization contribution is approximately:
 
-```
-Problem: 3 physical nodes = 3 points on ring → unbalanced segments
-Solution: map each physical node to many virtual nodes
-  Node A → vnode_A_0, vnode_A_1, ... vnode_A_149
+$$
+u_k = q_k s_k
+$$
 
-Typical vnode count: 100-200 per physical node
-  Too few (<50):  uneven distribution | Too many (>500): memory overhead
+When one key consumes a large fraction of a single execution resource, the shard has little queueing headroom even if aggregate cluster QPS looks low. Monitor p99 and queueing, not only average CPU.
 
-Heterogeneous hardware: 32 GB node → 100 vnodes, 64 GB node → 200 vnodes
-```
+### 7.3 Large objects
 
-### Jump Consistent Hashing
+Large values cause:
 
-```
-Google's alternative (2014):
-  - No ring structure, O(1) memory, O(ln n) time
-  - Deterministic: jump_hash(key, num_buckets) → bucket
-  - Perfect balance, minimal code (~10 lines), no vnodes needed
+- network head-of-line blocking;
+- serialization and garbage-collection pressure;
+- uneven memory and slot distribution;
+- long migration and deletion operations;
+- oversized pipeline reply buffers.
 
-Limitations:
-  - Only sequential bucket IDs (0 to N-1)
-  - Can only add/remove the LAST bucket
-  - Not suitable when arbitrary nodes join/leave
-```
-
-### Rendezvous Hashing (Highest Random Weight)
-
-```
-For each key, compute score for every node: score = hash(key + node)
-Route to the node with the highest score.
-
-Adding/removing a node: only keys where that node scored highest move.
-  → Same 1/N redistribution as consistent hashing, no vnodes needed.
-```
-
-### Comparison
-
-| Aspect | Modular | Consistent (ring) | Jump | Rendezvous |
-|---|---|---|---|---|
-| Key movement on resize | ~(N-1)/N | ~1/N | ~1/N | ~1/N |
-| Memory | O(1) | O(N * vnodes) | O(1) | O(N) |
-| Lookup | O(1) | O(log N) | O(log N) | O(N) |
-| Arbitrary add/remove | Yes | Yes | No (last only) | Yes |
-| Balance without vnodes | Perfect | Poor | Perfect | Good |
-| Used by | Simple setups | Dynamo, Cassandra | Google | Microsoft Cuckoo |
+Set an item-size and collection-cardinality budget. Split objects only when callers can tolerate partial reads and versioned assembly. Compression should be chosen from measured CPU-versus-byte savings and must have decompression size limits.
 
 ---
 
-## Redis Cluster Architecture
+## 8. Client and Network Design
 
-### Hash Slot Distribution
+### 8.1 Connections and deadlines
 
-```
-Redis Cluster uses 16384 hash slots: Slot = CRC16(key) % 16384
-Slot assignment via redis-cli --cluster create or manual:
-  Master A: slots 0-5460 | Master B: slots 5461-10922 | Master C: slots 10923-16383
+Clients should:
 
-Why 16384? Gossip heartbeats carry a slot bitmap.
-  16384 bits = 2 KB — small enough for every heartbeat message.
-```
+- reuse bounded connection pools;
+- budget cache timeouts as a small fraction of the end-to-end deadline;
+- cap in-flight operations and pending bytes;
+- cancel work when the caller deadline expires;
+- expose pool wait separately from server latency;
+- apply retry budgets, not unbounded transparent retries.
 
-### MOVED and ASK Redirections
+A cache timeout followed by an origin read pays both costs. A long cache timeout can therefore make a failure slower than running without a cache.
 
-```
-Client sends GET user:123 to wrong node:
-  Node A → Client: MOVED 3999 10.0.0.2:7001
-  Client updates local slot map, retries directly to Node B
+### 8.2 Pipelining and batching
 
-During resharding (slot migration in progress):
-  Node A → Client: ASK 7865 10.0.0.3:7002
-  Client sends ASKING + GET user:456 → Node C
-  ASK is temporary — client does NOT update its slot map
-```
+Pipelining amortizes round trips but the server and client must buffer replies. Use bounded batches and cap bytes, not only command count. Very large pipelines can increase tail latency and memory.
 
-### Live Resharding
+Prefer a multi-get or variadic command when it preserves semantics. In a sharded cluster, split a multi-get by owner and enforce an overall deadline; otherwise one slow shard holds the entire response.
 
-```
-Moving slot 7865 from Node A → Node C (zero downtime):
-  1. Node C: CLUSTER SETSLOT 7865 IMPORTING <A-id>
-  2. Node A: CLUSTER SETSLOT 7865 MIGRATING <C-id>
-  3. Per key: MIGRATE <C-host> <C-port> <key> 0 5000
-  4. Both nodes: CLUSTER SETSLOT 7865 NODE <C-id>
-Keys already migrated served by C; remaining by A (with ASK redirect).
-```
+Pipelining does not make a read-modify-write atomic. Use a server-side atomic primitive where appropriate and same-slot constraints permit it.
 
-### Replica Promotion on Master Failure
+### 8.3 Retries
 
-```
-Detection via gossip: nodes ping randomly every second
-  No PONG within cluster-node-timeout (default 15s) → PFAIL
-  Majority of masters agree PFAIL → FAIL
+GET and DELETE are normally safe to retry within a deadline. A fill SET should include source version when reordering matters. Increment, append, lock acquisition, and rate-limit operations may not be safe to retry after an ambiguous timeout.
 
-Promotion: replica with least lag initiates election,
-  majority of masters vote, replica becomes new master.
-  Typical total failover time: 15-30 seconds.
-```
+Retry at one layer. Client, proxy, and service retries multiplied together can saturate the cache during the incident they are intended to hide.
 
-### Client-Side Slot Caching
+### 8.4 Serialization
 
-```
-Smart clients (Jedis, redis-py, Lettuce):
-  1. On startup: CLUSTER SLOTS → full slot-to-node mapping
-  2. Cache locally → direct routing, zero redirects
-  3. On MOVED → refresh slot map | Periodic refresh for topology changes
-
-Dumb clients: send to any node, follow redirects (2x latency on miss).
-```
-
-### Redis Cluster Limitations
-
-```
-Multi-key ops require same slot:
-  MGET user:1 user:2       → CROSSSLOT error
-  MGET {user}:1 {user}:2   → OK (hash tag "user" → same slot)
-
-Co-locate related keys: {order:789}:items, {order:789}:total → same slot
-No SELECT (single DB only) | No cross-slot MULTI/EXEC or Lua scripts
-```
+Version payloads and treat unknown schema as a miss. Validate size before allocation, bound decompression, and never deserialize untrusted native object formats such as unrestricted language pickles. Measure encode/decode time as part of hit latency.
 
 ---
 
-## Memcached vs Redis for Distributed Caching
+## 9. L1 and L2 Integration
 
-### Threading Model
+An L1 cache is a replication layer in every process. It is valuable for hot, read-mostly values, but fleet size multiplies memory and invalidation endpoints.
 
-```
-Memcached: multi-threaded
-  - Worker threads handle requests in parallel, scales with CPU cores
-  - At 24+ threads, saturates memory bandwidth before CPU
+A safe L1/L2 arrangement has:
 
-Redis: single-threaded event loop (per shard)
-  - No lock contention, simpler code
-  - Redis 6+: io-threads for network I/O (not command execution)
-  - Scale out via sharding, not threading
-```
+- shorter L1 age than the object freshness budget;
+- original source version and generation time copied from L2;
+- invalidation continuity or flush on disconnect;
+- an L2 and origin concurrency budget during process rollouts;
+- per-instance hit rate so cold instances are visible;
+- a size cap below garbage-collector or allocator pressure thresholds.
 
-### Data Structure Capabilities
+Redis server-assisted client tracking can send invalidations for keys a client has read, or broadcast invalidations by prefix. Client support and disconnect semantics are part of the design. A basic transient pub/sub subscriber that silently misses messages is not coherence.
 
-```
-Memcached: key → binary string (up to 1 MB). No other data types.
-
-Redis: Strings, Lists, Sets, Sorted Sets, Hashes,
-  Streams, Bitmaps, HyperLogLog, Geospatial indexes
-
-  Where Redis wins:
-    Leaderboard: ZADD + ZRANGE | Rate limiter: INCR + EXPIRE atomically
-    Pub/sub: built-in broadcasting | HyperLogLog: 0.81% error, 12 KB
-```
-
-### Memory Allocation
-
-```
-Memcached slab allocator:
-  Pre-allocates slab classes (64B, 128B, 256B ...)
-  100B item → 128B slab → 28B wasted (internal fragmentation)
-  Predictable memory, no external fragmentation
-
-Redis jemalloc:
-  General-purpose, better fit for variable-size structures
-  Can fragment over time: check mem_fragmentation_ratio in INFO memory
-  MEMORY PURGE to release freed pages back to OS
-```
-
-### Performance Comparison
-
-```
-Pure GET/SET at high concurrency (benchmarks vary):
-  Memcached: ~200K-600K ops/sec per node (multi-threaded)
-  Redis:     ~100K-200K ops/sec per node (single-threaded)
-Memcached wins 1.5-2x for simple key-value. Network is often the real bottleneck.
-Both deliver sub-millisecond latency for typical payloads.
-```
-
-### When to Choose Each
-
-```
-Memcached: pure key-value cache, max throughput per node,
-  ephemeral data only, simplicity (no persistence/replication)
-
-Redis: data structures (sorted sets, streams, pub/sub),
-  persistence (RDB/AOF), built-in replication + failover,
-  Lua scripting, transactions
-```
+Do not perform an L2 version lookup on every L1 hit unless measurement shows the remaining network hop is still worthwhile. If every L1 hit validates remotely, the tier may save serialization but not the network dependency.
 
 ---
 
-## Distributed Cache Failure Modes
+## 10. Failure Containment
 
-### Node Failure and Thundering Herd
+### 10.1 Cache outage does not imply unlimited origin fallback
 
-```
-Node B dies → consistent hashing redirects B's keys to Node C
-  → All of B's keys are cache misses on C → DB query storm
+~~~text
+steady state:
+100,000 reads/s * 2% miss = 2,000 origin reads/s
 
-Mitigation:
-  - Request coalescing (singleflight): 1 thread fetches, others wait
-  - Staggered TTLs: random jitter so keys don't expire together
-  - Warm-up: proactively populate new node before decommission
-```
+cache outage:
+100,000 reads/s * 100% miss = 100,000 origin reads/s
+~~~
 
-### Split-Brain in Redis Cluster
+If the origin safely handles 5,000 reads/s, “fail open to the database” creates an outage.
 
-```
-Partition A: Master 1, Master 2, Replica 3a
-Partition B: Master 3, Replica 1a, Replica 2a
-  → Replica 1a promoted → TWO Master 1s for slots 0-5460
-  → On heal: original Master 1 demotes, DISCARDS its writes → data loss
+Use a protection stack:
 
-Prevention:
-  min-replicas-to-write 1  → refuse writes without reachable replicas
-  min-replicas-max-lag 10  → replica must be <10s behind
-```
+- short cache timeout and circuit breaker to stop waiting on a failed cache;
+- stale values with a hard age and version boundary;
+- request coalescing per key;
+- global and per-tenant origin concurrency budgets;
+- admission control or feature degradation after the budget is exhausted;
+- priority for critical reads;
+- gradual recovery so fills do not compete with live misses.
 
-### Memory Fragmentation
+### 10.2 Failure policy by data class
 
-```
-Redis INFO memory:
-  used_memory: 10 GB (logical) | used_memory_rss: 16 GB (physical)
-  mem_fragmentation_ratio: 1.6 (rss / used)
+| Cache class | Cache unavailable | Origin unavailable |
+|---|---|---|
+| Public content | Protected origin fallback | Bounded stale or omit |
+| User profile | Protected authoritative read | Bounded stale if product permits |
+| Authorization | Validate authority or fail closed | Fail closed / explicit unavailable |
+| Recommendation | Omit module | Bounded stale |
+| Inventory display | Authoritative read with deadline | Unavailable rather than misleading |
+| Negative cache | Bypass | Preserve upstream error, not “absent” |
 
-  < 1.0: swapping to disk (critical) | 1.0-1.5: healthy | > 1.5: wasted RAM
-  Fix: activedefrag yes (Redis 4+) or restart via replica failover
-```
+### 10.3 Cache poisoning
 
-### Hot Key Problem
-
-```
-"trending:homepage" → 500K reads/sec → one shard saturated
-
-Detection: redis-cli --hotkeys (LFU approximation)
-
-Mitigation:
-  1. Local L1 cache: hot keys in-process with 1-5s TTL
-  2. Key replication: trending:homepage:{1..8}, client picks random suffix
-  3. Read replicas: route hot key reads to replicas
-  4. Redis 6 server-assisted client cache (RESP3 push invalidation)
-```
+Validate that a cached value came from the intended tenant, schema, and source version. Restrict write permissions by namespace. A compromised writer or key collision can amplify one bad value across the fleet. Provide targeted purge by key generation and retain an auditable way to trace who filled an entry.
 
 ---
 
-## Key Takeaways
+## 11. Topology Change Runbooks
 
-1. **Consistent hashing minimizes reshuffling** - Use for node additions/removals
-2. **Redis Cluster for rich features** - Replication, data types, persistence
-3. **Memcached for simplicity** - Pure cache, high memory efficiency
-4. **Plan for node failures** - Graceful degradation to database
-5. **Connection pooling is essential** - Don't create connections per request
-6. **Pipeline for batches** - Reduce round-trips dramatically
-7. **Monitor hit rate and latency** - Primary health indicators
-8. **Cache is not critical path** - Failures should never crash the app
+### 11.1 Planned scale-out or reshard
+
+1. Verify N-minus-one and origin headroom.
+2. Add nodes and establish replicas before assigning user load.
+3. Publish a versioned topology or begin the product's native slot migration.
+4. Rate-limit bytes and keys moved; large objects get a separate budget.
+5. Watch redirections, client-map epochs, p99, replication lag, evictions, and origin misses.
+6. Pause automatically when any safety gate is exceeded.
+7. Warm or copy only the moved hot set; do not scan and refill everything blindly.
+8. Confirm every client generation has converged before draining old owners.
+9. Keep rollback ownership until moved-key and error audits pass.
+
+### 11.2 Unplanned node failure
+
+1. Stop retry amplification.
+2. Determine whether a replica can promote or keys are simply absent.
+3. Apply origin miss budgets before clients fan out.
+4. Prefer stale or degraded responses where contracts allow.
+5. Track promotion, routing-map convergence, and refill separately.
+6. Rebuild redundancy before declaring the incident over.
+7. Test failback; a recovered old node must not resume ownership from stale state.
+
+### 11.3 Cross-region failure
+
+A cold regional cache can be a larger risk than database replication itself. Maintain a warm-enough standby from a safe source, reserve inter-region and origin capacity, and include cache age in traffic-shift readiness. Do not copy entries across regions if residency, tenant, or encryption policy forbids it.
+
+---
+
+## 12. Observability and Verification
+
+### 12.1 Metrics
+
+Per node, shard, command, client version, and key class:
+
+- useful conditional hit rate and miss reason;
+- p50/p95/p99 server, network, pool-wait, and end-to-end latency;
+- operations and bytes per second;
+- memory dataset, resident memory, fragmentation, evictions, expirations, and rejected writes;
+- connections, in-flight commands, pipeline depth, and reply bytes;
+- replication offset/lag and promotion state;
+- slot or ownership distribution, migration bytes, MOVED/ASK rate, and client-map epoch;
+- top-key and top-tenant contribution;
+- cache errors, bypasses, stale serves, and protected-origin QPS.
+
+### 12.2 Verification matrix
+
+Run these under production-shaped traffic:
+
+| Experiment | Required assertion |
+|---|---|
+| Kill one primary | p99 and origin load stay within gate |
+| Partition primary from replicas | documented write-loss and failover behavior occurs |
+| Delay cache by more than timeout | circuit opens; requests do not queue without bound |
+| Empty one shard | refill is coalesced and origin budget holds |
+| Add/remove node | movement matches plan; clients converge |
+| Reshard large keys | migration pause and network stay bounded |
+| Send one hot key | mitigation prevents single-shard saturation |
+| Fill memory | chosen admission/eviction behavior protects useful hit rate |
+| Disconnect L1 tracking | local cache flushes or revalidates |
+| Roll serializer version | old payload is read safely or treated as miss |
+
+A benchmark on a warm, healthy, single node proves none of these properties.
+
+### 12.3 Checklist
+
+- [ ] Stable hash protocol and topology epoch are shared by every client.
+- [ ] Partitioning was tested with real key bytes and popularity.
+- [ ] One hot key and one large object cannot dominate a shard unnoticed.
+- [ ] Capacity passes N-minus-one with measured command mix.
+- [ ] Replication loss semantics match the cache's role.
+- [ ] Redis replica constraints are not described as consensus or fencing.
+- [ ] Client timeouts, retries, pools, and pipelines are bounded.
+- [ ] Cache outage cannot create unlimited origin fallback.
+- [ ] Reshard, failover, and failback have automated pause gates.
+- [ ] Metrics expose topology convergence and user-visible miss load.
+
+---
+
+## Primary References
+
+- [Redis Cluster specification](https://redis.io/docs/latest/operate/oss_and_stack/reference/cluster-spec/)
+- [Redis pipelining](https://redis.io/docs/latest/develop/using-commands/pipelining/)
+- [Redis latency diagnosis](https://redis.io/docs/latest/operate/oss_and_stack/management/optimization/latency/)
+- [Redis key eviction](https://redis.io/docs/latest/develop/reference/eviction/)
+- [Redis server-assisted client-side caching](https://redis.io/docs/latest/develop/reference/client-side-caching/)
+- [Memcached performance and efficiency](https://docs.memcached.org/serverguide/performance/)
+- [Consistent Hashing and Random Trees, Karger et al.](https://people.csail.mit.edu/karger/Papers/ConsistentHashing.pdf)
+- [A Fast, Minimal Memory, Consistent Hash Algorithm](https://arxiv.org/abs/1406.2294)
+- [Scaling Memcache at Facebook, NSDI 2013](https://www.usenix.org/conference/nsdi13/technical-sessions/presentation/nishtala)

@@ -1,763 +1,270 @@
-# Dead Letter Queues
+# Poison-Message Quarantine and Redrive
 
-## TL;DR
+A poison message is a delivery that cannot make progress under the current code, data, policy, or dependency state. Quarantine removes it from the hot delivery path while preserving enough evidence and identity to diagnose, repair, and replay it safely. A dead-letter queue is therefore an incident and repair subsystem, not a place to hide exhausted generic retries.
 
-Dead Letter Queues (DLQ) capture messages that cannot be processed successfully. Instead of losing failed messages or blocking the queue, they're moved to a separate queue for investigation. Essential for debugging, compliance, and preventing data loss. Configure retry limits, monitor DLQ depth, and establish procedures for handling dead letters.
+A quarantine subsystem must define failure classification, quarantine state, retained evidence, bulk isolation, repair, and controlled redrive. Retry timing/idempotency/compensation belong to [Workflow Effect Protocols](../18-workflow-job-systems/06-retry-idempotency-compensation.md). Queue claims are in [Message Queue Architecture](01-message-queues.md), and end-to-end duplicate effects are in [Delivery Guarantees](04-delivery-guarantees.md).
 
----
+## Workload and contract
 
-## Why Dead Letter Queues?
+Quarantine operations should be explicit:
 
-### The Problem
-
-```
-Message arrives → Processing fails → What now?
-
-Options without DLQ:
-  1. Retry forever (blocks queue)
-  2. Discard (lose data)
-  3. Crash consumer (disrupts service)
-
-None are good!
+```text
+quarantine(delivery, classification, evidence, policy_version)
+inspect(quarantine_id)
+assign(quarantine_id, owner)
+repair(quarantine_id, repair_artifact)
+redrive(selection, destination, transform_version, rate_budget, dry_run)
+resolve(quarantine_id, outcome)
+expire(quarantine_id, retention_policy)
 ```
 
-### DLQ Solution
+Define:
 
-```
-Message arrives → Processing fails → Retry N times → Move to DLQ
+- which failures are retryable, permanent, ambiguous, or policy-blocked;
+- who classifies them and with which policy version;
+- whether quarantine advances the main subscription position;
+- evidence captured and sensitive-data handling;
+- retention/legal hold and payload availability;
+- repair and transformation authority;
+- redrive identity, ordering, destination, rate, and duplicate-effect safeguards;
+- ownership/SLO for oldest untriaged and unresolved items;
+- behavior during systemic failure when millions of messages fail together.
 
-Main Queue ──► Consumer ──► Success
-                  │
-              Failure (after retries)
-                  │
-                  ▼
-              Dead Letter Queue
-                  │
-                  ▼
-          Manual investigation
-```
+Moving a record to quarantine is a state transition with durable evidence. If the broker cannot atomically record quarantine and advance source progress, the operation may duplicate; stable identities make it reconcilable.
 
----
+## State and invariants
 
-## How DLQs Work
+A quarantine record includes:
 
-### Basic Flow
-
-```
-1. Consumer receives message
-2. Processing fails
-3. Message returned to queue (nack)
-4. Retry counter incremented
-5. After N retries, move to DLQ
-6. Original queue continues processing
-7. DLQ monitored and investigated
+```text
+quarantine_id
+original_event_id and source topic/partition/position
+original schema/type/tenant and payload digest/reference
+consumer/service/release/policy versions
+first/last failure time and attempt summary
+normalized failure class/code and redacted diagnostic reference
+claim/order/entity versions at failure
+status, owner, retention/hold, repair/redrive lineage
 ```
 
-### Message Metadata
+Enforce:
 
-```json
-{
-  "original_message": {
-    "body": "...",
-    "headers": {...}
-  },
-  "dlq_metadata": {
-    "original_queue": "orders",
-    "failure_reason": "ValidationError: Invalid product ID",
-    "failure_timestamp": "2024-01-15T10:30:00Z",
-    "retry_count": 3,
-    "stack_trace": "..."
-  }
-}
+**Original identity is preserved.** Redrive does not silently create a new logical business intent. If a new event is deliberately created, it records causal lineage and why dedup semantics differ.
+
+**Evidence is immutable.** Triage notes and repair actions append to history; original payload digest, failure class, and source position are not overwritten.
+
+**Quarantine is isolated from hot delivery.** A poison item cannot immediately cycle back and consume workers without an explicit redrive decision.
+
+**Source progress is unambiguous.** The main subscription records that the source item was quarantined, not successfully applied. Reconciliation can distinguish the two.
+
+**Repair is reproducible.** Transform/code/config/schema artifact versions are recorded; “edited JSON manually” is not a production repair protocol.
+
+**Redrive is bounded and reversible.** Selection, destination, rate, idempotency horizon, stop conditions, and outcomes are known before execution.
+
+**Retention preserves dependencies.** A quarantine envelope is not useful if its referenced payload, schema, encryption key, or source context expires first.
+
+## Failure classification
+
+Classify before deciding to retry or quarantine:
+
+| Class | Examples | Normal action |
+|---|---|---|
+| transient dependency | timeout, rate limit, leader failover | bounded retry/backoff; do not quarantine every item |
+| deterministic payload/schema | malformed field, unknown required version | quarantine with schema evidence |
+| deterministic domain conflict | impossible transition, stale prerequisite | quarantine or resolve through domain repair |
+| authorization/policy | revoked tenant, prohibited content, residency violation | fail closed; restricted quarantine/review |
+| consumer defect | release crashes on valid record | halt/circuit-break release or isolate cohort |
+| ambiguous outcome | external request timed out after possible commit | reconcile status before retry/redrive |
+| resource/pathological | decompression bomb, huge expansion, hot key | isolate and enforce budgets |
+
+Attempt count alone is a weak classifier. Ten identical schema errors are poison; ten timeouts during a known regional outage may be normal transient failure. Conversely, one invalid signature should fail permanently without repeated work.
+
+Classification is a versioned decision function over typed error code, retryability declaration, dependency health, attempt history, message/schema version, and policy. Do not parse arbitrary exception strings as the primary contract.
+
+Consumers return structured failure outcomes. The queue/quarantine service applies central safety limits: maximum delivery age, attempts, cumulative execution, lease extensions, and unknown-error budget. Application teams can narrow but not bypass platform bounds.
+
+## Data plane and control plane
+
+The **data plane** receives structured failures, persists quarantine records/payload references, advances or records source disposition, serves bounded inspection, and executes rate-limited redrive. It supports high-volume batch quarantine without calling a human-review service per message.
+
+The **control plane** owns classification policy, retention, access, ownership/routing, repair transform registry, redrive approvals, destinations, quotas, legal holds, and dashboards. Emergency policy changes are versioned, audited, canaried, and rollbackable.
+
+Separate quarantine storage from the source queue so poison evidence survives source retention/purge and cannot block its partitions. Keep a source-position index for reconciliation and an entity/type/error index for triage. Avoid arbitrary high-cardinality indexes on raw payload fields.
+
+Human triage UI reads redacted metadata by default; privileged payload access is just-in-time and audited. Bulk APIs operate on stable query snapshots/manifests so a changing filter does not cause an unrepeatable redrive set.
+
+## Quarantine transition
+
+For a broker with native dead-lettering, configure a dead-letter destination plus maximum delivery/classification policy. Still verify what is preserved: original topic, position, headers, delivery attempts, and payload. Broker-native redrive may assign a new transport position and may not retain source identity unless included in the envelope.
+
+For an application-managed consumer, a safe local-database path is:
+
+1. begin the same transaction used for inbox/progress;
+2. insert quarantine disposition keyed by `(consumer, event_id)` with payload reference/evidence;
+3. update entity/projection status if the product exposes blocked work;
+4. advance the contiguous source checkpoint only under policy that permits skipping into quarantine;
+5. insert an outbox record for the quarantine store if it is external;
+6. commit, then acknowledge source.
+
+If quarantine storage is remote, first persist a local durable disposition/outbox; calling remote quarantine then checkpointing source is a dual write. A crash can either lose evidence or duplicate records.
+
+Strict ordered streams need special handling. Quarantining sequence 18 and applying 19 may violate the domain even though queue throughput recovers. Policies include:
+
+- block only that entity/key while unrelated keys continue;
+- quarantine the blocked suffix together;
+- rebuild/repair 18 before proceeding;
+- explicitly skip 18 only if domain semantics allow it and record the gap.
+
+Moving poison out of the queue does not remove ordering invariants.
+
+## Systemic failures and bulk isolation
+
+A bad deployment or schema rollout can make most messages fail. Individually retrying and quarantining them floods storage, alerts, and operator interfaces. Detect correlated failure by normalized fingerprint, release, schema, partition, and time window.
+
+When a failure cohort crosses a learned/declared threshold:
+
+1. open a circuit for the affected consumer release/message class;
+2. pause or slow source delivery for that cohort;
+3. store one incident/fingerprint record plus compact references to affected source ranges where safe;
+4. preserve source retention/checkpoints;
+5. roll back or repair the consumer;
+6. replay from source under a controlled generation rather than materializing millions of duplicate payloads.
+
+Range quarantine is safe only when the source remains retained and immutable. If source retention can expire, copy payloads or extend retention. The incident manifest lists exact partitions/positions and checksums.
+
+Protect healthy tenants/types through bulkheads. A global circuit should be the last resort; isolate by consumer, release, schema, tenant, and partition without letting unbounded label cardinality exhaust the controller.
+
+## Triage and repair workflow
+
+Quarantine states can be:
+
+```text
+NEW -> TRIAGED -> REPAIR_READY -> REDRIVING -> RESOLVED
+  \-> POLICY_HOLD
+  \-> DISCARDED (with authority and evidence)
+  \-> REDRIVE_FAILED -> TRIAGED
 ```
 
----
-
-## Configuration
-
-### RabbitMQ
-
-```python
-# Declare DLQ
-channel.queue_declare(
-    queue='orders-dlq',
-    durable=True
-)
-
-# Declare main queue with DLQ binding
-channel.queue_declare(
-    queue='orders',
-    durable=True,
-    arguments={
-        'x-dead-letter-exchange': '',
-        'x-dead-letter-routing-key': 'orders-dlq',
-        'x-message-ttl': 60000,  # Optional: TTL before DLQ
-        'x-max-retries': 3  # Requires plugin
-    }
-)
-```
-
-### Amazon SQS
-
-```python
-import boto3
-
-sqs = boto3.client('sqs')
-
-# Create DLQ
-dlq = sqs.create_queue(QueueName='orders-dlq')
-dlq_arn = sqs.get_queue_attributes(
-    QueueUrl=dlq['QueueUrl'],
-    AttributeNames=['QueueArn']
-)['Attributes']['QueueArn']
-
-# Create main queue with redrive policy
-sqs.create_queue(
-    QueueName='orders',
-    Attributes={
-        'RedrivePolicy': json.dumps({
-            'deadLetterTargetArn': dlq_arn,
-            'maxReceiveCount': '3'  # After 3 failures → DLQ
-        })
-    }
-)
-```
-
-### Kafka
-
-```python
-# Kafka doesn't have native DLQ
-# Implement in consumer
-
-from kafka import KafkaConsumer, KafkaProducer
-
-consumer = KafkaConsumer('orders')
-producer = KafkaProducer()
-
-for message in consumer:
-    try:
-        process(message)
-    except Exception as e:
-        # Send to DLQ topic
-        producer.send(
-            'orders-dlq',
-            key=message.key,
-            value=message.value,
-            headers=[
-                ('original-topic', b'orders'),
-                ('failure-reason', str(e).encode()),
-                ('retry-count', str(get_retry_count(message)).encode())
-            ]
-        )
-        consumer.commit()
-```
-
----
-
-## Retry Strategies
-
-### Immediate Retry
-
-```python
-def process_with_retry(message, max_retries=3):
-    for attempt in range(max_retries):
-        try:
-            process(message)
-            return True
-        except RetryableError:
-            if attempt < max_retries - 1:
-                continue
-    
-    # Max retries exceeded
-    send_to_dlq(message)
-    return False
-```
-
-### Exponential Backoff
-
-```python
-def process_with_backoff(message, max_retries=3):
-    for attempt in range(max_retries):
-        try:
-            process(message)
-            return True
-        except RetryableError:
-            if attempt < max_retries - 1:
-                delay = min(2 ** attempt, 60)  # Cap at 60 seconds
-                sleep(delay)
-    
-    send_to_dlq(message)
-    return False
-```
-
-### Delayed Retry Queue
-
-```
-Instead of immediate retry, use delay queue
-
-Main Queue → Failure → Delay Queue (5 min) → Main Queue
-
-Delay Queue implementation:
-  - Message TTL + DLQ routing back to main queue
-  - Or: Scheduled re-delivery
-```
-
----
-
-## Handling Dead Letters
-
-### Investigation Workflow
-
-```
-1. Alert on DLQ messages
-2. View message content and failure reason
-3. Determine root cause
-   - Bug in consumer?
-   - Invalid message format?
-   - External dependency failure?
-4. Fix root cause
-5. Replay or discard messages
-```
-
-### Message Inspection
-
-```python
-def inspect_dlq():
-    messages = dlq.receive_messages(max_messages=10)
-    
-    for msg in messages:
-        print(f"Message ID: {msg.id}")
-        print(f"Failed at: {msg.attributes['failure_timestamp']}")
-        print(f"Reason: {msg.attributes['failure_reason']}")
-        print(f"Retry count: {msg.attributes['retry_count']}")
-        print(f"Body: {msg.body}")
-        print("---")
-```
-
-### Replay Messages
-
-```python
-def replay_dlq_messages():
-    """Move messages from DLQ back to main queue"""
-    while True:
-        messages = dlq.receive_messages(max_messages=10)
-        if not messages:
-            break
-        
-        for msg in messages:
-            # Send back to original queue
-            main_queue.send(
-                body=msg.body,
-                headers=msg.headers
-            )
-            
-            # Delete from DLQ
-            dlq.delete(msg)
-    
-    log.info("DLQ replay complete")
-```
-
-### Selective Replay
-
-```python
-def replay_if_fixed(message):
-    """Only replay if we've fixed the issue"""
-    
-    failure_reason = message.attributes['failure_reason']
-    
-    if "ValidationError" in failure_reason:
-        # Skip - message itself is invalid
-        archive_dlq_message(message)
-    elif "ServiceUnavailable" in failure_reason:
-        # Retry - service might be back
-        replay_message(message)
-    else:
-        # Unknown - manual review
-        flag_for_review(message)
-```
-
----
-
-## DLQ per Error Type
-
-### Separate DLQs
-
-```
-orders-dlq-validation  → Invalid message format
-orders-dlq-external    → External service failures
-orders-dlq-unknown     → Unknown errors
-
-Benefits:
-  - Different handling per type
-  - Easier investigation
-  - Different retention policies
-```
-
-### Routing Implementation
-
-```python
-def send_to_appropriate_dlq(message, error):
-    if isinstance(error, ValidationError):
-        dlq = "orders-dlq-validation"
-    elif isinstance(error, ExternalServiceError):
-        dlq = "orders-dlq-external"
-    else:
-        dlq = "orders-dlq-unknown"
-    
-    send_to_dlq(dlq, message, error)
-```
-
----
-
-## Monitoring
-
-### Key Metrics
-
-```
-DLQ depth:
-  Number of messages in DLQ
-  Should be near zero normally
-
-DLQ arrival rate:
-  Messages arriving per minute
-  Spike indicates processing issue
-
-DLQ age:
-  Age of oldest message
-  Stale messages indicate neglect
-
-Failure categories:
-  Breakdown by error type
-  Identify systemic issues
-```
-
-### Alerting
-
-```yaml
-alerts:
-  - name: DLQDepthHigh
-    condition: dlq_depth > 100
-    severity: warning
-    
-  - name: DLQDepthCritical
-    condition: dlq_depth > 1000
-    severity: critical
-    
-  - name: DLQArrivalSpike
-    condition: dlq_arrival_rate > 10/min
-    for: 5m
-    
-  - name: DLQStaleMessages
-    condition: oldest_dlq_message_age > 24h
-    severity: warning
-```
-
-### Dashboard
-
-```
-DLQ Dashboard:
-  - Current depth (gauge)
-  - Arrival rate (time series)
-  - Top failure reasons (pie chart)
-  - Age distribution (histogram)
-  - Recent messages (table)
-```
-
----
-
-## Retention and Cleanup
-
-### Retention Policy
-
-```
-Consider:
-  - Compliance requirements (must keep N days)
-  - Investigation time (allow time to debug)
-  - Storage costs (don't keep forever)
-  
-Typical: 7-30 days
-```
-
-### Automatic Cleanup
-
-```python
-@scheduled(cron="0 0 * * *")  # Daily
-def cleanup_old_dlq_messages():
-    cutoff = now() - timedelta(days=30)
-    
-    while True:
-        messages = dlq.receive_messages(
-            max_messages=100,
-            attributes=['sent_timestamp']
-        )
-        
-        if not messages:
-            break
-        
-        for msg in messages:
-            if msg.sent_timestamp < cutoff:
-                archive_message(msg)  # Optional: archive first
-                dlq.delete(msg)
-```
-
-### Archive Before Delete
-
-```python
-def archive_message(message):
-    s3.put_object(
-        Bucket='dlq-archive',
-        Key=f'{date.today()}/{message.id}.json',
-        Body=json.dumps({
-            'body': message.body,
-            'attributes': message.attributes
-        })
-    )
-```
-
----
-
-## Common Patterns
-
-### Poison Message Detection
-
-```python
-# Message that always fails - detect and sideline quickly
-
-def process_with_poison_detection(message):
-    retry_count = get_retry_count(message)
-    
-    if retry_count > 10:
-        # Poison message - don't even try
-        send_to_poison_queue(message)
-        return
-    
-    try:
-        process(message)
-    except Exception as e:
-        increment_retry_count(message)
-        if retry_count >= 3:
-            send_to_dlq(message, e)
-        else:
-            requeue(message)
-```
-
-### DLQ Consumer
-
-```python
-# Dedicated service to process DLQ
-
-class DLQConsumer:
-    def run(self):
-        for message in self.dlq:
-            try:
-                self.handle_dead_letter(message)
-            except Exception:
-                # Even DLQ processing can fail!
-                log.exception(f"Failed to handle DLQ message: {message.id}")
-    
-    def handle_dead_letter(self, message):
-        # Attempt auto-fix
-        if self.can_auto_fix(message):
-            fixed = self.auto_fix(message)
-            self.main_queue.send(fixed)
-            self.dlq.delete(message)
-        else:
-            # Create ticket for manual review
-            self.create_ticket(message)
-```
-
-### Circuit Breaker Integration
-
-```python
-from circuitbreaker import circuit
-
-@circuit(failure_threshold=5, recovery_timeout=60)
-def call_external_service(data):
-    return external_api.process(data)
-
-def process_message(message):
-    try:
-        result = call_external_service(message.body)
-        return result
-    except CircuitBreakerError:
-        # Service unhealthy - delay processing
-        delay_message(message, seconds=300)
-        raise
-```
-
----
-
-## DLQ Processing Strategies
-
-### Manual Review
-
-```
-Who:     Human operator via dashboard or CLI
-When:    Low-volume DLQs, compliance-sensitive data, unknown failure types
-How:     Operator inspects message body + failure reason → decides replay or discard
-
-Workflow:
-  1. Alert fires on DLQ depth
-  2. Operator opens DLQ dashboard
-  3. Reads failure reason + stack trace
-  4. Determines root cause
-  5. Fixes consumer or upstream data
-  6. Replays or archives the message
-
-Tradeoff: Slow, doesn't scale. But safest for critical financial or PII data.
-```
-
-### Automated Retry
-
-```
-A scheduler periodically reads DLQ and re-publishes messages to the original queue.
-
-Schedule: Every 15 min, pick up to 50 messages, republish with exponential backoff.
-
-Backoff formula:
-  delay = min(base_delay * 2^retry_count, max_delay)
-  Example: 1s → 2s → 4s → 8s → ... → cap at 5 min
-
-Risk: Infinite retry loop.
-  If the message is permanently invalid (bad schema, missing required field),
-  it will bounce between main queue and DLQ forever.
-
-Mitigation:
-  - Set a max lifetime (e.g., 24h from first failure). After that → archive.
-  - Distinguish retryable vs non-retryable errors before republishing.
-```
-
-### Conditional Replay
-
-```
-Inspect each DLQ message, apply a transformation or data correction, then replay.
-
-Example:
-  Original message has { "price": -5 }  → validation failure
-  Fix: set price to 0 or fetch correct price from source system
-  Replay corrected message to main queue
-
-Use when:
-  - Upstream producer sent bad data but the intent is recoverable
-  - Schema evolved and old messages need field backfill
-  - External reference data was temporarily wrong (e.g., currency rate)
-
-Caution: Transformations must be idempotent. Replayed message may be processed
-         alongside newer messages — ensure no duplicate side effects.
-```
-
-### DLQ Consumer Service
-
-```
-A dedicated microservice consumes the DLQ as its primary input.
-
-Responsibilities:
-  - Classify failure type (validation, timeout, auth, unknown)
-  - Apply programmatic fixes per failure type
-  - Re-publish fixed messages to original queue
-  - Escalate unfixable messages (create ticket, send Slack alert)
-  - Track repair metrics (auto-fixed %, escalation %)
-
-Architecture:
-  Main Queue ──► Consumer ──► DLQ ──► DLQ Consumer Service
-                                          │
-                              ┌────────────┼────────────┐
-                              ▼            ▼            ▼
-                         Auto-fix     Create Ticket   Archive
-                         & Replay
-```
-
----
-
-## DLQ Schema and Metadata
-
-### Why Metadata Matters
-
-```
-Without failure context, a DLQ is a black hole.
-
-You see a message in the DLQ. Questions you need answered:
-  - Which queue did it come from?
-  - Why did it fail?
-  - How many times was it retried?
-  - When did it first fail? When did it last fail?
-  - What does the stack trace say?
-
-Without this metadata, triage is guesswork. Engineers waste hours
-reproducing failures that a stack trace would have explained in seconds.
-```
-
-### Essential Metadata Schema
-
-```json
-{
-  "dlq_envelope": {
-    "message_id": "msg-a1b2c3d4",
-    "original_topic": "orders.placed",
-    "original_queue": "order-processing",
-    "original_partition": 3,
-    "original_offset": 884201,
-    "failure_reason": "ValidationError: field 'quantity' must be > 0",
-    "failure_category": "VALIDATION",
-    "stack_trace": "Traceback (most recent call last):\n  File \"consumer.py\", line 42 ...",
-    "retry_count": 3,
-    "first_failure_at": "2025-11-10T08:15:22Z",
-    "last_failure_at": "2025-11-10T08:17:44Z",
-    "consumer_instance": "order-consumer-pod-7b4d9",
-    "consumer_version": "2.4.1"
-  },
-  "original_headers": {
-    "correlation_id": "corr-x9y8z7",
-    "content_type": "application/json"
-  },
-  "original_body": {
-    "order_id": "ORD-12345",
-    "quantity": -1,
-    "product_id": "SKU-999"
-  }
-}
-```
-
-### Metadata Guidelines
-
-```
-- Always capture failure_reason: the exception message, not just the class name.
-- Always capture stack_trace: truncate to last 20 frames if needed for storage.
-- Track first vs last failure timestamps: shows how long the message has been bouncing.
-- Include consumer_version: critical for debugging issues introduced by a specific deploy.
-- Keep original headers intact: correlation IDs enable end-to-end tracing.
-```
-
----
-
-## DLQ Anti-Patterns
-
-### Ignoring the DLQ
-
-```
-Symptom:  DLQ has 50,000 messages. Nobody noticed.
-Cause:    No monitoring, no alerts, no ownership.
-Fix:      Alert on DLQ depth > 0 (warning), > 100 (critical).
-          Assign a team to own DLQ triage as part of on-call rotation.
-```
-
-### Replaying Without Fixing
-
-```
-Symptom:  Message fails → goes to DLQ → replayed → fails again → DLQ → replay → ...
-Cause:    Blind replay script with no root cause analysis.
-Fix:      Never replay without understanding the failure reason.
-          Gate replay behind a check: has the consumer bug been fixed?
-          Has the invalid data been corrected?
-          Track replay count — if a message has been replayed 3+ times, escalate.
-```
-
-### No TTL on DLQ Messages
-
-```
-Symptom:  DLQ contains messages from 2 years ago. Nobody knows what they are.
-Cause:    No retention policy, no cleanup job.
-Fix:      Set retention between 7-30 days depending on compliance needs.
-          Archive to cold storage (S3, GCS) before deletion if audit trail is required.
-          Messages older than retention are not actionable — delete or archive them.
-```
-
-### Using DLQ as a Feature
-
-```
-Symptom:  Producer intentionally sends messages to a queue knowing they'll fail,
-          so they end up in the DLQ for "later processing."
-Cause:    Misunderstanding DLQ purpose. Treating it as a delay queue.
-Fix:      Use a dedicated delay queue or scheduled queue instead.
-          DLQs are for unexpected failures, not intentional routing.
-          Delay mechanisms: RabbitMQ message TTL + dead-letter routing to a processing
-          queue, SQS delay queues, Kafka topic with timestamp-based consumer pause.
-```
-
----
-
-## DLQ in Real Systems
-
-### AWS SQS
-
-```
-Configuration:
-  Main queue has a RedrivePolicy:
-    { "maxReceiveCount": 5, "deadLetterTargetArn": "arn:aws:sqs:...:orders-dlq" }
-
-Behavior:
-  - After 5 failed receive+process cycles (no deletion), message moves to DLQ.
-  - SQS tracks receive count automatically — no application code needed.
-  - Use RedriveAllowPolicy on DLQ to restrict which queues can target it.
-  - Redrive to source: SQS console supports moving messages back to original queue.
-
-Gotcha: maxReceiveCount includes visibility timeout expiries. If your consumer
-        is slow and the visibility timeout expires, that counts as a receive.
-```
-
-### Apache Kafka
-
-```
-Kafka has no native DLQ mechanism. You implement it yourself.
-
-Common pattern:
-  - Failed messages are produced to a separate topic: orders.dlq
-  - Consumer catches exception → writes to DLQ topic with failure headers
-  - A DLQ consumer service reads orders.dlq for triage
-
-Spring Kafka integration:
-  - DeadLetterPublishingRecoverer: auto-publishes to <topic>.DLT after retries
-  - DefaultErrorHandler with BackOff: configurable retry + DLT routing
-  - Retains original headers + adds exception headers automatically
-
-Naming convention: <original-topic>.dlq or <original-topic>.DLT (dead letter topic)
-```
-
-### RabbitMQ
-
-```
-Native DLQ support via exchange routing:
-
-Queue arguments:
-  x-dead-letter-exchange: "dlx-exchange"
-  x-dead-letter-routing-key: "orders.dlq"
-
-Messages are dead-lettered when:
-  - Consumer nacks (basic.reject / basic.nack) with requeue=false
-  - Message TTL expires
-  - Queue max-length exceeded
-
-The dead-letter exchange routes the message to the DLQ based on the routing key.
-Original death metadata is added to x-death header array (queue, reason, count, time).
-```
-
-### GCP Pub/Sub
-
-```
-Configuration:
-  Subscription has a deadLetterPolicy:
-    { "deadLetterTopic": "projects/.../topics/orders-dlq",
-      "maxDeliveryAttempts": 5 }
-
-Behavior:
-  - After 5 failed delivery attempts (nack or ack deadline expiry), message
-    is forwarded to the dead letter topic.
-  - Pub/Sub adds CloudPubSubDeadLetterSourceDeliveryCount attribute automatically.
-  - The DLQ topic needs a separate subscription for consumers to read from it.
-
-Gotcha: The service account needs pubsub.publisher role on the DLQ topic
-        and pubsub.subscriber role on the source subscription.
-```
-
----
-
-## Key Takeaways
-
-1. **DLQs prevent message loss** - Failed messages preserved
-2. **Configure retry limits** - Don't retry forever
-3. **Include failure metadata** - Reason, timestamp, retry count
-4. **Monitor DLQ depth** - Alert on accumulation
-5. **Establish handling procedures** - Investigation, replay, archive
-6. **Different DLQs for different errors** - Easier categorization
-7. **Retention policies matter** - Compliance and storage costs
-8. **Automate where possible** - Replay, cleanup, alerting
+Triage groups records by stable error fingerprint and finds first-seen release/schema plus representative samples. The owner determines whether the fix is consumer code, schema adapter, source correction, dependency reconciliation, policy exception, or intentional discard.
+
+Prefer fixing code/config and replaying the original immutable event. If payload transformation is necessary, register a pure versioned transform that takes original envelope and returns repaired envelope plus validation report. Keep original bytes/digest and transformation lineage. Validate against schema, domain invariants, tenant policy, and idempotency key behavior.
+
+Source-data correction often should produce a new domain event rather than mutate the failed event. Link the corrective event to the quarantined identity and resolve only after downstream reconciliation proves the intended state.
+
+Ambiguous external effects enter reconciliation, not automatic redrive. Query the downstream status using business/idempotency reference. Mark applied if it committed, retry with the same key if absent, or escalate if unknown cannot be resolved.
+
+## Controlled redrive
+
+Redrive is a production deployment. Its manifest contains:
+
+- immutable selection snapshot/count/bytes/error classes;
+- source and destination;
+- original/repaired schema and transform artifact digest;
+- identity/idempotency policy;
+- ordering/entity grouping;
+- rate/concurrency/downstream budget;
+- canary subset and comparison;
+- stop thresholds for failure, latency, or duplicates;
+- operator/approver and audit ticket;
+- rollback/abort behavior.
+
+Dry run decodes and validates without effects, estimating destination partitions, schema outcomes, and downstream work. Canary a deterministic small cohort, verify effects/reconciliation, then ramp. Redrive traffic has a separate priority/budget from live traffic so old poison cannot starve new work.
+
+Preserve original `event_id` when the logical intent is unchanged; inbox duplicates then safely detect already-applied effects. If the consumer’s inbox has expired, reconcile or restore identity evidence before redrive. Generating new IDs to “get around dedup” is dangerous and requires explicit new-intent semantics.
+
+For ordered keys, replay missing items before suffixes and respect current source versions. An old state-replacement event may now be stale and should resolve as superseded rather than overwrite current state. Delta/financial events may still require exact application.
+
+## Retention and privacy
+
+Retention derives from investigation time, source replay, legal/audit, privacy deletion, and repair value. Apply separate horizons by error/data class. Monitor records and bytes approaching expiry without resolution.
+
+Payload references, schemas, encryption keys, and diagnostic traces must live at least as long as quarantine, or the record declares that payload was intentionally erased and can no longer be redriven. Copying a payload into quarantine creates another governed data store. Propagate deletion, residency, legal hold, and tenant-key destruction.
+
+Store stack traces and raw exceptions separately with redaction; they may contain secrets or record content. Quarantine UI/search should not expose payload values as metric labels or broad full-text indexes.
+
+Discard is an explicit terminal outcome with reason, authority, affected business identity, and reconciliation. TTL expiry is not silent discard. Before expiry, notify owner and apply policy: archive, extend under approval, repair, or record irreversible loss.
+
+## Capacity and cost model
+
+Illustrative platform:
+
+- live delivery 100,000 messages/s at 1.2 KiB;
+- normal quarantine rate 0.015%;
+- quarantine envelope/evidence adds 900 bytes;
+- payload retained inline for 30 days with two replicas;
+- a bad release can fail 35% of traffic for 12 minutes before circuit/rollback;
+- controlled redrive target 8,000/s.
+
+Normal quarantine is 15/s. At 2.1 KiB per record, 30 days yields about 38.9 million records and 76 GiB logical; two replicas are 152 GiB before indexes/backups.
+
+The 12-minute incident produces `100,000 * 0.35 * 720 = 25.2 million` failures. Copying each 2.1 KiB record adds about 49 GiB logical in minutes and can overload metadata/indexes. Cohort/range manifests plus retained source are essential for systemic failures.
+
+At 8,000/s, redriving 25.2 million takes 52.5 minutes before retries. If each effect consumes 3 ms of downstream CPU, redrive adds 24 CPU-seconds/s. Live traffic must retain priority and downstream utilization headroom.
+
+Operator capacity also matters. Fifteen unrelated poison messages/s is 1.3 million/day; manual per-message review is impossible. Group by fingerprint/entity and automate known-safe repair while measuring false grouping.
+
+## Concrete failure trace: unsafe bulk redrive
+
+A schema bug quarantines two million payment events. After deploying a decoder fix, an operator selects “all payments” in a UI whose query is not snapshotted and redrives at unlimited speed with new event IDs. The selection grows while running, old events whose payments already committed bypass inbox dedup, and the payment provider is saturated by duplicates.
+
+Containment stops redrive and payment calls, then reconciles by payment intent. Repair records original IDs, restores downstream idempotency/status, and replays only proven absent effects. Prevention requires immutable selection manifests, original identity preservation, dry-run/canary, approvals, rate/downstream budgets, automatic stop thresholds, and a privileged API that cannot silently generate new logical IDs.
+
+## Operations and observability
+
+Track by source, consumer, release, schema, tenant, fingerprint, and state:
+
+- quarantine rate/count/bytes and ratio to live traffic;
+- oldest new/untriaged/unresolved age and owner/SLO;
+- failure-class/fingerprint cardinality and first/last seen;
+- systemic circuit state and retained source ranges;
+- payload/reference availability, schema/key expiry, and retention risk;
+- repair transform outcomes and validation failures;
+- dry-run/canary/redrive rate, lag, duplicates, downstream saturation, and stop events;
+- resolved/discarded/expired outcomes and source/effect reconciliation;
+- unauthorized payload access and control-plane changes.
+
+Alert on rate change and age, not merely “DLQ non-empty.” A nonempty quarantine may be normal; an unowned week-old financial event or sudden correlated spike is urgent.
+
+Runbooks cover schema poison, bad release cohort, external ambiguity, ordered-key blockage, missing payload/key, quarantine-store outage, privacy deletion, and runaway redrive.
+
+## Security and isolation
+
+Separate permissions to quarantine automatically, inspect metadata, reveal payload, upload repair transforms, approve redrive, change destination/rate, discard, and alter retention. Use least privilege and immutable audit.
+
+Authenticate original source identity and bind event ID to tenant/payload digest. Quarantined payloads are hostile: validate size, compression, schema, content type, and sandbox any transform/parser. Never render unescaped payload content in an operator UI.
+
+Redrive can invoke high-value effects and is equivalent to production write access. Require short-lived authorization, change record, dual control for high-risk domains, and per-tenant/destination quotas. Cross-tenant selection or cache leakage is a critical incident.
+
+## Verification strategy
+
+- model-test quarantine state transitions, source disposition, and idempotent duplicate quarantine;
+- fault-inject local/remote quarantine dual-write boundaries;
+- generate each structured failure class and verify policy/version/evidence;
+- simulate a bad release affecting millions and ensure cohort circuit/range manifests protect storage;
+- replay ordered streams with a quarantined gap and validate blocking/repair policy;
+- test dry-run, immutable selection, canary, stop thresholds, rate priority, and cancellation;
+- expire inbox/payload/schema/key independently and verify redrive is blocked or reconciled;
+- attempt unauthorized inspection, transformation, discard, and cross-tenant redrive.
+
+## Decision framework
+
+Quarantine when a message cannot safely progress now but retaining it has repair/audit value. Drop only when loss is explicitly acceptable and observed. Pause/circuit-break a cohort instead of individually quarantining every event during a systemic consumer/dependency failure.
+
+Before enabling a dead-letter path:
+
+1. Which typed failures lead to retry, quarantine, reconciliation, pause, or drop?
+2. Can source disposition and quarantine evidence be made atomic/recoverable?
+3. What ordering scope remains blocked after one item is quarantined?
+4. Which evidence/payload/schema/key is needed to repair, and how long is it retained?
+5. Can systemic failure be represented as ranges/cohorts instead of millions of copies?
+6. How does redrive preserve identity and protect live/downstream capacity?
+7. Who owns every item and which terminal outcomes are audited?
+
+## References
+
+- [Amazon SQS: Dead-Letter Queues](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html)
+- [RabbitMQ: Dead Letter Exchanges](https://www.rabbitmq.com/docs/dlx)
+- [Google Cloud Pub/Sub: Dead-Letter Topics](https://cloud.google.com/pubsub/docs/dead-letter-topics)
+- [Apache Kafka Connect: Error Handling and Dead Letter Queues](https://kafka.apache.org/documentation/#connectconfigs_errors.deadletterqueue.topic.name)
+- [CloudEvents Specification](https://github.com/cloudevents/spec)
+- [NIST SP 800-61 Rev. 3: Incident Response Recommendations and Considerations](https://csrc.nist.gov/pubs/sp/800/61/r3/final)

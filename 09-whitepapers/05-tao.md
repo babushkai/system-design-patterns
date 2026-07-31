@@ -1,770 +1,133 @@
-# TAO: Facebook's Distributed Data Store for the Social Graph
+# TAO (USENIX ATC 2013): Evidence-First Paper Analysis
 
-## Paper Overview
+TAO shows what happens when a company turns a dominant access pattern into a storage contract. Facebook did not build a general graph database. It built a geographically distributed, read-optimized service for **objects and time-ordered association lists**, then moved cache coherence out of thousands of application clients and into that service.
 
-- **Title**: TAO: Facebook's Distributed Data Store for the Social Graph
-- **Authors**: Nathan Bronson, Zach Amsden, George Cabrera, et al.
-- **Published**: USENIX ATC 2013
-- **Context**: Facebook needed efficient read-heavy storage for social graph data
+## Publication identity and scope
 
-## TL;DR
+- **Paper:** *TAO: Facebook's Distributed Data Store for the Social Graph*
+- **Authors:** Nathan Bronson, Zach Amsden, George Cabrera, Prasad Chakka, Peter Dimov, Hui Ding, Jack Ferris, Anthony Giardullo, Sachin Kulkarni, Harry Li, Mark Marchukov, Dmitri Petrov, Lovro Puzar, Yee Jiun Song, and Venkat Venkataramani
+- **Venue and version:** USENIX Annual Technical Conference, 2013, pages 49–60
+- **System described:** Facebook's production TAO deployment and workload measurements available to the authors in 2012–2013
 
-TAO is a geographically distributed, read-optimized data store that provides:
-- **Graph-native API** for objects and associations
-- **Read-through/write-through caching** for efficiency
-- **Eventually consistent** with per-object consistency
-- **Handles billions of reads per second** with minimal latency
+The paper is not a specification for Meta's current graph infrastructure. It also does not describe arbitrary graph traversal, graph analytics, Cypher-like queries, or a globally serializable database. Its API is intentionally restrictive.
 
-## Problem Statement
+[Distributed Caching](../04-caching/03-distributed-caching.md) and [Cache Invalidation](../04-caching/02-cache-invalidation.md) cover the reusable mechanics. This analysis explains why TAO could apply them safely to one graph workload.
 
-### Challenges with Existing Solutions
+## Workload that shaped the design
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     Facebook's Requirements                      │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  1. Read-Dominated Workload                                     │
-│     - 99.8% reads, 0.2% writes                                  │
-│     - Memcached alone couldn't handle graph queries             │
-│                                                                  │
-│  2. Graph Data Model                                            │
-│     - Objects: Users, Posts, Photos, etc.                       │
-│     - Associations: Friendships, Likes, Comments                │
-│                                                                  │
-│  3. Global Scale                                                │
-│     - Billions of users                                         │
-│     - Hundreds of billions of objects/associations              │
-│     - Multiple data centers worldwide                           │
-│                                                                  │
-│  4. Consistency Requirements                                    │
-│     - Users should see their own writes                         │
-│     - Eventually consistent is acceptable for others            │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
+Facebook rendered content for a viewer by repeatedly fetching graph nodes and edges, then applying privacy and product logic at read time. Precomputing every viewer-specific feed object was infeasible. The original PHP/MySQL/memcache arrangement exposed three problems:
 
-### Why Not Just Memcached + MySQL?
+1. A key/value cache was a poor fit for incrementally changing edge lists; changing one edge could require reloading a whole list.
+2. Cache-fill, invalidation, and thundering-herd control lived in independently deployed clients.
+3. Asynchronous MySQL replication meant a cache miss in a remote region could refill from a stale replica just after a write.
 
-```mermaid
-graph LR
-    Client --> |cache miss| Memcache
-    Client --> |must query DB| MySQL
-    Memcache --> |fill cache| MySQL
-```
+TAO's goal in Section 2.2 is correspondingly narrow: serve a constantly changing social graph in many regions, optimize aggressively for reads, and prefer efficiency and availability over strong consistency. Applications should tolerate occasional stale data.
 
-> **Lookaside Cache Issues:**
-> 1. Clients must handle cache misses
-> 2. Thundering herd on popular items
-> 3. No graph-aware operations
-> 4. Stale data after writes
+## Data model and semantic boundary
 
-## TAO Data Model
+TAO models a node as an **object** and a directed, typed edge as an **association**.
 
-### Objects and Associations
+An object has a globally unique 64-bit ID, type, and typed key/value fields. An association contains source ID `id1`, type `atype`, destination ID `id2`, a 32-bit timestamp, and optional data. The identity of an association is `(id1, atype, id2)`.
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        TAO Data Model                           │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  OBJECTS (Nodes)                                                │
-│  ┌──────────────────────────────────────────────┐               │
-│  │  (id) ─────> (otype, data)                   │               │
-│  │                                               │               │
-│  │  Example:                                     │               │
-│  │  id: 12345                                    │               │
-│  │  otype: USER                                  │               │
-│  │  data: {name: "Alice", ...}                  │               │
-│  └──────────────────────────────────────────────┘               │
-│                                                                  │
-│  ASSOCIATIONS (Edges)                                           │
-│  ┌──────────────────────────────────────────────┐               │
-│  │  (id1, atype, id2) ─────> (time, data)       │               │
-│  │                                               │               │
-│  │  Example:                                     │               │
-│  │  id1: 12345 (Alice)                          │               │
-│  │  atype: FRIEND                                │               │
-│  │  id2: 67890 (Bob)                            │               │
-│  │  time: 1609459200                             │               │
-│  │  data: {}                                     │               │
-│  └──────────────────────────────────────────────┘               │
-│                                                                  │
-│  Association Lists (sorted by time descending)                  │
-│  ┌──────────────────────────────────────────────┐               │
-│  │  (id1, atype) ─────> [(id2, time, data), ...]│               │
-│  │                                               │               │
-│  │  Example: Alice's friends                     │               │
-│  │  (12345, FRIEND) -> [(67890, t1), (11111, t2)]│               │
-│  └──────────────────────────────────────────────┘               │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
+For each `(id1, atype)`, TAO maintains an association list ordered by descending timestamp. The core read API supports:
 
-### TAO API
+- lookup of selected destination IDs;
+- a range of the newest associations;
+- a timestamp-bounded range;
+- a count.
 
-```python
-class TaoAPI:
-    """TAO's graph-native API."""
-    
-    # Object operations
-    def object_get(self, id: int) -> dict:
-        """Get object by ID."""
-        pass
-    
-    def object_create(self, otype: str, data: dict) -> int:
-        """Create new object, return ID."""
-        pass
-    
-    def object_update(self, id: int, data: dict) -> bool:
-        """Update object data."""
-        pass
-    
-    def object_delete(self, id: int) -> bool:
-        """Delete object."""
-        pass
-    
-    # Association operations
-    def assoc_add(self, id1: int, atype: str, id2: int, 
-                  time: int, data: dict) -> bool:
-        """Add association between objects."""
-        pass
-    
-    def assoc_delete(self, id1: int, atype: str, id2: int) -> bool:
-        """Delete association."""
-        pass
-    
-    def assoc_get(self, id1: int, atype: str, 
-                  id2_set: set) -> list:
-        """Get specific associations."""
-        pass
-    
-    def assoc_count(self, id1: int, atype: str) -> int:
-        """Count associations of type."""
-        pass
-    
-    def assoc_range(self, id1: int, atype: str, 
-                    offset: int, limit: int) -> list:
-        """Get range of associations (time-ordered)."""
-        pass
-    
-    def assoc_time_range(self, id1: int, atype: str,
-                         high: int, low: int, limit: int) -> list:
-        """Get associations in time range."""
-        pass
-```
+That API matches “recent comments on this post” and “does this user like this object.” It does not expose multi-hop traversal. Applications compose calls and apply business logic themselves.
 
-## Architecture
+Association types may declare an inverse. TAO couples each association create, update, or delete with the corresponding operation on its inverse edge; for example, `AUTHORED` and `AUTHORED_BY` form an inverse pair. This is a domain invariant built into the service, not a general graph constraint mechanism. An inverse can reside on another shard, so one logical association update may touch both source and destination shards. Section 4.2 is explicit that these two writes are **not atomic**: a failure can leave a forward edge without its inverse, and an asynchronous job repairs the hanging association.
 
-### Two-Tier Caching
+## Persistence, sharding, and cache topology
 
-```mermaid
-graph TD
-    WS[Web Servers<br/>PHP, Product Code]
+Persistent state remains in sharded MySQL. Object IDs contain a shard identifier, making object placement direct. Associations are stored with the source object's shard; inverse associations place the reverse edge with the other endpoint. The database layer uses one master and asynchronous slaves, with the master region selectable per shard.
 
-    subgraph Followers["Follower Tier (read-only caches)"]
-        F1[Follower Cache] & F2[Follower Cache] & F3[Follower Cache] & F4[Follower Cache]
-    end
+Above MySQL, each region has a **leader cache tier** and at least two **follower tiers**.
 
-    subgraph Leaders["Leader Tier (write-through caches)"]
-        L1[Leader Cache] & L2[Leader Cache] & L3[Leader Cache] & L4[Leader Cache]
-    end
+- Clients send normal reads to a nearby follower.
+- On a hit, the follower responds without another hop.
+- On a miss, the follower asks the leader responsible for that shard.
+- The leader serves from its cache or fetches from the regional database.
+- Writes travel follower → local leader → leader in the database-master region → MySQL master.
 
-    subgraph Storage["MySQL (persistent, sharded by object ID)"]
-        S1[("Shard 1")] & S2[("Shard 2")] & S3[("Shard 3")] & SN[("Shard N")]
-    end
+“Leader” here is a cache routing role, not a consensus leader. Many shards share a server, and a server may be master-region leader for some shards and slave-region leader for others.
 
-    WS --> F1 & F2 & F3 & F4
-    F1 & F2 & F3 & F4 --> L1 & L2 & L3 & L4
-    L1 & L2 & L3 & L4 --> S1 & S2 & S3 & SN
-```
+This hierarchy separates capacity: followers absorb the enormous read volume; leaders serialize cache maintenance and shield databases from miss storms; MySQL supplies durable relational storage and replication.
 
-### Read Path
+Section 5.3 addresses skew rather than assuming hashing makes it disappear. Shards map to cache servers with consistent hashing, but TAO can clone a hot shard onto multiple followers and send consistency messages to every clone. For an individual item queried orders of magnitude more often than its peers, the client may retain the item and version in a small cache; later requests carry the version so a follower can omit unchanged data or throttle an extreme hot key. Cloning spreads load but increases the invalidation fan-out that correctness must cover.
 
-```python
-class TaoCache:
-    """TAO caching layer implementation."""
-    
-    def __init__(self, is_leader: bool):
-        self.cache = {}  # In-memory cache
-        self.is_leader = is_leader
-        self.leader = None  # Reference to leader (if follower)
-        self.storage = None  # MySQL connection (if leader)
-        self.followers = []  # List of followers (if leader)
-    
-    def get_object(self, id: int) -> dict:
-        """Read-through cache for objects."""
-        # Check local cache first
-        cache_key = f"obj:{id}"
-        if cache_key in self.cache:
-            return self.cache[cache_key]
-        
-        if self.is_leader:
-            # Leader: fetch from MySQL
-            result = self.storage.query_object(id)
-            if result:
-                self.cache[cache_key] = result
-            return result
-        else:
-            # Follower: ask leader
-            result = self.leader.get_object(id)
-            if result:
-                self.cache[cache_key] = result
-            return result
-    
-    def get_assoc_range(self, id1: int, atype: str, 
-                        offset: int, limit: int) -> list:
-        """Get association list with range query."""
-        cache_key = f"assoc:{id1}:{atype}"
-        
-        if cache_key in self.cache:
-            assoc_list = self.cache[cache_key]
-            return assoc_list[offset:offset + limit]
-        
-        if self.is_leader:
-            # Fetch full association list from MySQL
-            assoc_list = self.storage.query_assoc_list(id1, atype)
-            self.cache[cache_key] = assoc_list
-            return assoc_list[offset:offset + limit]
-        else:
-            # Ask leader
-            assoc_list = self.leader.get_assoc_range(
-                id1, atype, 0, float('inf')
-            )
-            self.cache[cache_key] = assoc_list
-            return assoc_list[offset:offset + limit]
-```
+## Cache state and consistency protocol
 
-### Write Path
+TAO caches objects, association counts, and bounded association-list ranges rather than an undifferentiated serialized blob. The service understands enough graph semantics to update or invalidate only the affected entries.
 
-```python
-class TaoLeader(TaoCache):
-    """TAO leader with write-through caching."""
-    
-    def __init__(self):
-        super().__init__(is_leader=True)
-        self.version_counter = 0
-    
-    def write_object(self, id: int, data: dict) -> bool:
-        """Write-through for object updates."""
-        # 1. Write to MySQL first (synchronous)
-        success = self.storage.update_object(id, data)
-        if not success:
-            return False
-        
-        # 2. Update local cache
-        cache_key = f"obj:{id}"
-        self.cache[cache_key] = data
-        self.version_counter += 1
-        
-        # 3. Invalidate follower caches (async)
-        self._send_invalidation(cache_key)
-        
-        return True
-    
-    def add_association(self, id1: int, atype: str, 
-                        id2: int, time: int, data: dict) -> bool:
-        """Write-through for association adds."""
-        # 1. Write to MySQL
-        success = self.storage.insert_assoc(id1, atype, id2, time, data)
-        if not success:
-            return False
-        
-        # 2. Update local association list cache
-        cache_key = f"assoc:{id1}:{atype}"
-        if cache_key in self.cache:
-            # Insert in sorted order by time (descending)
-            assoc_list = self.cache[cache_key]
-            new_entry = (id2, time, data)
-            self._insert_sorted(assoc_list, new_entry)
-        
-        # 3. Update association count
-        count_key = f"count:{id1}:{atype}"
-        if count_key in self.cache:
-            self.cache[count_key] += 1
-        
-        # 4. Invalidate followers
-        self._send_invalidation(cache_key)
-        self._send_invalidation(count_key)
-        
-        return True
-    
-    def _send_invalidation(self, cache_key: str):
-        """Send async invalidation to all followers."""
-        for follower in self.followers:
-            # Async message
-            follower.invalidate(cache_key)
-    
-    def _insert_sorted(self, assoc_list: list, entry: tuple):
-        """Insert entry in time-sorted order."""
-        time = entry[1]
-        for i, existing in enumerate(assoc_list):
-            if time > existing[1]:
-                assoc_list.insert(i, entry)
-                return
-        assoc_list.append(entry)
-```
+Writes commit synchronously at the MySQL master. The master-region leader returns a **changeset** to the originating follower path, which updates or invalidates the local cache before acknowledging the caller. In normal operation (defined by the paper as at most one failure encountered by a request), this supplies read-after-write consistency for clients that stay on one follower tier.
 
-## Multi-Region Architecture
+Separately, MySQL's asynchronous replication stream carries refill and invalidation messages to each slave region. The paper orders those messages after the corresponding database transaction reaches the slave. Sending an invalidation first would allow a subsequent miss to refill from a still-stale slave.
 
-### Geographic Distribution
+Association lists make invalidation subtle. A concurrent edge insertion can change list order, counts, and whether an item falls within a cached range. TAO uses versions and graph-specific rules to decide whether a changeset can be applied or whether the safer action is invalidation. The point is architectural: a semantic cache service can maintain list fragments more correctly than arbitrary application clients.
 
-```mermaid
-graph TD
-    subgraph RegionA["Region A (Master Region)"]
-        FA1[Follower] & FA2[Follower]
-        LA1[Leader] & LA2[Leader]
-        MySQL[("MySQL<br/>Primary")]
+The guarantee remains bounded. Switching to a backup follower tier can violate read-after-write if that tier has not received the refill. A partial leader failure or permanently lost invalidation can leave stale data. Cross-region database state is eventually consistent; TAO does not claim causal or serializable consistency for the whole graph.
 
-        FA1 & FA2 --> LA1 & LA2
-        LA1 & LA2 --> MySQL
-    end
+The paper also exposes an escape hatch rather than pretending eventual reads fit every operation: a request marked **critical** is proxied to the master region, where synchronous MySQL writes make the master database the consistent source of truth. This raises latency and centralizes the read path, so it is reserved for the small subset of operations, such as an authentication check in the paper's example, that cannot tolerate replica lag.
 
-    subgraph RegionB["Region B (Slave Region)"]
-        FB1[Follower] & FB2[Follower]
-        SL1[Slave Leader] & SL2[Slave Leader]
+## Failure paths and repair
 
-        FB1 & FB2 --> SL1 & SL2
-    end
+The paper treats failures at each layer differently.
 
-    LA1 -.->|async replication| SL1
-    LA2 -.->|async replication| SL2
-```
+- **Database master failure:** a slave is promoted. Writes that fail during the switch are returned as failures and are not silently retried, avoiding ambiguous duplicate effects.
+- **Slave database failure:** regional cache misses route to the master region. A separate binlog tailer delivers consistency messages until the slave returns; replay may deliver them again, so invalidation is idempotent.
+- **Leader cache failure:** followers route misses directly to the database and send writes through another leader. The substitute also records invalidations for the original leader.
+- **Lost refill/invalidation:** messages for an unreachable follower are queued to disk. If permanent leader loss could have dropped them, TAO bulk-invalidates every cached object and association for the affected shard.
+- **Follower failure:** clients use a backup tier. The substitute can serve the same shard but may not preserve session-local read-after-write.
+- **Split inverse update:** the two shards of an association/inverse pair are not one transaction. If the second write fails after the first succeeds, an asynchronous repair job restores the missing edge.
 
-> **Writes:** Always go to master region leaders.
-> **Reads:** Served locally from followers/slave leaders.
+These protocols reveal the chosen invariant order: preserve durable master writes, keep local reads available, repair cache freshness, and accept bounded periods of staleness. TAO explicitly does not permit disconnected regions to accept independent writes, avoiding application-side multi-master conflict resolution.
 
-### Read-After-Write Consistency
+## Workload and performance evidence
 
-```python
-class TaoClient:
-    """Client-side TAO operations with read-after-write consistency."""
-    
-    def __init__(self, local_cache: TaoCache, master_leader: TaoLeader):
-        self.local_cache = local_cache
-        self.master_leader = master_leader
-        self.recent_writes = {}  # Key -> (value, timestamp)
-        self.write_window = 20  # seconds
-    
-    def write_object(self, id: int, data: dict) -> bool:
-        """Write always goes to master leader."""
-        success = self.master_leader.write_object(id, data)
-        if success:
-            # Track recent write for read-after-write consistency
-            cache_key = f"obj:{id}"
-            self.recent_writes[cache_key] = (data, time.time())
-        return success
-    
-    def read_object(self, id: int) -> dict:
-        """Read from local cache with write-tracking."""
-        cache_key = f"obj:{id}"
-        
-        # Check if we recently wrote this object
-        if cache_key in self.recent_writes:
-            data, write_time = self.recent_writes[cache_key]
-            if time.time() - write_time < self.write_window:
-                # Return our recent write, not possibly stale cache
-                return data
-            else:
-                # Write is old enough, cache should be consistent
-                del self.recent_writes[cache_key]
-        
-        # Read from local cache
-        return self.local_cache.get_object(id)
-    
-    def _cleanup_old_writes(self):
-        """Periodically clean up old write tracking."""
-        now = time.time()
-        expired = [
-            key for key, (_, ts) in self.recent_writes.items()
-            if now - ts > self.write_window
-        ]
-        for key in expired:
-            del self.recent_writes[key]
-```
+The authors sampled 6.5 million requests randomly over 40 days and measured production behavior. The scope and sampling window belong with every percentage.
 
-## Consistency Model
+- Reads were 99.8% of calls; writes were 0.2% (Figure 3). Among reads, association range was 40.9%, object get 28.9%, association get 15.7%, association count 11.7%, and time-range 2.8%.
+- Empty results were normal: only 19.6% of sampled `assoc_get`, 31.0% of `assoc_range`, and 1.9% of `assoc_time_range` calls returned edges. Forty-five percent of association-count calls returned zero, while 1% of nonzero counts exceeded 500,000. A useful system had to make both negative lookup and extreme fan-out efficient.
+- The deployment continuously processed about one billion reads/s and millions of writes/s across regions at publication. This is a production scale statement, not a reproducible benchmark configuration.
+- Overall read-cache hit rate was 96.4%. Figure 8 reports client-observed latency, including PHP client and network: median cache-hit latency was approximately 1.0–1.3 ms across read operations. The 99th percentile ranged from 24.8 to 32.8 ms for hits; misses varied more, with object-get averaging 75.3 ms and reaching 186.4 ms at the 99th percentile.
+- The paper's follower-throughput curve used machines with 144 GB RAM, two 8-core 2.2 GHz Xeon E5-2660 CPUs with hyperthreading, and 10 Gbit Ethernet. Throughput rose with hit rate because misses and writes were more expensive; the figure is observational highest 15-minute average, not a controlled saturation benchmark.
+- Average write latency was 12.1 ms in the master region and 74.4 ms from a region whose average round-trip was 58.1 ms. Geography accounts for most of the difference because writes synchronously reach the master.
+- Slave replication lag was under one second for 85% of the trace, under three seconds for 99%, and under ten seconds for 99.8%. Those are empirical lag observations, not consistency bounds.
+- Over 90 days, the web-server-observed failed-query fraction was `4.9 × 10^-6`; the authors warn that dependent queries and correlated systems complicate interpretation.
 
-### Per-Object Consistency
+## Limits and assumptions
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                   TAO Consistency Model                         │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  Guarantees:                                                    │
-│                                                                  │
-│  1. Read-after-write (same client)                              │
-│     - Client sees its own writes immediately                    │
-│     - Achieved via write tracking on client                     │
-│                                                                  │
-│  2. Eventual consistency (cross-client)                         │
-│     - Other clients eventually see updates                      │
-│     - Typically within seconds                                  │
-│                                                                  │
-│  3. Per-object serialization                                    │
-│     - All writes to an object go through one leader             │
-│     - Prevents write conflicts                                  │
-│                                                                  │
-│  NOT Guaranteed:                                                │
-│                                                                  │
-│  1. Cross-object consistency                                    │
-│     - No transactions across multiple objects                   │
-│     - Application must handle partial updates                   │
-│                                                                  │
-│  2. Ordering across objects                                     │
-│     - Updates to different objects may arrive out of order      │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
+- The graph API supports only object and one-hop association-list access, not arbitrary traversal or analytics.
+- The object API omits compare-and-set; eventual reads would make a client-visible CAS contract substantially less useful, and applications cannot infer conditional-update semantics that the paper never provides.
+- Writes depend on one master region per shard; a disconnected region cannot continue independent mutation.
+- Cross-region replication and caches are eventually consistent.
+- Read-after-write is conditional on the normal path and tier affinity, not a global session guarantee.
+- Association queries have a per-type result cap, typically 6,000 in the paper. Longer lists require pagination, and negative edge lookups on a high-degree object can reach MySQL because the uncached list tail might contain the destination.
+- Hot shards can be cloned and extreme hot items can be version-cached at clients, but both mechanisms add coherence work rather than eliminating skew.
+- MySQL, binlog delivery, cache versions, and shard-level invalidation all participate in correctness.
+- Evaluation comes from one Facebook workload and author-operated infrastructure; there is no matched comparison with another graph store.
 
-### Handling Inverse Associations
+## Later evolution without back-projection
 
-```python
-class TaoInverseAssociations:
-    """Handle bidirectional associations in TAO."""
-    
-    def add_bidirectional_assoc(self, id1: int, id2: int, 
-                                 atype: str, inverse_atype: str,
-                                 time: int, data: dict) -> bool:
-        """
-        Add association in both directions.
-        
-        Example: FRIEND relationship
-        - Alice (id1) FRIEND Bob (id2)
-        - Bob (id2) FRIEND Alice (id1)
-        """
-        # Get leaders for both objects
-        leader1 = self.get_leader_for_object(id1)
-        leader2 = self.get_leader_for_object(id2)
-        
-        # Add forward association
-        success1 = leader1.add_association(
-            id1, atype, id2, time, data
-        )
-        
-        # Add inverse association
-        success2 = leader2.add_association(
-            id2, inverse_atype, id1, time, data
-        )
-        
-        # Note: These are NOT atomic!
-        # If one fails, we have inconsistency
-        # TAO accepts this trade-off for performance
-        
-        if not success1 or not success2:
-            # Log for async repair
-            self.log_partial_failure(id1, id2, atype)
-        
-        return success1 and success2
-    
-    def repair_inverse_inconsistency(self, id1: int, id2: int, 
-                                      atype: str):
-        """Background job to repair inverse association mismatches."""
-        # Check both directions
-        forward = self.assoc_get(id1, atype, {id2})
-        inverse = self.assoc_get(id2, self.get_inverse(atype), {id1})
-        
-        if forward and not inverse:
-            # Add missing inverse
-            self.add_association(id2, self.get_inverse(atype), id1, 
-                               forward[0]['time'], forward[0]['data'])
-        elif inverse and not forward:
-            # Add missing forward
-            self.add_association(id1, atype, id2,
-                               inverse[0]['time'], inverse[0]['data'])
-```
+Meta's later engineering descriptions report that TAO continued to evolve operationally, but the 2013 paper's enduring pattern is narrower: **a domain-specific caching API can centralize coherence and make a relational backing store serve a read-dominant graph workload**. Modern graph stores may add traversal languages, stronger consistency, log-based storage, or different regional writes. Those additions change the proof boundary and should not be attributed to this paper.
 
-## Performance Optimizations
+The design also contrasts usefully with [Dynamo](./02-dynamo.md): TAO sacrifices disconnected write availability and uses one master to avoid application conflict merge; Dynamo accepts concurrent versions to keep writes available. Neither is “more distributed” in the abstract; they protect different invariants.
 
-### Cache Efficiency
+## Design review questions
 
-```python
-class TaoOptimizations:
-    """Performance optimizations in TAO."""
-    
-    def __init__(self):
-        self.cache = {}
-        self.hot_objects = LRUCache(max_size=10_000_000)
-        self.assoc_count_cache = {}
-    
-    def cache_association_list(self, id1: int, atype: str, 
-                               assoc_list: list):
-        """
-        Cache full association list.
-        
-        Key insight: Cache entire lists, not individual edges.
-        This enables efficient range queries.
-        """
-        cache_key = f"assoc:{id1}:{atype}"
-        self.cache[cache_key] = assoc_list
-        
-        # Also cache count
-        count_key = f"count:{id1}:{atype}"
-        self.assoc_count_cache[count_key] = len(assoc_list)
-    
-    def handle_high_degree_nodes(self, id1: int, atype: str) -> list:
-        """
-        Handle nodes with millions of edges (celebrities).
-        
-        Strategy: Only cache recent subset.
-        """
-        cache_key = f"assoc:{id1}:{atype}"
-        
-        # Check if this is a high-degree node
-        count = self.get_assoc_count(id1, atype)
-        
-        if count > 10000:
-            # Only cache most recent 10K associations
-            # Older ones require DB lookup
-            return self.storage.query_assoc_range(
-                id1, atype, offset=0, limit=10000
-            )
-        else:
-            # Cache entire list
-            return self.storage.query_assoc_list(id1, atype)
-    
-    def batch_get_objects(self, ids: list) -> dict:
-        """
-        Batch fetch multiple objects.
-        
-        Reduces round trips for common access patterns.
-        """
-        results = {}
-        missing = []
-        
-        # Check cache first
-        for id in ids:
-            cache_key = f"obj:{id}"
-            if cache_key in self.cache:
-                results[id] = self.cache[cache_key]
-            else:
-                missing.append(id)
-        
-        # Batch fetch missing from storage
-        if missing:
-            fetched = self.storage.batch_query_objects(missing)
-            for id, data in fetched.items():
-                results[id] = data
-                self.cache[f"obj:{id}"] = data
-        
-        return results
-```
+1. Is the dominant API stable and narrow enough for the cache layer to understand mutations?
+2. Which cached aggregates or ranges change for one write, and can updates be safely idempotent?
+3. What exact session or tier boundary contains read-after-write?
+4. Can a cache miss refill from storage before the corresponding mutation arrives there?
+5. What repairs stale data after a permanently lost invalidation?
+6. How are high-degree nodes, negative lookups, and long-tail object sizes represented?
+7. Is regional write unavailability preferable to multi-master reconciliation for this domain?
 
-### Thundering Herd Prevention
+## Primary sources
 
-```python
-class ThunderingHerdProtection:
-    """Prevent cache stampedes on popular items."""
-    
-    def __init__(self):
-        self.cache = {}
-        self.pending_fetches = {}  # Key -> Future
-        self.locks = defaultdict(threading.Lock)
-    
-    def get_with_protection(self, key: str, 
-                            fetch_func: callable) -> any:
-        """
-        Single-flight pattern for cache misses.
-        
-        Only one request fetches from DB; others wait.
-        """
-        # Fast path: cache hit
-        if key in self.cache:
-            return self.cache[key]
-        
-        with self.locks[key]:
-            # Double-check after acquiring lock
-            if key in self.cache:
-                return self.cache[key]
-            
-            # Check if another request is already fetching
-            if key in self.pending_fetches:
-                future = self.pending_fetches[key]
-            else:
-                # We're the first - start the fetch
-                future = Future()
-                self.pending_fetches[key] = future
-                
-                try:
-                    result = fetch_func()
-                    self.cache[key] = result
-                    future.set_result(result)
-                except Exception as e:
-                    future.set_exception(e)
-                finally:
-                    del self.pending_fetches[key]
-        
-        # Wait for result (either we fetched or someone else did)
-        return future.result()
-```
-
-## Failure Handling
-
-### Cache Failures
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                   TAO Failure Scenarios                         │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  Scenario 1: Follower Failure                                   │
-│  ┌──────────────────────────────────────────────┐               │
-│  │  Followers    ┌───┐ ┌─X─┐ ┌───┐              │               │
-│  │               │ F │ │ F │ │ F │              │               │
-│  │               └─┬─┘ └───┘ └─┬─┘              │               │
-│  │                 │     │     │                │               │
-│  │  Impact: Traffic redirects to other followers │               │
-│  │  Recovery: Restart, cold cache refill        │               │
-│  └──────────────────────────────────────────────┘               │
-│                                                                  │
-│  Scenario 2: Leader Failure                                     │
-│  ┌──────────────────────────────────────────────┐               │
-│  │  Leaders      ┌───┐ ┌─X─┐ ┌───┐              │               │
-│  │               │ L │ │ L │ │ L │              │               │
-│  │               └─┬─┘ └───┘ └─┬─┘              │               │
-│  │                 │     │     │                │               │
-│  │  Impact: Writes fail, reads from stale cache  │               │
-│  │  Recovery: Failover to backup leader          │               │
-│  └──────────────────────────────────────────────┘               │
-│                                                                  │
-│  Scenario 3: MySQL Shard Failure                                │
-│  ┌──────────────────────────────────────────────┐               │
-│  │  MySQL       ┌───┐ ┌─X─┐ ┌───┐               │               │
-│  │              │ S │ │ S │ │ S │               │               │
-│  │              └───┘ └───┘ └───┘               │               │
-│  │                                               │               │
-│  │  Impact: Affected objects unavailable         │               │
-│  │  Mitigation: Serve stale cached data          │               │
-│  └──────────────────────────────────────────────┘               │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### Graceful Degradation
-
-```python
-class TaoResilience:
-    """Graceful degradation strategies."""
-    
-    def __init__(self):
-        self.cache = {}
-        self.stale_on_error = True
-        self.max_stale_time = 3600  # 1 hour
-    
-    def get_with_fallback(self, key: str) -> tuple:
-        """
-        Return cached data even if stale during outages.
-        
-        Returns: (data, is_stale)
-        """
-        cached = self.cache.get(key)
-        
-        try:
-            # Try to get fresh data
-            fresh_data = self.fetch_from_leader(key)
-            self.cache[key] = {
-                'data': fresh_data,
-                'timestamp': time.time()
-            }
-            return (fresh_data, False)
-            
-        except LeaderUnavailable:
-            if cached:
-                # Return stale data
-                age = time.time() - cached['timestamp']
-                if age < self.max_stale_time:
-                    return (cached['data'], True)
-            
-            # No cached data or too stale
-            raise
-    
-    def mark_data_stale(self, key: str):
-        """Mark cached data as stale after invalidation failure."""
-        if key in self.cache:
-            self.cache[key]['stale'] = True
-            # Don't delete - better to serve stale than nothing
-```
-
-## Key Results
-
-### Production Performance
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     TAO Performance                              │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  Throughput:                                                    │
-│  ┌─────────────────────────────────────────────┐                │
-│  │  Billions of reads per second               │                │
-│  │  Millions of writes per second              │                │
-│  └─────────────────────────────────────────────┘                │
-│                                                                  │
-│  Latency:                                                       │
-│  ┌─────────────────────────────────────────────┐                │
-│  │  Read (cache hit):     < 1ms                │                │
-│  │  Read (cache miss):    ~10ms                │                │
-│  │  Write:                ~10-50ms             │                │
-│  └─────────────────────────────────────────────┘                │
-│                                                                  │
-│  Cache Hit Rates:                                               │
-│  ┌─────────────────────────────────────────────┐                │
-│  │  Objects:      ~96% hit rate                │                │
-│  │  Associations: ~92% hit rate                │                │
-│  │  Counts:       ~98% hit rate                │                │
-│  └─────────────────────────────────────────────┘                │
-│                                                                  │
-│  Scale:                                                         │
-│  ┌─────────────────────────────────────────────┐                │
-│  │  Hundreds of billions of objects            │                │
-│  │  Trillions of associations                  │                │
-│  │  Thousands of cache servers                 │                │
-│  └─────────────────────────────────────────────┘                │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-## Influence and Legacy
-
-### Impact on Industry
-
-1. **Graph-native APIs**: Influenced other social graph stores
-2. **Read-through caching**: Widely adopted pattern
-3. **Two-tier caching**: Leader/follower model for scale
-4. **Eventually consistent**: Acceptable for social data
-
-### TAO vs. Alternatives
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│                    TAO vs. Alternatives                      │
-├──────────────────────────────────────────────────────────────┤
-│                                                               │
-│  TAO vs. Memcached + MySQL:                                  │
-│  - Graph-aware API (not key-value)                           │
-│  - Managed cache consistency                                 │
-│  - Thundering herd protection built-in                       │
-│                                                               │
-│  TAO vs. Graph Databases (Neo4j, etc.):                      │
-│  - Simpler model (just objects + edges)                      │
-│  - Extreme read optimization                                 │
-│  - No complex traversals (done in application)               │
-│                                                               │
-│  TAO vs. Distributed KV Stores:                              │
-│  - Association lists as first-class citizens                 │
-│  - Time-ordered edge storage                                 │
-│  - Count caching                                             │
-│                                                               │
-└──────────────────────────────────────────────────────────────┘
-```
-
-## Key Takeaways
-
-1. **Read optimization matters**: 99.8% reads justifies complex caching
-2. **Domain-specific APIs**: Graph operations > generic key-value
-3. **Two-tier caching**: Followers for reads, leaders for consistency
-4. **Accept eventual consistency**: For social data, it's the right trade-off
-5. **Protect against thundering herd**: Essential at Facebook's scale
-6. **Per-object consistency**: Simpler than distributed transactions
-7. **Serve stale over nothing**: Graceful degradation is crucial
+- [Bronson et al., *TAO: Facebook's Distributed Data Store for the Social Graph* (USENIX ATC 2013), official USENIX PDF](https://www.usenix.org/system/files/conference/atc13/atc13-bronson.pdf)
+- [USENIX publication and presentation page](https://www.usenix.org/conference/atc13/technical-sessions/presentation/bronson)
+- [Meta Engineering's publication-era TAO overview](https://engineering.fb.com/2013/06/25/core-infra/tao-the-power-of-the-graph/)

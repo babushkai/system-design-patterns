@@ -2,9 +2,9 @@
 
 ## TL;DR
 
-Distributed training is a placement problem over two ledgers: bytes that must be resident and operations that must finish before a deadline. Data parallelism replicates computation and synchronizes gradients; FSDP/ZeRO shards replicated state; tensor, sequence, context, pipeline, and expert parallelism partition different axes of the computation. None is “the scaling strategy” in isolation. The useful composition maps high-frequency communication to the fastest links, keeps each kernel large enough to use the device, stays below the optimization system's effective-batch limit, and leaves recoverable state at well-defined step boundaries. Synchronous jobs inherit the slowest rank and every collective dependency, so topology, stragglers, checkpoint commit semantics, data cursors, and numerical state are part of model correctness—not cluster plumbing. The central invariant is: **a distributed step either becomes one globally committed optimizer step with reproducible input and state, or recovery discards it everywhere.**
+Distributed training is a placement problem over two ledgers: bytes that must be resident and operations that must finish before a deadline. Data parallelism replicates computation and synchronizes gradients; FSDP/ZeRO shards replicated state; tensor, sequence, context, pipeline, and expert parallelism partition different axes of the computation. None is “the scaling strategy” in isolation. The useful composition maps high-frequency communication to the fastest links, keeps each kernel large enough to use the device, stays below the optimization system's effective-batch limit, and leaves recoverable state at well-defined step boundaries. Synchronous jobs inherit the slowest rank and every collective dependency, so topology, stragglers, checkpoint commit semantics, data cursors, and numerical state are part of model correctness, not cluster plumbing. The central invariant is: **a distributed step either becomes one globally committed optimizer step with reproducible input and state, or recovery discards it everywhere.**
 
-The orchestration layer above this — pipelines, retraining, reproducibility — is [Training Pipelines](./05-training-pipelines.md); the sibling problem of extracting FLOPs from a single accelerator at inference time is [GPU Inference Internals](../17-llm-systems/11-gpu-inference-internals.md); cluster-level sizing and cost is [ML Capacity & Cost Planning](./14-ml-capacity-cost-planning.md).
+The orchestration layer above this (pipelines, retraining, reproducibility) is [Training Pipelines](./05-training-pipelines.md); the sibling problem of extracting FLOPs from a single accelerator at inference time is [GPU Inference Internals](../17-llm-systems/11-gpu-inference-internals.md); cluster-level sizing and cost is [ML Capacity & Cost Planning](./14-ml-capacity-cost-planning.md).
 
 ---
 
@@ -30,7 +30,7 @@ fp32 Adam variance (v)           4 bytes
 
 The multiplier is not universal. An optimizer may omit fp32 master weights, quantize or factor its state, accumulate gradients in another dtype, or add auxiliary parameters. Start with an inventory of actual tensors and their sharding/replication groups instead of multiplying parameter count by a remembered constant.
 
-That inventory still excludes **activations**—intermediate tensors retained for backward—which depend on microbatch size, sequence length, hidden dimensions, layer structure, attention algorithm, and which operations are recomputed. Activation checkpointing discards selected tensors and recomputes them during backward, trading additional compute for a lower memory high-water mark. The exact exchange depends on the checkpoint partition and fused kernels; profile it rather than assuming one fixed overhead.
+That inventory still excludes **activations** (intermediate tensors retained for backward), which depend on microbatch size, sequence length, hidden dimensions, layer structure, attention algorithm, and which operations are recomputed. Activation checkpointing discards selected tensors and recomputes them during backward, trading additional compute for a lower memory high-water mark. The exact exchange depends on the checkpoint partition and fused kernels; profile it rather than assuming one fixed overhead.
 
 ### The compute ledger
 
@@ -71,12 +71,12 @@ move faster than the measured path permits.
 Three mechanisms keep this from being fatal:
 
 - **Overlap**: gradients for late layers are ready while early layers are still doing backward. Frameworks bucket gradients and launch all-reduce on each bucket as it completes, hiding communication behind computation. A well-tuned job hides most of the 2D; a poorly-tuned one serializes compute-then-communicate and loses a third of its throughput to the network.
-- **Gradient accumulation**: run k micro-batches locally, sync once. Divides communication frequency by k at the cost of a k×-larger effective batch — which is only free if you *wanted* a bigger batch (see below).
+- **Gradient accumulation**: run k micro-batches locally, sync once. Divides communication frequency by k at the cost of a k×-larger effective batch, which is only free if you *wanted* a bigger batch (see below).
 - **Hierarchical topology**: reduce or reduce-scatter within a fast locality domain, exchange the smaller necessary state across slower domains, then complete the local collective. The exact hierarchy follows measured GPU, PCIe, NUMA, NIC, node, and switch paths; advertised link rates do not equal collective bandwidth.
 
 ### The ceiling nobody escapes: batch size
 
-Data parallelism has both a communication limit and an *optimization* limit. Holding microbatch size fixed while adding replicas enlarges the global batch. Beyond a model-, data-, optimizer-, and training-phase-dependent **critical batch size**, larger batches may stop reducing steps-to-target enough to justify their additional examples. The practical symptom is that step throughput rises while time-to-quality does not. Learning-rate schedules can change the boundary but do not create unlimited statistical efficiency. Measure tokens or examples and wall time to a fixed validation target—not only steps per second—before declaring a scaling win.
+Data parallelism has both a communication limit and an *optimization* limit. Holding microbatch size fixed while adding replicas enlarges the global batch. Beyond a model-, data-, optimizer-, and training-phase-dependent **critical batch size**, larger batches may stop reducing steps-to-target enough to justify their additional examples. The practical symptom is that step throughput rises while time-to-quality does not. Learning-rate schedules can change the boundary but do not create unlimited statistical efficiency. Measure tokens or examples and wall time to a fixed validation target (not only steps per second) before declaring a scaling win.
 
 ---
 
@@ -107,7 +107,7 @@ The design sensibility to absorb: **full sharding trades repeated materializatio
 
 ### Tensor parallelism: split the matrices
 
-Tensor parallelism splits individual operators—commonly matrix dimensions—across ranks. Each rank computes a partial result, and collective communication assembles or redistributes activations for the next operator. The exact sequence may use all-reduce, reduce-scatter, all-gather, or fused variants, but it occurs inside the layer and microbatch dependency path; it has less opportunity for coarse overlap than end-of-backward data-parallel synchronization.
+Tensor parallelism splits individual operators (commonly matrix dimensions) across ranks. Each rank computes a partial result, and collective communication assembles or redistributes activations for the next operator. The exact sequence may use all-reduce, reduce-scatter, all-gather, or fused variants, but it occurs inside the layer and microbatch dependency path; it has less opportunity for coarse overlap than end-of-backward data-parallel synchronization.
 
 ```
 Consequence: TP lives or dies on measured interconnect latency and
@@ -152,7 +152,7 @@ Real large-model jobs use all three, and the composition follows the hardware hi
   TP=8 (one node) × PP=4 (4 nodes = one model replica of 32 GPUs)
   × DP=16 replicas
   Per-GPU: one of 4 pipeline layer groups and one of 8 tensor shards of
-  the local matrices—approximately 1/(4×8) = 1/32 of dense parameters
+  the local matrices: approximately 1/(4×8) = 1/32 of dense parameters
   when stages are balanced, not 1/32 of the layers times another 1/8.
   The placement must also fit activations; global batch =
   16 × microbatches × micro size.
@@ -192,15 +192,15 @@ time(message_bytes M) ≈ α × synchronization_rounds + β × bytes_transferred
 β = inverse effective bandwidth (seconds/byte)
 ```
 
-Large gradient buckets are bandwidth-bound, so ring all-reduce—with many rounds but near-optimal bytes—is effective. Tiny per-layer tensor-parallel messages can be latency-bound, so a tree or topology-specific collective may win despite moving different bytes. “The fabric is 400 Gb/s” is not an input to the model until benchmarked through the actual collective, message-size range, rank count, NIC/GPU direct-memory path, and concurrent traffic. Effective bandwidth can be far below line rate because PCIe topology, NUMA placement, switch oversubscription, routing, protocol overhead, or another job shares the path.
+Large gradient buckets are bandwidth-bound, so ring all-reduce (with many rounds but near-optimal bytes) is effective. Tiny per-layer tensor-parallel messages can be latency-bound, so a tree or topology-specific collective may win despite moving different bytes. “The fabric is 400 Gb/s” is not an input to the model until benchmarked through the actual collective, message-size range, rank count, NIC/GPU direct-memory path, and concurrent traffic. Effective bandwidth can be far below line rate because PCIe topology, NUMA placement, switch oversubscription, routing, protocol overhead, or another job shares the path.
 
 Model a hierarchical all-reduce as two collectives, not one average link: reduce-scatter inside each node, inter-node collective among node representatives or shards, then all-gather inside the node. The slow fabric sees less traffic and the fast fabric absorbs the local expansion. Modern libraries choose algorithms dynamically, but the training team still needs per-bucket traces: a library cannot fix ranks placed across a split PCIe tree or an oversubscribed rack.
 
-Overlap is also a dependency graph, not a checkbox. A gradient bucket can launch only when every parameter in it has a gradient; a single late layer delays the whole bucket. Buckets that are too large expose little overlap, while buckets that are too small pay `α` repeatedly and increase launch overhead. Parameter order, bucket construction, backward graph, and network streams together determine whether the advertised communication is actually hidden. The decisive profile is a timeline showing kernels, collectives, input, and idle gaps on every rank—not a single utilization percentage.
+Overlap is also a dependency graph, not a checkbox. A gradient bucket can launch only when every parameter in it has a gradient; a single late layer delays the whole bucket. Buckets that are too large expose little overlap, while buckets that are too small pay `α` repeatedly and increase launch overhead. Parameter order, bucket construction, backward graph, and network streams together determine whether the advertised communication is actually hidden. The decisive profile is a timeline showing kernels, collectives, input, and idle gaps on every rank, not a single utilization percentage.
 
 ## Sequence, Context, and Expert Parallelism
 
-Long sequences create an activation problem even when parameters fit. **Sequence parallelism** shards operations whose inputs can be partitioned along tokens—layer normalization, dropout, and parts of attention/MLP processing—across tensor-parallel ranks, avoiding replicated activations. **Context parallelism** goes further and partitions the attention sequence itself. Each rank owns a span of queries and must obtain the keys/values needed to attend across the full context, commonly through ring-style exchange. The memory reduction is close to the context-parallel degree, but communication grows with activation size and the attention algorithm must preserve causal masking and numerical equivalence across partitions.
+Long sequences create an activation problem even when parameters fit. **Sequence parallelism** shards operations whose inputs can be partitioned along tokens (layer normalization, dropout, and parts of attention/MLP processing) across tensor-parallel ranks, avoiding replicated activations. **Context parallelism** goes further and partitions the attention sequence itself. Each rank owns a span of queries and must obtain the keys/values needed to attend across the full context, commonly through ring-style exchange. The memory reduction is close to the context-parallel degree, but communication grows with activation size and the attention algorithm must preserve causal masking and numerical equivalence across partitions.
 
 The placement rule mirrors TP: context exchange happens every layer, so keep the group on fast links when possible. It is attractive when context length, rather than parameter state, is the limiting dimension; it is wasteful for short sequences where communication and smaller kernels dominate. Sequence packing matters too. Padding every example to the longest sequence in a batch can burn most FLOPs on padding, while naive packing can let tokens attend across document boundaries or leak examples. The attention mask and position IDs are part of training correctness, not loader optimization details.
 
@@ -254,7 +254,7 @@ Loss normalization belongs in the contract. Variable-length packing, dropped sam
 
 ### Membership changes are optimizer changes
 
-Elastic infrastructure can replace ranks, but changing data-parallel degree changes `B_global` unless accumulation or microbatching changes with it. It can also change collective order, shard ownership, data assignment, and optimizer hyperparameter assumptions. Safe resize occurs at a committed boundary: stop admitting a new step, publish or materialize consistent state, establish a new membership epoch, reshard, restore data/RNG state, recompute the batch plan, and only then resume. “Elastic” should mean the protocol automates those changes—not that convergence is invariant to them.
+Elastic infrastructure can replace ranks, but changing data-parallel degree changes `B_global` unless accumulation or microbatching changes with it. It can also change collective order, shard ownership, data assignment, and optimizer hyperparameter assumptions. Safe resize occurs at a committed boundary: stop admitting a new step, publish or materialize consistent state, establish a new membership epoch, reshard, restore data/RNG state, recompute the batch plan, and only then resume. “Elastic” should mean the protocol automates those changes, not that convergence is invariant to them.
 
 Parallel groups and rank placement are versioned run metadata:
 
@@ -379,7 +379,7 @@ Fleet averages erase the causal rank. Emit step, microbatch, and collective IDs 
 
 Progress monitoring must run outside the blocked process group. A rank may be alive while its training thread waits forever in a collective; conversely, a long compilation or checkpoint can look stalled unless the phase is known. Watchdog policy uses phase-specific deadlines, identifies the earliest rank/collective that stopped advancing, captures evidence, then aborts and recovers consistently. Killing one process without fencing the rest can leave old ranks communicating with a replacement membership.
 
-Training infrastructure crosses valuable trust boundaries. Checkpoints contain model weights and often optimizer statistics that may reveal more than the final release; dataset manifests expose sensitive provenance; worker credentials can read large corpora and write trusted artifacts. Use workload identity scoped to exact input manifests and attempt prefixes, isolate tenants at scheduler/network/storage layers, encrypt checkpoint and transport paths, and prevent arbitrary experiment code from acquiring registry-promotion credentials. The finalizer—not a worker rank—publishes checkpoint and model manifests.
+Training infrastructure crosses valuable trust boundaries. Checkpoints contain model weights and often optimizer statistics that may reveal more than the final release; dataset manifests expose sensitive provenance; worker credentials can read large corpora and write trusted artifacts. Use workload identity scoped to exact input manifests and attempt prefixes, isolate tenants at scheduler/network/storage layers, encrypt checkpoint and transport paths, and prevent arbitrary experiment code from acquiring registry-promotion credentials. The finalizer (not a worker rank) publishes checkpoint and model manifests.
 
 Integrity is equally important. Pin and attest training images and extensions, verify checkpoint shards and dataset manifests by hash, record code/runtime/topology provenance, and quarantine nodes with repeatable numerical or communication anomalies. A compromised or faulty rank can contaminate a collective before global loss changes. Per-rank numeric sentinels and sampled checksums provide earlier evidence, while the immutable lineage path supports impact analysis after discovery.
 
@@ -397,7 +397,7 @@ Integrity is equally important. Pin and attest training images and extensions, v
 
 **Topology-blind placement.** The scheduler grants 512 GPUs scattered across the datacenter; rings cross oversubscribed spine links; all-reduce runs at a fraction of node-local speed. Gang scheduling with topology awareness (whole racks/pods, [ML Capacity & Cost Planning](./14-ml-capacity-cost-planning.md)) is a first-order throughput factor, not an infra nicety.
 
-**Cargo-culted parallelism configs.** A 3D config tuned for one fabric (NVLink+NDR InfiniBand) transplanted onto slower cloud networking inverts its trade-offs — TP across nodes, PP with too few microbatches. The published config encodes someone else's hardware; re-derive from your own bandwidth numbers.
+**Cargo-culted parallelism configs.** A 3D config tuned for one fabric (NVLink+NDR InfiniBand) transplanted onto slower cloud networking inverts its trade-offs: TP across nodes, PP with too few microbatches. The published config encodes someone else's hardware; re-derive from your own bandwidth numbers.
 
 **Partial optimizer step survives a failure.** Some ranks apply an update before another rank dies, and survivors continue under a replacement membership. Defense: treat ambiguous step completion as uncommitted, fence the old membership, and restore one globally consistent state.
 
@@ -459,16 +459,16 @@ Then require the operating design to answer:
 
 ## References
 
-1. [Megatron-LM: Training Multi-Billion Parameter Language Models Using Model Parallelism](https://arxiv.org/abs/1909.08053) — Shoeybi et al., 2019
-2. [ZeRO: Memory Optimizations Toward Training Trillion Parameter Models](https://arxiv.org/abs/1910.02054) — Rajbhandari et al., 2020
-3. [GPipe: Efficient Training of Giant Neural Networks Using Pipeline Parallelism](https://arxiv.org/abs/1811.06965) — Huang et al., 2019
-4. [Efficient Large-Scale Language Model Training on GPU Clusters Using Megatron-LM](https://arxiv.org/abs/2104.04473) — Narayanan et al., 2021
-5. [Accurate, Large Minibatch SGD: Training ImageNet in 1 Hour](https://arxiv.org/abs/1706.02677) — Goyal et al., 2017
-6. [An Empirical Model of Large-Batch Training](https://arxiv.org/abs/1812.06162) — McCandlish et al., 2018
-7. [PaLM: Scaling Language Modeling with Pathways](https://arxiv.org/abs/2204.02311) — Chowdhery et al., 2022
-8. [The Llama 3 Herd of Models](https://arxiv.org/abs/2407.21783) — Grattafiori et al., 2024
-9. [MegaScale: Scaling Large Language Model Training to More Than 10,000 GPUs](https://www.usenix.org/conference/nsdi24/presentation/jiang-ziheng) — Jiang et al., NSDI 2024
-10. [A Higher Order Estimate of the Optimum Checkpoint Interval for Restart Dumps](https://doi.org/10.1016/j.future.2004.11.016) — Daly, 2006
-11. [PyTorch FSDP: Experiences on Scaling Fully Sharded Data Parallel](https://arxiv.org/abs/2304.11277) — Zhao et al., 2023
-12. [PyTorch FullyShardedDataParallel Documentation](https://docs.pytorch.org/docs/stable/fsdp.html) — sharding and reshard semantics
+1. [Megatron-LM: Training Multi-Billion Parameter Language Models Using Model Parallelism](https://arxiv.org/abs/1909.08053): Shoeybi et al., 2019
+2. [ZeRO: Memory Optimizations Toward Training Trillion Parameter Models](https://arxiv.org/abs/1910.02054): Rajbhandari et al., 2020
+3. [GPipe: Efficient Training of Giant Neural Networks Using Pipeline Parallelism](https://arxiv.org/abs/1811.06965): Huang et al., 2019
+4. [Efficient Large-Scale Language Model Training on GPU Clusters Using Megatron-LM](https://arxiv.org/abs/2104.04473): Narayanan et al., 2021
+5. [Accurate, Large Minibatch SGD: Training ImageNet in 1 Hour](https://arxiv.org/abs/1706.02677): Goyal et al., 2017
+6. [An Empirical Model of Large-Batch Training](https://arxiv.org/abs/1812.06162): McCandlish et al., 2018
+7. [PaLM: Scaling Language Modeling with Pathways](https://arxiv.org/abs/2204.02311): Chowdhery et al., 2022
+8. [The Llama 3 Herd of Models](https://arxiv.org/abs/2407.21783): Grattafiori et al., 2024
+9. [MegaScale: Scaling Large Language Model Training to More Than 10,000 GPUs](https://www.usenix.org/conference/nsdi24/presentation/jiang-ziheng): Jiang et al., NSDI 2024
+10. [A Higher Order Estimate of the Optimum Checkpoint Interval for Restart Dumps](https://doi.org/10.1016/j.future.2004.11.016): Daly, 2006
+11. [PyTorch FSDP: Experiences on Scaling Fully Sharded Data Parallel](https://arxiv.org/abs/2304.11277): Zhao et al., 2023
+12. [PyTorch FullyShardedDataParallel Documentation](https://docs.pytorch.org/docs/stable/fsdp.html): sharding and reshard semantics
 13. [NVIDIA NCCL Collective Operations](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/collectives.html)

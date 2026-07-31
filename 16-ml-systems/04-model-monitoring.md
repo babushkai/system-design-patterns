@@ -2,31 +2,27 @@
 
 ## TL;DR
 
-Model monitoring is observability for a decision system whose empirical quality is statistical and whose ground truth arrives late or never. The label pipeline is its own system-design problem; [Label and Ground-Truth Systems](./10-label-ground-truth-systems.md) covers selective labels, human review, and label-store correctness. A degraded model can return confident, well-formed answers while every HTTP response is a 200. Monitoring must therefore combine immediate operational and data-contract evidence, distributional evidence, and delayed outcome evidence. These signals are not a proof ladder — input drift can be harmless and concept drift can occur with stable inputs — but they differ in latency and causal specificity. The system's value is the action path that turns evidence into the right containment, not the number of dashboards.
+Model monitoring is observability for a decision system whose empirical quality is statistical and whose ground truth arrives late or never. The label pipeline is its own system-design problem; [Label and Ground-Truth Systems](./10-label-ground-truth-systems.md) covers selective labels, human review, and label-store correctness. A degraded model can return confident, well-formed answers while every HTTP response is a 200. Monitoring must therefore combine immediate operational and data-contract evidence, distributional evidence, and delayed outcome evidence. These signals are not a proof ladder (input drift can be harmless and concept drift can occur with stable inputs), but they differ in latency and causal specificity. The system's value is the action path that turns evidence into the right containment, not the number of dashboards.
 
-> This is the model-quality complement to infrastructure observability. Pair it with [Metrics & Monitoring](../11-observability/02-metrics-monitoring.md) and [Alerting](../11-observability/04-alerting.md), express degradation budgets as [SLOs & Error Budgets](../11-observability/05-slos-error-budgets.md), and wire the action path into [Incident Management](../11-observability/07-incident-management.md). For LLM output quality specifically, see [LLM Evaluation](../17-llm-systems/10-llm-evaluation.md).
+> This is the model-quality complement to infrastructure observability. Pair it with [Metrics Systems and Monitoring](../11-observability/02-metrics-monitoring.md) and [Alert Evaluation and Notification](../11-observability/04-alerting.md), express degradation budgets as [SLOs and Error-Budget Control](../11-observability/05-slos-error-budgets.md), and wire the action path into [Incident Command and Learning](../11-observability/07-incident-management.md). For LLM output quality specifically, see [LLM Evaluation](../17-llm-systems/10-llm-evaluation.md).
 
 ---
 
-## The Defining Problem: Models Fail Silently
+## Silent Quality Failure
 
-Ordinary software observability rests on a comforting assumption: when the system is wrong, it tends to *say so*. It throws an exception, returns a 500, breaches a latency budget, or fills a log with stack traces. The signal of failure is correlated with the failure itself, which is why a service can be monitored by watching its error rate.
-
-A machine-learning system breaks this assumption at the root. A model that has silently degraded does not throw. It receives a well-formed request, runs the same matrix multiplications it always has, and returns a syntactically perfect prediction within its latency budget. Every operational metric is green. The only thing wrong is that the prediction is *worse than it used to be* — the fraud model now misses a class of attack, the recommender now ranks low-quality items higher, the credit model now systematically misprices a segment. The failure is invisible to any monitor that only watches whether the service is up.
-
-This is the engineering implication that organizes everything else: **monitoring exists to make statistical degradation observable, because the system will not announce it.** A model's correctness lives in the *distribution* of its inputs and outputs and in the *relationship* between them, not in any single response. So the monitors must watch distributions and relationships over time, which is a fundamentally different discipline from counting errors. The hardest part is not computing a statistic; it is that the statistic you most want — "is the model still right?" — is the one you usually cannot compute yet.
+A model can miss new fraud patterns, degrade recommendations, or misprice a segment while returning syntactically valid, low-latency HTTP 200 responses. Operational health therefore cannot establish predictive quality. Monitor operational and data contracts immediately, distributions as leading evidence, and delayed outcomes as quality evidence; every alert needs a containment path.
 
 ---
 
 ## The Ground-Truth-Delay Problem
 
-The reason model quality cannot be measured in real time is that the ground truth arrives late. A prediction is made at time T, but the outcome that would confirm or refute it is realized much later — and the gap defines what monitoring can and cannot see.
+The reason model quality cannot be measured in real time is that the ground truth arrives late. A prediction is made at time T, but the outcome that would confirm or refute it is realized much later, and the gap defines what monitoring can and cannot see.
 
 Consider the spread. A click-through model learns whether it was right within seconds; the user clicks or does not. A fraud model that approves a transaction may not learn it was wrong until a chargeback posts thirty to ninety days later. A credit-underwriting model may wait months or years for a loan to default. A content-recommendation model that optimizes long-term retention may *never* get a clean label at all, only noisy proxies. In each case the prediction is actionable immediately, but the truth that grades it is not.
 
 The engineering consequence is severe: **you cannot alert on accuracy you do not yet have.** If a fraud model degrades today and the labels that would reveal it arrive in sixty days, then alerting on measured precision means discovering the problem two months and millions of dollars too late. A monitoring system that relies solely on ground-truth quality is, for any label-delayed domain, a system that detects fires by waiting for the insurance claim.
 
-This forces the central architectural move of model monitoring: rely on **proxy signals that are available immediately** as early-warning surrogates for the quality you cannot yet measure. The prediction's *inputs* are available now. The prediction's *output distribution* is available now. Data quality is available now. None of these tells you directly that the model is wrong — but each is correlated with future quality, and each can fire in seconds instead of weeks. Monitoring is the art of assembling these surrogates into a ladder that gives you the earliest possible warning at the cost of certainty.
+This forces the central architectural move of model monitoring: rely on **proxy signals that are available immediately** as early-warning surrogates for the quality you cannot yet measure. The prediction's *inputs* are available now. The prediction's *output distribution* is available now. Data quality is available now. None of these tells you directly that the model is wrong, but each is correlated with future quality, and each can fire in seconds instead of weeks. Monitoring is the art of assembling these surrogates into a ladder that gives you the earliest possible warning at the cost of certainty.
 
 ---
 
@@ -44,15 +40,15 @@ flowchart LR
     T --> A["contain · investigate · recalibrate · retrain"]
 ```
 
-**Layer 1 — Operational health.** Latency, error rate, throughput, fallback rate, feature-lookup miss rate. This is ordinary service observability, and it catches the failures that *do* announce themselves: a crashed feature store, a timed-out model server, a deployment that won't load. It says nothing about prediction quality, but it is free, instant, and the right first thing to wire up. A model that cannot respond cannot be wrong correctly.
+**Layer 1: Operational health.** Latency, error rate, throughput, fallback rate, feature-lookup miss rate. This is ordinary service observability, and it catches the failures that *do* announce themselves: a crashed feature store, a timed-out model server, a deployment that won't load. It says nothing about prediction quality, but it is free, instant, and the right first thing to wire up. A model that cannot respond cannot be wrong correctly.
 
-**Layer 2 — Data quality at serving time.** Schema conformance, value ranges, null rates, enum validity on the *features as the model actually receives them*. This is the highest-leverage layer in practice, because the most common cause of sudden model degradation is not the model at all — it is an upstream pipeline that started sending nulls, changed a unit, or dropped a join. A feature that silently becomes 90% null will quietly destroy a model's predictions while every distribution looks superficially plausible. Validating inputs at the serving boundary catches these before they reach the model.
+**Layer 2: Data quality at serving time.** Schema conformance, value ranges, null rates, enum validity on the *features as the model actually receives them*. This is the highest-leverage layer in practice, because the most common cause of sudden model degradation is not the model at all: it is an upstream pipeline that started sending nulls, changed a unit, or dropped a join. A feature that silently becomes 90% null will quietly destroy a model's predictions while every distribution looks superficially plausible. Validating inputs at the serving boundary catches these before they reach the model.
 
-**Layer 3 — Input (feature) drift.** The features are individually valid, but their *distribution* has shifted relative to the data the current model was trained on. A new market launches, a marketing campaign changes the traffic mix, a sensor recalibrates. The model is now extrapolating into a region of input space it saw little of during training, which is where models silently lose skill. Input drift cannot prove the model is wrong, but it flags the conditions under which it is most likely to be.
+**Layer 3: Input (feature) drift.** The features are individually valid, but their *distribution* has shifted relative to the data the current model was trained on. A new market launches, a marketing campaign changes the traffic mix, a sensor recalibrates. The model is now extrapolating into a region of input space it saw little of during training, which is where models silently lose skill. Input drift cannot prove the model is wrong, but it flags the conditions under which it is most likely to be.
 
-**Layer 4 — Prediction (output) drift.** The distribution of the model's *outputs* has shifted — the average score rose, the class mix tilted, the confidence distribution narrowed. This is a strictly cheaper proxy than measured quality because it needs no labels, only the predictions you already log. Its ambiguity is its weakness: a prediction shift can mean the world changed (legitimate), the input changed (drift), or the model broke (degradation), and output drift alone cannot distinguish them.
+**Layer 4: Prediction (output) drift.** The distribution of the model's *outputs* has shifted: the average score rose, the class mix tilted, the confidence distribution narrowed. This is a strictly cheaper proxy than measured quality because it needs no labels, only the predictions you already log. Its ambiguity is its weakness: a prediction shift can mean the world changed (legitimate), the input changed (drift), or the model broke (degradation), and output drift alone cannot distinguish them.
 
-**Layer 5 — Observed model quality.** Precision, recall, AUC, calibration, and loss are computed once labels join back to the predictions that earned them. They are the closest evidence to the objective, but they estimate quality only for the labeled population under a particular observation policy. Maturity windows, unknown-vs-negative state, selective labels, correction history, and stable prediction-ID joins determine whether that estimate is trustworthy. Those mechanics are covered in [Label and Ground-Truth Systems](./10-label-ground-truth-systems.md).
+**Layer 5: Observed model quality.** Precision, recall, AUC, calibration, and loss are computed once labels join back to the predictions that earned them. They are the closest evidence to the objective, but they estimate quality only for the labeled population under a particular observation policy. Maturity windows, unknown-vs-negative state, selective labels, correction history, and stable prediction-ID joins determine whether that estimate is trustworthy. Those mechanics are covered in [Label and Ground-Truth Systems](./10-label-ground-truth-systems.md).
 
 The engineering implication is a budgeting rule: operational health and serving-time data contracts should exist on day one; distribution and action monitors add early evidence where labels are delayed; outcome metrics close the loop when their cohort matures. None is globally "stronger" than another. A schema violation can identify cause more directly than a quality drop, while a stable feature histogram cannot clear a model of concept drift.
 
@@ -78,7 +74,7 @@ flowchart LR
 
 The raw log and metric store have different retention and cardinality economics. At `r` decisions per second, the raw event count is `86,400r` per day; at 10,000/s that is 864 million events before labels. Persist full audit records for decisions whose consequence requires reconstruction, while sampling bulky feature payloads only under a documented design. Sampling must be deterministic by prediction ID so the later label join selects the same cohort, and rare safety slices may require 100% capture even when common traffic is sampled.
 
-Aggregates are keyed by release *and policy*, because a threshold change can move actions and realized precision while the model bytes remain unchanged. Event-time windows need watermark and correction semantics: late predictions and revised labels update a new metric revision rather than silently rewriting a published point. The monitoring pipeline exposes its own SLOs — prediction-event coverage, ingest lag, label-join coverage, oldest unprocessed offset, metric revision age, and alert-delivery success. A flat quality line is untrustworthy when event coverage fell by half.
+Aggregates are keyed by release *and policy*, because a threshold change can move actions and realized precision while the model bytes remain unchanged. Event-time windows need watermark and correction semantics: late predictions and revised labels update a new metric revision rather than silently rewriting a published point. The monitoring pipeline exposes its own SLOs: prediction-event coverage, ingest lag, label-join coverage, oldest unprocessed offset, metric revision age, and alert-delivery success. A flat quality line is untrustworthy when event coverage fell by half.
 
 Privacy constrains observability design. Feature payloads can contain personal or commercially sensitive data; unrestricted logging turns monitoring into a shadow data lake. Prefer stable IDs, approved slice dimensions, feature hashes or bounded summaries where replay is unnecessary, encryption and retention by risk tier, and tightly audited access to reconstructable records. The design must still preserve enough evidence to explain consequential decisions; "log everything forever" and "log nothing sensitive" are both evasions of that trade-off.
 
@@ -88,21 +84,21 @@ Privacy constrains observability design. Feature payloads can contain personal o
 
 "Drift" is used loosely, but the distinctions matter because each kind of drift demands a different engineering response. The cleanest framing decomposes the joint distribution of inputs `X` and labels `Y` and asks which part moved.
 
-**Covariate drift (feature drift)** is a change in `P(X)` — the distribution of inputs shifts while the underlying input-to-label relationship `P(Y|X)` holds. The classic example is a model trained on one geography now serving traffic from another, or a seasonal shift in user behavior. The model is not *wrong* about the relationship; it is operating where it has thin evidence. The engineering implication is that covariate drift is detectable *immediately and without labels*, by comparing live feature distributions against the training baseline — which makes it the workhorse early-warning signal.
+**Covariate drift (feature drift)** is a change in `P(X)`: the distribution of inputs shifts while the underlying input-to-label relationship `P(Y|X)` holds. The classic example is a model trained on one geography now serving traffic from another, or a seasonal shift in user behavior. The model is not *wrong* about the relationship; it is operating where it has thin evidence. The engineering implication is that covariate drift is detectable *immediately and without labels*, by comparing live feature distributions against the training baseline, which makes it the workhorse early-warning signal.
 
-**Concept drift** is a change in `P(Y|X)` — the very relationship the model encodes has changed, even if the inputs look identical. Fraud is the canonical case: attackers adapt to the deployed model, so the same features that meant "legitimate" last month mean "fraud" this month. Concept drift is the most dangerous kind because it is *invisible to input monitoring* — the features can look perfectly stable while the model becomes systematically wrong. The engineering implication is sobering: concept drift can only be confirmed once labels arrive, which means for label-delayed domains it is detected last and hurts most. Prediction drift is the only pre-label hint, and a weak one.
+**Concept drift** is a change in `P(Y|X)`: the very relationship the model encodes has changed, even if the inputs look identical. Fraud is the canonical case: attackers adapt to the deployed model, so the same features that meant "legitimate" last month mean "fraud" this month. Concept drift is the most dangerous kind because it is *invisible to input monitoring*: the features can look perfectly stable while the model becomes systematically wrong. The engineering implication is sobering: concept drift can only be confirmed once labels arrive, which means for label-delayed domains it is detected last and hurts most. Prediction drift is the only pre-label hint, and a weak one.
 
 **Prior probability shift** is the narrower condition in which `P(Y)` changes while the class-conditional input distribution `P(X|Y)` remains stable. Under that assumption, a calibrated posterior or threshold can often be adjusted for the new prior without relearning the class-conditional structure. A changed marginal label rate by itself does *not* establish prior shift: it can also arise from covariate drift, concept drift, a changed action/observation policy, or label-pipeline selection. The monitor must test the stability assumption on representative mature cohorts before prescribing prior correction.
 
 | Drift type | What moved | Visible without labels? | Typical response |
 |---|---|---|---|
-| Covariate / feature | `P(X)` | Yes — compare features to baseline | Investigate traffic source; consider retrain on new region |
-| Concept | `P(Y\|X)` | No — only weak prediction-drift hints | Retrain on fresh labels; tighten label collection |
+| Covariate / feature | `P(X)` | Yes: compare features to baseline | Investigate traffic source; consider retrain on new region |
+| Concept | `P(Y\|X)` | No: only weak prediction-drift hints | Retrain on fresh labels; tighten label collection |
 | Prior probability | `P(Y)` with stable `P(X\|Y)` | No; score movement is only a hint | Validate assumption; then prior-correct/recalibrate |
 
 These are hypotheses about a joint distribution, not labels a dashboard can infer from one marginal. A change in `P(X)` can induce a change in `P(Y)` even when `P(Y|X)` is stable, and a score shift can arise from inputs, model release, calibration, or policy. Without representative labels and release context, the monitoring system can localize evidence but cannot identify concept drift. Alerts should therefore say "input distribution changed" or "mature cohort calibration changed," not claim a causal class the data does not establish.
 
-The practical lesson is that drift detection is not one monitor but a *triage vocabulary*. When an alert fires, the first useful question is "which distribution moved, under which observation policy?" Covariate evidence points toward data and population changes; concept drift requires representative labels and may justify retraining; prior correction is available only after stable `P(X|Y)` has been established.
+Drift signals form a *triage vocabulary*, not one monitor. Ask which distribution moved under which observation policy. Covariate evidence points to data or population changes; concept drift requires representative labels; prior correction requires established stability of `P(X|Y)`.
 
 A production triage table should distinguish drift from ordinary pipeline breakage:
 
@@ -127,7 +123,7 @@ A drift monitor is mechanically a comparison between a current window and a refe
 
 Every baseline is an immutable, versioned artifact with population filters, bin edges, time range, source generations, and intended question. A rolling window is useful for acute change detection but dangerous as the only reference because it can follow a slow degradation. A stale training fingerprint can also page forever after a legitimate population expansion while saying nothing about quality. The monitoring system should name the comparison in the alert instead of presenting "drift" as one universal scalar. The training pipeline persists the active release's fingerprint; monitoring adds seasonal and concurrent references without overwriting it.
 
-The choice of statistic is secondary and well-trodden: population stability index and KL/Jensen-Shannon divergence for binned distributions, Kolmogorov-Smirnov for continuous features, simple category-share deltas for enums, and centroid or distance shifts for embeddings where per-dimension comparison is meaningless. Each has a known weakness, and the table below is a triage aid, not a recipe — the point of system design here is the plumbing (windowing, baselining, alerting), not the choice of test.
+The choice of statistic is secondary and well-trodden: population stability index and KL/Jensen-Shannon divergence for binned distributions, Kolmogorov-Smirnov for continuous features, simple category-share deltas for enums, and centroid or distance shifts for embeddings where per-dimension comparison is meaningless. Each has a known weakness, and the table below is a triage aid, not a recipe: the point of system design here is the plumbing (windowing, baselining, alerting), not the choice of test.
 
 | Signal | Catches | Weakness |
 |---|---|---|
@@ -165,7 +161,7 @@ def psi(base_hist, curr_hist, eps=1e-4):
     return contrib.sum(), contrib          # scalar for the alert, vector for the triage
 ```
 
-Two operational notes. The `eps` clip is not pedantry: a category present in the baseline but absent this week (or vice versa) makes the log term infinite, and an unclipped PSI job crashes or pages on every new enum value. And the *bins are part of the baseline artifact* — recomputing bins from current data each window makes PSI values incomparable across time, which is why the baseline object above stores explicit bin edges rather than letting the job choose them.
+Two operational notes. The `eps` clip is not pedantry: a category present in the baseline but absent this week (or vice versa) makes the log term infinite, and an unclipped PSI job crashes or pages on every new enum value. And the *bins are part of the baseline artifact*: recomputing bins from current data each window makes PSI values incomparable across time, which is why the baseline object above stores explicit bin edges rather than letting the job choose them.
 
 Tooling has consolidated around exactly this comparison pattern: open-source **Evidently** and Google's **TensorFlow Data Validation** compute distribution distances against a reference schema, and managed platforms such as **Arize**, **Fiddler**, and **WhyLabs** productize baseline storage, windowed comparison, and slice-aware alerting. They differ in packaging, not in principle. The principle is always: *version the baseline, window the present, measure the distance, and make the alert actionable.*
 
@@ -260,7 +256,7 @@ The second problem is **seasonality**. Real input distributions breathe with the
 
 The third problem is **alert fatigue**, which is the consequence of the first two and the death of the whole system. A drift dashboard that fires a dozen low-confidence alerts a day is a dashboard no one reads, and a monitor that is ignored is worse than no monitor because it created the illusion of coverage.
 
-The engineering response is to make alerts *actionable rather than merely true*. Three disciplines do most of the work. First, **tie severity to impact, not to statistics** — page only when a signal is both significant *and* plausibly consequential, and route everything else to a review queue instead of a pager. Second, **borrow burn-rate alerting from SLO practice** ([SLOs & Error Budgets](../11-observability/05-slos-error-budgets.md)): alert on the *rate and persistence* of degradation against a budget, so a brief blip is tolerated and a sustained slide pages fast. Third, **compare against seasonal baselines** — same-hour-last-week rather than a flat reference — so the monitor stops mistaking the daily rhythm for a problem. The table below sketches a severity model; the organizing idea is that most statistical signals should *inform*, and only a few should *page*.
+The engineering response is to make alerts *actionable rather than merely true*. Three disciplines do most of the work. First, **tie severity to impact, not to statistics**: page only when a signal is both significant *and* plausibly consequential, and route everything else to a review queue instead of a pager. Second, **borrow burn-rate alerting from SLO practice** ([SLOs and Error-Budget Control](../11-observability/05-slos-error-budgets.md)): alert on the *rate and persistence* of degradation against a budget, so a brief blip is tolerated and a sustained slide pages fast. Third, **compare against seasonal baselines** (same-hour-last-week rather than a flat reference), so the monitor stops mistaking the daily rhythm for a problem. The table below sketches a severity model; the organizing idea is that most statistical signals should *inform*, and only a few should *page*.
 
 | Signal | Page? | Response |
 |---|---|---|
@@ -292,21 +288,21 @@ SE(p̂) = sqrt(p̂(1 - p̂) / n)
 
 Rare slices and correlated traffic have less effective sample size than their row count suggests, so they need longer windows or hierarchical pooling. A guardrail should state its minimum detectable effect and maximum detection delay. "Alert when recall drops" is underspecified; "detect a 3 percentage-point drop on the high-value-merchant slice within six hours at the chosen false-alarm budget" can be capacity-planned against label rate.
 
-Monitoring hundreds of features across dozens of slices also creates a multiple-testing system: even a 1% false-positive probability produces noise when thousands of tests run each hour. Control the family of alerts, not just each test — pre-register paging slices, combine related feature anomalies into one incident, use effect-size and persistence gates, and apply false-discovery control for exploratory review queues. Never hide a newly observed category merely because it was grouped into an "other" bin; schema novelty is a separate data-contract signal from distribution distance.
+Monitoring hundreds of features across dozens of slices also creates a multiple-testing system: even a 1% false-positive probability produces noise when thousands of tests run each hour. Control the family of alerts, not just each test: pre-register paging slices, combine related feature anomalies into one incident, use effect-size and persistence gates, and apply false-discovery control for exploratory review queues. Never hide a newly observed category merely because it was grouped into an "other" bin; schema novelty is a separate data-contract signal from distribution distance.
 
 ---
 
 ## Slice-Based Monitoring: Aggregates Hide Regressions
 
-An aggregate metric is an average, and averages conceal exactly the failures that matter most. A model can hold its overall precision flat while a specific segment — a country, a device type, a language, a tenant, a new-user cohort — degrades badly, because the healthy majority masks the suffering minority. This is Simpson's paradox as an operational hazard: the top-line number says "fine" while the system is actively failing the users you can least afford to fail.
+An aggregate metric is an average, and averages conceal exactly the failures that matter most. A model can hold its overall precision flat while a specific segment (a country, a device type, a language, a tenant, a new-user cohort) degrades badly, because the healthy majority masks the suffering minority. This is Simpson's paradox as an operational hazard: the top-line number says "fine" while the system is actively failing the users you can least afford to fail.
 
-The engineering implication is that monitoring must be **sliced along the dimensions where regressions are both likely and costly**, and those slices must be chosen deliberately rather than discovered after an incident. The standard cuts are geography, device and platform, language, customer tenant, traffic source, and — where legally and ethically appropriate — protected classes, because a model that degrades on a protected segment is not merely a quality bug but a fairness and compliance failure. Slice monitoring is more expensive than aggregate monitoring: each slice needs enough traffic to compute a stable metric, and naively slicing every dimension explodes combinatorially. The discipline is to pre-register the slices that carry real risk, set per-slice guardrails, and accept that the cheapest place to discover a per-segment regression is a dashboard, while the most expensive place is a regulator's letter.
+The engineering implication is that monitoring must be **sliced along the dimensions where regressions are both likely and costly**, and those slices must be chosen deliberately rather than discovered after an incident. The standard cuts are geography, device and platform, language, customer tenant, traffic source, and (where legally and ethically appropriate) protected classes, because a model that degrades on a protected segment is not merely a quality bug but a fairness and compliance failure. Slice monitoring is more expensive than aggregate monitoring: each slice needs enough traffic to compute a stable metric, and naively slicing every dimension explodes combinatorially. The discipline is to pre-register the slices that carry real risk, set per-slice guardrails, and accept that the cheapest place to discover a per-segment regression is a dashboard, while the most expensive place is a regulator's letter.
 
 ---
 
 ## The Feedback Loop: Monitoring Triggers Retraining
 
-Monitoring is not an end in itself; in a mature ML platform it is the *trigger* for the system's corrective action. The clearest version of this is triggered retraining: a drift or quality signal crossing a threshold fires a retrain of the model on fresh data, closing the loop between detection and repair. This is precisely the *triggered retraining* strategy described in [Training Pipelines](./05-training-pipelines.md) — retraining driven by observed change rather than by the calendar.
+Monitoring is not an end in itself; in a mature ML platform it is the *trigger* for the system's corrective action. The clearest version of this is triggered retraining: a drift or quality signal crossing a threshold fires a retrain of the model on fresh data, closing the loop between detection and repair. This is precisely the *triggered retraining* strategy described in [Training Pipelines](./05-training-pipelines.md): retraining driven by observed change rather than by the calendar.
 
 ```mermaid
 flowchart LR
@@ -383,7 +379,7 @@ The first response to drift is diagnosis and containment, not retraining. The sa
 
 Causal order matters. Confirm active release and baseline, then the monitor's own coverage, then serving and feature health, then rollout or experiment context, and only then interpret distribution or label evidence. Localize by release, policy, source generation, and pre-registered slice. Containment targets the smallest boundary supported by evidence: freezing one slice is safer than a global rollback when only a new market shifted; rolling back a model is ineffective when both versions consume the same corrupt feature.
 
-Every incident should leave a machine-enforced improvement — a new contract field, source-generation dimension, baseline, slice guardrail, fallback independence rule, or promotion gate. A prose-only postmortem does not shorten the next detection path.
+Every incident should leave a machine-enforced improvement: a new contract field, source-generation dimension, baseline, slice guardrail, fallback independence rule, or promotion gate. A prose-only postmortem does not shorten the next detection path.
 
 ---
 
@@ -406,7 +402,7 @@ This yields a design invariant: `T` must be below the product's harm horizon at 
 
 The characteristic failures of model monitoring recur across organizations, and naming them is most of preventing them.
 
-**Silent degradation** is the root failure the whole discipline addresses: the model gets worse while every operational metric stays green, because a degraded model returns confident, well-formed, wrong answers. The defense is the proxy hierarchy — input and prediction drift give a pre-label warning that operational monitoring never will.
+**Silent degradation** is the root failure the whole discipline addresses: the model gets worse while every operational metric stays green, because a degraded model returns confident, well-formed, wrong answers. The defense is the proxy hierarchy: input and prediction drift give a pre-label warning that operational monitoring never will.
 
 **Label-delay masking** is silent degradation's accomplice: because outcome-based quality lags, a model can fail for weeks before measured accuracy reflects it. The defense is to combine early causal contract signals and distributional evidence with maturity-aware quality, rather than using any one as universal proof.
 
@@ -440,7 +436,7 @@ Start from the harm horizon and work backward; do not start from a catalog of dr
 | Who can act on the signal? | owner and independent fallback for each boundary | alert routing, containment automation, escalation and audit trail |
 | Can the observer be trusted? | event coverage, lag, join rate, revision age, delivery success | monitoring-pipeline SLO and explicit unknown state |
 
-Operational health and serving-time data quality are the first layer because they are immediate and causal. Drift and prediction distributions add pre-label evidence only after their baselines and seasonal peers are versioned. Direct skew audits are required where offline and online computation can diverge. Slice quality follows the decision's risk model, not every available dimension. Full automation is appropriate only for actions whose causal interpretation is strong and reversible — stopping a canary on a guardrail breach, for example. A generic drift alert should usually freeze exposure or open investigation, not train and deploy a replacement.
+Operational health and serving-time data quality are the first layer because they are immediate and causal. Drift and prediction distributions add pre-label evidence only after their baselines and seasonal peers are versioned. Direct skew audits are required where offline and online computation can diverge. Slice quality follows the decision's risk model, not every available dimension. Full automation is appropriate only for actions whose causal interpretation is strong and reversible: stopping a canary on a guardrail breach, for example. A generic drift alert should usually freeze exposure or open investigation, not train and deploy a replacement.
 
 The finished design should satisfy `T_signal + T_window + T_alert + T_decision + T_mitigation ≤ T_harm` for the maximum allowed actuation rate. If it cannot, reduce the action's blast radius; buying another monitoring dashboard does not change the physics of late truth.
 
@@ -448,7 +444,7 @@ The finished design should satisfy `T_signal + T_window + T_alert + T_decision +
 
 ## Key Takeaways
 
-1. A degraded model fails silently — confident, well-formed, wrong answers while every operational metric is green. Monitoring exists to make that statistical degradation observable.
+1. A degraded model fails silently: confident, well-formed, wrong answers while every operational metric is green. Monitoring exists to make that statistical degradation observable.
 2. Ground truth arrives late or never, so monitoring must lean on immediate proxy signals rather than waiting for measured accuracy.
 3. Structure monitoring as complementary evidence: operational health, data contracts, input distributions, scores/actions, and mature outcomes. Earlier does not mean weaker, and drift is not proof of quality loss.
 4. The drift taxonomy constrains the response: covariate drift concerns `P(X)`, concept drift concerns `P(Y|X)`, and prior correction is justified only when `P(Y)` changed while `P(X|Y)` remained stable.
@@ -465,9 +461,9 @@ The finished design should satisfy `T_signal + T_window + T_alert + T_decision +
 
 ## References
 
-1. [Hidden Technical Debt in Machine Learning Systems](https://proceedings.neurips.cc/paper_files/paper/2015/file/86df7dcfd896fcaf2674f757a2463eba-Paper.pdf) — Sculley et al., 2015
-2. [Data Validation for Machine Learning](https://mlsys.org/Conferences/2019/doc/2019/167.pdf) — Breck et al., 2019
-3. [TFX: A TensorFlow-Based Production-Scale Machine Learning Platform](https://dl.acm.org/doi/10.1145/3097983.3098021) — Baylor et al., 2017
-4. [Rules of Machine Learning: Best Practices for ML Engineering](https://developers.google.com/machine-learning/guides/rules-of-ml) — Zinkevich
+1. [Hidden Technical Debt in Machine Learning Systems](https://proceedings.neurips.cc/paper_files/paper/2015/file/86df7dcfd896fcaf2674f757a2463eba-Paper.pdf): Sculley et al., 2015
+2. [Data Validation for Machine Learning](https://mlsys.org/Conferences/2019/doc/2019/167.pdf): Breck et al., 2019
+3. [TFX: A TensorFlow-Based Production-Scale Machine Learning Platform](https://dl.acm.org/doi/10.1145/3097983.3098021): Baylor et al., 2017
+4. [Rules of Machine Learning: Best Practices for ML Engineering](https://developers.google.com/machine-learning/guides/rules-of-ml): Zinkevich
 5. [Evidently: Open-Source ML Monitoring Documentation](https://docs.evidentlyai.com/)
 6. [Arize AI: ML Observability Concepts](https://arize.com/ml-observability/)

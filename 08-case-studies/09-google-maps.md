@@ -1,1429 +1,306 @@
-# Google Maps System Design
+# Google Maps: Versioned Geospatial Data, Tiles, Routing, and ETA
 
-## TL;DR
+A global map is not one database with a spatial index. It is a family of products built from a changing world model: viewport rendering, place lookup, geocoding, road snapping, route search, traffic-aware ETA, incident updates, and turn-by-turn navigation. Each path has different freshness, latency, correctness, and privacy constraints.
 
-Google Maps serves 1B+ monthly users with mapping, navigation, and location services. The architecture centers on: **tile-based map rendering** with vector tiles for efficient delivery, **graph-based routing** using contraction hierarchies for fast path finding, **real-time traffic** from aggregated device data, **geocoding** with probabilistic address parsing, and **spatial indexing** using S2 geometry. Key insight: pre-computation at multiple scales enables sub-second responses for complex geospatial queries.
+Public sources describe Google Maps interfaces and selected algorithms, but not a complete current production topology. The following labels distinguish documented facts from inference and reference design:
 
----
+- **Documented**: stated in a linked Google/Google DeepMind source or primary paper; figures and capabilities are dated.
+- **Inference**: follows from documented behavior or geospatial constraints but is not a Google production claim.
+- **Reference design**: an implementable design for a Maps-like platform, not a reconstruction presented as fact.
 
-## Core Requirements
+## Product surfaces and contracts
 
-### Functional Requirements
-1. **Map display** - Render maps at any zoom level globally
-2. **Directions** - Calculate routes with multiple transport modes
-3. **Search** - Find places by name, category, or address
-4. **Real-time traffic** - Show current traffic conditions
-5. **ETA calculation** - Predict arrival times accurately
-6. **Street View** - Display 360° street-level imagery
+**Documented, current API behavior.** Google Maps Platform exposes map tiles, geocoding, places, routes, route matrices, and navigation SDKs. The Routes API can return traffic-aware duration separately from static duration and can explicitly report fallback information when the requested computation is unavailable. [Google Maps Platform documentation](https://developers.google.com/maps/documentation), [Routes API route-matrix response](https://developers.google.com/maps/documentation/routes/reference/rest/v2/TopLevel/computeRouteMatrix)
 
-### Non-Functional Requirements
-1. **Latency** - Map tiles < 100ms, routes < 500ms
-2. **Accuracy** - ETA within 10% of actual travel time
-3. **Scale** - 1B+ users, 25M+ updates daily
-4. **Freshness** - Traffic data < 2 minute lag
-5. **Coverage** - 220+ countries and territories
+**Documented, 2020 snapshot.** Google reported that more than one billion kilometers were driven with Google Maps each day across more than 220 countries and territories. That dated product figure is useful for understanding geographic diversity, not for deriving current server QPS. [Google Maps, traffic and routing](https://blog.google/products-and-platforms/products/maps/google-maps-101-how-ai-helps-predict-traffic-and-determine-routes/)
 
----
+**Reference-design requirements.** A design should provide:
 
-## High-Level Architecture
+- a map viewport at a chosen zoom, language, region, and style;
+- forward/reverse geocoding and place search;
+- routes for different modes and constraints;
+- traffic-aware ETAs and safe rerouting;
+- ingestion of authoritative road/place changes and time-sensitive incidents;
+- reproducible versions for debugging, rollback, and legal/audit needs;
+- graceful fallback when live traffic, imagery, or advanced routing is unavailable.
+
+The core invariants are:
+
+1. every response is derived from a coherent version set, even if different datasets refresh at different rates;
+2. route edges form a connected, legally traversable path for the requested mode and policy;
+3. an ETA names the route and traffic/model versions it evaluates;
+4. stale live data never silently masquerades as current data;
+5. untrusted reports cannot directly mutate the authoritative road graph;
+6. location telemetry is minimized, aggregated, retained, and accessed under explicit policy;
+7. a bad regional publication can be rolled back without rebuilding the whole world.
+
+## State, authority, and version composition
+
+**Reference design.** Model the world as separate versioned datasets:
+
+| Dataset | Authority | Update character |
+|---|---|---|
+| base geometry | curated map pipeline | slower, structural |
+| road graph and restrictions | graph publication pipeline | structural plus scheduled rules |
+| places and addresses | place authority with provenance | frequent independent edits |
+| cartographic style | style control plane | versioned configuration |
+| traffic observations | privacy-filtered stream | seconds/minutes, expires |
+| incidents and closures | fused authoritative/user signals | urgent, confidence evolves |
+| ETA model and features | ML release system | versioned model + schema |
+
+A response carries a version vector rather than pretending one global transaction updated everything:
+
+$$
+V = (v_{graph}, v_{places}, v_{style}, v_{traffic}, v_{incident}, v_{model})
+$$
+
+Compatibility rules define which combinations are legal. For example, a traffic edge identifier must resolve in the selected graph version; a model must accept the selected feature schema; a tile style must understand the tile schema. A publication manifest atomically changes the set of compatible versions visible to one serving cell.
+
+### Road graph invariant
+
+For route `P = (e_1, \ldots, e_n)`:
+
+$$
+head(e_i) = tail(e_{i+1})
+$$
+
+and every edge must satisfy mode, direction, turn, time-window, vehicle, and policy constraints at the planned traversal time. A geometrically connected polyline is not necessarily a legal route.
+
+### Freshness invariant
+
+Each dynamic datum includes event time, processing time, expiry, confidence, and source class. If current time exceeds its expiry, routing falls back to historical/static cost and marks the live component unavailable. “Last updated” without expiry semantics is insufficient.
+
+## Documented spatial and routing foundations
+
+### Tile coordinates and level of detail
+
+**Documented, Maps JavaScript API as of July 2026.** Google Maps uses WGS84 latitude/longitude, Mercator world coordinates, pixel coordinates, and tile coordinates. At zoom zero the base world is one 256×256-pixel tile; pixel dimensions double in each axis per zoom, so the number of logical tiles grows as `4^z`. The client computes only the tiles intersecting its viewport. [Google, map and tile coordinates](https://developers.google.com/maps/documentation/javascript/coordinates)
+
+The existence of `4^z` possible coordinates does not mean all tiles are materialized. Sparse coverage, on-demand generation, versioned bundles, and caches avoid a physical “trillion-row table” interpretation at high zoom.
+
+### S2 as a reference building block
+
+**Documented, open-source library.** Google's S2 Geometry represents data on a sphere, supplies a hierarchy of cells, can cover arbitrary regions with cell sets, and provides robust spatial predicates and indexes. [S2 Geometry overview](https://s2geometry.io/about/overview.html), [S2 cell hierarchy](https://s2geometry.io/devguide/s2cell_hierarchy)
+
+**Evidence boundary.** S2 is a credible component for a Maps-like spatial index, but these library documents do not prove that every Google Maps production subsystem uses S2. This chapter uses S2 cells only in the reference design.
+
+### Traffic and ETA
+
+**Documented, 2020.** Google described combining aggregate live location data, historical traffic patterns, authoritative government data, and user incident reports for traffic and routing. Route selection also considers road characteristics and predicted conditions ahead, not only present speed. [Google Maps, traffic and routing](https://blog.google/products-and-platforms/products/maps/google-maps-101-how-ai-helps-predict-traffic-and-determine-routes/)
+
+**Documented, 2020 system snapshot.** Google DeepMind described a production ETA pipeline that builds road “supersegments” from traffic information and uses a graph neural network to predict their travel times. The article reported up to 50% reductions in ETA inaccuracy in selected cities and said Google Maps' predictive ETAs were accurate for more than 97% of trips at that time. These are publication-specific evaluation claims, not timeless global SLOs. [Google DeepMind, traffic prediction with GNNs](https://deepmind.google/blog/traffic-prediction-with-advanced-graph-neural-networks/)
+
+**Documented, primary paper, 2021.** The associated paper states that the graph-network ETA estimator was deployed in production at Google Maps. [Derrow-Pinion et al., ETA Prediction with Graph Neural Networks](https://arxiv.org/abs/2108.11482)
+
+### Public-transit routing
+
+**Documented, primary paper, 2010.** Google researchers described transfer patterns: precompute common station-transfer sequences, then answer multi-criteria public-transit queries over large networks quickly. The paper reports use in Google Maps and experiments on networks up to half a billion arcs. This supports transit routing specifically; it is not evidence that road routing uses the same algorithm. [Bast et al., Transfer Patterns](https://research.google/pubs/fast-routing-in-very-large-public-transportation-networks-using-transfer-patterns/)
+
+## Reference architecture
+
+**Reference design.** Separate offline/streaming publication from online query serving:
 
 ```mermaid
-graph TD
-    Client["Client Applications<br/>(Web, Android, iOS, Embedded, 3rd Party APIs)"]
-
-    Client -->|"HTTPS / gRPC"| EdgeLayer
-
-    subgraph EdgeLayer["Edge Layer"]
-        CDN["Global CDN<br/>(Tile Caching)"]
-        APIGW["API Gateway / Load Balancer"]
+flowchart TB
+    subgraph Sources
+        A[Authoritative map feeds]
+        U[User edits and incidents]
+        T[Privacy-filtered traffic observations]
+        I[Imagery and sensors]
     end
-
-    EdgeLayer --> ServiceLayer
-
-    subgraph ServiceLayer["Service Layer"]
-        TileSvc["Tile Service<br/>- Vector tile generation<br/>- Raster tile rendering<br/>- Level-of-detail management"]
-        RoutingSvc["Routing Service"]
-        GeocodingSvc["Geocoding Service"]
-        PlacesSvc["Places Service"]
-        TrafficSvc["Traffic Service"]
-        ETASvc["ETA Prediction"]
-        StreetViewSvc["Street View Service"]
-    end
-
-    ServiceLayer --> DataLayer
-
-    subgraph DataLayer["Data Layer"]
-        RoadGraph[("Road Graph<br/>- Billions of road segments<br/>- Pre-computed contraction hierarchies<br/>- Real-time edge weight updates")]
-        Bigtable[("Bigtable<br/>(Place Data)")]
-        Spanner[("Spanner<br/>(Transactions)")]
-        Colossus[("Colossus<br/>(Map Data, Images)")]
-        S2[("S2 Geometry Index")]
-        TrafficAgg[("Traffic Aggregation")]
-    end
+    Sources --> P[Validation, conflation, provenance]
+    P --> G[Versioned graph and place build]
+    P --> TS[Traffic and incident stream]
+    G --> M[(Immutable publication manifests)]
+    M --> Tile[Tile build and serving]
+    M --> Geo[Geocoding and place serving]
+    M --> Route[Routing serving cells]
+    TS --> Route
+    TS --> ETA[ETA feature service]
+    ETA --> Route
+    C[Clients and SDKs] --> Tile
+    C --> Geo
+    C --> Route
 ```
 
----
-
-## Tile-Based Map Rendering
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                    Tile Pyramid (Zoom Levels)                            │
-│                                                                          │
-│   Zoom 0:   1 tile covers entire world                                  │
-│   ┌─────────────────────────────────────────────────────────────────┐   │
-│   │                        World                                     │   │
-│   └─────────────────────────────────────────────────────────────────┘   │
-│                                                                          │
-│   Zoom 1:   4 tiles (2x2)                                               │
-│   ┌────────────────────┐  ┌────────────────────┐                       │
-│   │                    │  │                    │                       │
-│   └────────────────────┘  └────────────────────┘                       │
-│   ┌────────────────────┐  ┌────────────────────┐                       │
-│   │                    │  │                    │                       │
-│   └────────────────────┘  └────────────────────┘                       │
-│                                                                          │
-│   Zoom 20:  ~1 trillion tiles (street level detail)                     │
-│                                                                          │
-│   Tile addressing: /{z}/{x}/{y}                                         │
-│   - z: zoom level (0-22)                                                │
-│   - x: column (0 to 2^z - 1)                                            │
-│   - y: row (0 to 2^z - 1)                                               │
-│                                                                          │
-│   ┌──────────────────────────────────────────────────────────────────┐  │
-│   │                   Vector Tiles vs Raster Tiles                    │  │
-│   │                                                                   │  │
-│   │   Raster (PNG):          Vector (PBF):                           │  │
-│   │   - Pre-rendered pixels  - Geometry + styling                    │  │
-│   │   - Large file size      - Small file size                       │  │
-│   │   - Fixed resolution     - Smooth at any zoom                    │  │
-│   │   - Can't customize      - Client-side styling                   │  │
-│   │                          - Rotation without blur                 │  │
-│   └──────────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-### Tile Service Implementation
-
-```go
-package tile
-
-import (
-	"compress/gzip"
-	"fmt"
-	"math"
-	"net/http"
-	"strconv"
-	"strings"
-	"sync"
-	"time"
-
-	"google.golang.org/protobuf/proto"
-)
-
-// TileCoordinate represents a tile's position in the pyramid.
-type TileCoordinate struct {
-	Z int // Zoom level
-	X int // Column
-	Y int // Row
-}
-
-// ToBBox converts a tile coordinate to a lat/lng bounding box.
-func (tc TileCoordinate) ToBBox() (latMin, lonMin, latMax, lonMax float64) {
-	n := math.Pow(2, float64(tc.Z))
-
-	lonMin = float64(tc.X)/n*360 - 180
-	lonMax = float64(tc.X+1)/n*360 - 180
-
-	latMax = math.Atan(math.Sinh(math.Pi*(1-2*float64(tc.Y)/n))) * 180 / math.Pi
-	latMin = math.Atan(math.Sinh(math.Pi*(1-2*float64(tc.Y+1)/n))) * 180 / math.Pi
-	return
-}
-
-// VectorTileFeature holds a single geometry and its properties.
-type VectorTileFeature struct {
-	GeometryType int             // 1=Point, 2=Line, 3=Polygon
-	Geometry     [][2]int        // Screen coordinates
-	Properties   map[string]string
-}
-
-// detailRange maps zoom ranges to visible layers.
-type detailRange struct {
-	minZ, maxZ int
-	layers     []string
-}
-
-// TileService generates and serves map tiles at various zoom levels.
-// Uses vector tiles for modern clients, raster for legacy.
-type TileService struct {
-	features     FeatureStore
-	cache        CacheClient
-	cdn          CDNClient
-	detailLevels []detailRange
-}
-
-// NewTileService creates a TileService with default detail level thresholds.
-func NewTileService(fs FeatureStore, cache CacheClient, cdn CDNClient) *TileService {
-	return &TileService{
-		features: fs,
-		cache:    cache,
-		cdn:      cdn,
-		detailLevels: []detailRange{
-			{0, 4, []string{"countries", "oceans"}},
-			{5, 9, []string{"countries", "states", "major_roads", "major_water"}},
-			{10, 13, []string{"cities", "roads", "water", "parks"}},
-			{14, 16, []string{"buildings", "streets", "poi_major"}},
-			{17, 22, []string{"buildings_detailed", "all_streets", "all_poi"}},
-		},
-	}
-}
-
-// GetVectorTile generates or retrieves a cached vector tile.
-// Returns Protocol Buffer encoded tile bytes.
-func (ts *TileService) GetVectorTile(coord TileCoordinate, layers []string) ([]byte, error) {
-	cacheKey := fmt.Sprintf("vtile:%d:%d:%d", coord.Z, coord.X, coord.Y)
-
-	// Check cache
-	if cached, err := ts.cache.Get(cacheKey); err == nil && cached != nil {
-		return cached, nil
-	}
-
-	// Determine which layers to include based on zoom
-	activeLayers := ts.getLayersForZoom(coord.Z)
-	if len(layers) > 0 {
-		filtered := make([]string, 0)
-		allowed := make(map[string]bool)
-		for _, l := range activeLayers {
-			allowed[l] = true
-		}
-		for _, l := range layers {
-			if allowed[l] {
-				filtered = append(filtered, l)
-			}
-		}
-		activeLayers = filtered
-	}
-
-	// Get bounding box
-	latMin, lonMin, latMax, lonMax := coord.ToBBox()
-	bbox := [4]float64{latMin, lonMin, latMax, lonMax}
-
-	// Fetch features from store
-	features, err := ts.features.QueryBBox(bbox, activeLayers, ts.getSimplification(coord.Z))
-	if err != nil {
-		return nil, fmt.Errorf("query features: %w", err)
-	}
-
-	// Build vector tile
-	tileBytes := ts.buildVectorTile(features, coord)
-
-	// Compress with gzip
-	compressed := gzipCompress(tileBytes)
-
-	// Cache (longer TTL for lower zoom levels)
-	ttl := 3600 * time.Second
-	if coord.Z < 10 {
-		ttl = 86400 * time.Second
-	}
-	ts.cache.SetEx(cacheKey, ttl, compressed)
-
-	return compressed, nil
-}
-
-// buildVectorTile builds a vector tile in Mapbox Vector Tile (MVT) format.
-// Uses Protocol Buffers encoding via proto.Marshal.
-func (ts *TileService) buildVectorTile(features []VectorTileFeature, coord TileCoordinate) []byte {
-	tile := &vectorpb.Tile{}
-
-	// Group features by layer
-	byLayer := make(map[string][]VectorTileFeature)
-	for _, f := range features {
-		layerName := f.Properties["layer"]
-		if layerName == "" {
-			layerName = "default"
-		}
-		byLayer[layerName] = append(byLayer[layerName], f)
-	}
-
-	// Build each layer
-	extent := uint32(4096) // Tile coordinate space
-	for layerName, layerFeatures := range byLayer {
-		layer := &vectorpb.Tile_Layer{
-			Name:    &layerName,
-			Extent:  &extent,
-			Version: proto.Uint32(2),
-		}
-
-		for _, feat := range layerFeatures {
-			// Convert geometry to tile coordinates
-			tileGeom := toTileCoords(feat.Geometry, coord, int(extent))
-
-			// Encode geometry with delta encoding
-			encodedGeom := encodeGeometry(feat.GeometryType, tileGeom)
-
-			gt := vectorpb.Tile_GeomType(feat.GeometryType)
-			layer.Features = append(layer.Features, &vectorpb.Tile_Feature{
-				Type:     &gt,
-				Geometry: encodedGeom,
-			})
-		}
-
-		tile.Layers = append(tile.Layers, layer)
-	}
-
-	data, _ := proto.Marshal(tile)
-	return data
-}
-
-// toTileCoords converts lat/lng pairs to tile coordinate space.
-func toTileCoords(geometry [][2]int, coord TileCoordinate, extent int) [][2]int {
-	latMin, lonMin, latMax, lonMax := coord.ToBBox()
-	result := make([][2]int, len(geometry))
-
-	for i, pt := range geometry {
-		lat, lng := float64(pt[0]), float64(pt[1])
-		x := int((lng - lonMin) / (lonMax - lonMin) * float64(extent))
-		y := int((latMax - lat) / (latMax - latMin) * float64(extent))
-		result[i] = [2]int{x, y}
-	}
-	return result
-}
-
-// getSimplification returns geometry simplification tolerance based on zoom.
-// Lower zoom = more simplification.
-func (ts *TileService) getSimplification(zoom int) float64 {
-	baseTolerance := 0.0001
-	return baseTolerance * math.Pow(2, float64(20-zoom))
-}
-
-// getLayersForZoom returns layers visible at a given zoom level.
-func (ts *TileService) getLayersForZoom(zoom int) []string {
-	var layers []string
-	for _, dl := range ts.detailLevels {
-		if zoom >= dl.minZ && zoom <= dl.maxZ {
-			layers = append(layers, dl.layers...)
-		}
-	}
-	return layers
-}
-
-// ServeHTTP exposes the tile service over HTTP.
-func (ts *TileService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Parse /{z}/{x}/{y} from URL
-	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-	if len(parts) < 3 {
-		http.Error(w, "invalid tile path", http.StatusBadRequest)
-		return
-	}
-
-	z, _ := strconv.Atoi(parts[0])
-	x, _ := strconv.Atoi(parts[1])
-	y, _ := strconv.Atoi(parts[2])
-
-	coord := TileCoordinate{Z: z, X: x, Y: y}
-	data, err := ts.GetVectorTile(coord, nil)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/x-protobuf")
-	w.Header().Set("Content-Encoding", "gzip")
-	w.Write(data)
-}
-
-// TilePrefetcher prefetches tiles ahead of user viewport for smooth panning.
-type TilePrefetcher struct {
-	tiles          *TileService
-	prefetchRadius int
-}
-
-// NewTilePrefetcher creates a prefetcher with a default radius of 2 tiles.
-func NewTilePrefetcher(ts *TileService) *TilePrefetcher {
-	return &TilePrefetcher{tiles: ts, prefetchRadius: 2}
-}
-
-// PrefetchForViewport prefetches tiles around the current viewport concurrently.
-func (tp *TilePrefetcher) PrefetchForViewport(center TileCoordinate, zoom int) {
-	var wg sync.WaitGroup
-	maxTile := (1 << zoom) - 1
-
-	for dx := -tp.prefetchRadius; dx <= tp.prefetchRadius; dx++ {
-		for dy := -tp.prefetchRadius; dy <= tp.prefetchRadius; dy++ {
-			x := center.X + dx
-			y := center.Y + dy
-
-			if x < 0 || x > maxTile || y < 0 || y > maxTile {
-				continue
-			}
-
-			wg.Add(1)
-			go func(c TileCoordinate) {
-				defer wg.Done()
-				tp.tiles.GetVectorTile(c, nil)
-			}(TileCoordinate{Z: zoom, X: x, Y: y})
-		}
-	}
-	wg.Wait()
-}
-```
-
----
-
-## Routing with Contraction Hierarchies
-
-**Original Graph:**
-
-```mermaid
-graph LR
-    A -->|"5"| B
-    B -->|"3"| C
-    A -->|"2"| D
-    B -->|"4"| E
-    C -->|"6"| F
-    D -->|"7"| E
-    E -->|"2"| F
-```
-
-**After Contraction (shortcuts added):**
-
-```mermaid
-graph LR
-    A ==>|"9 (shortcut via B)"| C
-    A -->|"2"| D
-    C -->|"6"| F
-    D ==>|"12 (multiple shortcuts)"| F
-```
-
-> **Query:** Bidirectional search, always go UP in hierarchy
-> - Forward search from source (upward only)
-> - Backward search from target (upward only)
-> - Meet in the middle at high-importance node
-> - Unpack shortcuts to get actual path
->
-> **Performance:** O(log n) instead of O(n) for Dijkstra
-
-### Routing Service Implementation
-
-```cpp
-#include <cstdint>
-#include <functional>
-#include <limits>
-#include <optional>
-#include <queue>
-#include <string>
-#include <unordered_map>
-#include <unordered_set>
-#include <utility>
-#include <vector>
-
-enum class TravelMode { Driving, Walking, Bicycling, Transit };
-
-struct RouteStep {
-    std::pair<double, double> start_location;
-    std::pair<double, double> end_location;
-    int distance_meters;
-    int duration_seconds;
-    std::string polyline;
-    std::string instructions;
-    std::optional<std::string> maneuver;
-};
-
-struct Route {
-    std::vector<RouteStep> steps;
-    int distance_meters;
-    int duration_seconds;
-    std::string polyline;
-    std::optional<int> traffic_duration_seconds;
-    std::vector<std::string> warnings;
-};
-
-// Hash for std::pair used as unordered_map key.
-struct PairHash {
-    std::size_t operator()(const std::pair<int, int>& p) const {
-        auto h1 = std::hash<int>{}(p.first);
-        auto h2 = std::hash<int>{}(p.second);
-        return h1 ^ (h2 << 32);
-    }
-};
-
-/// Fast routing using pre-computed contraction hierarchies.
-/// Reduces query time from O(n) to O(log n).
-class ContractionHierarchyRouter {
-public:
-    ContractionHierarchyRouter(GraphStore& graph, TrafficService& traffic)
-        : graph_(graph), traffic_(traffic) {}
-
-    /// Find optimal route using contraction hierarchy.
-    Route findRoute(
-        std::pair<double, double> origin,
-        std::pair<double, double> destination,
-        TravelMode mode,
-        std::optional<int64_t> departure_time = std::nullopt,
-        std::vector<std::string> avoid = {}
-    ) {
-        // Snap to nearest road nodes
-        int origin_node = graph_.nearestNode(origin, mode);
-        int dest_node = graph_.nearestNode(destination, mode);
-
-        // Run bidirectional CH query
-        auto path_nodes = chQuery(origin_node, dest_node, mode);
-
-        // Unpack shortcuts to get full path
-        auto full_path = unpackPath(path_nodes);
-
-        // Get current traffic weights if driving
-        std::unordered_map<std::pair<int, int>, double, PairHash> edge_weights;
-        if (mode == TravelMode::Driving && departure_time.has_value()) {
-            edge_weights = traffic_.getTrafficWeights(full_path, *departure_time);
-        }
-
-        // Build route with turn-by-turn instructions
-        return buildRoute(full_path, edge_weights, mode);
-    }
-
-private:
-    GraphStore& graph_;
-    TrafficService& traffic_;
-    std::unordered_map<int, int> node_levels_;  // node_id -> level
-    std::unordered_map<std::pair<int, int>, std::vector<int>, PairHash> shortcuts_;
-
-    /// Bidirectional contraction hierarchy query.
-    /// Forward search goes up, backward search goes up, meet in middle.
-    std::vector<int> chQuery(int origin, int destination, TravelMode mode) {
-        using Entry = std::tuple<double, int, int>;  // (distance, node, previous)
-
-        // Min-heaps: (distance, node, previous)
-        std::priority_queue<Entry, std::vector<Entry>, std::greater<>> forward_pq;
-        std::priority_queue<Entry, std::vector<Entry>, std::greater<>> backward_pq;
-
-        forward_pq.emplace(0.0, origin, -1);
-        backward_pq.emplace(0.0, destination, -1);
-
-        // Visited: node -> (distance, predecessor)
-        std::unordered_map<int, std::pair<double, int>> forward_visited;
-        std::unordered_map<int, std::pair<double, int>> backward_visited;
-
-        forward_visited[origin] = {0.0, -1};
-        backward_visited[destination] = {0.0, -1};
-
-        double best_distance = std::numeric_limits<double>::infinity();
-        int meeting_node = -1;
-
-        while (!forward_pq.empty() || !backward_pq.empty()) {
-            // Forward step
-            if (!forward_pq.empty()) {
-                auto [dist, node, prev] = forward_pq.top();
-                forward_pq.pop();
-
-                if (dist > best_distance) goto backward;
-
-                // Check if backward search already visited this node
-                if (auto it = backward_visited.find(node); it != backward_visited.end()) {
-                    double total = dist + it->second.first;
-                    if (total < best_distance) {
-                        best_distance = total;
-                        meeting_node = node;
-                    }
-                }
-
-                // Expand only to higher-level nodes
-                for (auto& [neighbor, weight] : getUpwardEdges(node, mode)) {
-                    double new_dist = dist + weight;
-                    auto it = forward_visited.find(neighbor);
-                    if (it == forward_visited.end() || new_dist < it->second.first) {
-                        forward_visited[neighbor] = {new_dist, node};
-                        forward_pq.emplace(new_dist, neighbor, node);
-                    }
-                }
-            }
-
-            backward:
-            // Backward step (similar logic)
-            if (!backward_pq.empty()) {
-                auto [dist, node, prev] = backward_pq.top();
-                backward_pq.pop();
-
-                if (dist > best_distance) continue;
-
-                if (auto it = forward_visited.find(node); it != forward_visited.end()) {
-                    double total = dist + it->second.first;
-                    if (total < best_distance) {
-                        best_distance = total;
-                        meeting_node = node;
-                    }
-                }
-
-                for (auto& [neighbor, weight] : getUpwardEdgesReverse(node, mode)) {
-                    double new_dist = dist + weight;
-                    auto it = backward_visited.find(neighbor);
-                    if (it == backward_visited.end() || new_dist < it->second.first) {
-                        backward_visited[neighbor] = {new_dist, node};
-                        backward_pq.emplace(new_dist, neighbor, node);
-                    }
-                }
-            }
-        }
-
-        if (meeting_node < 0) {
-            throw std::runtime_error("No route found between points");
-        }
-
-        return reconstructPath(meeting_node, forward_visited, backward_visited);
-    }
-
-    /// Get edges to nodes with higher level (upward in hierarchy).
-    std::vector<std::pair<int, double>> getUpwardEdges(int node, TravelMode mode) {
-        int node_level = node_levels_.count(node) ? node_levels_[node] : 0;
-        std::vector<std::pair<int, double>> edges;
-
-        for (auto& [neighbor, weight] : graph_.getEdges(node, mode)) {
-            int neighbor_level = node_levels_.count(neighbor) ? node_levels_[neighbor] : 0;
-            if (neighbor_level >= node_level) {
-                edges.emplace_back(neighbor, weight);
-            }
-        }
-        return edges;
-    }
-
-    std::vector<std::pair<int, double>> getUpwardEdgesReverse(int node, TravelMode mode) {
-        int node_level = node_levels_.count(node) ? node_levels_[node] : 0;
-        std::vector<std::pair<int, double>> edges;
-
-        for (auto& [neighbor, weight] : graph_.getReverseEdges(node, mode)) {
-            int neighbor_level = node_levels_.count(neighbor) ? node_levels_[neighbor] : 0;
-            if (neighbor_level >= node_level) {
-                edges.emplace_back(neighbor, weight);
-            }
-        }
-        return edges;
-    }
-
-    /// Recursively unpack shortcuts to get original path.
-    std::vector<int> unpackPath(const std::vector<int>& path) {
-        std::vector<int> full_path = {path[0]};
-
-        for (size_t i = 0; i + 1 < path.size(); ++i) {
-            auto key = std::make_pair(path[i], path[i + 1]);
-            if (auto it = shortcuts_.find(key); it != shortcuts_.end()) {
-                auto unpacked = unpackPath(it->second);
-                full_path.insert(full_path.end(), unpacked.begin() + 1, unpacked.end());
-            } else {
-                full_path.push_back(path[i + 1]);
-            }
-        }
-        return full_path;
-    }
-
-    /// Build route with instructions from node path.
-    Route buildRoute(
-        const std::vector<int>& path,
-        const std::unordered_map<std::pair<int, int>, double, PairHash>& traffic_weights,
-        TravelMode mode
-    ) {
-        std::vector<RouteStep> steps;
-        int total_distance = 0;
-        int total_duration = 0;
-        int total_traffic_duration = 0;
-
-        for (size_t i = 0; i + 1 < path.size(); ++i) {
-            int u = path[i], v = path[i + 1];
-            auto edge = graph_.getEdge(u, v);
-
-            double base_duration = edge.length / edge.speed_limit;
-            double traffic_duration = base_duration;
-
-            auto tw = traffic_weights.find({u, v});
-            if (tw != traffic_weights.end()) {
-                traffic_duration = edge.length / tw->second;
-            }
-
-            auto u_coord = graph_.getNodeLocation(u);
-            auto v_coord = graph_.getNodeLocation(v);
-
-            auto [instruction, maneuver] = generateInstruction(
-                edge, (i > 0) ? graph_.getEdge(path[i - 1], u) : edge
-            );
-
-            steps.push_back(RouteStep{
-                .start_location = u_coord,
-                .end_location = v_coord,
-                .distance_meters = static_cast<int>(edge.length),
-                .duration_seconds = static_cast<int>(base_duration),
-                .polyline = edge.geometry_encoded,
-                .instructions = instruction,
-                .maneuver = maneuver,
-            });
-
-            total_distance += static_cast<int>(edge.length);
-            total_duration += static_cast<int>(base_duration);
-            total_traffic_duration += static_cast<int>(traffic_duration);
-        }
-
-        return Route{
-            .steps = std::move(steps),
-            .distance_meters = total_distance,
-            .duration_seconds = total_duration,
-            .polyline = mergePolylines(steps),
-            .traffic_duration_seconds = total_traffic_duration,
-            .warnings = {},
-        };
-    }
-};
-
-/// Find alternative routes that are meaningfully different.
-/// Uses plateau method to find diverse paths.
-class AlternativeRouteFinder {
-public:
-    explicit AlternativeRouteFinder(ContractionHierarchyRouter& router)
-        : router_(router), similarity_threshold_(0.5) {}
-
-    /// Find up to 'count' meaningfully different routes.
-    std::vector<Route> findAlternatives(
-        std::pair<double, double> origin,
-        std::pair<double, double> destination,
-        TravelMode mode,
-        int count = 3
-    ) {
-        std::vector<Route> alternatives;
-
-        // Get primary route
-        alternatives.push_back(router_.findRoute(origin, destination, mode));
-
-        // Find alternatives using via points
-        for (int via_node : findViaCandidates(origin, destination, mode)) {
-            auto alt = routeVia(origin, destination, via_node, mode);
-            if (alt.has_value() && !tooSimilar(*alt, alternatives)) {
-                alternatives.push_back(std::move(*alt));
-                if (static_cast<int>(alternatives.size()) >= count) break;
-            }
-        }
-        return alternatives;
-    }
-
-private:
-    ContractionHierarchyRouter& router_;
-    double similarity_threshold_;
-
-    /// Check if route is too similar to existing routes.
-    bool tooSimilar(const Route& route, const std::vector<Route>& existing) {
-        auto route_edges = routeToEdgeSet(route);
-
-        for (const auto& other : existing) {
-            auto other_edges = routeToEdgeSet(other);
-
-            size_t intersection = 0;
-            for (const auto& e : route_edges) {
-                if (other_edges.count(e)) ++intersection;
-            }
-
-            std::unordered_set<std::pair<int, int>, PairHash> union_set(
-                route_edges.begin(), route_edges.end());
-            union_set.insert(other_edges.begin(), other_edges.end());
-
-            double overlap = static_cast<double>(intersection) / union_set.size();
-            if (overlap > similarity_threshold_) return true;
-        }
-        return false;
-    }
-};
-```
-
----
-
-## Real-Time Traffic
-
-```mermaid
-graph TD
-    subgraph Sources["Data Sources"]
-        Android["Android Devices"]
-        iOS["iOS Devices"]
-        Waze["Waze Reports"]
-    end
-
-    Android --> Stream
-    iOS --> Stream
-    Waze --> Stream
-    Stream["Location Updates Stream<br/>(Anonymized lat/lng, speed, heading)"]
-
-    Stream --> RawGPS["Raw GPS"]
-    RawGPS --> MapMatch["Map Match"]
-    MapMatch --> SpeedAgg["Speed Aggregate"]
-    SpeedAgg --> SegSpeed["Segment Speed"]
-
-    SegSpeed --> Output["Traffic Layer Output"]
-```
-
-**Traffic Layer Output:**
-
-| Speed Ratio | Color  | Edge Weight Multiplier     |
-|-------------|--------|----------------------------|
-| > 0.8       | Green  | 1.0 (free flow)            |
-| 0.5 - 0.8   | Yellow | 1.3                        |
-| 0.25 - 0.5  | Orange | 2.0                        |
-| < 0.25      | Red    | 3.0+ (severe congestion)   |
-
-### Traffic Service Implementation
-
-```go
-package traffic
-
-import (
-	"fmt"
-	"sort"
-	"sync"
-	"time"
-
-	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
-)
-
-// TrafficSegment holds real-time speed data for a road segment.
-type TrafficSegment struct {
-	SegmentID     string
-	SpeedKmh      float64
-	FreeFlowSpeed float64
-	Confidence    float64
-	UpdatedAt     int64
-}
-
-// TrafficIncident represents a traffic event such as an accident.
-type TrafficIncident struct {
-	IncidentID   string
-	Location     [2]float64
-	IncidentType string // "accident", "construction", "road_closure"
-	Severity     int    // 1-5
-	Description  string
-	StartTime    int64
-	EndTime      *int64
-}
-
-// TrafficService aggregates real-time traffic data from device probes
-// and updates edge weights for routing.
-type TrafficService struct {
-	consumer      *kafka.Consumer
-	segments      SegmentStore
-	incidents     IncidentStore
-
-	// Guards the in-memory aggregation windows.
-	mu            sync.RWMutex
-	windows       map[string][]speedSample
-
-	windowSeconds int
-	minSamples    int
-}
-
-type speedSample struct {
-	Speed     float64
-	Timestamp int64
-}
-
-// NewTrafficService creates a TrafficService that reads from Kafka.
-func NewTrafficService(
-	consumer *kafka.Consumer,
-	segments SegmentStore,
-	incidents IncidentStore,
-) *TrafficService {
-	return &TrafficService{
-		consumer:      consumer,
-		segments:      segments,
-		incidents:     incidents,
-		windows:       make(map[string][]speedSample),
-		windowSeconds: 120, // 2-minute windows
-		minSamples:    5,
-	}
-}
-
-// ProcessLocationUpdate processes an incoming location update from a device.
-func (ts *TrafficService) ProcessLocationUpdate(
-	deviceID string, // Anonymized
-	lat, lng float64,
-	speedMps float64,
-	heading float64,
-	timestamp int64,
-) error {
-	// Map match to road segment
-	segmentID, err := ts.mapMatch(lat, lng, heading)
-	if err != nil || segmentID == "" {
-		return err // Couldn't match to road
-	}
-
-	// Add to aggregation window
-	windowKey := ts.getWindowKey(segmentID, timestamp)
-
-	ts.mu.Lock()
-	ts.windows[windowKey] = append(ts.windows[windowKey], speedSample{
-		Speed:     speedMps * 3.6, // Convert m/s to km/h
-		Timestamp: timestamp,
-	})
-	ts.mu.Unlock()
-
-	return nil
-}
-
-// AggregateWindow is called when an aggregation window closes.
-// It computes median speed for the segment.
-func (ts *TrafficService) AggregateWindow(windowKey string) error {
-	segmentID, _ := ts.parseWindowKey(windowKey)
-
-	ts.mu.RLock()
-	samples := ts.windows[windowKey]
-	ts.mu.RUnlock()
-
-	if len(samples) < ts.minSamples {
-		return nil // Not enough data
-	}
-
-	// Compute median speed (robust to outliers)
-	speeds := make([]float64, len(samples))
-	for i, s := range samples {
-		speeds[i] = s.Speed
-	}
-	sort.Float64s(speeds)
-	medianSpeed := speeds[len(speeds)/2]
-
-	// Get free flow speed for segment
-	segmentInfo, err := ts.segments.GetSegment(segmentID)
-	if err != nil {
-		return fmt.Errorf("get segment: %w", err)
-	}
-	freeFlow := segmentInfo.SpeedLimit * 0.95 // 95% of limit is free flow
-
-	// Calculate confidence based on sample count
-	confidence := float64(len(samples)) / 20.0
-	if confidence > 1.0 {
-		confidence = 1.0
-	}
-
-	traffic := TrafficSegment{
-		SegmentID:     segmentID,
-		SpeedKmh:      medianSpeed,
-		FreeFlowSpeed: freeFlow,
-		Confidence:    confidence,
-		UpdatedAt:     samples[0].Timestamp,
-	}
-
-	return ts.segments.UpdateTraffic(traffic)
-}
-
-// GetTrafficWeights returns traffic-adjusted edge weights for a path.
-// Returns speed in km/h for each edge.
-func (ts *TrafficService) GetTrafficWeights(
-	path []int,
-	departureTime int64,
-) (map[[2]int]float64, error) {
-	weights := make(map[[2]int]float64)
-
-	for i := 0; i+1 < len(path); i++ {
-		u, v := path[i], path[i+1]
-		segmentID := fmt.Sprintf("%d_%d", u, v)
-
-		traffic, err := ts.segments.GetTraffic(segmentID)
-		if err == nil && traffic != nil && traffic.Confidence > 0.5 {
-			weights[[2]int{u, v}] = traffic.SpeedKmh
-		} else {
-			predicted, err := ts.predictSpeed(segmentID, departureTime)
-			if err != nil {
-				return nil, err
-			}
-			weights[[2]int{u, v}] = predicted
-		}
-	}
-	return weights, nil
-}
-
-// predictSpeed uses historical patterns to predict speed.
-// Uses day-of-week and time-of-day patterns.
-func (ts *TrafficService) predictSpeed(segmentID string, timeOfDay int64) (float64, error) {
-	patterns, err := ts.segments.GetHistoricalPatterns(segmentID)
-	if err != nil {
-		return 0, err
-	}
-
-	t := time.Unix(timeOfDay, 0).UTC()
-	dayOfWeek := int(t.Weekday())
-	bucket := t.Hour()*4 + t.Minute()/15
-
-	if dayPatterns, ok := patterns[dayOfWeek]; ok {
-		if speed, ok := dayPatterns[bucket]; ok {
-			return speed, nil
-		}
-	}
-
-	// Fall back to segment speed limit
-	segment, err := ts.segments.GetSegment(segmentID)
-	if err != nil {
-		return 0, err
-	}
-	return segment.SpeedLimit * 0.7, nil // Assume 70% of limit
-}
-
-// TrafficTileGenerator generates traffic overlay tiles for map display.
-type TrafficTileGenerator struct {
-	traffic *TrafficService
-	tiles   *TileService
-
-	// Color mapping: speed ratio range -> hex color
-	colors []struct {
-		minR, maxR float64
-		color      string
-	}
-}
-
-// NewTrafficTileGenerator creates a generator with standard color thresholds.
-func NewTrafficTileGenerator(traffic *TrafficService, tiles *TileService) *TrafficTileGenerator {
-	return &TrafficTileGenerator{
-		traffic: traffic,
-		tiles:   tiles,
-		colors: []struct {
-			minR, maxR float64
-			color      string
-		}{
-			{0.8, 1.0, "#00FF00"},  // Green - free flow
-			{0.5, 0.8, "#FFFF00"},  // Yellow - slow
-			{0.25, 0.5, "#FFA500"}, // Orange - heavy
-			{0.0, 0.25, "#FF0000"}, // Red - severe
-		},
-	}
-}
-
-// GenerateTrafficTile generates a traffic overlay tile.
-func (tg *TrafficTileGenerator) GenerateTrafficTile(coord TileCoordinate) ([]byte, error) {
-	latMin, lonMin, latMax, lonMax := coord.ToBBox()
-	bbox := [4]float64{latMin, lonMin, latMax, lonMax}
-
-	segments, err := tg.tiles.GetRoadSegments(bbox)
-	if err != nil {
-		return nil, err
-	}
-
-	var features []map[string]interface{}
-	for _, seg := range segments {
-		traffic, err := tg.traffic.segments.GetTraffic(seg.ID)
-		if err != nil || traffic == nil {
-			continue
-		}
-
-		ratio := traffic.SpeedKmh / traffic.FreeFlowSpeed
-		color := tg.getColor(ratio)
-
-		features = append(features, map[string]interface{}{
-			"type":     "Feature",
-			"geometry": seg.Geometry,
-			"properties": map[string]interface{}{
-				"color":       color,
-				"speed_ratio": ratio,
-				"layer":       "traffic",
-			},
-		})
-	}
-
-	return tg.buildTrafficTile(features, coord)
-}
-
-func (tg *TrafficTileGenerator) getColor(ratio float64) string {
-	for _, c := range tg.colors {
-		if ratio >= c.minR && ratio < c.maxR {
-			return c.color
-		}
-	}
-	return "#FF0000" // Default to red
-}
-```
-
----
-
-## Geocoding & Places
-
-```go
-package geocoding
-
-import (
-	"sort"
-	"strings"
-
-	"github.com/golang/geo/s2"
-)
-
-// GeocodingResult represents a single geocoding match.
-type GeocodingResult struct {
-	FormattedAddress string
-	Location         s2.LatLng
-	PlaceID          string
-	Types            []string
-	Confidence       float64
-	Components       map[string]string
-}
-
-// Place represents a physical location in the index.
-type Place struct {
-	PlaceID          string
-	Name             string
-	Location         s2.LatLng
-	Types            []string
-	Rating           *float64
-	UserRatingsTotal *int
-	Address          string
-	OpeningHours     map[string]interface{}
-	Components       map[string]string
-}
-
-// GeocodingService converts addresses to coordinates (geocoding) and
-// coordinates to addresses (reverse geocoding).
-type GeocodingService struct {
-	parser AddressParser
-	places PlaceIndex
-	s2idx  S2Index
-}
-
-// NewGeocodingService creates a GeocodingService.
-func NewGeocodingService(parser AddressParser, places PlaceIndex, s2idx S2Index) *GeocodingService {
-	return &GeocodingService{parser: parser, places: places, s2idx: s2idx}
-}
-
-// Geocode converts an address string to coordinates.
-// Uses probabilistic parsing to handle various formats.
-func (gs *GeocodingService) Geocode(
-	address string,
-	region *string,
-	bounds *[4]float64,
-) ([]GeocodingResult, error) {
-	// Parse address into components
-	parsed, err := gs.parser.Parse(address)
-	if err != nil {
-		return nil, err
-	}
-
-	// Search for matching places
-	candidates, err := gs.findCandidates(parsed, region, bounds)
-	if err != nil {
-		return nil, err
-	}
-
-	// Score and rank candidates
-	type scored struct {
-		place Place
-		score float64
-	}
-	var scoredList []scored
-	for _, c := range candidates {
-		scoredList = append(scoredList, scored{c, gs.scoreCandidate(c, parsed)})
-	}
-	sort.Slice(scoredList, func(i, j int) bool {
-		return scoredList[i].score > scoredList[j].score
-	})
-
-	// Convert to results (top 5)
-	limit := 5
-	if len(scoredList) < limit {
-		limit = len(scoredList)
-	}
-	results := make([]GeocodingResult, 0, limit)
-	for _, s := range scoredList[:limit] {
-		results = append(results, GeocodingResult{
-			FormattedAddress: gs.formatAddress(s.place),
-			Location:         s.place.Location,
-			PlaceID:          s.place.PlaceID,
-			Types:            s.place.Types,
-			Confidence:       s.score,
-			Components:       s.place.Components,
-		})
-	}
-	return results, nil
-}
-
-// ReverseGeocode converts coordinates to an address.
-// Uses S2 geometry for efficient spatial lookup.
-func (gs *GeocodingService) ReverseGeocode(
-	lat, lng float64,
-	resultTypes []string,
-) ([]GeocodingResult, error) {
-	// Get S2 cell covering this point
-	ll := s2.LatLngFromDegrees(lat, lng)
-	cellID := s2.CellIDFromLatLng(ll)
-
-	// Find nearest address points
-	nearby, err := gs.places.FindNearby(
-		cellID,
-		100, // radius_meters
-		[]string{"street_address", "route", "locality"},
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	if len(nearby) == 0 {
-		// Expand search radius
-		nearby, err = gs.places.FindNearby(cellID, 1000, resultTypes)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// Sort by distance
-	type placeWithDist struct {
-		place    Place
-		distance float64
-	}
-	var withDist []placeWithDist
-	for _, p := range nearby {
-		dist := haversineDistance(ll, p.Location)
-		withDist = append(withDist, placeWithDist{p, dist})
-	}
-	sort.Slice(withDist, func(i, j int) bool {
-		return withDist[i].distance < withDist[j].distance
-	})
-
-	// Build results (top 5)
-	limit := 5
-	if len(withDist) < limit {
-		limit = len(withDist)
-	}
-	results := make([]GeocodingResult, 0, limit)
-	for _, pd := range withDist[:limit] {
-		results = append(results, GeocodingResult{
-			FormattedAddress: gs.formatAddress(pd.place),
-			Location:         pd.place.Location,
-			PlaceID:          pd.place.PlaceID,
-			Types:            pd.place.Types,
-			Confidence:       1.0 - (pd.distance / 1000), // Decay with distance
-			Components:       pd.place.Components,
-		})
-	}
-	return results, nil
-}
-
-// findCandidates searches for candidate matches for a parsed address.
-func (gs *GeocodingService) findCandidates(
-	parsed map[string]string,
-	region *string,
-	bounds *[4]float64,
-) ([]Place, error) {
-	var queries []map[string]string
-
-	// Try exact match first
-	if parsed["street_number"] != "" && parsed["route"] != "" {
-		queries = append(queries, map[string]string{
-			"street_number": parsed["street_number"],
-			"route":         parsed["route"],
-			"locality":      parsed["locality"],
-		})
-	}
-
-	// Try without number
-	if parsed["route"] != "" {
-		queries = append(queries, map[string]string{
-			"route":    parsed["route"],
-			"locality": parsed["locality"],
-		})
-	}
-
-	// Try just locality
-	if parsed["locality"] != "" {
-		queries = append(queries, map[string]string{
-			"locality":            parsed["locality"],
-			"administrative_area": parsed["administrative_area"],
-		})
-	}
-
-	var candidates []Place
-	for _, q := range queries {
-		results, err := gs.places.Search(q, region, bounds, 10)
-		if err != nil {
-			return nil, err
-		}
-		candidates = append(candidates, results...)
-	}
-	return candidates, nil
-}
-
-// PlacesService searches and retrieves place information.
-// Uses S2 geometry for spatial indexing.
-type PlacesService struct {
-	bigtable     BigtableClient
-	s2idx        S2Index
-	autocomplete AutocompleteIndex
-}
-
-// NewPlacesService creates a PlacesService.
-func NewPlacesService(bt BigtableClient, s2idx S2Index, ac AutocompleteIndex) *PlacesService {
-	return &PlacesService{bigtable: bt, s2idx: s2idx, autocomplete: ac}
-}
-
-// NearbySearch finds places near a location.
-// Uses S2 covering to efficiently query spatial index.
-func (ps *PlacesService) NearbySearch(
-	location s2.LatLng,
-	radiusMeters int,
-	types []string,
-	keyword *string,
-) ([]Place, error) {
-	// Get S2 cells covering the search area
-	cellID := s2.CellIDFromLatLng(location)
-	covering := ps.s2idx.GetCovering(cellID, radiusMeters, 8)
-
-	// Query each cell
-	var allPlaces []Place
-	for _, cid := range covering {
-		places, err := ps.bigtable.Scan("places", "s2:"+cid.ToToken(), types)
-		if err != nil {
-			return nil, err
-		}
-		allPlaces = append(allPlaces, places...)
-	}
-
-	// Filter by actual distance and keyword
-	var results []Place
-	for _, p := range allPlaces {
-		dist := haversineDistance(location, p.Location)
-		if dist > float64(radiusMeters) {
-			continue
-		}
-		if keyword != nil && !strings.Contains(
-			strings.ToLower(p.Name), strings.ToLower(*keyword),
-		) {
-			continue
-		}
-		if len(types) > 0 && !hasAnyType(p.Types, types) {
-			continue
-		}
-		results = append(results, p)
-	}
-
-	// Sort by relevance (popularity + distance)
-	sort.Slice(results, func(i, j int) bool {
-		return ps.rankPlace(results[i], location) < ps.rankPlace(results[j], location)
-	})
-
-	if len(results) > 20 {
-		results = results[:20]
-	}
-	return results, nil
-}
-
-// TextSearch searches places by text query.
-// Combines text search with optional location bias.
-func (ps *PlacesService) TextSearch(
-	query string,
-	location *s2.LatLng,
-	radiusMeters *int,
-) ([]Place, error) {
-	// Text search in index
-	textResults, err := ps.bigtable.TextSearch("places", query)
-	if err != nil {
-		return nil, err
-	}
-
-	if location != nil && radiusMeters != nil {
-		// Filter to radius
-		var filtered []Place
-		for _, p := range textResults {
-			if haversineDistance(*location, p.Location) <= float64(*radiusMeters) {
-				filtered = append(filtered, p)
-			}
-		}
-		// Re-rank with location bias
-		sort.Slice(filtered, func(i, j int) bool {
-			return ps.rankPlace(filtered[i], *location) < ps.rankPlace(filtered[j], *location)
-		})
-		return filtered, nil
-	}
-	return textResults, nil
-}
-
-// Autocomplete provides autocomplete suggestions as the user types.
-// Optimized for low latency with prefix search.
-func (ps *PlacesService) Autocomplete(
-	input string,
-	sessionToken string,
-	location *s2.LatLng,
-	types []string,
-) ([]map[string]interface{}, error) {
-	// Get prefix matches from trie-based index
-	suggestions, err := ps.autocomplete.PrefixSearch(
-		strings.ToLower(input), 10, types,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	// Add location bias if provided
-	if location != nil {
-		for _, s := range suggestions {
-			loc := s["location"].(s2.LatLng)
-			s["distance_meters"] = haversineDistance(*location, loc)
-		}
-		sort.Slice(suggestions, func(i, j int) bool {
-			popI := suggestions[i]["popularity"].(float64)
-			popJ := suggestions[j]["popularity"].(float64)
-			distI := suggestions[i]["distance_meters"].(float64)
-			distJ := suggestions[j]["distance_meters"].(float64)
-			return (-popI + distI/10000) < (-popJ + distJ/10000)
-		})
-	}
-
-	if len(suggestions) > 5 {
-		suggestions = suggestions[:5]
-	}
-	return suggestions, nil
-}
-```
-
----
-
-## Key Metrics & Scale
-
-| Metric | Value |
-|--------|-------|
-| **Monthly Active Users** | 1B+ |
-| **Countries Covered** | 220+ |
-| **Road Network** | 25M+ miles mapped |
-| **Street View Coverage** | 10M+ miles |
-| **Daily Routing Requests** | Billions |
-| **Route Calculation Time** | < 500ms |
-| **Tile Requests/Second** | Millions |
-| **Traffic Update Latency** | < 2 minutes |
-| **Location Updates/Day** | Billions |
-| **Places in Database** | 200M+ |
-
----
-
-## Production Insights
-
-### Contraction Hierarchy Pre-computation
-- CH pre-processing runs offline on the full road graph (~1B edges) and takes hours on a large cluster, but the resulting overlay graph fits in memory on each routing server (~10-20 GB for a continent).
-- Node ordering uses edge-difference heuristic: contract the node that adds the fewest shortcuts first. A bad ordering can blow up the overlay size by 10x, so iterative re-ordering passes are standard.
-- Partition-based CH (PCH) splits the graph into cells; shortcuts only span cell boundaries, allowing incremental updates when a road segment changes without a full rebuild. Google's internal system rebuilds partitions on a rolling basis, typically completing a full global refresh within 24 hours.
-- Live traffic is layered on top of the static CH by customizable edge weights (CCH). The topology stays fixed; only the weight table is swapped, which takes milliseconds per query.
-
-### S2 Cells vs Geohash
-- S2 uses a Hilbert curve projection onto six cube faces, guaranteeing cells of roughly equal area everywhere on Earth. Geohash cells stretch significantly near the poles.
-- S2 cell levels 12-16 (roughly 3 km^2 down to 0.5 m^2) are used for place indexing. Level 12 covers city-block search; level 16 is fine enough for "which side of the street" disambiguation.
-- S2 coverings avoid the "boundary problem" of geohash: a circular query produces a tight set of cells with no false-negative strips along hash boundaries, eliminating the need for multi-prefix queries.
-- The `github.com/golang/geo/s2` library mirrors the C++ reference implementation and is used in production systems like CockroachDB and Uber's H3 comparison benchmarks.
-
-### Traffic Probe Anonymization and HMM Map Matching
-- Raw GPS traces are truncated to grid cells (~100 m) before leaving the device and are assigned rotating, ephemeral identifiers so that no server-side join can reconstruct a user's full trip.
-- Map matching uses a Hidden Markov Model: each GPS ping is an observation; road segments are hidden states; emission probability decays with distance from the ping, and transition probability penalizes U-turns and impossible segment jumps.
-- The Viterbi algorithm finds the most likely segment sequence in O(T * S^2) where T is the number of pings and S is the candidate segment count per ping (typically 3-5 after spatial filtering).
-- Aggregated segment speeds are only published when the sample count exceeds a k-anonymity threshold (typically k >= 5 probes within a 2-minute window) to prevent re-identification of individual drivers on low-traffic roads.
-- Speed outliers (e.g., emergency vehicles, GPS drift) are trimmed using a median-based approach rather than mean, since median is robust to the heavy-tailed noise distribution common in urban canyons and tunnels.
-
----
-
-## Key Takeaways
-
-1. **Tile-based rendering** - Pyramid of pre-rendered tiles at each zoom level. Vector tiles enable client-side styling and smooth zoom.
-
-2. **Contraction hierarchies** - Pre-compute shortcuts to reduce routing from O(n) to O(log n). Critical for real-time route calculation.
-
-3. **S2 geometry** - Hierarchical spatial indexing for efficient geo queries. Cells at multiple levels enable range queries and covering.
-
-4. **Crowd-sourced traffic** - Aggregate anonymous device location updates. Map matching converts GPS to road segments.
-
-5. **Multi-scale detail** - Different map features visible at different zoom levels. Roads simplify at lower zooms, POIs appear at higher zooms.
-
-6. **Edge weight updates** - Traffic conditions update edge weights in real-time. Routing uses current weights, not just distance.
-
-7. **Probabilistic geocoding** - Parse addresses into components, score multiple interpretations, return ranked candidates.
-
-8. **Extensive pre-computation** - Tile generation, routing hierarchies, traffic patterns computed offline. Online queries just look up results.
+The data plane serves tile, place, geocode, route, and navigation requests. The publication control plane validates source changes, builds indexes, trains/evaluates models, produces signed manifests, rolls versions through cells, and can stop or roll back a release. Live traffic is a streaming data plane with its own expiry and quality controls, not an administrative configuration plane.
+
+## Map-tile path
+
+**Reference design.** For a viewport request:
+
+1. The client converts bounds to tile coordinates at zoom `z` and requests only intersecting tiles.
+2. The request key includes tile coordinate, map-data version, style version, language/region policy, layer set, and format.
+3. An edge cache serves immutable versioned tiles. A miss goes to a regional tile service.
+4. The service retrieves a prebuilt vector bundle or queries a spatial feature index, clips geometry with a buffer, simplifies it for the zoom, applies visibility policy, and encodes the tile.
+5. The client verifies response integrity, renders vectors, and prefetches a bounded ring in the direction of motion.
+
+Versioned URLs allow long cache lifetimes. Publishing a new manifest changes which version new sessions request; old cached objects remain valid for in-flight sessions. This avoids global cache invalidation. The canonical design is in [CDN architecture](../06-scaling/04-cdn-architecture.md) and [cache invalidation](../04-caching/02-cache-invalidation.md).
+
+### Tile-boundary correctness
+
+Features crossing tile edges must be clipped consistently and rendered with buffer overlap, or roads and labels flicker at seams. Label placement may need a higher-level metatile or deterministic ownership rule so adjacent tiles do not duplicate a label.
+
+## Geocoding and place search
+
+**Reference design.** Normalize a query using locale-aware tokenization, but retain the raw form for audit and learning. Generate candidates from address components, place names, aliases, categories, and spatial proximity; rank them using text match, geographic context, prominence, freshness, and user-safe personalization. Return stable place IDs and structured ambiguity rather than forcing a low-confidence single answer.
+
+**Documented, current Routes API.** Google recommends Place IDs for routing because raw coordinates may snap to a nearby road that is not a valid access point, while address strings require geocoding first. [Google, route waypoint locations](https://developers.google.com/maps/documentation/routes/specify_location-rm)
+
+**Inference.** Place identity and map geometry therefore need separate lifecycles. A business can move or have multiple entrances without becoming an entirely unrelated text document; an entrance can be routable for pedestrians but not cars.
+
+The canonical search mechanics are covered in [inverted indexes](../14-search-systems/01-inverted-indexes.md), [ranking](../14-search-systems/04-ranking-algorithms.md), and [typeahead](../14-search-systems/06-typeahead-autocomplete.md).
+
+## Route and ETA flow
+
+**Reference design.** A traffic-aware route request proceeds as follows:
+
+1. Resolve origin, destination, and waypoints to candidate access nodes rather than merely nearest geometry.
+2. Select a graph publication and restrictions valid for departure time and travel mode.
+3. Generate a bounded set of candidate corridors using a precomputed routing hierarchy or small-subgraph extractor.
+4. Overlay live incidents and traffic features that have not expired.
+5. Compute path costs over candidates, including turn restrictions, toll/ferry policy, and time-dependent traversal.
+6. Predict ETA for complete candidates with a model version compatible with the graph/features.
+7. Rank candidates by the declared objective; preserve meaningful alternatives rather than tiny variations.
+8. Return route geometry, instructions, static duration, traffic-aware duration, provenance/freshness metadata, and fallback status.
+9. During navigation, map-match location observations and reroute only when expected benefit exceeds churn and safety costs.
+
+Shortest path and best route are different. A route objective may combine expected travel time, uncertainty, road suitability, closures, toll preferences, walking distance, transfer count, fuel/energy, and safety constraints. The weights are product policy and must be versioned.
+
+## Partitioning and locality
+
+**Reference design.** Use multiple partition spaces:
+
+- tile coordinate and version for rendering objects;
+- hierarchical spherical cells for nearby places and spatial joins;
+- graph regions with boundary overlays for routing;
+- place ID for entity authority;
+- road/supersegment ID and time bucket for traffic features.
+
+No one partitioning scheme is optimal for all queries. Graph partitioning minimizes cross-region edges; spatial cells support containment/proximity; tiles match viewport delivery. Maintain translation tables and version compatibility rather than forcing all identities into tile keys.
+
+Routing across partitions can use a hierarchy: local access graph, regional boundary graph, long-distance backbone, then destination-region expansion. A partition must include a halo of neighboring geometry so queries near boundaries do not fail or produce discontinuities.
+
+## Capacity and cost model
+
+### Viewport amplification: illustrative assumptions
+
+**Reference design.** Assume 1.5 million active map sessions at peak. Each session requests 10 visible/prefetch tiles on initial view and then 1.2 tiles/s while moving. If 20% initialize in any given second:
+
+$$
+tile\ requests/s = 1.5M \times (0.2 \times 10 + 1.2) = 4.8M
+$$
+
+At a 96% edge-cache hit rate, origin load is:
+
+$$
+4.8M \times 0.04 = 192{,}000\ requests/s
+$$
+
+Improving hit rate from 96% to 97% reduces origin requests by 48,000/s. Cache keys must not fragment unnecessarily by parameters that do not affect bytes, but omitting language, policy, or style inputs can return incorrect tiles.
+
+### Routing compute: illustrative assumptions
+
+Suppose 80,000 route requests/s, 2.4 candidates/request, and 3.5 ms CPU/candidate after precomputation:
+
+$$
+CPU\ cores_{raw} = 80{,}000 \times 2.4 \times 0.0035 = 672
+$$
+
+At 55% target utilization, the CPU floor is about 1,222 cores before geocoding, feature fetch, model inference, serialization, redundancy, or failure headroom.
+
+Route matrices amplify as `origins × destinations`. A 25-by-25 request means 625 route elements. Public Google documentation, checked in July 2026, limits non-transit route-matrix items to 625 and traffic-aware-optimal requests to 100, illustrating why cost-based admission is necessary. [Google, route matrix limits](https://developers.google.com/maps/documentation/javascript/routes/get-a-route-matrix)
+
+### Traffic state: illustrative assumptions
+
+At 60 million accepted segment observations/minute, 48 bytes after aggregation, and replication factor 3:
+
+$$
+ingress \approx \frac{60M \times 48 \times 3}{60} = 144\ MB/s
+$$
+
+The raw-event rate may be much higher; privacy aggregation and retention dominate both design and cost. These figures are illustrative, not Google measurements.
+
+## Failure trace: poisoned closure and mixed versions
+
+**Reference-design trace.** A source incorrectly marks a major bridge closed:
+
+1. The ingestion pipeline receives the change with source identity and event time.
+2. Validation detects that it conflicts with authoritative road data but not with a burst of user reports; confidence remains below automatic-publication threshold.
+3. The incident is shadow-applied to a canary cell. Route diffs show a sudden regional detour and ETA increase beyond expected bounds.
+4. The release controller blocks global publication and sends the case to review.
+5. Meanwhile an unrelated graph version `g+1` rolls out. Traffic features keyed to `g` are translated only through an approved compatibility map; unmatched edges fall back to historical cost.
+6. One cell accidentally loads `g+1` with an incompatible ETA feature schema. Startup validation rejects the manifest, and routing stays on the last known-good bundle.
+7. Operators remove the false incident; append-only provenance preserves who supplied it, what validation occurred, and which canary queries changed.
+
+Without confidence gates, one false report can redirect a city. Without version manifests, the service can combine new graph IDs with old traffic/model features and produce plausible but wrong ETAs.
+
+## Failure trace: traffic stream outage
+
+**Reference design.** When live traffic processing stops, route serving should not block behind an ever-growing consumer backlog. Mark the watermark stale, stop presenting values as live, use historical/static duration, expose fallback metadata, and shed expensive optimal-traffic computations. On recovery, process only data that remains useful; expired observations are not worth replaying ahead of current traffic. This is a [backpressure](../06-scaling/07-backpressure.md) and freshness-policy problem, not merely a Kafka lag alert.
+
+## Multi-region design
+
+**Reference design.** Replicate immutable map bundles and models to independent regional cells, then direct queries to a nearby cell. A cell activates a bundle only after hashes, schema compatibility, graph connectivity samples, and model-feature contracts pass. Region-specific legal/cartographic policy is an explicit manifest dimension.
+
+Live traffic has a short useful life. Replicate aggregated regional features to the cells that serve that area; losing one ingest region may cause a visible freshness downgrade without preventing static routing. The publication authority should be strongly fenced, while immutable read serving can be active-active. Keep enough compute and cached data for regional evacuation; see [multi-region architecture](../06-scaling/09-multi-region-architecture.md).
+
+## Privacy, security, and abuse
+
+**Documented, 2020 high-level description.** Google stated that aggregate location data from navigation can be used to understand traffic. The public article describes the aggregate use but not a full retention or anonymization protocol. [Google Maps, traffic and routing](https://blog.google/products-and-platforms/products/maps/google-maps-101-how-ai-helps-predict-traffic-and-determine-routes/)
+
+**Reference design.** Separate account identity from traffic aggregation as early as possible; use coarse time/space aggregation, minimum cohort thresholds, bounded retention, access auditing, and privacy review for new features. Do not log exact origin/destination pairs in general-purpose traces. Protect API keys with application restrictions, enforce per-project quotas, sign privileged map publications, and treat user edits and incident reports as adversarial input.
+
+Threats include location stalking, scraping place inventories, fake closures, malicious map edits, API-key theft, and route manipulation. Abuse defenses must avoid making low-volume rural areas permanently invisible; privacy thresholds and coverage quality need joint evaluation.
+
+## Observability and validation
+
+**Reference design.** Operate semantic quality alongside service health:
+
+- tile cache hit rate by version/style/region, origin render time, missing layers, and seam errors;
+- geocoder ambiguity, no-result rate, correction rate, and locale bias;
+- route search expansion, candidate count, fallback rate, illegal-edge findings, and route churn;
+- ETA residual by horizon, region, mode, road class, and traffic regime;
+- traffic event-time watermark, expired-feature fraction, and sensor/source disagreement;
+- publication age, canary diff size, validation failures, and rollback time;
+- graph connectivity, turn-restriction consistency, and orphan place entrances;
+- privacy-budget/threshold outcomes and privileged data access.
+
+An ETA average can hide systematic harm. Track quantiles and calibration: among routes predicted to take 20 minutes, how often do they actually fall in the declared uncertainty interval? Monitor map freshness separately from latency; a 20 ms response built from a month-old closure is not healthy.
+
+Verification should include golden geographic fixtures, property tests around the antimeridian/poles, graph reachability checks, adversarial source edits, version-skew startup tests, replay of historic traffic days, and regional publication rollback. Online experiments need safety guardrails: route quality cannot be judged only by click-through or reroute acceptance.
+
+## Evolution and migration
+
+**Reference design.** Evolve immutable bundles rather than mutating a world database in place:
+
+1. build graph/tile/place version `n+1` beside `n`;
+2. validate topology, schemas, source provenance, and size deltas offline;
+3. shadow representative queries and compare routes, ETAs, and tiles;
+4. canary by serving cell and geography;
+5. publish a signed manifest atomically;
+6. retain `n` for rollback and in-flight navigation sessions;
+7. garbage-collect old bundles only after client/session and audit retention windows close.
+
+For model changes, pin feature schema, preprocessing code, graph version range, and model artifact together. Shadow evaluation should include route ranking changes, not only lower ETA error on the already selected route; changing the predictor changes user behavior and therefore future training data. See [model deployment](../16-ml-systems/06-model-deployment-rollouts.md), [monitoring](../16-ml-systems/04-model-monitoring.md), and [dataset versioning](../16-ml-systems/11-dataset-management-versioning.md).
+
+## Transferable lessons
+
+1. One “map version” is really a compatibility contract across several independently refreshed datasets.
+2. Tile coordinates, spatial cells, place IDs, and graph partitions solve different locality problems.
+3. Separate candidate route generation from traffic/ETA evaluation and final policy ranking.
+4. Make freshness and fallback visible; stale dynamic data should degrade, not lie.
+5. Precomputation buys online latency at the cost of publication complexity and version storage.
+6. Validate semantic diffs in canaries before worldwide map publication.
+7. Treat location data and crowdsourced updates as sensitive, adversarial inputs.
+
+## Primary sources
+
+- [Google Maps Platform documentation](https://developers.google.com/maps/documentation)
+- [Google Maps JavaScript API: map and tile coordinates](https://developers.google.com/maps/documentation/javascript/coordinates)
+- [Google Maps Routes API: route-matrix response and fallback](https://developers.google.com/maps/documentation/routes/reference/rest/v2/TopLevel/computeRouteMatrix)
+- [Google Maps: how traffic prediction and routing work, 2020](https://blog.google/products-and-platforms/products/maps/google-maps-101-how-ai-helps-predict-traffic-and-determine-routes/)
+- [Google DeepMind: traffic prediction with graph neural networks, 2020](https://deepmind.google/blog/traffic-prediction-with-advanced-graph-neural-networks/)
+- [Derrow-Pinion et al.: ETA Prediction with Graph Neural Networks in Google Maps, 2021](https://arxiv.org/abs/2108.11482)
+- [Bast et al.: Fast Routing in Public Transportation Networks Using Transfer Patterns, 2010](https://research.google/pubs/fast-routing-in-very-large-public-transportation-networks-using-transfer-patterns/)
+- [S2 Geometry overview and cell hierarchy](https://s2geometry.io/)

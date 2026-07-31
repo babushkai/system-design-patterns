@@ -1,764 +1,250 @@
-# Delivery Guarantees
+# Delivery Guarantees and Effect Boundaries
 
-## TL;DR
+Delivery guarantees describe uncertainty between producer, broker, consumer, and effect store. A broker can prove that a record was durably appended, fetched, or transactionally written to another broker partition. It cannot, by itself, prove that a payment, email, filesystem write, or unrelated database transaction happened exactly once. Correct design names each atomicity boundary and closes the gaps end to end.
 
-Delivery guarantees define how many times a message will be delivered: at-most-once (may lose), at-least-once (may duplicate), exactly-once (ideal but hard). True exactly-once is extremely difficult; most systems achieve it through at-least-once + idempotent consumers. Understand the guarantees of your messaging system and design consumers accordingly.
+Delivery guarantees are end-to-end contracts over broker semantics, acknowledgement ambiguity, producer retry deduplication, consumer effect commit, and the limits of “exactly once.” [Outbox and Inbox](07-outbox-pattern.md) owns atomic database-to-broker publication and transactional consumer deduplication. [Ordering](03-message-ordering.md) owns sequences. Workflow-specific retries and compensation belong to [Effect Commit Protocols](../18-workflow-job-systems/06-retry-idempotency-compensation.md).
 
----
+## Workload and guarantee contract
 
-## The Three Guarantees
+Draw the complete path:
 
-### At-Most-Once
-
-```
-Message delivered 0 or 1 time
-
-Send ──► Broker ──► Consumer
-           │
-     (no retry on failure)
-
-Possible outcomes:
-  ✓ Delivered once
-  ✗ Never delivered (lost)
-
-Never duplicated
-May be lost
+```text
+source transaction
+  -> producer/relay
+  -> broker leader and replicas
+  -> subscription delivery/checkpoint
+  -> consumer transaction
+  -> external effects
 ```
 
-### At-Least-Once
+For every arrow state:
 
-```
-Message delivered 1 or more times
+- what constitutes success;
+- where durable evidence lives;
+- what a timeout means;
+- whether retries can duplicate;
+- how long deduplication evidence is retained;
+- which failure domains the acknowledgement survives;
+- who reconciles ambiguous outcomes.
 
-Send ──► Broker ──► Consumer
-           │           │
-     (retry if no ack) │
-           │◄────(ack)─┘
+Use precise vocabulary:
 
-Possible outcomes:
-  ✓ Delivered once
-  ✓ Delivered multiple times (retries)
+**At-most-once observation** means a logical delivery is attempted no more than once in the defined scope; loss is possible. **At-least-once observation** means retries continue so a retained message is eventually attempted, but duplicates are possible. **Effectively-once effect** means duplicate attempts converge to one committed logical effect under an idempotency/transaction protocol. **Exactly-once processing** is valid only inside a named transactional domain with defined inputs, outputs, epochs, and retention.
 
-Never lost (if producer retries)
-May be duplicated
-```
+Never shorten these to “exactly once” in an architecture contract.
 
-### Exactly-Once
+## State and invariants
 
-```
-Message delivered exactly 1 time
+Relevant state includes producer identity/epoch/sequence, broker record identity and position, replica commit watermark, delivery/consumer generation, consumer checkpoint, idempotency/inbox record, effect transaction, and reconciliation status.
 
-Requires:
-  - Deduplication at broker or consumer
-  - Transactional processing
-  - Or: At-least-once + idempotency
+Enforce:
 
-Ideal but extremely difficult
-Often simulated rather than true
-```
+**Broker acknowledgement matches replication policy.** A producer success means the record is durably present on the declared failure domains, not merely accepted into one process buffer.
 
----
+**Logical identity survives retry.** Every retry of the same intent carries the same event/idempotency identity; a new intent gets a new identity.
 
-## Failure Scenarios
+**Producer epochs fence old sessions.** A restarted or failed-over producer cannot continue an earlier sequence namespace and overwrite/deduplicate unrelated records.
 
-### Producer Failures
+**Effect and processed marker are atomic where possible.** Recording “done” before the effect can lose work; recording it afterward can duplicate the effect.
 
-```
-Scenario 1: Message lost before broker
-  Producer ──X──► Broker
-  
-  At-most-once: Lost
-  At-least-once: Lost (unless producer retries)
+**Checkpoint follows durable effect.** A consumer does not advance past work whose required effect could still be lost.
 
-Scenario 2: Ack lost
-  Producer ──► Broker ──X──► Producer
-  
-  At-most-once: Producer thinks it failed, doesn't retry
-  At-least-once: Producer retries, duplicate at broker
-```
+**Deduplication retention covers the retry/replay contract.** Expiring identity evidence earlier silently weakens the guarantee.
 
-### Broker Failures
+**Ambiguity is recoverable.** A timeout has a status lookup or reconciliation path; blind retries are not the only option.
 
-```
-Scenario: Broker crashes after receive, before persist
+## Failure windows
 
-  Producer ──► Broker (memory) ──X── (disk)
-  
-  At-most-once: Message lost
-  At-least-once: Producer retries (if no ack received)
+The central ambiguity is the **lost acknowledgement**. Suppose the broker commits event E and sends success, but the response is lost. The producer cannot distinguish committed from uncommitted. Retrying with a new ID creates two logical events; abandoning the attempt can lose it. Retrying with the same identity lets the broker return the existing result.
 
-Solution: Sync to disk before ack, or replicate first
-```
+On the consumer side, suppose the handler writes the effect and crashes before acknowledgement. Redelivery is necessary because the broker cannot know the effect committed. If the effect and inbox marker share one database transaction, the second attempt observes the marker and acknowledges without repeating the mutation. If the effect is an external API, that API must accept the same idempotency key or the workflow must reconcile/compensate.
 
-### Consumer Failures
+Other windows include:
 
-```
-Scenario: Consumer crashes after processing, before ack
+- broker leader acknowledges before required replicas and then fails;
+- producer retry crosses a producer-session/epoch reset;
+- consumer checkpoints a batch before its database commit;
+- broker transaction commits outputs but an external side effect fails;
+- dedup state expires before a delayed replay;
+- failover restores broker data but not the external dedup store;
+- operator replay changes event IDs and defeats identity.
 
-  Broker ──► Consumer (processed) ──X── (ack)
-  
-  At-most-once: N/A (no ack expected)
-  At-least-once: Broker redelivers, processed twice
-```
+Build the protocol around these windows rather than happy-path SDK configuration.
 
----
+## Producer-side semantics
 
-## Implementing At-Most-Once
+### Fire-and-forget
 
-### Fire and Forget
+The producer sends and does not await durable acknowledgement. It minimizes latency and resource use but permits silent loss during client, network, or broker failure. Restrict it to observations whose loss is acceptable and measured, such as sampled diagnostics, not business intent.
 
-```python
-# Producer: Don't wait for ack
-producer.send(message)
-# Continue immediately, don't care if it arrived
+### Confirmed at-least-once publication
 
-# Consumer: Auto-ack before processing
-def consume():
-    message = queue.get(auto_ack=True)  # Ack immediately
-    process(message)  # If this fails, message lost
-```
+The producer waits for a broker acknowledgement matching the replication policy. On timeout it retries the same logical event with bounded backoff/deadline. Without broker deduplication, the log may contain duplicates; consumers still need effect safety.
 
-### Use Cases
+### Idempotent producer session
 
-```
-✓ Metrics and telemetry (loss OK)
-✓ Logging (best effort)
-✓ Real-time displays (stale data acceptable)
-✗ Financial transactions
-✗ State changes
-✗ Anything requiring reliability
-```
+The broker tracks `(producer_id, epoch, sequence)` per partition. A retry of the same sequence returns the existing append; an older epoch is fenced; a gap or conflicting payload is rejected. This prevents duplicates caused by retries within the protocol’s state/retention scope. It does not deduplicate the same business operation emitted under a new producer identity after an application restart unless the stable event ID is also enforced.
 
----
+Producer identity state must be durable enough for failover. If the broker forgets it during restore while the producer assumes it remains valid, the guarantee changes. Include snapshot/backup compatibility and dedup watermark in recovery tests.
 
-## Implementing At-Least-Once
+The strongest database-to-broker producer design is not “retry after commit”; it is a [transactional outbox](07-outbox-pattern.md) or authoritative event log whose relay retries with stable identity.
 
-### Producer Retries
+## Broker durability and replication
 
-```python
-def send_with_retry(message, max_retries=3):
-    for attempt in range(max_retries):
-        try:
-            # Wait for broker acknowledgment
-            ack = producer.send(message, timeout=5000)
-            if ack.success:
-                return True
-        except TimeoutError:
-            if attempt < max_retries - 1:
-                sleep(exponential_backoff(attempt))
-    
-    raise MessageDeliveryError("Failed after retries")
+A leader append passes stages: accepted, written locally, replicated, committed under the quorum/in-sync policy, and retained in a published segment. Producer acknowledgements choose one of these stages. The contract must state whether process crash, node loss, zone loss, and simultaneous failures are covered.
+
+Replication settings are not independent toggles. A quorum acknowledgement is meaningful only if replica membership, failure-domain placement, minimum healthy replicas, and unclean leader-election policy preserve the claimed durability. Allowing an out-of-date replica to become leader restores availability by accepting data loss.
+
+Fsync policy determines power-loss durability; replication does not protect against correlated software deletion or poison writes. Backups/archives and delayed replicas address different failures. Validate checksums and generation manifests during recovery.
+
+Retention bounds redelivery. Once the only retained copy is deleted, at-least-once cannot be honored for a consumer that has not checkpointed it. Tie topic retention to maximum permitted lag/replay, or make lagging subscriptions expire/fail explicitly.
+
+## Consumer acknowledgement strategies
+
+**Acknowledge before effect** gives at-most-once processing: a crash loses work. **Acknowledge after effect** gives at-least-once attempt: a crash after effect can repeat it. **Acknowledge atomically with effect** is possible only when broker progress and effect participate in one transactional domain or when a durable inbox/effect transaction lets redelivery converge.
+
+For batch consumption, process and commit a contiguous prefix. If item 4 fails after items 1–3 commit, do not advance a single checkpoint through item 10 unless individual durable identities allow safe replay. Store per-item inbox state or split the batch.
+
+Acknowledgement tokens contain consumer-group generation/claim generation. A consumer revoked during rebalance cannot move the checkpoint after a new member owns the partition. This prevents progress regression or skipping; it does not eliminate duplicate execution during an unclean handoff.
+
+Cancellation and deadlines matter. If the broker times out a consumer while its database transaction continues, it may redeliver concurrently. The effect store should serialize/idempotently reject the duplicate, and the consumer should stop work when authority/deadline is lost where safe.
+
+## Effectively-once database effects
+
+For an effect in one transactional database, use a uniqueness-constrained inbox:
+
+```text
+BEGIN
+  INSERT inbox(consumer, event_id, received_at)
+    -- unique(consumer, event_id); duplicate means already committed
+  UPDATE domain_state ...
+  UPDATE projection_checkpoint ...
+COMMIT
+ack broker
 ```
 
-### Consumer Ack After Processing
-
-```python
-def consume():
-    while True:
-        message = queue.get(auto_ack=False)
-        
-        try:
-            process(message)
-            queue.ack(message)  # Only ack after success
-        except Exception as e:
-            queue.nack(message)  # Requeue for retry
-            log.error(f"Processing failed: {e}")
-```
-
-### Handling Duplicates
-
-```python
-# Consumer must be idempotent
-def process(message):
-    message_id = message.id
-    
-    # Check if already processed
-    if redis.sismember('processed_messages', message_id):
-        log.info(f"Duplicate message {message_id}, skipping")
-        return
-    
-    # Process
-    do_work(message)
-    
-    # Mark as processed
-    redis.sadd('processed_messages', message_id)
-    redis.expire('processed_messages', 86400)  # 24h TTL
-```
-
----
-
-## Implementing Exactly-Once
-
-### Approach 1: Deduplication
-
-```python
-class DeduplicatingConsumer:
-    def __init__(self):
-        self.seen = set()  # Or external store
-    
-    def process(self, message):
-        if message.id in self.seen:
-            return  # Skip duplicate
-        
-        do_work(message)
-        self.seen.add(message.id)
-
-# Limitation: Seen set must persist, has memory limits
-```
-
-### Approach 2: Idempotent Operations
-
-```python
-# Instead of: counter += 1
-# Use: counter = specific_value
-
-# Instead of: INSERT
-# Use: UPSERT
-
-def process_payment(payment):
-    # Idempotent: Same payment_id always results in same state
-    db.execute("""
-        INSERT INTO payments (id, amount, status)
-        VALUES (%s, %s, 'completed')
-        ON CONFLICT (id) DO NOTHING
-    """, payment.id, payment.amount)
-```
-
-### Approach 3: Transactional Outbox
-
-```python
-def process(message):
-    with db.transaction():
-        # Check if processed
-        if is_processed(message.id):
-            return
-        
-        # Do work
-        update_state(message)
-        
-        # Mark processed (same transaction)
-        mark_processed(message.id)
-    
-    # Only ack after transaction commits
-    queue.ack(message)
-```
-
-### Approach 4: Kafka Transactions
-
-```python
-producer.init_transactions()
-
-try:
-    producer.begin_transaction()
-    
-    # Consume
-    records = consumer.poll()
-    
-    # Process and produce
-    for record in records:
-        result = process(record)
-        producer.send(output_topic, result)
-    
-    # Commit offsets and produced messages atomically
-    producer.send_offsets_to_transaction(
-        consumer.position(), 
-        consumer_group
-    )
-    producer.commit_transaction()
-    
-except Exception:
-    producer.abort_transaction()
-```
-
----
-
-## Kafka Delivery Semantics
-
-### Producer Settings
-
-```python
-# At-most-once
-producer = KafkaProducer(
-    acks=0  # Don't wait for ack
-)
-
-# At-least-once
-producer = KafkaProducer(
-    acks='all',  # Wait for all replicas
-    retries=3,
-    retry_backoff_ms=100
-)
-
-# Exactly-once (idempotent producer)
-producer = KafkaProducer(
-    acks='all',
-    enable_idempotence=True,  # Broker deduplicates
-    transactional_id='my-producer'  # For transactions
-)
-```
-
-### Consumer Settings
-
-```python
-# At-most-once
-consumer = KafkaConsumer(
-    enable_auto_commit=True,
-    auto_commit_interval_ms=100  # Commit often
-)
-
-# At-least-once
-consumer = KafkaConsumer(
-    enable_auto_commit=False  # Manual commit after processing
-)
-
-# Exactly-once (with transactions)
-consumer = KafkaConsumer(
-    isolation_level='read_committed'  # Only see committed
-)
-```
-
----
-
-## RabbitMQ Delivery Semantics
-
-### Publisher Confirms
-
-```python
-# At-least-once with publisher confirms
-channel.confirm_delivery()
-
-try:
-    channel.basic_publish(
-        exchange='',
-        routing_key='queue',
-        body=message,
-        properties=pika.BasicProperties(delivery_mode=2)  # Persistent
-    )
-except pika.exceptions.UnroutableError:
-    # Message was not delivered
-    handle_failure()
-```
-
-### Consumer Acknowledgments
-
-```python
-# At-least-once
-def callback(ch, method, properties, body):
-    try:
-        process(body)
-        ch.basic_ack(delivery_tag=method.delivery_tag)
-    except Exception:
-        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
-
-channel.basic_consume(queue='queue', on_message_callback=callback)
-```
-
----
-
-## SQS Delivery Semantics
-
-### Standard Queue
-
-```
-At-least-once delivery
-Best-effort ordering
-
-Messages may be delivered more than once
-Order not guaranteed
-High throughput
-```
-
-### FIFO Queue
-
-```
-Exactly-once processing
-Strict ordering (within message group)
-
-Deduplication by:
-  - MessageDeduplicationId (5-minute window)
-  - Content-based (hash of body)
-
-Lower throughput (300-3000 msg/sec)
-```
-
-### Visibility Timeout
-
-```python
-# Message invisible while processing
-sqs.receive_message(
-    QueueUrl=queue_url,
-    VisibilityTimeout=30  # seconds
-)
-
-# If not deleted within 30s, becomes visible again
-# Another consumer might process it (duplicate)
-
-# After processing:
-sqs.delete_message(
-    QueueUrl=queue_url,
-    ReceiptHandle=receipt_handle
-)
-```
-
----
-
-## Testing Delivery Guarantees
-
-### Chaos Testing
-
-```python
-def test_at_least_once():
-    # Send message
-    message_id = producer.send(message)
-    
-    # Kill consumer mid-processing
-    consumer.start()
-    wait_for_processing_start()
-    consumer.kill()
-    
-    # Restart consumer
-    consumer.start()
-    
-    # Verify message processed (possibly twice)
-    assert is_processed(message_id)
-
-def test_no_message_loss():
-    # Send many messages
-    sent_ids = [producer.send(m) for m in messages]
-    
-    # Process all
-    process_until_empty()
-    
-    # Verify all processed
-    for id in sent_ids:
-        assert is_processed(id)
-```
-
-### Duplicate Detection Testing
-
-```python
-def test_duplicate_handling():
-    message = create_message()
-    
-    # Send same message twice
-    producer.send(message)
-    producer.send(message)
-    
-    # Process
-    process_all()
-    
-    # Verify processed only once
-    assert get_process_count(message.id) == 1
-```
-
----
-
-## Choosing a Guarantee
-
-### Decision Matrix
-
-| Requirement | Guarantee |
-|-------------|-----------|
-| Maximum throughput, loss OK | At-most-once |
-| No message loss | At-least-once |
-| No duplicates | Exactly-once or idempotent |
-| Financial transactions | Exactly-once preferred |
-| Event logging | At-least-once |
-| Metrics | At-most-once OK |
-
-### Cost Comparison
-
-| Guarantee | Latency | Throughput | Complexity |
-|-----------|---------|------------|------------|
-| At-most-once | Lowest | Highest | Lowest |
-| At-least-once | Medium | Medium | Medium |
-| Exactly-once | Highest | Lowest | Highest |
-
----
-
-## Kafka Idempotent Producer Internals
-
-```
-How the broker deduplicates without application-level logic:
-
-1. PID Assignment
-   Producer.init() ──► Broker allocates PID (Producer ID)
-
-2. Sequence Tagging
-   Every ProducerRecord carries (PID, partition, sequence_number)
-   Sequence increments per-partition, starting at 0
-
-3. Broker-Side Dedup
-   Broker maintains: Map<(PID, partition), last_committed_sequence>
-
-   Incoming message sequence ≤ last_committed → DUPLICATE, reject
-   Incoming message sequence  = last_committed + 1 → ACCEPT
-   Incoming message sequence  > last_committed + 1 → OUT_OF_ORDER, error
-```
-
-**Session scope limitation**: PID is ephemeral — assigned on `Producer.init()`. If the producer process restarts, it gets a new PID. The broker cannot correlate the new PID with the old one, so deduplication only works within a single producer session.
-
-**Surviving restarts with `transactional.id`**: When you set `transactional.id`, the transaction coordinator persists the mapping `transactional.id → (PID, epoch)`. On restart, the producer calls `initTransactions()`, the coordinator looks up the existing PID (or allocates a new one and increments the epoch), and fences any old producer instance still running with the same `transactional.id`.
-
-```
-# Config (default since Kafka 3.0)
-enable.idempotence=true    # Implies acks=all, retries=MAX_INT, max.in.flight.requests.per.connection ≤ 5
-
-# What it costs you: ~2-3% throughput reduction (extra sequence bookkeeping)
-# What it gives you: no duplicates from producer retries within one session
-```
-
-**Key subtlety**: Idempotence alone does NOT give you exactly-once across consume-transform-produce pipelines. It only deduplicates writes from a single producer to the broker. For end-to-end EOS, you need Kafka transactions.
-
----
-
-## Kafka EOS Transaction Protocol
-
-```
-Transaction lifecycle — what actually happens on the wire:
-
-1. initTransactions()
-   Producer ──► TransactionCoordinator
-   Coordinator bumps epoch for this transactional.id
-   Old producer with same transactional.id is now fenced (zombie fencing)
-
-2. beginTransaction()
-   Local state change only, nothing sent to broker
-
-3. send() / AddPartitionsToTxn
-   First send to a new partition in this txn triggers:
-   Producer ──► Coordinator: AddPartitionsToTxn(txnId, epoch, [topic-partition])
-   Coordinator persists partition list to __transaction_state
-
-4. Data writes
-   Producer ──► Partition leaders: normal produce requests tagged with PID+epoch
-   Leaders buffer messages but mark them as "uncommitted"
-
-5. sendOffsetsToTransaction()
-   Producer ──► Coordinator: AddOffsetsToTxn(txnId, consumerGroupId)
-   Producer ──► GroupCoordinator: TxnOffsetCommit(offsets)
-
-6. commitTransaction()
-   Producer ──► Coordinator: EndTxn(COMMIT)
-   Coordinator writes PREPARE_COMMIT to __transaction_state
-   Coordinator writes COMMIT markers to ALL involved partitions
-   Coordinator writes COMPLETE_COMMIT to __transaction_state
-```
-
-**What consumers see**: With `isolation.level=read_committed`, the consumer's fetch request returns a `LastStableOffset` (LSO). Messages beyond LSO that belong to open transactions are buffered but not delivered to the application until their transaction resolves. This means read_committed consumers may see higher end-to-end latency.
-
-**`__transaction_state` topic**: Internal compacted topic (default 50 partitions). Each `transactional.id` hashes to one partition. Stores `(transactional.id, PID, epoch, state, involved_partitions, timeout)`. Compaction keeps only the latest state per key.
-
-**Failure recovery**: If a producer crashes mid-transaction, the coordinator's transaction timeout (default 60s) expires and it auto-aborts. When a new producer initializes with the same `transactional.id`, the coordinator increments the epoch — any lingering writes from the old epoch are rejected by partition leaders.
-
----
-
-## Idempotent Consumer Patterns
-
-Four strategies for making consumers tolerate duplicate delivery, from cheapest to most complex:
-
-| Strategy | Mechanism | Cost | Best For |
-|----------|-----------|------|----------|
-| Natural idempotency | Operation is inherently safe to repeat | Free | Any case where possible |
-| Database constraint | Unique index rejects duplicate inserts | Low | DB-backed consumers |
-| Distributed dedup store | Check external store before processing | Medium | Stateless consumers |
-| Versioned state | Reject if state already at higher version | Medium | Event-sourced systems |
-
-### Natural Idempotency
-
-```python
-# SET is idempotent; INCREMENT is not
-# Instead of: UPDATE accounts SET balance = balance + 100
-# Use:        UPDATE accounts SET balance = 1500 WHERE id = ? AND version = ?
-
-# DELETE WHERE is idempotent
-db.execute("DELETE FROM cart_items WHERE cart_id = ? AND product_id = ?", cart_id, product_id)
-```
-
-Rule of thumb: if the operation converges to the same state regardless of how many times it runs, it is naturally idempotent. Prefer this over all other strategies.
-
-### Database Constraint
-
-```python
-def process(message):
-    try:
-        db.execute(
-            "INSERT INTO processed_events (event_id, result, created_at) VALUES (%s, %s, NOW())",
-            message.id, compute_result(message)
-        )
-    except UniqueViolation:
-        log.info(f"Duplicate {message.id}, skipping")
-        return  # Safe to ack
-```
-
-Works when business logic and dedup record share the same database — wrap both in one transaction for atomicity.
-
-### Distributed Dedup Store
-
-```python
-def process(message):
-    # SETNX returns False if key already exists
-    if not redis.set(f"dedup:{message.id}", "1", nx=True, ex=86400):
-        log.info(f"Duplicate {message.id}, skipping")
-        return
-
-    do_work(message)
-    # If do_work() fails, key is already set → message won't be reprocessed
-    # Mitigation: set key AFTER do_work, accept small duplicate window
-```
+On duplicate, the unique conflict proves that this consumer’s prior database transaction committed, so it can acknowledge. A separate `SELECT has_seen` followed by effect is racy. A marker in a separate store recreates a dual write.
 
-Trade-off: setting the key before processing prevents duplicates but risks message loss on crash. Setting it after processing risks duplicates on crash. Choose based on which failure mode your system tolerates.
-
-### Versioned State
-
-```python
-def process(event):
-    current = db.execute("SELECT version FROM entities WHERE id = %s", event.entity_id)
-    if current.version >= event.version:
-        log.info(f"Stale event v{event.version}, current v{current.version}")
-        return  # Already at this version or newer
+Idempotency must reflect the logical effect. `event_id` may be appropriate for one event; `payment_intent_id` may be the correct identity across several delivery records. A uniqueness constraint that is too narrow permits business duplicates; one too broad suppresses legitimate repetitions.
 
-    db.execute(
-        "UPDATE entities SET data = %s, version = %s WHERE id = %s AND version < %s",
-        event.data, event.version, event.entity_id, event.version
-    )
-```
-
-The `WHERE version < ?` clause makes the UPDATE itself idempotent — re-applying the same event version is a no-op.
-
----
-
-## Deduplication Storage Sizing
+For monotonically versioned state, `UPDATE ... WHERE current_version < incoming_version` can converge naturally, but it discards intermediate deltas. Use it only when the event carries replacement state or the domain allows skipping.
 
-When using an external dedup store, storage grows with message rate. Size it wrong and you either run out of memory or evict IDs too early (causing false "new message" on redelivery).
+## External effects
 
-### Retention Window
+An external API should accept a caller-generated idempotency key, durably bind it to request semantics, and return the original result for retries. It must reject reuse of the key with different parameters. The retention window must cover caller retry, delayed broker replay, and disaster recovery.
 
-Keep message IDs for **2x the maximum redelivery window**. If your system can redeliver messages up to 4 hours after initial delivery, retain IDs for 8 hours. This accounts for consumer lag, retry storms, and clock skew.
+If the downstream system lacks idempotency, options are:
 
-### Storage Formula
+- place an idempotent adapter in front of it with authoritative status/reconciliation;
+- allocate a natural unique business reference the downstream enforces;
+- make the effect detectable and reconcile before retry;
+- accept at-most-once and possible loss;
+- accept duplicates and run repair/compensation;
+- redesign the boundary.
 
-```
-memory = message_rate × retention_window × id_size × overhead_factor
+Recording “request sent” locally is not proof that the remote effect happened. Recording “done” only from a response is not proof it did not happen when the response is lost. Model `UNKNOWN` as a durable state and resolve it through status lookup or reconciliation.
 
-Example:
-  10,000 msg/s × 604,800 s (7 days) × 36 bytes (UUID) × 1.5 (hash table overhead)
-  = 10,000 × 604,800 × 36 × 1.5
-  ≈ 327 GB
-
-  That's too much for in-memory. Reduce retention or use probabilistic structures.
-```
+## Transactional consume-transform-produce
 
-### Alternatives
+Some brokers allow a consumer to read records, write output records, and commit input positions in one broker transaction. The coordinator tracks producer epoch and transaction markers; read-committed consumers hide aborted output. This can provide exactly-once processing **within that broker transaction domain**.
 
-**Bloom filter**: 10M entries at 1% false-positive rate ≈ 12 MB. Extremely memory-efficient, but false positives mean *dropped messages* (the filter says "seen" when it hasn't been). Acceptable only if occasional message loss is tolerable — which defeats the purpose of at-least-once.
+The guarantee stops at non-participating state. A handler that updates PostgreSQL or charges a card inside the same function has an unclosed boundary even if broker input/output are transactional. Use an outbox/inbox, downstream idempotency, or a workflow effect protocol.
 
-**Redis sorted set with TTL-based cleanup**:
-```
-ZADD dedup <unix_timestamp> <message_id>     # O(log N) insert
-ZSCORE dedup <message_id>                     # O(1) existence check
-ZRANGEBYSCORE dedup -inf <cutoff_ts>          # Periodic cleanup of expired IDs
-ZREMRANGEBYSCORE dedup -inf <cutoff_ts>       # Remove expired entries
-```
+Long broker transactions pin unstable data and can time out during processing. Keep them bounded in records, bytes, and duration. External calls inside the transaction couple broker health to remote latency and should be avoided.
 
-This gives you exact dedup with automatic expiry. At 10K msg/s with 1-hour retention, expect ~36M entries × ~80 bytes each ≈ 2.9 GB in Redis. Manageable.
+## Deduplication scope and storage
 
----
+Dedup state is indexed by effect scope and stable identity. It stores status, request digest, result reference, first/last observation, and expiry. Partition it with the effect when atomicity is required.
 
-## Performance Overhead
+Capacity is rate times retention. Illustrative consumer:
 
-Kafka delivery guarantee modes have measurable throughput and latency costs. The following ratios are illustrative — actual numbers vary by batch size, partition count, replication factor, and hardware.
+- 40,000 delivered events/s;
+- 72-hour maximum replay/retry horizon;
+- 80 encoded bytes per inbox record including index overhead;
+- two database replicas.
 
-| Mode | Throughput (relative) | Latency P99 | Key Config |
-|------|----------------------|-------------|------------|
-| At-most-once | 1.0× baseline | ~2 ms | `acks=0` |
-| At-least-once | ~0.85× | ~10 ms | `acks=all`, `retries=Integer.MAX_VALUE` |
-| Idempotent | ~0.82× | ~12 ms | `enable.idempotence=true` |
-| Transactional | ~0.65–0.75× | ~25–50 ms | `transactional.id` set, `isolation.level=read_committed` |
+The live window contains `40,000 * 259,200 = 10.368 billion` identities. One logical copy is about 772 GiB; two are about 1.51 TiB before storage-engine amplification, backups, and reserve. A global dedup table is therefore often impractical. Prefer transactional per-domain inboxes, natural unique keys, version gating, compact partitions dropped by time, and replay horizons justified by recovery policy.
 
-**Why transactional mode is slower**:
-- Each transaction requires at least 2 extra RPCs to the coordinator (`AddPartitionsToTxn`, `EndTxn`)
-- Commit markers must be written to every partition involved in the transaction
-- `read_committed` consumers must wait for the LSO to advance, adding tail latency
-- Smaller batches amplify this overhead — batch aggressively when using transactions
+Bloom filters can avoid some negative lookups but cannot be the correctness authority because false positives would suppress legitimate work. They may front an exact store only if positives are verified.
 
-**Tuning levers**:
-- `linger.ms` and `batch.size`: larger batches amortize per-message overhead
-- `transaction.timeout.ms`: shorter timeout = faster zombie detection, but risks aborting slow legitimate producers
-- Partition count: more partitions = more commit markers per transaction, but more parallelism
+Expiry is a semantic event. After 72 hours, the same ID can repeat unless the effect itself has a durable natural uniqueness constraint. Document this in replay tooling and disaster-recovery plans.
 
-**Rule of thumb**: if you need >100K msg/s per producer and P99 < 10ms, idempotent mode is the practical ceiling. Transactional mode is viable at ~50–80K msg/s with P99 ~30ms.
+## Capacity and latency model
 
----
+Illustrative broker path:
 
-## Real Failure Scenarios
+- 60,000 publications/s at 1 KiB;
+- three replicas;
+- producer batches average 200 records;
+- quorum commit adds a measured 4 ms p50 and 18 ms p99;
+- 0.15% of attempts time out and retry;
+- four independent subscriptions.
 
-Theory breaks down at failure boundaries. These three scenarios come up repeatedly in production.
+Replicated ingress is about 176 MiB/s before protocol/index overhead. Retry traffic adds only 90 attempts/s on average, but correlated broker slowdown can push timeout/retry rates far higher; use retry budgets and absolute deadlines.
 
-### Scenario 1: Dedup Store Down
+Fan-out delivery is `60,000 * 4 = 240,000` records/s. If consumer effect transactions sustain a measured 2,500/s per database shard at safe utilization, each full-rate subscription needs at least 24 effect shards before skew and failure reserve. Broker throughput is not end-to-end capacity.
 
-```
-Consumer receives message M1
-Consumer tries Redis SETNX to check duplicate → Redis timeout / connection refused
-Now what?
+Batching amortizes acknowledgements but increases ambiguity/replay suffix and latency. Model batch fill time at low traffic, maximum transaction bytes, and recovery reprocessing, not only peak throughput.
 
-Option A — Fail-open (process anyway):
-  Risk: duplicate processing if M1 was already seen
-  Benefit: no data loss
+## Concrete failure trace: disaster restore forgets dedup state
 
-Option B — Fail-closed (reject / nack):
-  Risk: message goes back to queue, may expire or hit DLQ
-  Benefit: no duplicate processing
-```
+A broker and consumer database are restored from backups after regional loss. The broker archive includes 48 hours of events, but the consumer inbox backup is 36 hours old. Replaying the broker suffix repeats 12 hours of already executed effects. The team assumed “at-least-once plus inbox equals exactly once,” but restored the two evidence streams to inconsistent recovery points.
 
-**Most systems choose fail-open.** Reason: duplicates are usually cheaper to handle downstream (idempotent DB writes, reconciliation jobs) than lost messages. If your dedup store has an SLA below your message broker's, consider a local in-process fallback cache.
+Containment pauses consumers and identifies effects with natural business references. Repair reconciles the 12-hour window before controlled replay. Prevention aligns recovery-point contracts, includes inbox/effect state in recovery manifests, retains downstream idempotency keys beyond maximum replay, and exercises cross-system restore, not independent component restore.
 
-### Scenario 2: Consumer Crash After Offset Commit
+## Operations and observability
 
-```
-Timeline:
-  t1: Consumer polls batch of 100 messages
-  t2: Consumer commits offsets (async or in read_committed)
-  t3: Consumer begins business logic for message 51
-  t4: Consumer process crashes (OOM, segfault, kill -9)
+Track each boundary:
 
-Result: messages 51–100 had their offsets committed but business logic never completed.
-These messages are permanently skipped — the new consumer instance starts at offset 101.
-```
+- producer attempts, stable IDs, acknowledgements, timeouts, retry age, epoch fences;
+- leader append/replicate/commit latency and healthy failure domains;
+- unclean election, truncation, checksum/corruption, and retention exposure;
+- delivered/acknowledged/redelivered rates and consumer generation rejects;
+- inbox duplicates, unique conflicts, effect commit latency, and checkpoint lag;
+- external idempotency result reuse, key conflicts, unknown outcomes, and reconciliation age;
+- broker transaction open duration/bytes, aborts, and read-committed lag;
+- dedup storage bytes, oldest identity, expiry, and replay horizon mismatch.
 
-**Fix**: Never commit offsets until business logic succeeds. Use manual commit (`enable.auto.commit=false`) and commit *after* processing each batch. For Kafka transactions, use `sendOffsetsToTransaction()` so offset commit is atomic with the produce — if the transaction aborts, offsets roll back too.
+Runbooks cover producer timeout ambiguity, broker data loss, replay beyond dedup horizon, downstream idempotency outage, stuck broker transaction, and inconsistent disaster restore.
 
-### Scenario 3: Broker Restart Mid-Batch
+## Security and abuse resistance
 
-```
-Producer sends batch of 50 messages to partition leader
-Broker acks messages 1–30, then crashes before acking 31–50
+Authenticate producer identity/epoch issuance and consumer groups. An attacker who can choose another tenant’s event or idempotency IDs can suppress legitimate work or retrieve prior results. Namespace keys by authenticated caller and effect scope; bind them to a request digest.
 
-Without idempotence:
-  Producer retries all 50 (it doesn't know which were persisted)
-  Messages 1–30 are duplicated on the broker
-  Consumers see 80 messages instead of 50
+Protect acknowledgement/checkpoint operations with generation-scoped tokens. Limit retry rate, batch size, transaction duration, and replay privileges. Broker logs, inboxes, and reconciliation records contain business identifiers and result references; apply least privilege, encryption, retention, and audit.
 
-With idempotence:
-  Producer retries all 50 with same (PID, partition, sequence) tuples
-  Broker's sequence tracker rejects messages 1–30 (sequence ≤ last committed)
-  Broker accepts messages 31–50
-  Consumers see exactly 50 messages
-```
+Never deserialize untrusted payloads before schema/size checks. Duplicate storms are an availability attack even when effects are idempotent: the duplicate path still consumes broker, network, lookup, and transaction resources.
 
-This is the single strongest argument for enabling idempotent producers — it costs almost nothing (~3% throughput) and eliminates the most common source of duplicates in Kafka.
+## Verification strategy
 
-Cross-reference: for atomically writing to both a database and a message queue (avoiding the dual-write problem that causes many of these scenarios), see `07-outbox-pattern.md`.
-
----
-
-## Key Takeaways
-
-1. **At-most-once is fastest** - But may lose messages
-2. **At-least-once is most common** - Requires idempotent consumers
-3. **Exactly-once is hard** - Usually simulated via deduplication
-4. **Ack after processing** - Not before
-5. **Idempotency is your friend** - Makes duplicates harmless
-6. **Test failure scenarios** - Crash consumers, drop acks
-7. **Know your system's guarantees** - Kafka vs SQS vs RabbitMQ differ
-8. **Design for duplicates** - They will happen
+- enumerate every crash point between append, acknowledgement, effect, inbox, checkpoint, and response;
+- property-test stable identity reuse and reject same key/different request;
+- partition leaders/producers to verify epoch fencing and acknowledged durability;
+- crash consumers before/after database commit and prove one logical effect;
+- test external API timeout with status reconciliation and duplicate key reuse;
+- expire dedup partitions and attempt delayed replay;
+- restore broker, effect store, and inbox to skewed recovery points;
+- load-test retry storms, duplicate hot keys, transaction aborts, and downstream saturation.
+
+## Decision framework
+
+Select guarantees per effect, not per broker brand:
+
+1. What loss and duplication harm does the business tolerate?
+2. What stable identity names one logical intent/effect?
+3. Which steps can share one transaction?
+4. Where is the first external boundary, and does it support idempotency/status?
+5. What do producer/consumer timeouts mean and how are they reconciled?
+6. How long must identity evidence survive replay and disaster recovery?
+7. Can component backups restore a consistent end-to-end guarantee?
+
+Use at-most-once only when loss is cheaper than duplication. Use at-least-once with idempotent/transactional effects for most durable work. Claim exactly-once processing only inside the precise domain you can prove.
+
+## References
+
+- [Jerome H. Saltzer, David P. Reed, and David D. Clark: End-to-End Arguments in System Design](https://web.mit.edu/Saltzer/www/publications/endtoend/endtoend.pdf)
+- [Apache Kafka: Message Delivery Semantics](https://kafka.apache.org/documentation/#semantics)
+- [Apache Kafka: Transactions](https://kafka.apache.org/documentation/#transactions)
+- [RabbitMQ: Consumer Acknowledgements and Publisher Confirms](https://www.rabbitmq.com/docs/confirms)
+- [Amazon SQS: At-Least-Once Delivery](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/standard-queues-at-least-once-delivery.html)
+- [Martin Kleppmann et al.: Online Event Processing: Achieving Consistency Where Distributed Transactions Have Failed](https://doi.org/10.1145/3329672.3329679)

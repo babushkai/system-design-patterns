@@ -1,173 +1,422 @@
 # Durable Execution and Workflow Engines
 
-## TL;DR
+A durable workflow engine persists orchestration decisions so a process can wait, crash, move to another worker, and continue without treating volatile stack memory as progress. In a code-replay engine, workers reconstruct local workflow state by rerunning deterministic orchestration code against an ordered event history. In an interpreted engine, the service advances a persisted declarative state machine. Both models separate durable orchestration decisions from external activity effects.
 
-Durable execution is the most powerful point on this section's durability axis: it makes an ordinary long-running, multi-step function survive process death *as if the crash never happened*. A normal function's state — its local variables, its position in the code, which steps have already completed — lives in volatile memory and evaporates when the process dies. A durable execution engine persists the result of every step into an append-only history and, on recovery, *replays that history* to reconstruct execution, so the program resumes exactly where it left off, possibly on a different machine, hours or days later. This is event sourcing applied to control flow. The price of the magic is a single hard constraint: the workflow code must be **deterministic**, because it is replayed, and any nondeterminism corrupts the replay. Temporal, Uber Cadence, AWS Step Functions, Azure Durable Functions, and Netflix Conductor all sit on this idea. What you buy is built-in retries, timeouts, durable multi-day sleeps, and crash-proof state recovery without hand-rolling a state machine in a database.
+Durable execution covers event history, deterministic replay matching, orchestration/activity separation, timers and signals, history rollover, replay performance, worker/definition versioning, and engine evolution. [Workflow System Fundamentals](./01-workflow-system-fundamentals.md) covers mechanism selection; [Effect Commit Protocols](./06-retry-idempotency-compensation.md) covers activity effects; [Leases and Recovery](./08-leases-heartbeats-recovery.md) covers heartbeat and fencing; [Workflow Observability](./09-workflow-observability-replay.md) covers operator timelines; [DAG Orchestration](./05-dag-orchestration.md) covers static graphs and data intervals.
 
----
+## Primary Evidence and Scope
 
-## The Problem: Program State Is Volatile
+| Primary evidence | What it establishes | Boundary |
+|---|---|---|
+| Temporal workflow/event-history documentation | Commands are checked against event history during replay; history is append-only durable execution state | Temporal semantics and current implementation limits |
+| Temporal History Service architecture | History/mutable-state transitions and internal transfer/timer tasks use transactional state plus an outbox-like queue before Matching dispatch | Open-source Temporal implementation, not a universal service topology |
+| Microsoft Durable Task documentation | Orchestrator state is rebuilt through event sourcing/replay; orchestrators must be deterministic; activities may run at least once | Durable Task family and storage-provider qualifications |
+| Cadence topology and versioning documentation | Frontend, History, Matching, persistence, external workers, and explicit code version markers form a durable code-replay system | Cadence terminology/APIs |
+| AWS Step Functions workflow-type documentation | Standard and Express workflow types have different execution semantics and interpret persisted state-machine definitions | Do not project code-replay constraints or one delivery claim across all Step Functions modes |
 
-Consider a function that fulfills an order: reserve inventory, charge the card, wait for a warehouse to confirm shipment, then email the customer. Written as ordinary code it is trivial — five statements and a loop. But ordinary code carries a fatal assumption: that the process stays alive from the first statement to the last. The "state" of that function is the call stack, the local variables, and the instruction pointer, and all three live in RAM. If the process is killed after the card is charged but before shipment is recorded — a deploy, an OOM kill, a node failure, a spot reclamation — that state is simply gone. The card is charged, but nothing in the system knows the workflow had reached that point. There is no resumption; there is only a half-finished side effect and an operator trying to reconstruct what happened from logs.
+## Durable-execution contract
 
-The conventional fix is to externalize the state into a database: a row per order with a `status` column, a polling worker that reads orders in each state and advances them, retry counters, timeout columns, and a scheduler to wake up sleeping orders. This works, but it is the same hand-rolled state machine reinvented in every company, and it inverts the program. The natural sequential logic — "charge, then wait, then ship" — is shredded into disconnected event handlers keyed on status values, and the real control flow now lives implicitly in the transition table of a database. Every new step means a new status, a new query, a new piece of the scheduler. The business logic becomes nearly unreadable, and the bugs live in the seams between handlers.
+Define:
 
-Durable execution engines exist to give you back the straight-line program while making its state as durable as the database row. You write the order flow as a single function that charges, then *sleeps*, then ships; the engine guarantees that function will run to completion exactly once, surviving any number of crashes along the way.
+| Field | Required answer |
+|---|---|
+| **Workflow identity** | Namespace, stable workflow/business ID, physical run ID, parent/root, and duplicate-start policy? |
+| **Definition model** | Replayed code, interpreted state-machine version, or application-owned explicit state table? |
+| **History authority** | Which ordered events/transition record are canonical, and which mutable/visibility views are derived? |
+| **Command boundary** | Which operations are durable orchestration commands versus external activities/effects? |
+| **Message contract** | Signals/events/updates, identity, ordering, schema, sender authorization, and duplicate handling? |
+| **Timer contract** | Fire-at semantics, lateness SLO, cancellation race, and simultaneous-timer burst? |
+| **Activity contract** | Task queue/capability, timeouts, progress checkpoint, cancellation, result size, and logical-effect identity? |
+| **Evolution** | Which histories run on which build/definition, and how are incompatible changes introduced/retired? |
+| **History lifecycle** | Event/byte limit, rollover rule, closed retention, archival, encryption key, and restore? |
+| **Repair** | Who may reset, terminate, cancel, pause, skip/patch, or start a compensating/new run? |
 
----
+Durable execution does not mean physical exactly-once execution. Workflow code may replay many times. Activity/task semantics differ by engine and configuration, and arbitrary remote effects remain outside the history transaction.
 
-## The Mechanism: Event-Sourced History and Replay
+## Two engine families
 
-The engine achieves durability not by snapshotting memory but by recording history. Every time the workflow function does something observable — schedules an activity, starts a timer, receives a signal, completes — the engine appends an event to a per-instance, append-only log: `WorkflowStarted`, `ActivityScheduled`, `ActivityCompleted`, `TimerStarted`, `TimerFired`, `SignalReceived`, `WorkflowCompleted`. This log is the durable source of truth for one workflow instance, and it is exactly the [event sourcing](../05-messaging/05-event-sourcing.md) pattern applied to a program's control flow rather than to a domain aggregate.
+### Code replay
 
-Recovery is where the design becomes surprising. When a worker picks up a workflow after a crash, it does **not** restore a memory image. Instead it *re-runs the workflow function from the very first line*. As the function executes, every command it issues is checked against the recorded history. If the history already contains the result of a step — say the card charge completed — the engine does not re-execute that step; it feeds back the recorded result and lets the function continue. The replay races forward through everything that already happened, reconstructing all the local variables and the exact position in the code purely from the sequence of recorded results, until it reaches the first command that has *no* recorded outcome yet. That is the true frontier of progress, and only there does the workflow do new work.
+Temporal, Cadence, and Azure Durable orchestrators expose ordinary-looking code. The engine records commands and externally supplied outcomes; on activation the SDK reruns orchestration code and feeds recorded results back until it reaches the history frontier. Correctness requires the current code and SDK to emit a command sequence compatible with that history.
 
-```mermaid
-sequenceDiagram
-    participant W as Workflow Code
-    participant E as Engine
-    participant H as History Store
-    participant A as Activity Worker
+The workflow code is a deterministic state-machine generator. Local variables are reconstructed results, not independently durable facts. The history (not a worker cache or stack snapshot) is authority.
 
-    Note over W,H: crash, then a new worker picks up the run
-    E->>H: load history for this instance
-    E->>W: re-run function from line 1
-    W->>E: charge_card()
-    E-->>W: replay recorded result (no re-execution)
-    W->>E: sleep(7 days)
-    E-->>W: timer already fired, continue
-    W->>E: create_shipment()
-    Note over E,A: no recorded result — this is the frontier
-    E->>A: dispatch activity
-    A->>E: result
-    E->>H: append ActivityCompleted
+### Interpreted state machine
+
+AWS Step Functions and other declarative engines persist a definition/state and have the service interpret the next transition. User orchestration code is not replayed, so language-level deterministic restrictions do not apply in the same form. Definition versioning, input/output transforms, task semantics, quotas, and state-transition compatibility still matter.
+
+Do not flatten product guarantees. AWS currently documents different semantics for Step Functions Standard, asynchronous Express, and synchronous Express workflows. Even when a service describes a state transition/task execution as exactly once, an explicitly configured retry or an external API's commit/response ambiguity can repeat effects. Record the exact workflow type and boundary.
+
+## Reference architecture
+
+~~~mermaid
+flowchart LR
+    C[Client / signal sender]
+    F[Frontend API and authorization]
+    H[History shard / transition authority]
+    P[(History + mutable-state persistence)]
+    I[Durable internal transfer/timer tasks]
+    M[Matching / task queues]
+    WW[Workflow workers]
+    AW[Activity workers]
+    E[External systems]
+    V[(Visibility/search projection)]
+
+    C --> F
+    F --> H
+    H --> P
+    H --> I
+    I --> M
+    M --> WW
+    M --> AW
+    WW --> H
+    AW --> H
+    AW --> E
+    H --> V
+~~~
+
+The **History/transition authority** serializes events for one run and maintains a derived summary of pending activities, timers, children, messages, and status. **Internal transfer tasks** durably request workflow/activity dispatch; **timer tasks** wake due executions. **Matching** connects task queues to compatible long-polling workers. Workflow workers make deterministic decisions; activity workers interact with the outside world. **Visibility** indexes searchable metadata asynchronously and is never transition authority.
+
+**Documented, Temporal implementation:** a History state transition transactionally updates mutable state and internal history tasks; queue processors eventually transfer workflow/activity tasks to Matching. This is an outbox boundary: Matching can receive a duplicate transfer, while History state determines whether a completion is current.
+
+The engine cluster does not normally execute user code. Application workers poll outbound through authenticated task queues, which improves network isolation but makes task-queue routing and worker availability part of progress.
+
+## Durable state and invariants
+
+An engine commonly persists:
+
+```text
+namespace, workflow ID, run ID, root/parent/continued-run IDs
+workflow type and definition/build/version-routing metadata
+start input schema/reference/digest and identity
+ordered history branch, next event ID, and history checksum/size
+mutable-state revision and execution status
+pending workflow task and last accepted task frontier
+pending activities, attempts/timeouts, and result references
+pending timers and due times
+children and external-message/signal/update state
+cancellation/termination/pause intent
+search/visibility attributes and projection revision
+retention, archival, encryption codec/key version, and audit principal
 ```
 
-The consequence is profound: a process can die at any point and a fresh process, on a different machine, reconstructs the entire logical state of the program by replaying a list of facts. The stack and the variables were never durable; the *history of decisions* was, and that turns out to be enough to rebuild everything else.
+An event envelope contains monotonically ordered event ID within a run, type, server-accepted time, typed attributes, causation/command identity, payload codec/schema, and audit attribution where supported. Do not let a user-supplied timestamp establish history order.
 
----
+**Reference-design invariants:**
 
-## Determinism Is the Hard Constraint
+1. Events for one workflow run have one serialized order and are never mutated in place.
+2. A history transition atomically advances authoritative mutable state and durably records every internal task required to make the transition progress.
+3. Only a workflow-task completion compatible with the current task token/history frontier can append its command batch; duplicate or stale completions cannot fork the run.
+4. Replay consumes the same recorded outcomes and emits the same compatible command sequence before the frontier.
+5. Workflow code performs no unrecorded external I/O or nondeterministic decision whose value affects commands.
+6. A timer wait persists state and releases application-worker compute; firing creates a durable history transition/task rather than relying on a sleeping process.
+7. Activity completion is correlated to the exact scheduled activity/attempt authority; recording completion is separate from the external effect.
+8. Visibility, caches, and snapshots can lag or disappear without changing execution truth.
+9. Rollover/continue-as-new links runs and transfers explicit logical state without rewriting old history.
+10. A worker/definition version is not retired while any reachable history still requires it, unless an explicitly compatible path has been proven.
+11. Restore preserves history order, run identity, timer/task reconciliation, and version/key availability.
 
-Replay only reconstructs the right state if the workflow function, fed the same history, makes the same decisions it made the first time. That is the entire game, and it imposes a constraint that beginners always trip over: **workflow code must be deterministic.** Given an identical sequence of recorded inputs, it must execute an identical sequence of commands. Anything that can return a different value on replay than it did on the original run will desynchronize the function from its history and corrupt the reconstruction.
+## Workflow-task replay protocol
 
-This rules out a surprising amount of ordinary code. Reading the wall clock directly is forbidden, because `now()` returns a different value during replay than during the original run, so a branch like `if now() > deadline` could take a different path and the function would issue commands the history does not expect. Random numbers are forbidden for the same reason. Iterating over a hash map or set whose order is unspecified is forbidden, because the order may differ between runs. Reading a mutable global, a config value, or an environment variable inside workflow code is forbidden, because it may have changed between the original execution and the replay. Even spawning threads with nondeterministic scheduling breaks the model.
+~~~mermaid
+sequenceDiagram
+    participant S as History service
+    participant Q as Matching/task queue
+    participant W as Workflow SDK worker
 
-The reason a nondeterministic workflow is so dangerous is that the failure is silent and delayed. The workflow runs correctly for days, then a worker restarts and replays the history. If on replay the code reads a clock and takes a *different* branch, it will try to schedule, say, a refund where the history records a shipment — a "nondeterminism error." Best case, the engine detects the mismatch between the new command and the recorded event and refuses to proceed, freezing the workflow; worst case, in a weaker model, it executes against an inconsistent state. Either way a workflow that ran fine in testing breaks the first time it has to recover, which is precisely when you need it most.
+    S->>Q: enqueue workflow task(run, frontier, task token)
+    W->>Q: long-poll compatible task queue
+    Q-->>W: task + history/events
+    W->>W: replay deterministic workflow from start/checkpoint
+    W->>W: match emitted commands to recorded events
+    Note over W: first unmatched command is the progress frontier
+    W->>S: complete task(token, command batch, query/update results)
+    S->>S: validate current token/frontier
+    S->>S: append events + mutable state + internal tasks atomically
+    S-->>W: accepted or stale/conflict
+~~~
 
-The discipline the engines impose is that *all* nondeterminism must be funneled through the engine's own APIs, which record their results into history so replay reproduces them identically. You do not call `time.now()`; you call the engine's `Now()`, whose value is captured in an event and replayed. You do not call `rand()`; you call the engine's deterministic side-effect API. You do not sleep on a thread; you start a durable timer. The rule of thumb, articulated clearly in Temporal's and Cadence's documentation, is that workflow code expresses *orchestration logic only* — branching, looping, waiting, coordinating — and pushes every interaction with the messy outside world into activities.
+Detailed flow:
 
----
+1. The service commits an input event (start, activity result, timer fire, signal, cancellation, or child event) and makes a workflow task available.
+2. A compatible worker receives a task token and history suffix/full history according to SDK/cache state.
+3. The SDK invokes workflow code in a deterministic scheduler. Each durable API call emits a command or awaits a recorded outcome.
+4. Before the frontier, commands are matched against history and recorded results are returned; no already-recorded activity or timer is newly scheduled.
+5. At the first undecided command, the workflow runs until it blocks or completes and returns a batch.
+6. The service validates task authority/current execution state, appends the implied events, updates mutable state, and creates required transfer/timer/visibility work.
+7. If the completion is stale or ambiguous, the worker reloads/replays; it never invents a second history branch locally.
 
-## Activities: Where Side Effects Live
+The system records the commands and externally observed outcomes needed to reconstruct orchestration, not necessarily every physical retry event. For example, Temporal's current documentation says activity retries can remain represented by the scheduled event until a terminal activity event is written. Treat provider event density as measured capacity data.
 
-Real work — calling a payment gateway, writing to a database, sending email, invoking another service — is nondeterministic by nature and cannot live in workflow code. Engines isolate it into **activities** (Step Functions calls them tasks, Durable Functions calls them activity functions). An activity is a plain function with no determinism requirement: it can read the clock, hit the network, and do anything ordinary code does. The workflow's job is to *decide which activities to run and in what order*; the activity's job is to *do the thing*. This is the clean division the model rests on — workflow code decides, activity code acts.
+## Deterministic workflow code
 
-The crucial property is the delivery semantic. The engine schedules an activity, records `ActivityScheduled`, dispatches it to an activity worker, and waits for the result, which it records as `ActivityCompleted`. But "dispatch, run, record the result" is not atomic across a crash. If the activity worker completes the payment side effect and then dies before reporting back, the engine never sees the completion, times the activity out, and retries it — running the payment a second time. Therefore activities are **at-least-once**, and the workflow author must make them **idempotent**, typically by attaching a stable idempotency key (derived from the workflow ID and the activity ID, *not* the attempt number, so all retries of the same logical operation collapse to one effect). This is the same retry-and-idempotency contract that governs every durable job system, covered in depth in [Retries, Idempotency, and Compensation](./06-retry-idempotency-compensation.md). The engine gives you automatic, policy-driven retries with backoff for free; it cannot give you idempotency for free, because only the activity's own domain knows what "the same operation" means.
+Determinism means: given the same workflow code version, start input, and ordered history, replay must make a compatible sequence of durable commands. It does not require every CPU instruction or log line to be identical.
 
----
+### Allowed sources of decisions
 
-## Durable Timers: Sleeping for Thirty Days
+- immutable workflow input and prior activity/child results from history;
+- signals/messages in their history-accepted order;
+- SDK workflow time, timers, deterministic random/UUID APIs, and version markers;
+- deterministic pure computation and collections with stable ordering;
+- configuration captured in input/history/version marker rather than read live;
+- SDK-provided deterministic concurrency primitives.
 
-The clearest demonstration of what durable execution buys you is the long sleep. A workflow can write `sleep(30 days)` and mean it literally: thirty days later, possibly after dozens of deploys and node replacements, the workflow wakes and continues. Ordinary code cannot do this — a thread sleeping for thirty days is thirty days of a held process that any restart destroys, and a `cron` job that pokes a database is exactly the hand-rolled state machine we were trying to escape.
+### Unsafe inside replayed workflow code
 
-The engine implements the wait as a persisted fact, not a held resource. The workflow's `sleep` becomes a `TimerStarted(fire_at=...)` event in history, and the worker is then free to evict the workflow from memory entirely. No process, thread, or memory is consumed during the wait. When the fire time arrives, the engine schedules a workflow task, a worker replays the history up to the timer, sees `TimerFired`, and continues. This makes durable timers a first-class primitive for genuinely long-lived business processes: a 7-day free-trial expiry, a 30-day payment-settlement window, a 90-day subscription renewal, a human-approval step that may take a week. AWS Step Functions Standard workflows can run for up to a year; Temporal and Cadence workflows can run effectively indefinitely. The wait costs storage, not compute, which is why a single cluster can hold millions of sleeping workflows at once.
+- direct network, database, filesystem, process, or environment reads;
+- wall clock, ordinary randomness/UUID, locale/time-zone defaults, or host identity;
+- unordered map/set iteration when order changes commands;
+- native threads, blocking synchronization, or nondeterministic race winners;
+- mutable global/singleton state;
+- dependency/library/runtime upgrades that change ordering, serialization, numeric, or exception behavior;
+- logging/metrics with side effects unless replay-aware.
 
----
+Push external work into activities. Use a product's recorded side-effect API only for a small nondeterministic value it explicitly supports; it is not a substitute for a retryable activity or effect protocol. Temporal's current docs, for example, warn that a Side Effect function that can fail may execute more than once.
 
-## A Named Landscape
+Nondeterminism is often latent: a warm sticky worker may retain reconstructed state and avoid full replay until deploy, eviction, failover, or cache miss. Replay tests are release gates, not optional recovery tests.
 
-The pattern has a clear lineage. **AWS Simple Workflow Service** (2012) was an early commercial durable-execution engine. **Uber Cadence**, open-sourced in 2017, generalized the idea into a code-first event-sourced workflow engine; its original authors, Maxim Fateev and Samar Abbas, later forked it into **Temporal** (founded 2019), now the most widely adopted general-purpose durable execution platform, available self-hosted and as Temporal Cloud. **AWS Step Functions** (launched December 2016) takes a different surface: workflows are defined as a JSON state machine (the Amazon States Language) rather than as imperative code, trading the natural programming model for a managed, declarative one. **Azure Durable Functions** (GA 2018) brings durable execution to the serverless world with an orchestrator-function programming model and the same determinism constraints. **Netflix Conductor** (open-sourced 2016) is a JSON-DSL orchestrator closer in spirit to a [DAG orchestrator](./05-dag-orchestration.md) than to code-shaped replay. The dividing line across this landscape is whether you write workflows as *real code that gets replayed* (Cadence, Temporal, Durable Functions) or as a *declarative state machine the engine interprets* (Step Functions, Conductor) — the former is more expressive and more dangerous, because the determinism burden falls on your code.
+## Activities and the external-effect boundary
 
----
+A workflow command schedules an activity task with logical activity identity, input, task queue/capability, and timeout policy. An activity worker executes unrestricted code and reports result/failure. The history service records the accepted outcome and wakes the workflow.
 
-## Versioning: Changing Code Under a Running Workflow
+The unsafe gap remains:
 
-The replay model creates a problem that no stateless service has: a single workflow instance may be *running for weeks* while you deploy new versions of its code. Because recovery replays the *current* code against *old* history, a code change that alters the sequence of commands — inserting a new activity before an existing one, reordering two steps, changing a branch — will, on the next replay of an in-flight instance, produce commands that do not match the recorded history. That is a nondeterminism error caused not by a clock but by you. This **versioning problem** is the chronic operational tax of durable execution, and it has no fully automatic solution.
+```text
+activity commits remote effect
+        -> completion reply is lost or worker dies
+        -> history lacks completion
+        -> engine may schedule another attempt
+```
 
-The engines provide explicit tools. Temporal and Cadence offer a versioning API (`GetVersion` / patched markers) that lets a single workflow function branch on "was this instance started before or after the change?", recording the version into history so replay stays consistent; old instances take the old path, new ones take the new path, and the marker pins each. The complementary technique is **continue-as-new**: a long-running or looping workflow periodically completes its current run and atomically starts a fresh instance with carried-over state, which both bounds history growth and provides a clean seam at which new code takes over. The operational discipline is to keep old workers draining old instances until they finish, route workflow types by version, and treat any change to in-flight workflow code with the same care as a database migration — because that is effectively what it is.
+Temporal and Durable Task document at-least-once activity behavior under this failure. Other workflow types can document different task semantics, especially without configured retry, but no engine can retroactively make an arbitrary external system share the history transaction. [Effect Commit Protocols](./06-retry-idempotency-compensation.md) owns stable effect keys, provider retention/parameter matching, local transactions, reconciliation, and compensation.
 
----
+Timeouts answer different questions. Temporal-style names are useful vocabulary:
 
-## Sagas: Durable Execution's Natural Application
+| Timeout | Question answered |
+|---|---|
+| **Schedule-to-start** | How long may a task wait for a compatible worker? |
+| **Start-to-close** | How long may one physical activity attempt run? |
+| **Schedule-to-close** | How long may all waits/attempts consume for this logical activity? |
+| **Heartbeat** | How long may a heartbeat-enabled attempt go without liveness/progress evidence? |
 
-Durable execution is the most ergonomic way to implement the [saga pattern](../05-messaging/09-saga-pattern.md) — a multi-step distributed transaction with compensating actions for rollback. Because the engine records exactly which forward steps completed, it knows precisely which compensations to run when a later step fails: reserve inventory, charge payment, create shipment, and on failure run only the compensations for the steps that actually succeeded, in reverse. The whole saga is one readable function with a try/compensate structure, and the durability of the history guarantees that even a crash mid-rollback resumes correctly. This is why "durable execution engine" and "saga orchestrator" are, in practice, often the same system.
+An activity heartbeat can carry a bounded checkpoint so a retry resumes application progress, but its durability/frequency is product-specific. It does not prove a remote effect did not commit, and it does not fence a stale worker by itself.
 
----
+Large activity inputs/results make every history fetch, replication, archival, and replay expensive. Store large immutable artifacts externally and put authenticated reference, version, size, and checksum in history. The artifact lifetime and encryption key must cover workflow retention/replay.
 
-## Durable Execution vs DAG Orchestration
+## Durable timers, messages, and cancellation
 
-It is easy to confuse this pattern with [DAG orchestration](./05-dag-orchestration.md), because both run multi-step workflows, but they target different shapes of problem. A DAG orchestrator (Airflow, Dagster, Conductor) models work as a *graph of tasks* — typically scheduled, batch, data-shaped jobs where the structure is known up front, fan-out and dependencies are the main concern, and runs are minutes-to-hours of throughput-oriented processing. Durable execution models work as *general code* — often request-driven, long-lived business processes (order fulfillment, subscription lifecycles, provisioning, saga orchestration) where the control flow includes loops, conditionals, dynamic branching, waiting on external signals, and durable sleeps that may span weeks. The DAG's structure is a static graph; the durable workflow's structure is whatever the imperative code does, including branches the graph model cannot express naturally.
+A durable timer is state such as `(run, timer_id, fire_at, status)`, indexed by due time. Starting it appends/commits the timer decision; the workflow task completes and the application worker can forget the execution. At/after `fire_at`, the timer processor records a fire transition and schedules another workflow task.
 
-The practical heuristic: if the work is a *pipeline of data transformations on a schedule*, reach for a DAG orchestrator. If the work is a *long-lived stateful business process driven by events and time*, reach for durable execution. Many organizations run both — Airflow for nightly analytics, Temporal for order workflows — because they are answers to different questions, not competing answers to the same one.
+No application thread remains allocated during the wait, but the service still consumes history bytes, timer-index entries, replication, storage, and future dispatch capacity. “Fire at 09:00” means eligible according to the engine's time semantics; queueing/failover can make delivery later. Define lateness SLO and cancellation/fire race behavior.
 
----
+Signals or external events are durable only after the authoritative service accepts/records them. Client retry needs a message identity or convergent handler because a lost response can make acceptance ambiguous. Concurrent timer, signal, cancellation, and activity events obtain some serialization order in history; workflow logic must make every allowed order safe rather than infer sender wall-clock order.
 
-## Failure Modes
+History prevents the classic lost wakeup: an event accepted before workflow code reaches `await signal` remains available when replay later evaluates the wait. The workflow still needs a durable condition/state, bounded message cardinality, schema evolution, sender authorization, and timeout/escalation policy.
 
-The model's failures are specific and worth naming, because most of them surface only at recovery time.
+Cancellation is a recorded request. Workflow/activity code must observe it at defined yield/heartbeat points and decide cleanup/compensation. Termination is an administrative stop that may bypass cleanup. Neither undoes external effects.
 
-**The nondeterministic workflow** is the signature failure. Workflow code reads a clock, calls `rand()`, iterates a map in unspecified order, or reads mutable config, and runs perfectly until the first replay takes a different branch than the original execution. The mismatch between the new command and the recorded history freezes (or, in weaker models, corrupts) the instance. The defense is strict determinism plus *replay tests* that re-run recorded histories of real workflows against new code in CI, catching the divergence before it reaches production.
+## History growth, caches, snapshots, and rollover
 
-**The non-idempotent activity double-executing** follows directly from at-least-once delivery. An activity completes its side effect, the worker crashes before reporting, the engine retries, and the payment is charged twice. The defense is a stable idempotency key per logical operation and an effect store the activity checks before acting.
+History is an audit/recovery log and a capacity liability. Every activity, timer, child, message, retry outcome, and workflow task can add transitions/events. Products impose event/byte/message limits that change by version; store current configured limits as policy and alert well before them.
 
-**Unbounded history growth** afflicts long-running or tightly looping workflows. Every iteration appends events, and a workflow that loops forever or fans out heavily accumulates a history that grows until it crosses the engine's limit — Temporal terminates a workflow whose history exceeds roughly 50,000 events or 50 MB, and Step Functions Standard caps history at 25,000 events. The defense is continue-as-new to reset history at safe boundaries and to aggregate chatty signals rather than recording each one.
+Code-replay SDKs use sticky worker caches, incremental history, and derived mutable state to avoid full replay on every activation. These are performance optimizations. Cache loss must fall back to authoritative history with identical decisions.
 
-**Workflow-versioning incompatibility** is the deploy-time failure: new code cannot replay old in-flight histories. The defense is versioning markers, draining old workers, and replay-compatibility tests against a corpus of real histories.
+An engine may persist a snapshot/checkpoint of reconstructed state. Bind it to workflow/run, exact history event ID/hash, SDK/definition version, and payload codec. On mismatch or corruption, discard it and replay. A snapshot that cannot be verified is a second authority and a recovery risk.
 
-**The poison workflow** is the instance that deterministically fails on every replay — a code bug or a permanently bad input — and that the engine retries forever, burning a worker slot and paging on the same alert. The defense is bounded workflow-task retries, a quarantine path, and operator tooling to reset, terminate, or patch a stuck instance. A related stuck state is a workflow blocked forever on a signal that never arrives; the defense is to pair every wait with a durable timeout and an escalation path.
+**Continue-as-new/history rollover** closes one run and starts a linked run with explicit compacted state and a fresh history. Temporal preserves Workflow ID and creates a new Run ID. Rollover must define:
 
----
+- which state is carried as new input and how it is validated;
+- how pending messages/signals and active handlers are drained or forwarded;
+- whether activities/children remain attached to the old run;
+- definition/build version selection for the new run;
+- lineage, business identity, cancellation, and result semantics across the chain.
 
-## Decision Framework
+Use rollover before the emergency threshold, driven by history length/bytes, replay latency, signal count, and a business-safe boundary. It is not garbage collection for an arbitrary mid-effect state.
 
-Choosing whether to reach for durable execution at all is the first and most important decision, because the determinism constraint and versioning tax are real costs you should only pay when the problem warrants them.
+## Capacity and performance model
 
-Reach for **durable execution** when the process is long-running (minutes to months), stateful, multi-step, business-critical, and must survive crashes exactly as written — order fulfillment, payment and saga orchestration, provisioning, human-approval flows, anything that sleeps for days and must wake reliably. You are buying crash-proof state, built-in retries and timeouts, durable timers, and a readable sequential program in exchange for the determinism discipline and versioning overhead.
+Size at least four workloads:
 
-Reach for a **DAG orchestrator** when the work is a scheduled or triggered *pipeline of data tasks* with a known graph structure, batch throughput, and dependency fan-out rather than long-lived per-entity state. See [DAG Orchestration](./05-dag-orchestration.md).
+1. **history/state transitions:** starts, workflow tasks, activities, timers, messages, children, cancels, resets;
+2. **matching/polling:** task enqueue, sync/async match, long polls, compatible worker routing;
+3. **workflow replay:** activations multiplied by history/replay work and cache-miss rate;
+4. **activity execution:** external worker resources and downstream capacity.
 
-Reach for a **plain background job queue** when all you need is "run this function later, perhaps with retries," and there is no long-lived multi-step state to coordinate. A queue and a worker pool ([Background Jobs and Worker Pools](./02-background-jobs-worker-pools.md)) are dramatically simpler, and reaching for durable execution here is over-engineering.
+Let workflow start rate be $\lambda_w$, mean history events per completed run be $\mathbb{E}[N_{\mathrm{events/run}}]$, mean encoded event size be $b$, and other independent event rate be $\lambda_{\mathrm{other}}$:
 
-Reach for a **hand-rolled state machine in your own database** only when the process is short, the states are few and stable, your team already operates that database well, and the operational cost of running a workflow engine is not justified. Be honest, though: the moment you find yourself adding retry counters, timeout columns, a polling scheduler, and a wake-up cron, you are rebuilding a durable execution engine badly, and adopting a real one will usually cost less over the system's life.
+$$
+\begin{aligned}
+\lambda_{\mathrm{events}}
+  &= \lambda_w\,\mathbb{E}[N_{\mathrm{events/run}}] + \lambda_{\mathrm{other}}, \\
+B_{\mathrm{history/second}}
+  &= \lambda_{\mathrm{events}} b
+\end{aligned}
+$$
 
----
+**Illustrative:** 500 workflow starts/s with 80 events/run produce 40,000 events/s before signals or recovery. At 1.2 KiB/event, raw ingest is about 46.9 MiB/s. Seven days of that closed-history volume is roughly 27 TiB before replication, indexes, open histories, backups, and compression. Measure real encoded distributions; large payload tails dominate.
 
-## Key Takeaways
+Workflow-task rate is driven by activations, not starts alone:
 
-1. Durable execution makes an ordinary long-running function survive process death as if it never happened, by persisting the result of every step and replaying history to reconstruct state on recovery.
-2. The mechanism is event sourcing applied to control flow: an append-only history of step inputs and results, replayed to rebuild local variables and code position rather than restoring a memory image.
-3. Determinism is the non-negotiable constraint — replayed workflow code must make identical decisions given identical history, so direct clock reads, randomness, unordered iteration, and mutable config are forbidden in workflow code.
-4. A nondeterministic workflow fails silently until recovery, then corrupts replay; funnel all nondeterminism through engine APIs (durable timers, side-effect/activity calls) whose results are recorded and replayed.
-5. Side effects live in activities, which run at-least-once and therefore must be idempotent; the engine gives you retries for free but cannot give you idempotency for free.
-6. Durable timers let a workflow reliably sleep for days or months because the wait is a persisted fact, not a held process — a capability ordinary code cannot match.
-7. What you buy is built-in retries, timeouts, crash recovery, and long-running orchestration without hand-rolling a state machine in a database.
-8. Versioning is the chronic tax: a workflow running for weeks while you deploy new code can break replay, so use version markers, continue-as-new, and replay-compatibility tests.
-9. Use durable execution for long-lived, stateful, code-shaped business processes; use a DAG orchestrator for scheduled data pipelines and a plain job queue for fire-and-forget work.
-10. The recurring failures — nondeterministic replay, double-executing activities, unbounded history, version incompatibility, poison workflows — all surface at recovery time, so test recovery explicitly.
+$$
+\lambda_{\mathrm{workflow\ tasks}} \approx
+\lambda_{\mathrm{starts}} + \lambda_{\mathrm{activity\ completions}}
+ + \lambda_{\mathrm{timer\ fires}} + \lambda_{\mathrm{messages}}
+ + \lambda_{\mathrm{child\ events}} + \lambda_{\mathrm{recovery}}
+$$
 
----
+Replay CPU is roughly the sum of history/command processing across cache-miss activations. One old workflow with 40,000 events activated every second can consume more replay CPU than thousands of sleeping workflows. Track instructions/time per replay and move to rollover before latency approaches the workflow-task timeout.
 
-## Related Patterns
+Timer capacity follows the due-time distribution, not only sleeping count. If 20 million timers are spread uniformly across ten minutes, average fire rate is about 33,333/s; if they share one deadline, the instantaneous burst is much larger. Shard/bucket timers, jitter product semantics where allowed, and reserve matching/worker/downstream capacity for the wakeup wave.
 
-- [Event Sourcing](../05-messaging/05-event-sourcing.md) — the storage model durable execution applies to control flow
-- [Saga Pattern](../05-messaging/09-saga-pattern.md) — the canonical application of durable workflows
-- [Outbox Pattern](../05-messaging/07-outbox-pattern.md) — atomic side effects at activity boundaries
-- [DAG Orchestration](./05-dag-orchestration.md) — graph-shaped batch alternative to code-shaped workflows
-- [Retries, Idempotency, and Compensation](./06-retry-idempotency-compensation.md) — the activity reliability contract
-- [Workflow Observability and Replay](./09-workflow-observability-replay.md) — debugging and replaying histories
-- [Background Jobs and Worker Pools](./02-background-jobs-worker-pools.md) — the simpler alternative for fire-and-forget work
-- [Idempotency](../01-foundations/08-idempotency.md) and [Failure Modes](../01-foundations/06-failure-modes.md) — foundations the model depends on
+Activities follow the worker/backlog model in [Background Jobs](./02-background-jobs-worker-pools.md). More workflow workers do not fix history persistence, matching, or downstream saturation.
 
----
+## Safe workflow evolution
 
-## References
+Long-lived histories make code deployment a data-compatibility migration. Classify changes by whether they alter durable command sequence for existing history.
 
-1. [Temporal Documentation — Workflows and Deterministic Constraints](https://docs.temporal.io/workflows) — the determinism rules and replay model
-2. [Cadence: The Only Workflow Platform You'll Ever Need](https://www.uber.com/blog/cadence/) — Uber Engineering, 2017
-3. [AWS Step Functions Developer Guide](https://docs.aws.amazon.com/step-functions/latest/dg/welcome.html) — declarative state-machine durable execution (launched 2016)
-4. [Azure Durable Functions Documentation](https://learn.microsoft.com/en-us/azure/azure-functions/durable/durable-functions-overview) — orchestrator-function model and code constraints
-5. [Netflix Conductor](https://github.com/Netflix/conductor) — JSON-DSL workflow orchestrator, open-sourced 2016
-6. [Temporal: Event History and the Continue-As-New Pattern](https://docs.temporal.io/workflow-execution/event) — history limits and history-size management
-7. [Pat Helland, "Life Beyond Distributed Transactions"](https://queue.acm.org/detail.cfm?id=3025012) — the entity-and-activity foundations behind sagas
-8. [Martin Fowler, "Event Sourcing"](https://martinfowler.com/eaaDev/EventSourcing.html) — the storage pattern generalized to control flow
+Potentially replay-safe changes include comments, replay-aware logs, and pure refactors proven to preserve command order/parameters. Breaking changes include adding/removing/reordering an activity/timer/child before an existing command, changing branch results for recorded input, changing message-handler scheduling, changing serialization, or reading a new mutable configuration.
+
+Use one or more explicit mechanisms:
+
+### History version/patch marker
+
+Workflow code asks the SDK for a version at a stable code point. The chosen version is recorded; old histories take the old command path and new histories take the new path. Cadence documents `GetVersion`; Temporal supports patch/version mechanisms. Retain the old branch until no history can replay through it.
+
+### Compatible worker/build routing
+
+Tag worker builds and route pinned histories/task queues only to compatible code. Temporal's current Worker Versioning model includes pinned and auto-upgrade behavior with product-specific constraints. Capacity planning includes every live compatibility cohort; “old workers exist” is insufficient if they cannot keep up.
+
+### Instance/definition version
+
+Associate each instance with an immutable orchestration/definition version and keep versioned code or declarative state machines side by side. Azure Durable Task documents built-in orchestration versioning. New starts use the new version; old instances drain or migrate at an explicit safe point.
+
+### New run/workflow type
+
+At a business-safe boundary, continue/start a new version with validated explicit state and lineage. This avoids replaying old history through new semantics but requires a protocol for messages, children, effects, and rollback across the handoff.
+
+Release gates:
+
+1. statically lint known nondeterministic APIs where SDK tooling exists;
+2. replay a corpus of real production histories against the candidate build;
+3. canary new starts and forced cache eviction/replay;
+4. route a bounded compatibility cohort;
+5. observe nondeterminism, replay latency, task age, and stuck versions;
+6. remove old branches/builds only after authoritative live-history inventory reaches zero plus retention/repair policy.
+
+Rollback routes tasks back to compatible code. It does not remove events written by the new build; if old code cannot replay them, recovery requires the compatible branch/build or a new forward repair.
+
+## Specialized failure traces
+
+### Sticky cache hides nondeterminism
+
+1. A new workflow build reads an unordered map but stays on a warm worker.
+2. Local reconstructed state advances without full replay for days.
+3. Deployment evicts the cache; replay chooses a different command order and the instance stops.
+
+Force cold replay in CI/canary against real histories. Healthy happy-path execution is not replay compatibility evidence.
+
+### Duplicate workflow task tries to fork history
+
+1. A workflow-task completion is committed but its response is lost.
+2. The worker retries or another copy returns a different batch.
+3. Without task-token/frontier validation, both append successors to one state.
+
+History authority accepts only a completion valid for the current task/frontier and makes duplicate completion idempotent or stale. Workers reload rather than merge histories.
+
+### Activity effect succeeds; history completion is absent
+
+The payment API commits, but the activity worker dies before History records completion. The engine eventually tries again. This is normal at-least-once activity behavior in code-replay systems, not a history-corruption bug. Stable effect identity/reconciliation closes the gap.
+
+### Timer wakeup wave overloads the system
+
+Millions of subscriptions share midnight expiry. Timer processors enqueue workflow tasks, workflow workers schedule activities, and activities overload the database simultaneously. Capacity-test the entire timer-to-effect chain; shard, rate-limit, stage, or jitter only where business semantics permit.
+
+### History approaches the hard limit during an incident
+
+A chatty signal loop and retries grow history; replay slows, creating workflow-task timeouts and more transitions. The instance can no longer reach the code that would roll it over. Trigger rollover on an early soft threshold and have a product-supported repair path; do not wait for the hard limit.
+
+### Old version has no compatible poller
+
+Routing correctly pins a history to build 12, but deployment scaled build 12 to zero. The execution remains “running” while task age grows. Monitor compatible poller/capacity per version and block retirement until no reachable histories remain.
+
+### Rollover drops application-level pending work
+
+Workflow compacts only its main state and starts a new run while its application-level inbox/handler work is not incorporated. A message accepted near the boundary is neither reflected nor deliberately forwarded. Define a quiesce/drain/transfer protocol and fault-test messages at every rollover boundary.
+
+### Visibility projection drives an invalid reset
+
+Search lags and says a workflow is stuck before an activity; authoritative history already passed it. An operator resets from the stale view and reopens downstream effects. Repair tools resolve and condition on current history/run revision before mutating state.
+
+### Encryption key expires before history
+
+Events persist for audit/replay, but the codec key or artifact referenced by an activity result is deleted first. Failover can load bytes but cannot reconstruct state. Couple payload/artifact/key retention to every open, archived, resettable, and legally held history.
+
+## Security and abuse boundaries
+
+Authorize start, signal/update, query, cancel, pause, reset, terminate, and history read separately by namespace/workflow/tenant. Treat task-queue polling and worker registration as capabilities: a malicious worker can read activity inputs, execute effects, and submit results unless the service authenticates and authorizes it.
+
+History is a high-value long-retention record. Minimize payloads, use client-side payload codecs/encryption where required, rotate keys without losing replay, and keep sensitive values out of broadly indexed visibility attributes. Redact error/stack data and external artifact URLs. Deletion/retention policy must account for backups and archives.
+
+Validate and quota signals, updates, child fan-out, timers, history bytes/events, payload sizes, query cost, and reset frequency. An authorized tenant can otherwise create a replay/history/timer denial of service. Workflow code and SDK dependencies are supply-chain authority over long-lived business processes; sign artifacts, restrict build routing, and audit version rules.
+
+Reset/terminate/skip/patch actions can repeat or bypass business effects. Require reason, approval where needed, dry-run/current-revision evidence, immutable audit, and post-action reconciliation. Do not give observability users implicit mutation privileges.
+
+## Observability and verification
+
+Observe per namespace, workflow type/version/build, task queue, and tenant:
+
+- start/message/cancel/update acceptance, deduplication, and authorization;
+- history events/bytes, transition rate, mutable-state conflicts, persistence and replication latency;
+- workflow-task schedule-to-start, execution/replay time, cache hit/miss, replayed events, stale completions, and nondeterminism;
+- matching backlog/oldest task, pollers and compatible capacity by build;
+- activities scheduled/started/completed with timeout/heartbeat/result-size evidence;
+- timers outstanding/due/fire lateness and simultaneous-deadline bursts;
+- open/closed/continued chains, rollover thresholds, run lineage, and stuck version cohorts;
+- visibility lag versus authoritative history;
+- reset/pause/cancel/terminate/version-rule changes and unresolved effect reconciliation.
+
+[Workflow Observability](./09-workflow-observability-replay.md) owns the operator timeline, search model, trace lineage, and forensic replay interface.
+
+Verification includes:
+
+1. deterministic unit tests using SDK virtual time/scheduler;
+2. replay of golden and sampled production histories on every candidate build;
+3. history-prefix/property fuzzing across every await, message, timer, cancel, and exception order;
+4. crash before/after workflow-task dispatch, command commit, activity dispatch/completion, timer fire, and visibility update;
+5. duplicate/stale workflow-task completion and history-service failover;
+6. sticky-cache eviction, snapshot corruption/mismatch, and full-history fallback;
+7. activity effect committed with lost completion and stale attempt return;
+8. timer storms, message floods, large histories/results, rollover, and restore;
+9. mixed-version workers, missing compatible pollers, patch markers, rollback, and old-branch retirement;
+10. payload/codec/key/artifact retention plus authorization and malicious fan-out tests.
+
+## Decision framework
+
+1. Does the process require durable waits/dynamic control flow and finer recovery than a bounded job or DAG node?
+2. Is the engine replaying user code or interpreting a persisted definition, and which constraints follow?
+3. Which ordered history/state is authoritative, and which caches/mutable/visibility views are derived?
+4. How does one workflow-task token/frontier prevent duplicate workers from forking history?
+5. Which values enter decisions only through deterministic SDK/history APIs?
+6. Which operations are activities, and what effect protocol covers their commit gap?
+7. What timer/message ordering, lateness, deduplication, and cancellation races are part of the contract?
+8. What event/byte/replay/timer limits trigger rollover well before failure?
+9. Which histories route to which compatible builds/definitions, and how is capacity proven for every cohort?
+10. Can candidate code replay real histories cold before deployment and after rollback?
+11. Do history payload, artifacts, codecs, and encryption keys survive every replay/reset/retention horizon?
+12. Can operators repair from authoritative state without silently repeating or bypassing effects?
+
+## Primary references
+
+- [Temporal, *Workflow Execution overview*](https://docs.temporal.io/workflow-execution)
+- [Temporal, *Events and Event History*](https://docs.temporal.io/workflow-execution/event)
+- [Temporal, *Continue-As-New*](https://docs.temporal.io/workflow-execution/continue-as-new)
+- [Temporal source, *History Service architecture*](https://github.com/temporalio/temporal/blob/main/docs/architecture/history-service.md)
+- [Temporal, *Activity Execution*](https://docs.temporal.io/activity-execution)
+- [Temporal, *Worker Versioning*](https://docs.temporal.io/production-deployment/worker-deployments/worker-versioning)
+- [Cadence, *Deployment topology*](https://cadenceworkflow.io/docs/concepts/topology)
+- [Cadence, *Workflow versioning*](https://cadenceworkflow.io/docs/go-client/workflow-versioning)
+- [Microsoft, *Durable orchestrations*](https://learn.microsoft.com/en-us/azure/durable-task/common/durable-task-orchestrations)
+- [Microsoft, *Durable orchestrator code constraints*](https://learn.microsoft.com/en-us/azure/durable-task/common/durable-task-code-constraints)
+- [Microsoft, *Durable orchestration versioning*](https://learn.microsoft.com/en-us/azure/durable-task/common/durable-orchestration-versioning)
+- [AWS Step Functions, *Choosing workflow type*](https://docs.aws.amazon.com/step-functions/latest/dg/choosing-workflow-type.html)
+- [Amazon States Language specification](https://states-language.net/spec.html)

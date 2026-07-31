@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
     tags: ['v*']
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -30,35 +32,30 @@ jobs:
       - name: Generate Book Files
         run: |
           mkdir -p build
+          BUILD_DATE="$(date -u +%Y-%m-%d)"
           
           # Generate front matter inline
-          cat > build/front-matter.md << 'FRONTMATTER'
+          cat > build/front-matter.md << FRONTMATTER
           ---
           title: System Design Patterns
-          subtitle: A Comprehensive Guide to Distributed Systems
+          subtitle: A Field Guide to Production Distributed Systems
           author: Babushkai
-          date: $(date +%Y-%m-%d)
+          date: "$BUILD_DATE"
           ---
 
           # Preface
 
-          This book is a comprehensive guide to system design patterns, covering everything from foundational concepts to advanced distributed systems architectures.
+          This book is a curated engineering field guide to production distributed systems. It develops designs from contracts and invariants through protocols, capacity limits, failure recovery, security boundaries, observability, migration, and verification. Chapters state what they own and cross-reference neighboring mechanisms instead of repeating generic checklists.
 
           ## Who This Book Is For
 
-          - Software engineers preparing for system design interviews
-          - Architects designing scalable distributed systems
-          - Engineers seeking deep understanding of infrastructure patterns
+          - Engineers and architects making production design decisions
+          - Operators diagnosing failure, overload, recovery, and consistency behavior
+          - Readers who want mechanisms and evidence beyond interview diagrams
 
           ## How to Use This Book
 
-          The book is organized into logical parts, progressing from fundamentals to advanced topics. Each chapter includes:
-
-          - **TL;DR** - Quick summary of key concepts
-          - **Problem Statement** - Why this pattern exists
-          - **Architecture Diagrams** - Visual representations
-          - **Code Examples** - Practical implementations
-          - **Best Practices** - Production recommendations
+          The parts progress from storage and distributed-systems foundations through service, data, ML/LLM, workflow, and engineering-platform architectures. Read a chapter's scope boundary first, then follow its invariants, control and data paths, quantitative assumptions, specialized failure traces, rollout mechanics, decision framework, and primary references. Worked numbers are either sourced to the described system or explicitly labeled as illustrative inputs.
 
           \newpage
           FRONTMATTER
@@ -66,7 +63,7 @@ jobs:
           # Generate metadata inline
           cat > build/metadata.yaml << 'METADATA'
           title: "System Design Patterns"
-          subtitle: "A Comprehensive Guide to Distributed Systems"
+          subtitle: "A Field Guide to Production Distributed Systems"
           author: "Babushkai"
           rights: "MIT License"
           language: "en-US"
@@ -100,7 +97,6 @@ jobs:
             "01-foundations/04-consistency-models.md"
             "01-foundations/05-distributed-time.md"
             "01-foundations/06-failure-modes.md"
-            "01-foundations/07-network-partitions.md"
             "01-foundations/08-idempotency.md"
             "01-foundations/09-distributed-locks.md"
             "01-foundations/10-capacity-planning.md"
@@ -129,8 +125,6 @@ jobs:
             "04-caching/02-cache-invalidation.md"
             "04-caching/03-distributed-caching.md"
             "04-caching/04-cache-stampede.md"
-            "04-caching/05-multi-tier-caching.md"
-            "04-caching/06-cache-warming.md"
             # Part 5: Messaging
             "05-messaging/01-message-queues.md"
             "05-messaging/02-pub-sub.md"
@@ -140,7 +134,6 @@ jobs:
             "05-messaging/06-cqrs.md"
             "05-messaging/07-outbox-pattern.md"
             "05-messaging/08-dead-letter-queues.md"
-            "05-messaging/09-saga-pattern.md"
             # Part 6: Scaling
             "06-scaling/01-load-balancing.md"
             "06-scaling/02-horizontal-vertical.md"
@@ -158,9 +151,6 @@ jobs:
             "06-scaling/14-network-transport-internals.md"
             # Part 7: Real-Time
             "07-real-time/01-polling.md"
-            "07-real-time/02-long-polling.md"
-            "07-real-time/03-server-sent-events.md"
-            "07-real-time/04-websockets.md"
             "07-real-time/05-webrtc.md"
             "07-real-time/06-presence.md"
             "07-real-time/07-crdts-collaborative-editing.md"
@@ -218,7 +208,6 @@ jobs:
             # Part 13: Data Pipelines
             "13-data-pipelines/01-batch-processing.md"
             "13-data-pipelines/02-stream-processing.md"
-            "13-data-pipelines/03-lambda-kappa-architecture.md"
             "13-data-pipelines/04-change-data-capture.md"
             "13-data-pipelines/05-lakehouse-table-formats.md"
             # Part 14: Search Systems
@@ -226,7 +215,6 @@ jobs:
             "14-search-systems/02-full-text-search.md"
             "14-search-systems/03-vector-search.md"
             "14-search-systems/04-ranking-algorithms.md"
-            "14-search-systems/05-search-relevance-tuning.md"
             "14-search-systems/06-typeahead-autocomplete.md"
             # Part 15: Deployment
             "15-deployment/01-deployment-strategies.md"
@@ -284,7 +272,7 @@ jobs:
           )
           
           # Collect existing chapters (no empty lines)
-          > build/chapters.txt
+          : > build/chapters.txt
           for chapter in "${CHAPTERS[@]}"; do
             if [ -f "$chapter" ]; then
               echo "$chapter" >> build/chapters.txt
@@ -293,12 +281,12 @@ jobs:
 
       - name: Build PDF
         run: |
-          # Build file list with ../ prefix for paths relative to build/
-          CHAPTER_FILES=$(grep -v '^$' build/chapters.txt | sed 's|^|../|' | tr '\n' ' ')
+          # Build an argument array with ../ prefixes for paths relative to build/.
+          mapfile -t CHAPTER_FILES < <(sed 's|^|../|' build/chapters.txt)
           
           cd build
           pandoc \
-            --from=markdown \
+            --from=markdown+tex_math_dollars \
             --to=pdf \
             --output=system-design-patterns.pdf \
             --pdf-engine=xelatex \
@@ -309,19 +297,19 @@ jobs:
             --top-level-division=chapter \
             --highlight-style=tango \
             front-matter.md \
-            $CHAPTER_FILES
+            "${CHAPTER_FILES[@]}"
           
           echo "PDF built successfully!"
           ls -lh system-design-patterns.pdf
 
       - name: Build EPUB
         run: |
-          # Build file list with ../ prefix for paths relative to build/
-          CHAPTER_FILES=$(grep -v '^$' build/chapters.txt | sed 's|^|../|' | tr '\n' ' ')
+          # Build an argument array with ../ prefixes for paths relative to build/.
+          mapfile -t CHAPTER_FILES < <(sed 's|^|../|' build/chapters.txt)
           
           cd build
           pandoc \
-            --from=markdown \
+            --from=markdown+tex_math_dollars \
             --to=epub \
             --output=system-design-patterns.epub \
             --metadata-file=metadata.yaml \
@@ -330,7 +318,7 @@ jobs:
             --epub-chapter-level=1 \
             --highlight-style=tango \
             front-matter.md \
-            $CHAPTER_FILES
+            "${CHAPTER_FILES[@]}"
           
           echo "EPUB built successfully!"
           ls -lh system-design-patterns.epub

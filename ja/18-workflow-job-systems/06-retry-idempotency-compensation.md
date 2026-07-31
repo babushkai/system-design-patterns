@@ -106,5 +106,5 @@ budgetが尽きたら、可視的にfailするかrepair queueへ送ります。
 
 - [冪等性](../01-foundations/08-idempotency.md)
 - [Outbox Pattern](../05-messaging/07-outbox-pattern.md)
-- [Saga Pattern](../05-messaging/09-saga-pattern.md)
+- [分散トランザクションとSaga](../02-distributed-databases/07-distributed-transactions.md#saga-pattern-deep-dive)
 - [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md)

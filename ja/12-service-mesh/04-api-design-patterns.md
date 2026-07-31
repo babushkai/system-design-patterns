@@ -99,7 +99,7 @@ server: first time  → execute, store (key → response)
 
 ## gRPC: 両端を所有するとき
 
-内部のサービス間トラフィックでは、gRPC + protobufは持ち場を稼ぎます: 全言語でコード生成される型付き契約、HTTP/2多重化、組み込みのデッドライン伝播、ネイティブなストリーミング(サーバー・クライアント・双方向 — サービス間で[WebSocket](../07-real-time/04-websockets.md)が担う大半をカバー)。負荷分散とリトライはメッシュが宣言的に扱います([サイドカーパターン](./03-sidecar-pattern.md))。
+内部のサービス間トラフィックでは、gRPC + protobufは持ち場を稼ぎます: 全言語でコード生成される型付き契約、HTTP/2多重化、組み込みのデッドライン伝播、ネイティブなストリーミング(サーバー・クライアント・双方向 — サービス間で[WebSocket](/07-real-time/01-polling.md#websocket)が担う大半をカバー)。負荷分散とリトライはメッシュが宣言的に扱います([サイドカーパターン](./03-sidecar-pattern.md))。
 
 契約の規律はprotoの**フィールド番号衛生**です:
 

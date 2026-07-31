@@ -38,6 +38,10 @@ LANDING_STAT_RE = re.compile(
 )
 LEGACY_MATH_DELIMITER_RE = re.compile(r"\\[()\[\]]")
 INLINE_CODE_RE = re.compile(r"`+[^`\n]*`+")
+ARTICLE_ROUTE_RE = re.compile(r"^(?:ja/)?[0-9][0-9]-[^/]+/[^/]+$")
+DOUBLE_DOLLAR_RE = re.compile(r"(?<!\\)\$\$")
+SINGLE_DOLLAR_RE = re.compile(r"(?<!\$)\$(?!\$)")
+INLINE_DOLLAR_MATH_RE = re.compile(r"(?<!\$)\$([^$\n]+?)\$(?!\$)")
 VITEPRESS_SOURCE_FILES = [
     Path(".vitepress/config.mts"),
     Path(".vitepress/theme/components/LandingPage.vue"),
@@ -239,6 +243,122 @@ def validate_deep_system_chapters(errors: list[str]) -> None:
                 )
 
 
+def normalize_heading(value: str) -> str:
+    """Normalize cosmetic Markdown differences before comparing headings."""
+
+    value = re.sub(r"[`*_]", "", value)
+    value = re.sub(r"\s+", " ", value).strip().casefold()
+    return value.rstrip(":")
+
+
+def validate_unique_h2_headings(errors: list[str]) -> None:
+    """Reject appended rewrites that introduce the same chapter section twice.
+
+    Repeated H2 headings were the clearest mechanical signal of chapters that had a
+    shallow tutorial followed by a second "deep dive" over the same material. H3
+    headings remain unrestricted because recurring substructures such as failure
+    traces can legitimately appear under different mechanisms.
+    """
+
+    for path in iter_markdown_files():
+        prose = strip_fenced_code(path.read_text(encoding="utf-8"))
+        first_seen: dict[str, int] = {}
+        for lineno, line in enumerate(prose.splitlines(), start=1):
+            match = re.match(r"^##\s+(.+?)\s*$", line)
+            if not match:
+                continue
+            heading = normalize_heading(match.group(1))
+            if heading in first_seen:
+                errors.append(
+                    f"{rel(path)}:{lineno}: duplicate H2 heading "
+                    + f"(first at line {first_seen[heading]}): {match.group(1)}"
+                )
+            else:
+                first_seen[heading] = lineno
+
+
+def validate_unique_chapter_titles(errors: list[str]) -> None:
+    """Require one distinct H1 for every chapter in each language."""
+
+    for prefix in ("", "ja"):
+        seen: dict[str, Path] = {}
+        base = ROOT / prefix
+        for relative in sorted(article_paths(prefix)):
+            path = base / relative
+            prose = strip_fenced_code(path.read_text(encoding="utf-8"))
+            titles = re.findall(r"^#\s+(.+?)\s*$", prose, flags=re.MULTILINE)
+            if len(titles) != 1:
+                errors.append(
+                    f"{rel(path)}: expected exactly one chapter H1, found {len(titles)}"
+                )
+                continue
+            title = normalize_heading(titles[0])
+            previous = seen.get(title)
+            if previous:
+                errors.append(
+                    f"{rel(path)}: duplicate chapter title also used by {rel(previous)}: "
+                    + titles[0]
+                )
+            else:
+                seen[title] = path
+
+
+def normalize_substantial_prose(value: str) -> str:
+    """Normalize prose while preserving enough wording to avoid false matches."""
+
+    value = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", value)
+    value = re.sub(r"<[^>]+>", " ", value)
+    value = re.sub(r"[`*_~]", "", value)
+    return re.sub(r"[\W_]+", " ", value.casefold(), flags=re.UNICODE).strip()
+
+
+def validate_unique_substantial_prose(errors: list[str]) -> None:
+    """Reject copied explanatory paragraphs across the English book.
+
+    Repeated short phrases, tables, quotations, and code are intentionally ignored.
+    Lists remain in scope because copied checklists were a source of chapter filler.
+    A 240-character normalized threshold catches boilerplate-sized prose without
+    forcing independent chapters to avoid ordinary technical vocabulary.
+    """
+
+    first_seen: dict[str, tuple[Path, int]] = {}
+    paths = [ROOT / path for path in sorted(article_paths())]
+    paths += [ROOT / "ja" / path for path in sorted(article_paths("ja"))]
+    for path in paths:
+        prose = strip_fenced_code(path.read_text(encoding="utf-8"))
+        paragraphs: list[tuple[int, str]] = []
+        paragraph_lines: list[str] = []
+        paragraph_start = 1
+        for lineno, line in enumerate([*prose.splitlines(), ""], start=1):
+            if line.strip():
+                if not paragraph_lines:
+                    paragraph_start = lineno
+                paragraph_lines.append(line)
+                continue
+            if paragraph_lines:
+                paragraphs.append((paragraph_start, "\n".join(paragraph_lines)))
+                paragraph_lines = []
+
+        for lineno, paragraph in paragraphs:
+            stripped = paragraph.lstrip()
+            if not stripped or re.match(r"^(?:#|>|\||:::)", stripped):
+                continue
+
+            normalized = normalize_substantial_prose(paragraph)
+            if len(normalized) < 240:
+                continue
+
+            previous = first_seen.get(normalized)
+            if previous:
+                previous_path, previous_line = previous
+                errors.append(
+                    f"{rel(path)}:{lineno}: substantial prose duplicates "
+                    + f"{rel(previous_path)}:{previous_line}"
+                )
+            else:
+                first_seen[normalized] = (path, lineno)
+
+
 def validate_portable_math_delimiters(errors: list[str]) -> None:
     """Keep equations portable across VitePress, GitHub, and Pandoc."""
 
@@ -252,6 +372,54 @@ def validate_portable_math_delimiters(errors: list[str]) -> None:
                     f"{rel(path)}:{lineno}: use $...$ or $$...$$ math delimiters "
                     + f"instead of {match.group(0)}"
                 )
+
+
+def validate_dollar_math_delimiters(errors: list[str]) -> None:
+    """Catch prose currency that MathJax/Pandoc would parse as an equation."""
+
+    paths = [ROOT / path for path in sorted(article_paths())]
+    paths += [ROOT / "ja" / path for path in sorted(article_paths("ja"))]
+
+    for path in paths:
+        prose = strip_fenced_code(path.read_text(encoding="utf-8"))
+        in_display_math = False
+        display_start = 0
+
+        for lineno, line in enumerate(prose.splitlines(), start=1):
+            clean = INLINE_CODE_RE.sub("", line)
+            display_count = len(DOUBLE_DOLLAR_RE.findall(clean))
+
+            if in_display_math:
+                if display_count % 2:
+                    in_display_math = False
+                continue
+
+            if display_count % 2:
+                in_display_math = True
+                display_start = lineno
+                clean = clean.split("$$", 1)[0]
+
+            clean = re.sub(r"(?<!\\)\$\$.*?(?<!\\)\$\$", "", clean)
+            clean = clean.replace(r"\$", "")
+            delimiters = list(SINGLE_DOLLAR_RE.finditer(clean))
+            if len(delimiters) % 2:
+                errors.append(
+                    f"{rel(path)}:{lineno}: unbalanced $ inline-math delimiter; "
+                    + "write currency as an ISO code such as USD 100"
+                )
+                continue
+
+            for match in INLINE_DOLLAR_MATH_RE.finditer(clean):
+                if re.match(r"\s*\d[\d,.]*\s+[A-Za-z]", match.group(1)):
+                    errors.append(
+                        f"{rel(path)}:{lineno}: probable currency parsed as math: "
+                        + match.group(0)
+                    )
+
+        if in_display_math:
+            errors.append(
+                f"{rel(path)}:{display_start}: unclosed $$ display-math delimiter"
+            )
 
 
 def validate_book_workflow_paths(errors: list[str]) -> None:
@@ -268,6 +436,63 @@ def validate_book_workflow_paths(errors: list[str]) -> None:
                 errors.append(
                     f"{rel(path)}:{lineno}: missing chapter path: {match.group(1)}"
                 )
+
+
+def validate_chapter_manifests(errors: list[str]) -> None:
+    """Keep the README, web sidebar, and book build in sync with the corpus."""
+
+    expected = article_paths()
+
+    workflow = ROOT / ".github/workflows/build-book.yml"
+    if workflow.exists():
+        listed = [
+            Path(match.group(1))
+            for match in BOOK_CHAPTER_RE.finditer(workflow.read_text(encoding="utf-8"))
+            if not match.group(1).startswith("ja/")
+        ]
+        counts: dict[Path, int] = {}
+        for path in listed:
+            counts[path] = counts.get(path, 0) + 1
+        for path, count in sorted(counts.items()):
+            if count > 1:
+                errors.append(f"{rel(workflow)}: chapter listed {count} times: {path}")
+        for path in sorted(expected - set(listed)):
+            errors.append(f"{rel(workflow)}: English chapter missing from book: {path}")
+        for path in sorted(set(listed) - expected):
+            errors.append(f"{rel(workflow)}: stale book chapter entry: {path}")
+        if set(listed) == expected and listed != sorted(expected):
+            errors.append(
+                f"{rel(workflow)}: chapter order must follow section and filename order"
+            )
+
+    config = ROOT / ".vitepress/config.mts"
+    if config.exists():
+        routes = {
+            match.group(1).split("#", 1)[0].rstrip("/")
+            for match in VITEPRESS_LINK_RE.finditer(config.read_text(encoding="utf-8"))
+            if ARTICLE_ROUTE_RE.match(match.group(1).strip("/").split("#", 1)[0])
+        }
+        expected_routes = {
+            "/" + str(path.with_suffix("")) for path in expected
+        } | {
+            "/ja/" + str(path.with_suffix("")) for path in expected
+        }
+        for route in sorted(expected_routes - routes):
+            errors.append(f"{rel(config)}: chapter missing from sidebar: {route}")
+        for route in sorted(routes - expected_routes):
+            errors.append(f"{rel(config)}: stale sidebar chapter route: {route}")
+
+    readme = ROOT / "README.md"
+    if readme.exists():
+        targets = {
+            Path(target_from_link(match.group(1)).split("#", 1)[0])
+            for match in MARKDOWN_LINK_RE.finditer(
+                strip_fenced_code(readme.read_text(encoding="utf-8"))
+            )
+            if target_from_link(match.group(1)).endswith(".md")
+        }
+        for path in sorted(expected - targets):
+            errors.append(f"{rel(readme)}: English chapter missing from contents: {path}")
 
 
 def validate_vitepress_workflow_links(errors: list[str]) -> None:
@@ -367,8 +592,13 @@ def main() -> int:
     validate_advertised_counts(errors, article_count)
     validate_frontmatter(errors)
     validate_deep_system_chapters(errors)
+    validate_unique_chapter_titles(errors)
+    validate_unique_h2_headings(errors)
+    validate_unique_substantial_prose(errors)
     validate_portable_math_delimiters(errors)
+    validate_dollar_math_delimiters(errors)
     validate_book_workflow_paths(errors)
+    validate_chapter_manifests(errors)
     validate_vitepress_workflow_links(errors)
     validate_generated_assets(errors)
     validate_homepage_html_links(errors)

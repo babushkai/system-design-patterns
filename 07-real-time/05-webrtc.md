@@ -1,867 +1,356 @@
-# WebRTC
+# WebRTC Media Systems
 
 ## TL;DR
 
-WebRTC (Web Real-Time Communication) enables peer-to-peer audio, video, and data sharing directly between browsers without requiring a server relay. It uses STUN/TURN servers for NAT traversal and a signaling server to exchange connection metadata. WebRTC is ideal for video conferencing, voice calls, screen sharing, and real-time gaming.
+WebRTC is a secure, congestion-controlled media stack, not a browser-to-browser socket. Signaling exchanges session descriptions and authorization; ICE searches for a viable path; STUN discovers translated addresses; TURN relays traffic when direct connectivity fails; DTLS-SRTP protects media; and SCTP data channels carry application data. Two-party calls can be peer to peer, while multiparty products normally use a Selective Forwarding Unit (SFU). Design is dominated by NAT diversity, relay coverage, SFU egress and packet rate, codec and layer selection, network-change recovery, and measurable quality of experience. TURN is required reliability capacity, not an optional fallback.
 
 ---
 
-## WebRTC Architecture
+## The Stack and Its Trust Boundaries
+
+WebRTC deliberately does not standardize signaling. An application may use ordinary HTTP, SSE, WebSocket, or another channel to exchange offers, answers, ICE candidates, room membership, and control messages. That channel creates intent; the browser's WebRTC stack negotiates and transports media.
 
 ```mermaid
-graph LR
-    subgraph WebRTC Connection
-        direction LR
-        subgraph Peer A
-            RTC_A[RTCPeerConnection]
-            MS_A["Media Streams<br/>- Video Track<br/>- Audio Track<br/>Data Channels"]
-            RTC_A --- MS_A
-        end
-        subgraph Peer B
-            RTC_B[RTCPeerConnection]
-            MS_B["Media Streams<br/>- Video Track<br/>- Audio Track<br/>Data Channels"]
-            RTC_B --- MS_B
-        end
-        RTC_A <=="Direct P2P Connection<br/>(UDP/DTLS/SRTP)"==> RTC_B
-    end
-
-    subgraph Supporting Infrastructure
-        SIG[Signaling Server] <--"WebSocket/HTTP"--> STUN[STUN Server<br/>NAT Discovery]
-        SIG --> TURN[TURN Server<br/>Relay for symmetric NAT / firewall]
-        STUN --> TURN
-    end
+flowchart TB
+    A[Client A] <-->|authenticated signaling| S[Session / signaling service]
+    B[Client B] <-->|authenticated signaling| S
+    A -->|STUN binding requests| STUN[STUN service]
+    B -->|STUN binding requests| STUN
+    A <-->|direct candidate pair| B
+    A <-->|relayed candidate pair| TURN[TURN relay]
+    B <-->|relayed candidate pair| TURN
+    A <-->|DTLS-SRTP / RTP and RTCP| SFU[Regional SFU]
+    B <-->|DTLS-SRTP / RTP and RTCP| SFU
 ```
+
+Separate these responsibilities:
+
+| Plane | Owns | Must survive |
+|---|---|---|
+| Identity and room control | join authorization, roles, room epoch, participant and track metadata | signaling reconnects and duplicate commands |
+| Signaling | SDP offer/answer and trickled ICE candidates | reordering, retry, glare, temporary disconnect |
+| Connectivity | candidate gathering, ICE checks, consent, ICE restart | NAT rebinding and network handoff |
+| Media | RTP/RTCP, codecs, congestion control, retransmission, jitter buffering | packet loss, bandwidth change, SFU failover policy |
+| Relay | TURN allocations, permissions, channel bindings | restrictive NAT/firewall paths and regional loss |
+| Data | SCTP data channels | explicit ordering/reliability and application backpressure |
+
+A signaling outage does not necessarily stop already-established media; an ICE or SFU failure can stop media while signaling remains green. Monitor and fail them independently.
 
 ---
 
-## Connection Flow
+## Session Establishment Is a State Machine
+
+A robust session is identified by `room_id`, `participant_id`, `session_epoch`, and stable logical `track_id`. Socket identity, ICE username fragment, SSRC, and transceiver identifiers are connection details that can change during renegotiation or recovery.
 
 ```mermaid
 sequenceDiagram
-    participant A as Peer A
-    participant S as Signaling Server
-    participant B as Peer B
-
-    A->>S: 1. Create Offer (SDP with media caps)
-    S->>B: 2. Forward Offer
-    B->>S: 3. Answer (SDP with media caps)
-    S->>A: 4. Forward Answer
-    A->>B: 5. ICE Candidate
-    B->>A: ICE Candidate
-    A<==>B: 6. Direct P2P Connection Established
+    participant C as Client
+    participant R as Room authority
+    participant S as Signaling
+    participant I as ICE/STUN/TURN
+    participant M as Peer or SFU
+    C->>R: authorize join(room, role, device)
+    R-->>C: short-lived join token + room epoch + region
+    C->>S: join(token, session epoch, capabilities)
+    C->>C: create offer / set local description
+    C-->>S: offer + trickled candidates
+    S-->>M: authorized offer + candidates
+    M-->>S: answer + candidates
+    S-->>C: answer + candidates
+    C->>I: candidate gathering and connectivity checks
+    C->>M: nominate candidate pair; complete DTLS
+    M-->>C: bidirectional SRTP / SCTP established
+    C-->>S: track published / subscribed
 ```
+
+Important details hide behind this simple flow:
+
+- **Offer/answer is transactional state.** Apply descriptions in legal signaling states and correlate them to a session epoch. A late answer from a previous attempt must not mutate a replacement connection.
+- **Glare is normal.** Both endpoints can negotiate at once when tracks or devices change. Use the "perfect negotiation" pattern: one side is polite and rolls back on collision; the other ignores the colliding offer. Do not rely on timing to avoid simultaneous offers.
+- **Trickle ICE lowers setup latency.** Send candidates as they are discovered rather than waiting for gathering to complete. Candidates can arrive before the remote description, so queue them by negotiation generation.
+- **End-of-candidates matters.** It distinguishes slow gathering from completion and helps diagnostics.
+- **Renegotiation needs serialization.** Track adds/removes, screen sharing, codec changes, and ICE restarts can all request negotiation. Collapse or queue them; uncontrolled negotiation creates state races.
+- **Idempotency still applies.** `join`, `publish_track`, `subscribe`, and `leave` commands need stable request IDs. Signaling delivery and client reconnect are at-least-once.
+
+SDP is a negotiated description, not a database schema to edit with ad hoc string replacement. Keep product intent, such as "subscribe to Alice's camera at medium quality," in the control protocol, and let a tested WebRTC implementation construct and apply SDP.
 
 ---
 
-## Basic Implementation
+## ICE, STUN, and TURN
 
-### Signaling Server (Python)
+### Candidate discovery and selection
 
-```python
-import asyncio
-import websockets
-import json
-from typing import Dict, Set
+ICE gathers possible addresses and tests candidate pairs in priority order:
 
-class SignalingServer:
-    """
-    Simple signaling server for WebRTC.
-    Routes offers, answers, and ICE candidates between peers.
-    """
-    
-    def __init__(self):
-        self.rooms: Dict[str, Set[str]] = {}  # room_id -> set of peer_ids
-        self.peers: Dict[str, websockets.WebSocketServerProtocol] = {}
-        self.peer_rooms: Dict[str, str] = {}  # peer_id -> room_id
-    
-    async def register(self, websocket, peer_id: str, room_id: str):
-        """Register peer in room."""
-        self.peers[peer_id] = websocket
-        self.peer_rooms[peer_id] = room_id
-        
-        if room_id not in self.rooms:
-            self.rooms[room_id] = set()
-        
-        # Notify existing peers about new peer
-        for existing_peer in self.rooms[room_id]:
-            await self.send_to_peer(existing_peer, {
-                'type': 'peer_joined',
-                'peer_id': peer_id
-            })
-        
-        # Send list of existing peers to new peer
-        await self.send_to_peer(peer_id, {
-            'type': 'room_peers',
-            'peers': list(self.rooms[room_id])
-        })
-        
-        self.rooms[room_id].add(peer_id)
-    
-    async def unregister(self, peer_id: str):
-        """Remove peer from room."""
-        if peer_id in self.peer_rooms:
-            room_id = self.peer_rooms[peer_id]
-            self.rooms[room_id].discard(peer_id)
-            
-            # Notify other peers
-            for other_peer in self.rooms[room_id]:
-                await self.send_to_peer(other_peer, {
-                    'type': 'peer_left',
-                    'peer_id': peer_id
-                })
-            
-            del self.peer_rooms[peer_id]
-        
-        self.peers.pop(peer_id, None)
-    
-    async def send_to_peer(self, peer_id: str, message: dict):
-        """Send message to specific peer."""
-        if peer_id in self.peers:
-            try:
-                await self.peers[peer_id].send(json.dumps(message))
-            except websockets.ConnectionClosed:
-                await self.unregister(peer_id)
-    
-    async def handle_message(self, peer_id: str, message: dict):
-        """Route signaling messages between peers."""
-        msg_type = message.get('type')
-        target = message.get('target')
-        
-        if msg_type == 'offer':
-            # Forward offer to target peer
-            await self.send_to_peer(target, {
-                'type': 'offer',
-                'offer': message['offer'],
-                'from': peer_id
-            })
-        
-        elif msg_type == 'answer':
-            # Forward answer to target peer
-            await self.send_to_peer(target, {
-                'type': 'answer',
-                'answer': message['answer'],
-                'from': peer_id
-            })
-        
-        elif msg_type == 'ice_candidate':
-            # Forward ICE candidate to target peer
-            await self.send_to_peer(target, {
-                'type': 'ice_candidate',
-                'candidate': message['candidate'],
-                'from': peer_id
-            })
-    
-    async def handler(self, websocket, path):
-        """WebSocket connection handler."""
-        peer_id = None
-        
-        try:
-            async for message in websocket:
-                data = json.loads(message)
-                
-                if data['type'] == 'join':
-                    peer_id = data['peer_id']
-                    room_id = data['room_id']
-                    await self.register(websocket, peer_id, room_id)
-                
-                elif peer_id:
-                    await self.handle_message(peer_id, data)
-        
-        finally:
-            if peer_id:
-                await self.unregister(peer_id)
+- **Host candidate:** a local interface address; useful on the same network and often represented with mDNS in browsers for privacy.
+- **Server-reflexive candidate:** the public address mapping observed by a STUN server.
+- **Peer-reflexive candidate:** discovered during connectivity checks.
+- **Relayed candidate:** an address allocated on a TURN server; traffic passes through the relay.
 
-# Run server
-server = SignalingServer()
-asyncio.run(websockets.serve(server.handler, 'localhost', 8765))
+STUN does not relay media and does not "open every NAT." It helps an endpoint learn a mapping and participates in connectivity checks. ICE decides whether a candidate pair actually works. TURN creates a relay allocation with permissions and channel bindings when direct paths are unavailable.
+
+Deploy TURN from the first production release. Enterprise firewalls, carrier NAT, symmetric mappings, UDP blocking, and topology changes make relay usage workload- and geography-dependent. Offer UDP first, then TURN over TCP and TLS on reachable ports such as 443 where policy permits. TURN/TLS on 443 is still not HTTPS and some authenticated HTTP proxies will reject it, so test the actual enterprise path. TCP/TLS improves reachability but can cause head-of-line blocking under loss; it is a compatibility path, not a quality upgrade.
+
+### Credential and relay security
+
+Issue short-lived TURN credentials after authenticating the room participant. Scope their lifetime to the expected setup/session window, rotate the shared signing secret, and reject allocations that exceed per-user, tenant, IP, region, or bandwidth quotas. TURN is an internet-reachable bandwidth relay; static credentials will be stolen and sold as an open proxy.
+
+Enforce TURN permissions, restrict disallowed peer address ranges to prevent access to internal networks, limit allocation count and lifetime, and meter bytes in both directions. Do not trust a client-supplied TURN region; issue endpoints selected by the service and include multiple failure domains.
+
+### Liveness and network change
+
+ICE consent freshness verifies that a peer still consents to receive traffic. Application UI presence is not a substitute. When Wi-Fi changes to cellular, a NAT mapping changes, or the nominated pair fails, attempt an ICE restart with a new generation and credentials while preserving the logical session and tracks. A "disconnected" ICE state can recover; "failed" requires intervention. Use bounded timers informed by measured platform behavior rather than immediately destroying a call on the first transient state.
+
+Log candidate-pair type, local and remote protocol, relay region, nomination time, ICE failure reason, and restart outcome. A single global "call failed" counter cannot distinguish missing UDP reachability, broken TURN TLS, signaling races, or codec negotiation.
+
+---
+
+## Topology: Mesh, SFU, or MCU
+
+### Mesh
+
+In a full mesh of `N` participants, every sender uploads to `N-1` peers and the room has `N(N-1)/2` peer connections. With per-stream bitrate `b`:
+
+```text
+per_client_upload ≈ (N - 1) * b
+room_network_payload ≈ N * (N - 1) * b
 ```
 
-### Client-Side (JavaScript)
+Mesh minimizes server media cost and can provide strong end-to-end privacy, but client uplink, encoding, battery, and connection state grow quadratically. It is normally appropriate only for very small calls after testing the weakest supported device and uplink.
 
-```javascript
-class WebRTCClient {
-  constructor(signalingUrl, peerId, roomId) {
-    this.signalingUrl = signalingUrl;
-    this.peerId = peerId;
-    this.roomId = roomId;
-    this.ws = null;
-    this.peers = new Map(); // peerId -> RTCPeerConnection
-    this.localStream = null;
-    
-    // STUN/TURN servers
-    this.iceServers = [
-      { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:stun1.l.google.com:19302' },
-      // Add TURN server for NAT traversal fallback
-      {
-        urls: 'turn:turn.example.com:3478',
-        username: 'user',
-        credential: 'password'
-      }
-    ];
-    
-    this.callbacks = {
-      onRemoteStream: null,
-      onPeerConnected: null,
-      onPeerDisconnected: null
-    };
-  }
+### Selective Forwarding Unit
 
-  on(event, callback) {
-    this.callbacks[event] = callback;
-  }
+Each participant sends one or more encoded layers to an SFU. The SFU forwards selected packets to subscribers without composing a new video frame. Client upload is roughly independent of room size; server egress grows with subscriptions.
 
-  async start(mediaConstraints = { video: true, audio: true }) {
-    // Get local media stream
-    this.localStream = await navigator.mediaDevices.getUserMedia(mediaConstraints);
-    
-    // Connect to signaling server
-    await this.connectSignaling();
-    
-    return this.localStream;
-  }
-
-  async connectSignaling() {
-    return new Promise((resolve, reject) => {
-      this.ws = new WebSocket(this.signalingUrl);
-      
-      this.ws.onopen = () => {
-        this.ws.send(JSON.stringify({
-          type: 'join',
-          peer_id: this.peerId,
-          room_id: this.roomId
-        }));
-        resolve();
-      };
-      
-      this.ws.onmessage = (event) => {
-        this.handleSignalingMessage(JSON.parse(event.data));
-      };
-      
-      this.ws.onerror = reject;
-    });
-  }
-
-  async handleSignalingMessage(message) {
-    switch (message.type) {
-      case 'room_peers':
-        // Initiate connection to existing peers
-        for (const peerId of message.peers) {
-          await this.createOffer(peerId);
-        }
-        break;
-      
-      case 'peer_joined':
-        // New peer will send offer, wait for it
-        console.log(`Peer ${message.peer_id} joined`);
-        break;
-      
-      case 'peer_left':
-        this.handlePeerLeft(message.peer_id);
-        break;
-      
-      case 'offer':
-        await this.handleOffer(message.from, message.offer);
-        break;
-      
-      case 'answer':
-        await this.handleAnswer(message.from, message.answer);
-        break;
-      
-      case 'ice_candidate':
-        await this.handleIceCandidate(message.from, message.candidate);
-        break;
-    }
-  }
-
-  createPeerConnection(remotePeerId) {
-    const pc = new RTCPeerConnection({ iceServers: this.iceServers });
-    
-    // Add local tracks
-    this.localStream.getTracks().forEach(track => {
-      pc.addTrack(track, this.localStream);
-    });
-    
-    // Handle incoming tracks
-    pc.ontrack = (event) => {
-      if (this.callbacks.onRemoteStream) {
-        this.callbacks.onRemoteStream(remotePeerId, event.streams[0]);
-      }
-    };
-    
-    // Handle ICE candidates
-    pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        this.ws.send(JSON.stringify({
-          type: 'ice_candidate',
-          target: remotePeerId,
-          candidate: event.candidate
-        }));
-      }
-    };
-    
-    // Connection state changes
-    pc.onconnectionstatechange = () => {
-      if (pc.connectionState === 'connected') {
-        if (this.callbacks.onPeerConnected) {
-          this.callbacks.onPeerConnected(remotePeerId);
-        }
-      } else if (pc.connectionState === 'failed' || 
-                 pc.connectionState === 'disconnected') {
-        if (this.callbacks.onPeerDisconnected) {
-          this.callbacks.onPeerDisconnected(remotePeerId);
-        }
-      }
-    };
-    
-    this.peers.set(remotePeerId, pc);
-    return pc;
-  }
-
-  async createOffer(remotePeerId) {
-    const pc = this.createPeerConnection(remotePeerId);
-    
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    
-    this.ws.send(JSON.stringify({
-      type: 'offer',
-      target: remotePeerId,
-      offer: pc.localDescription
-    }));
-  }
-
-  async handleOffer(fromPeerId, offer) {
-    const pc = this.createPeerConnection(fromPeerId);
-    
-    await pc.setRemoteDescription(new RTCSessionDescription(offer));
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-    
-    this.ws.send(JSON.stringify({
-      type: 'answer',
-      target: fromPeerId,
-      answer: pc.localDescription
-    }));
-  }
-
-  async handleAnswer(fromPeerId, answer) {
-    const pc = this.peers.get(fromPeerId);
-    if (pc) {
-      await pc.setRemoteDescription(new RTCSessionDescription(answer));
-    }
-  }
-
-  async handleIceCandidate(fromPeerId, candidate) {
-    const pc = this.peers.get(fromPeerId);
-    if (pc) {
-      await pc.addIceCandidate(new RTCIceCandidate(candidate));
-    }
-  }
-
-  handlePeerLeft(peerId) {
-    const pc = this.peers.get(peerId);
-    if (pc) {
-      pc.close();
-      this.peers.delete(peerId);
-    }
-    if (this.callbacks.onPeerDisconnected) {
-      this.callbacks.onPeerDisconnected(peerId);
-    }
-  }
-
-  stop() {
-    // Close all peer connections
-    this.peers.forEach(pc => pc.close());
-    this.peers.clear();
-    
-    // Stop local stream
-    if (this.localStream) {
-      this.localStream.getTracks().forEach(track => track.stop());
-    }
-    
-    // Close signaling
-    if (this.ws) {
-      this.ws.close();
-    }
-  }
-}
-
-// Usage
-const client = new WebRTCClient('wss://signaling.example.com', 'user123', 'room1');
-
-client.on('onRemoteStream', (peerId, stream) => {
-  const video = document.createElement('video');
-  video.srcObject = stream;
-  video.autoplay = true;
-  document.getElementById('remote-videos').appendChild(video);
-});
-
-const localStream = await client.start({ video: true, audio: true });
-document.getElementById('local-video').srcObject = localStream;
+```mermaid
+flowchart LR
+    A[Publisher A<br/>simulcast layers] --> S[SFU]
+    B[Publisher B<br/>audio + video] --> S
+    C[Publisher C<br/>screen] --> S
+    S -->|selected layers| A
+    S -->|selected layers| B
+    S -->|selected layers| C
+    S --> R[Recorder / egress]
 ```
+
+An SFU is the common choice for interactive multiparty calls. It preserves individual tracks, lets each receiver choose different layers, and avoids server-side decode/compose/encode for every room. It still terminates a secure transport with each participant and is a trusted media service unless an additional application end-to-end encryption layer is used.
+
+### Multipoint Control Unit
+
+An MCU decodes participants, mixes or composites them, and encodes one or a few outputs. It reduces receiver work and produces a canonical layout useful for legacy endpoints or broadcast, but adds substantial CPU/GPU cost, latency, codec coupling, and a cleartext media boundary. Many systems use an SFU for the call and a separate compositor only for recordings or broadcast renditions.
+
+### A practical decision
+
+Use mesh for measured two- or very-small-party sessions, SFU for multiparty interactive media, and MCU/composition where server-created output is the product requirement. Do not switch topology only at a participant-count threshold without considering number of published tracks, screen share, simulcast layers, device class, and subscription layout.
+
+---
+
+## Designing an SFU System
+
+Split control and packet paths:
+
+```mermaid
+flowchart TB
+    API[Room API] --> RA[Room authority / placement]
+    SIG[Signaling fleet] --> RA
+    RA --> N[SFU node assignment]
+    P[Participants] <-->|ICE + DTLS-SRTP| N
+    N --> Q[Quality and congestion controller]
+    N --> REC[Recording / egress workers]
+    N --> OBS[Per-stream telemetry]
+    RA --> META[(Durable room metadata)]
+```
+
+The room authority assigns one current room epoch and SFU placement. SFU nodes keep hot packet-routing state; durable product state such as room policy, recording intent, and audit records lives outside the media process. A stale signaling node must not publish tracks into a newer room epoch.
+
+### Track identity and subscriptions
+
+Give each logical source a stable track ID independent of SSRC or transport. A camera may restart with a new SSRC; a screen share may replace a sender; an SFU migration may create a new peer connection. Downstream UI, recording metadata, and authorization should follow the logical track.
+
+Model subscription intent separately from the selected encoding:
+
+```text
+subscription = (subscriber, logical_track, max_quality, priority, visibility)
+selection = (encoding/layer, target_bitrate, paused_reason, decision_version)
+```
+
+The SFU continually maps intent to a viable layer based on viewport, active speaker, available downlink, loss, CPU, and room policy. The client should not assume a fixed SSRC or resolution.
+
+### Simulcast and scalable coding
+
+With simulcast, a sender encodes several independent spatial streams; the SFU selects one per subscriber. This spends extra sender CPU and uplink so receivers can adapt quickly. With scalable video coding (SVC), enhancement layers depend on a base layer; it can be more bandwidth-efficient but support and switching behavior vary by codec and implementation.
+
+Budget the sum of all published layers, not only the highest advertised resolution. Avoid forwarding a high layer until the receiver has the needed keyframe and bandwidth. Excessive Picture Loss Indication (PLI) requests can cause a keyframe storm; aggregate or rate-limit requests per source and make layer switches deliberate.
+
+### Room placement and global calls
+
+Anchor an interactive room to a media region chosen from participant latency, TURN reachability, available capacity, and data-residency policy. Putting every participant in their nearest SFU and hauling each track among all SFUs can multiply inter-region traffic and complicate congestion control. For geographically distributed large rooms, use a measured cascade: regional edge SFUs exchange only tracks and layers demanded remotely.
+
+Keep existing rooms on healthy nodes during routine deploys and stop assigning new rooms before draining. Moving a live room generally requires new peer connections or ICE restarts and causes visible disruption; perform it only for failure, severe imbalance, or an explicit migration protocol. Preserve room and track identity across the move, increment the room/session epoch, and reject late signaling from the old node.
+
+---
+
+## Capacity and Cost Math
+
+### TURN
+
+For each unidirectional relayed stream, the relay receives the payload once and sends it once:
+
+```text
+TURN_NIC_throughput ≈ 2 * relayed_payload_bitrate + protocol_overhead
+TURN_egress_cost depends on provider accounting and traffic direction
+```
+
+Sum audio, video, data, RTCP, retransmissions, and overhead in both directions. A 2 Mb/s bidirectional session relayed for both peers is not a 2 Mb/s relay workload. Track allocations, permissions, file descriptors, UDP packets/s, TLS/TCP connections, and bandwidth independently. Provision across failure domains so losing one relay site does not force more traffic onto the remaining site than its measured safe goodput.
+
+### SFU
+
+For room `r` with publishers `p` and subscriptions `s`:
+
+```text
+SFU_ingress_r = sum(published_encoding_bitrates_p)
+SFU_egress_r  = sum(selected_bitrate_s)
+SFU_packet_work ≈ ingress_packets + forwarded_packets + RTCP/retransmission work
+```
+
+Egress normally dominates. Suppose 100 rooms contain 12 participants each. Every participant sends 1.5 Mb/s of media, and every receiver is sent an average 4 Mb/s selected layout. The fleet sees about 1.8 Gb/s ingress and 4.8 Gb/s egress before RTP/UDP/IP overhead, retransmissions, recording, and inter-region cascades. Those arithmetic values are inputs, not instance counts: benchmark safe throughput for the exact SFU, codec mix, packet sizes, encryption, observability, kernel/network configuration, and loss profile.
+
+Packets per second can exhaust CPU before link bandwidth when audio and low-bitrate layers produce many small packets. Conversely, a few high-resolution screens can exhaust NIC egress. Track both. Recording doubles selected egress or adds decode/encode work depending on architecture. Simulcast increases ingress. TURN and SFU paths can stack when a participant relays to the SFU, adding TURN load without reducing SFU load.
+
+Capacity plans should include peak concurrent participants, tracks per participant, layer mix, fan-out per track, TURN ratio by region/network, reconnect and keyframe bursts, one-node or one-zone loss, deploy surge, and growth margin. Admission control should reject or degrade before a room lands on a node that cannot preserve audio and control traffic.
+
+---
+
+## Congestion Control and Quality Adaptation
+
+Real-time media should reduce quality rather than build seconds of queue. Protect audio first, then screen readability or active-speaker video according to product policy. Adapt by pausing low-priority video, selecting a lower simulcast/SVC layer, reducing sender target bitrate or frame rate, and limiting the number of visible subscriptions.
+
+RTCP feedback and transport statistics expose loss, round-trip time, jitter, bitrate, retransmissions, frames dropped, freeze duration, keyframes, candidate pair, and available bitrate. Interpret counters as deltas over an interval; a cumulative byte count is not a rate. Correlate browser `getStats()` with SFU and TURN telemetry using room, participant, session epoch, and track identifiers, while respecting the privacy sensitivity of IP and device information.
+
+Useful experience indicators include:
+
+- join-to-first-audio and join-to-first-video;
+- call setup and ICE success by candidate type, network, platform, and region;
+- relay ratio and TURN failure rate;
+- audio concealment, jitter, round-trip time, and packet loss;
+- video freeze time, frames decoded/dropped, resolution switches, and time at requested quality;
+- SFU queueing, packet drops, PLI/NACK rate, retransmission bytes, and egress saturation;
+- unexpected reconnect, ICE restart, and participant drop rate.
+
+An average call-quality score hides exactly the networks and devices that need engineering attention. Use distributions and cohort breakdowns, and retain enough raw interval data to explain a failed session.
 
 ---
 
 ## Data Channels
 
-```javascript
-class DataChannelClient extends WebRTCClient {
-  constructor(signalingUrl, peerId, roomId) {
-    super(signalingUrl, peerId, roomId);
-    this.dataChannels = new Map(); // peerId -> RTCDataChannel
-    this.messageHandlers = [];
-  }
+`RTCDataChannel` runs SCTP over the WebRTC secure transport. The application selects ordered or unordered delivery and may bound retransmissions or packet lifetime. These options express different semantics:
 
-  onMessage(handler) {
-    this.messageHandlers.push(handler);
-  }
+- ordered and reliable: chat/control where sequence matters, but loss can head-of-line-block that channel;
+- unordered and partially reliable: cursor motion, game state, or telemetry where newer state supersedes old;
+- separate channels: isolate control from bulk transfer so a large reliable message does not delay latency-sensitive state.
 
-  createPeerConnection(remotePeerId) {
-    const pc = super.createPeerConnection(remotePeerId);
-    
-    // Create data channel for sending
-    const dc = pc.createDataChannel('messages', {
-      ordered: true  // Guaranteed order
-    });
-    
-    this.setupDataChannel(remotePeerId, dc);
-    
-    // Handle incoming data channel
-    pc.ondatachannel = (event) => {
-      this.setupDataChannel(remotePeerId, event.channel);
-    };
-    
-    return pc;
-  }
-
-  setupDataChannel(peerId, channel) {
-    channel.onopen = () => {
-      console.log(`Data channel open with ${peerId}`);
-      this.dataChannels.set(peerId, channel);
-    };
-    
-    channel.onmessage = (event) => {
-      const message = JSON.parse(event.data);
-      this.messageHandlers.forEach(handler => {
-        handler(peerId, message);
-      });
-    };
-    
-    channel.onclose = () => {
-      this.dataChannels.delete(peerId);
-    };
-  }
-
-  sendTo(peerId, message) {
-    const channel = this.dataChannels.get(peerId);
-    if (channel && channel.readyState === 'open') {
-      channel.send(JSON.stringify(message));
-    }
-  }
-
-  broadcast(message) {
-    this.dataChannels.forEach((channel, peerId) => {
-      this.sendTo(peerId, message);
-    });
-  }
-}
-
-// Usage: Real-time game
-const game = new DataChannelClient('wss://signaling.example.com', 'player1', 'game-room');
-
-game.onMessage((fromPeer, message) => {
-  if (message.type === 'player_move') {
-    updatePlayerPosition(fromPeer, message.position);
-  }
-});
-
-// Broadcast position updates
-setInterval(() => {
-  game.broadcast({
-    type: 'player_move',
-    position: getLocalPlayerPosition()
-  });
-}, 50); // 20 updates per second
-```
+Fragment and cap application messages, monitor `bufferedAmount`, and stop producing above a high-water mark. A data-channel `send()` is not durable delivery; reconnect loses in-flight state. Important commands need stable IDs, acknowledgments, replay or an ordinary durable API. For large files, object storage with resumable transfer is usually better than retaining the entire payload in peer and SCTP buffers.
 
 ---
 
-## TURN Server (Relay)
+## Security, Privacy, and Recording
 
-```mermaid
-graph LR
-    subgraph Scenario 1 — Direct P2P
-        PA1["Peer A<br/>(Public)"] <==> PB1["Peer B<br/>(Public)"]
-    end
+Browser media capture is restricted to secure contexts, and production signaling must use authenticated TLS. WebRTC encrypts transport media with DTLS-SRTP. Carry the negotiated fingerprint through that authenticated signaling path; if signaling can be altered, an attacker can redirect the session or change authorization even though packets are encrypted on each hop.
 
-    subgraph Scenario 2 — STUN
-        PA2[Peer A] --- NATA[NAT A] <==> NATB[NAT B] --- PB2[Peer B]
-        NATA --> STUN[STUN Server<br/>Discovers public IP/port]
-        NATB --> STUN
-    end
+An SFU has a secure transport relationship with every participant and can normally access media payload. If the product promises media that the SFU cannot decrypt, add an application end-to-end layer such as SFrame and design key distribution, participant changes, moderation, recording, transcription, and lawful-access policy around that fact. Transport encryption alone is not end-to-end encryption through an SFU.
 
-    subgraph Scenario 3 — TURN required
-        PA3[Peer A] --- SNATA[Symmetric NAT A] --> TURN[TURN Server<br/>Relays traffic]
-        PB3[Peer B] --- SNATB[Symmetric NAT B] --> TURN
-    end
-```
+Other controls are equally important:
 
-```python
-# TURN server configuration (using coturn)
-"""
-# /etc/turnserver.conf
+- obtain explicit camera, microphone, and screen-capture consent; show active capture clearly;
+- issue room-scoped, short-lived join tokens and enforce publisher/subscriber roles at signaling and SFU layers;
+- use short-lived TURN credentials, relay quotas, destination restrictions, and abuse monitoring;
+- limit offers, candidates, tracks, codecs, data-channel sizes, and renegotiation frequency;
+- treat ICE candidate and stats data as sensitive network/device information and minimize retention;
+- protect recording intent with durable authorization and audit events; never infer consent from mere room membership;
+- encrypt recordings at rest, segment uploads idempotently, define retention/deletion, and make missing segments visible rather than silently producing a corrupt artifact.
 
-# Network
-listening-port=3478
-tls-listening-port=5349
-
-# TLS certificates
-cert=/etc/ssl/certs/turn.pem
-pkey=/etc/ssl/private/turn.key
-
-# Authentication
-lt-cred-mech
-user=webrtc:password123
-
-# Realm
-realm=example.com
-
-# Allowed peer IPs (internal network)
-denied-peer-ip=0.0.0.0-0.255.255.255
-denied-peer-ip=10.0.0.0-10.255.255.255
-denied-peer-ip=172.16.0.0-172.31.255.255
-denied-peer-ip=192.168.0.0-192.168.255.255
-
-# Logging
-log-file=/var/log/turnserver.log
-verbose
-"""
-
-# Dynamic TURN credentials (time-limited)
-import hmac
-import hashlib
-import base64
-import time
-
-def generate_turn_credentials(secret: str, user: str, ttl: int = 86400):
-    """Generate time-limited TURN credentials."""
-    timestamp = int(time.time()) + ttl
-    username = f"{timestamp}:{user}"
-    
-    # HMAC-SHA1 of timestamp:user
-    password = base64.b64encode(
-        hmac.new(
-            secret.encode(),
-            username.encode(),
-            hashlib.sha1
-        ).digest()
-    ).decode()
-    
-    return {
-        'username': username,
-        'password': password,
-        'ttl': ttl,
-        'uris': [
-            'turn:turn.example.com:3478?transport=udp',
-            'turn:turn.example.com:3478?transport=tcp',
-            'turns:turn.example.com:5349?transport=tcp'
-        ]
-    }
-```
+Client-side recording captures only what that client receives and is vulnerable to tab suspension or device loss. Server-side per-track recording preserves sources but adds SFU egress and storage. Composition produces a convenient single layout but introduces decode/encode capacity and locks editorial decisions into the artifact. Choose intentionally.
 
 ---
 
-## Selective Forwarding Unit (SFU)
+## Failure Modes and Recovery
 
-```mermaid
-graph TD
-    subgraph "Mesh — N×(N-1)/2 connections (doesn't scale)"
-        MA[Peer A] <==> MB[Peer B]
-        MA <==> MC[Peer C]
-        MA <==> MD[Peer D]
-        MB <==> MC
-        MB <==> MD
-        MC <==> MD
-    end
-```
+| Failure | What it means | Recovery |
+|---|---|---|
+| Signaling disconnect, media healthy | Control path failed; current candidate pair still works | Reconnect signaling with room/session epoch; do not tear media down immediately |
+| No viable direct pair | NAT/firewall path unavailable | Allocate and nominate TURN relay; surface relay-region and transport diagnostics |
+| ICE `disconnected` after network change | Candidate pair may be transiently unreachable | Allow bounded recovery; trigger ICE restart when policy threshold is crossed |
+| ICE `failed` | Checklist has no usable path | ICE restart/new credentials; verify TURN coverage before abandoning call |
+| TURN allocation expires | Refresh failed or relay disappeared | New allocation and ICE restart; redundant regional relays |
+| SFU process dies | Media transport state is lost | Rejoin a replacement SFU with higher room/session epoch; recreate publications/subscriptions |
+| SFU egress saturates | Loss, queueing, freezes across many rooms | Admission control, shed video layers, preserve audio, move only new rooms during drain |
+| PLI/NACK storm | Loss or layer switching amplifies retransmission/keyframes | Aggregate/rate-limit feedback, fix path loss, reduce layers/bitrate |
+| Late signaling from old attempt | Stale answer/candidate mutates new connection | Correlate every message with negotiation generation and session epoch |
+| Token expires mid-call | Control authorization becomes stale | Rotate through authenticated signaling; enforce revocation at room authority and SFU |
+| Recorder falls behind | Recording queue or encoder cannot keep up | Bounded segment pipeline, explicit gaps, degrade/composition policy, alerts |
+| Region fails | Signaling, TURN, and/or SFU may fail independently | Region-aware reconnect, new placement, track identity preservation, measured recovery objective |
 
-```mermaid
-graph TD
-    subgraph "SFU — N connections (scales)"
-        SA[Peer A] --> SFU[SFU<br/>Selective Forward]
-        SB[Peer B] --> SFU
-        SFU --> SC[Peer C]
-        SFU --> SD[Peer D]
-    end
-```
-
-```python
-import asyncio
-from typing import Dict, Set, List
-from dataclasses import dataclass
-
-@dataclass
-class Participant:
-    id: str
-    websocket: any
-    tracks: Dict[str, 'TrackInfo']  # track_id -> TrackInfo
-
-@dataclass
-class TrackInfo:
-    type: str  # 'video' or 'audio'
-    participant_id: str
-    subscribers: Set[str]
-
-class SFUServer:
-    """
-    Simple SFU (Selective Forwarding Unit) concept.
-    In production, use mediasoup, Janus, or similar.
-    """
-    
-    def __init__(self):
-        self.rooms: Dict[str, Dict[str, Participant]] = {}
-    
-    async def join_room(self, room_id: str, participant: Participant):
-        """Participant joins room."""
-        if room_id not in self.rooms:
-            self.rooms[room_id] = {}
-        
-        room = self.rooms[room_id]
-        
-        # Notify existing participants
-        for existing in room.values():
-            await self.notify(existing, {
-                'type': 'participant_joined',
-                'participant_id': participant.id
-            })
-            
-            # Send existing tracks to new participant
-            for track in existing.tracks.values():
-                await self.notify(participant, {
-                    'type': 'track_available',
-                    'participant_id': existing.id,
-                    'track_id': track.id,
-                    'track_type': track.type
-                })
-        
-        room[participant.id] = participant
-    
-    async def publish_track(self, room_id: str, participant_id: str, 
-                           track_id: str, track_type: str):
-        """Participant publishes a track."""
-        room = self.rooms.get(room_id, {})
-        participant = room.get(participant_id)
-        
-        if participant:
-            track = TrackInfo(
-                type=track_type,
-                participant_id=participant_id,
-                subscribers=set()
-            )
-            participant.tracks[track_id] = track
-            
-            # Notify all other participants
-            for other in room.values():
-                if other.id != participant_id:
-                    await self.notify(other, {
-                        'type': 'track_available',
-                        'participant_id': participant_id,
-                        'track_id': track_id,
-                        'track_type': track_type
-                    })
-    
-    async def subscribe_track(self, room_id: str, subscriber_id: str,
-                              publisher_id: str, track_id: str):
-        """Subscribe to a track from another participant."""
-        room = self.rooms.get(room_id, {})
-        publisher = room.get(publisher_id)
-        
-        if publisher and track_id in publisher.tracks:
-            publisher.tracks[track_id].subscribers.add(subscriber_id)
-            
-            # In real SFU: set up RTP forwarding
-            # Return track details for WebRTC negotiation
-            return {
-                'type': 'subscribed',
-                'publisher_id': publisher_id,
-                'track_id': track_id
-            }
-    
-    async def forward_media(self, room_id: str, publisher_id: str, 
-                           track_id: str, media_data: bytes):
-        """Forward media to all subscribers (simplified)."""
-        room = self.rooms.get(room_id, {})
-        publisher = room.get(publisher_id)
-        
-        if publisher and track_id in publisher.tracks:
-            track = publisher.tracks[track_id]
-            
-            for subscriber_id in track.subscribers:
-                subscriber = room.get(subscriber_id)
-                if subscriber:
-                    # Forward RTP packet
-                    await self.send_media(subscriber, media_data)
-```
+Recovery is not seamless by default. A replacement SFU cannot reconstruct cryptographic, congestion-control, jitter-buffer, and packet-routing state from a database row. The client must establish a new transport. Design the UI and SLO around join recovery time, and preserve logical room/track state so the disruption is bounded and understandable.
 
 ---
 
-## Screen Sharing
+## Testing Strategy
 
-```javascript
-class ScreenShareClient extends WebRTCClient {
-  async startScreenShare() {
-    try {
-      // Get screen capture stream
-      const screenStream = await navigator.mediaDevices.getDisplayMedia({
-        video: {
-          cursor: 'always',
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
-          frameRate: { ideal: 30 }
-        },
-        audio: true  // System audio (if supported)
-      });
-      
-      // Replace video track in all peer connections
-      const screenTrack = screenStream.getVideoTracks()[0];
-      
-      this.peers.forEach((pc, peerId) => {
-        const sender = pc.getSenders().find(s => 
-          s.track && s.track.kind === 'video'
-        );
-        
-        if (sender) {
-          sender.replaceTrack(screenTrack);
-        }
-      });
-      
-      // Handle screen share stop
-      screenTrack.onended = () => {
-        this.stopScreenShare();
-      };
-      
-      this.screenStream = screenStream;
-      return screenStream;
-      
-    } catch (error) {
-      if (error.name === 'NotAllowedError') {
-        console.log('Screen share cancelled by user');
-      }
-      throw error;
-    }
-  }
-  
-  async stopScreenShare() {
-    if (this.screenStream) {
-      this.screenStream.getTracks().forEach(track => track.stop());
-      
-      // Restore camera track
-      const cameraTrack = this.localStream.getVideoTracks()[0];
-      
-      this.peers.forEach((pc, peerId) => {
-        const sender = pc.getSenders().find(s => 
-          s.track && s.track.kind === 'video'
-        );
-        
-        if (sender) {
-          sender.replaceTrack(cameraTrack);
-        }
-      });
-      
-      this.screenStream = null;
-    }
-  }
-}
-```
+Test a matrix, not one office Wi-Fi call:
+
+1. NAT types and paths: public, home NAT, carrier NAT, symmetric mappings, UDP blocked, TCP-only, TURN/TLS, IPv4, IPv6, and mixed families.
+2. Impairment: latency, jitter, burst loss, reordering, duplication, bandwidth collapse, bufferbloat, and asymmetric uplink/downlink.
+3. Mobility: Wi-Fi-to-cellular handoff, NAT rebinding, device sleep/wake, browser backgrounding, and laptop network changes.
+4. Signaling races: simultaneous offers, candidates before descriptions, duplicate joins, stale answers, reconnect during renegotiation, and token rotation.
+5. Media scale: maximum tracks/layers, active-speaker churn, screen share, PLI storms, recording, data channels, and one SFU/zone loss.
+6. Security: unauthorized join/publish/subscribe, replayed join tokens, TURN credential theft, internal-address relay attempts, oversized SDP/candidates/messages, and revocation during a call.
+7. Compatibility: every supported browser/OS/device/codec combination, including hardware encoder scarcity and permission UX.
+
+Automate synthetic calls through the public signaling, TURN, and SFU endpoints in every region. Assert media flow and quality counters, not merely that `RTCPeerConnection.connectionState` became `connected`.
 
 ---
 
-## Recording
+## Decision Framework
 
-```javascript
-class RecordingClient extends WebRTCClient {
-  constructor(...args) {
-    super(...args);
-    this.recorder = null;
-    this.recordedChunks = [];
-  }
-  
-  startRecording(stream, options = {}) {
-    const mimeType = this.getSupportedMimeType();
-    
-    this.recorder = new MediaRecorder(stream, {
-      mimeType,
-      videoBitsPerSecond: options.videoBitrate || 2500000
-    });
-    
-    this.recordedChunks = [];
-    
-    this.recorder.ondataavailable = (event) => {
-      if (event.data.size > 0) {
-        this.recordedChunks.push(event.data);
-      }
-    };
-    
-    this.recorder.onstop = () => {
-      this.saveRecording();
-    };
-    
-    // Record in 1-second chunks for resilience
-    this.recorder.start(1000);
-  }
-  
-  stopRecording() {
-    if (this.recorder && this.recorder.state !== 'inactive') {
-      this.recorder.stop();
-    }
-  }
-  
-  getSupportedMimeType() {
-    const types = [
-      'video/webm;codecs=vp9,opus',
-      'video/webm;codecs=vp8,opus',
-      'video/webm',
-      'video/mp4'
-    ];
-    
-    for (const type of types) {
-      if (MediaRecorder.isTypeSupported(type)) {
-        return type;
-      }
-    }
-    
-    throw new Error('No supported video format');
-  }
-  
-  saveRecording() {
-    const blob = new Blob(this.recordedChunks, { type: 'video/webm' });
-    const url = URL.createObjectURL(blob);
-    
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `recording-${Date.now()}.webm`;
-    a.click();
-    
-    URL.revokeObjectURL(url);
-  }
-}
-```
+Ask:
+
+1. Is the workload interactive audio/video or peer-oriented, partially reliable data? If not, a [client delivery transport](./01-polling.md) is simpler.
+2. Can two-party sessions meet reliability and device budgets with direct peer paths plus production TURN? If yes, P2P may be appropriate.
+3. Does room size, recording, moderation, adaptation, or topology control require an SFU? For most multiparty products, yes.
+4. Does the output require server composition or legacy interop? Add a separate MCU/compositor path instead of making every interactive packet pay that cost.
+5. Can the product afford TURN and SFU capacity in each supported region under a failure scenario? If not, it does not yet have a reliable WebRTC service.
+6. Is the encryption promise hop-by-hop through trusted media servers or application end to end? Decide before adding recording, transcription, and moderation.
+
+The final design should name the room authority, ordering/session epochs, signaling recovery, TURN coverage, topology, quality adaptation, measured safe capacity, media-region failure behavior, encryption boundary, and recording policy.
 
 ---
 
 ## Key Takeaways
 
-1. **Peer-to-peer by default**: WebRTC establishes direct connections; use TURN servers only when P2P fails
+1. WebRTC is a stack of signaling, ICE/STUN/TURN, secure media, congestion control, and optional data channels; each has a distinct failure boundary.
+2. TURN is mandatory reachability capacity. Measure relay ratio by network and region and size ingress, egress, allocations, packets, and failover headroom.
+3. ICE candidates are possibilities, not connectivity; checks nominate a working pair, consent maintains permission, and network changes often require ICE restart.
+4. Mesh grows quadratically and is limited to small measured rooms; an SFU is the normal multiparty topology, while MCU composition is a specialized output path.
+5. SFU egress and forwarded packets usually dominate. Simulcast, recording, retransmission, and regional cascades materially change the capacity model.
+6. Stable room, session-epoch, participant, and track identities must survive socket, SSRC, candidate, and SFU replacement.
+7. Preserve audio and control traffic under congestion; adapt subscriptions and layers rather than allowing a latency queue to grow.
+8. Transport encryption through an SFU is not application end-to-end encryption. If the SFU must not decrypt, add an explicit media E2EE and key-management design.
+9. `getStats()` plus SFU/TURN telemetry should explain each failed cohort; connection state alone is not a quality metric.
+10. Test NATs, mobility, loss, race conditions, browser/device combinations, abuse, and media-node failure through the real public path.
 
-2. **Signaling is separate**: WebRTC doesn't define signaling; use WebSocket, HTTP, or any channel for offer/answer exchange
+---
 
-3. **ICE handles NAT**: STUN discovers public addresses; TURN relays when direct connection impossible
+## References
 
-4. **SFU for scaling**: Mesh topology doesn't scale; use SFU for video conferencing with many participants
-
-5. **Data channels for low latency**: Use RTCDataChannel for game state, file transfer, or any real-time data
-
-6. **Handle network changes**: Implement ICE restart for network switching (WiFi to cellular)
-
-7. **Monitor connection quality**: Use getStats() API to monitor bitrate, packet loss, and adjust quality accordingly
+- [W3C WebRTC 1.0](https://www.w3.org/TR/webrtc/): browser peer-connection, media, data-channel, and statistics APIs
+- [W3C WebRTC Statistics](https://www.w3.org/TR/webrtc-stats/): interoperable quality and transport metric definitions
+- [RFC 8825: Overview of WebRTC](https://datatracker.ietf.org/doc/html/rfc8825): architecture and protocol suite
+- [RFC 8829: JavaScript Session Establishment Protocol](https://datatracker.ietf.org/doc/html/rfc8829): offer/answer and signaling state
+- [RFC 8445: Interactive Connectivity Establishment](https://datatracker.ietf.org/doc/html/rfc8445): candidate gathering, checks, nomination, and restart
+- [RFC 8838: Trickle ICE](https://datatracker.ietf.org/doc/html/rfc8838): incremental candidate exchange
+- [RFC 8489: Session Traversal Utilities for NAT](https://datatracker.ietf.org/doc/html/rfc8489): STUN
+- [RFC 8656: Traversal Using Relays around NAT](https://datatracker.ietf.org/doc/html/rfc8656): TURN allocations, permissions, channels, and refresh
+- [RFC 7675: STUN Usage for Consent Freshness](https://datatracker.ietf.org/doc/html/rfc7675): continuing peer consent
+- [RFC 8826: Security Considerations for WebRTC](https://datatracker.ietf.org/doc/html/rfc8826) and [RFC 8827: WebRTC Security Architecture](https://datatracker.ietf.org/doc/html/rfc8827): threat model and security properties
+- [RFC 8831: WebRTC Data Channels](https://datatracker.ietf.org/doc/html/rfc8831): SCTP data-channel transport and reliability modes
+- [RFC 9605: Secure Frame (SFrame)](https://datatracker.ietf.org/doc/html/rfc9605): application end-to-end media encryption through forwarding servers

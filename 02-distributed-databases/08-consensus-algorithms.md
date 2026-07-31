@@ -1,813 +1,220 @@
 # Consensus Algorithms
 
-## TL;DR
+Consensus is the safety core of a replicated state machine: replicas choose one ordered history even when processes crash, messages are delayed or duplicated, and the network partitions. Its value is not that every server is always current. Its value is that no two successful majorities can make incompatible decisions under the stated failure model.
 
-Consensus enables distributed nodes to agree on a value despite failures. Paxos is theoretically elegant but hard to implement. Raft is designed for understandability and is widely used. Both tolerate f failures with 2f+1 nodes. Consensus is expensive—use it only for coordination, not for all data operations.
+Consensus design must preserve **replicated-state-machine safety, quorum intersection, log choice, recovery, membership, and explicit liveness assumptions**. [Leader Election](./09-leader-election.md) covers candidacy, authority epochs, leases, external-resource fencing, failover timing, and handoff. The [Raft paper analysis](../09-whitepapers/07-raft.md) follows one protocol; the sections below compare common proof obligations.
 
----
+## The contract and failure model
 
-## The Consensus Problem
+For a single consensus instance, the usual properties are:
 
-### Definition
+- **Agreement:** no two correct processes decide different values.
+- **Validity/non-triviality:** a decided value came from an allowed proposal.
+- **Integrity:** a process decides at most once.
+- **Termination:** correct processes eventually decide, under explicit liveness assumptions.
 
-Get a group of nodes to agree on a single value.
+A replicated log repeats consensus for slots and adds total order: replicas apply the same committed command at each index, in index order. A service normally also needs linearizable client semantics, duplicate suppression, snapshots, membership changes, and deterministic state-machine execution. Those are not automatic consequences of “using Raft” or “using Paxos.”
 
-```
-Nodes: A, B, C, D, E
-Proposals: A proposes "X", B proposes "Y"
-
-Requirements:
-  1. Agreement: All nodes decide the same value
-  2. Validity: Decided value was proposed by some node
-  3. Termination: All correct nodes eventually decide
-```
-
-### Why It's Hard
-
-```
-Scenario: 5 nodes, A proposes "X"
-
-Time 1: A sends proposal to all
-Time 2: B, C receive proposal, agree
-Time 3: A crashes
-Time 4: D, E haven't received proposal
-
-What should D, E decide?
-  - They don't know about "X"
-  - Can't contact A (crashed)
-  - Might receive conflicting proposal from B
-```
-
-### FLP Impossibility
-
-```
-Fischer, Lynch, Paterson (1985):
-
-In an asynchronous system with even ONE faulty node,
-no consensus protocol can guarantee termination.
-
-Implication:
-  - Can't distinguish slow node from crashed node
-  - Must use timeouts (gives up pure asynchrony)
-  - All practical systems use partial synchrony
-```
-
----
-
-## Paxos
-
-### Basic Paxos
-
-Agrees on a single value.
-
-**Roles:**
-```
-Proposers: Propose values
-Acceptors: Accept/reject proposals
-Learners:  Learn decided values
-
-(Same node can play multiple roles)
-```
-
-**Phase 1: Prepare**
-```
-Proposer:
-  1. Choose proposal number n (unique, increasing)
-  2. Send Prepare(n) to majority of acceptors
-
-Acceptor on receiving Prepare(n):
-  If n > highest_seen:
-    highest_seen = n
-    Promise: won't accept proposals < n
-    Reply with any previously accepted value
-```
-
-**Phase 2: Accept**
-```
-Proposer (if majority promised):
-  If any acceptor replied with accepted value:
-    Use that value (can't choose own value)
-  Else:
-    Use own proposed value
-  Send Accept(n, value) to majority
-
-Acceptor on receiving Accept(n, value):
-  If n >= highest_seen:
-    Accept proposal
-    Reply with acceptance
-```
-
-**Decision:**
-```
-When proposer receives majority acceptances:
-  Value is decided
-  Notify learners
-```
-
-### Paxos Example
-
-```
-Proposers P1, P2; Acceptors A, B, C
-
-P1: Prepare(1) → A, B, C
-  A: Promise(1), no prior value
-  B: Promise(1), no prior value
-  C: Promise(1), no prior value
-
-P1: Accept(1, "X") → A, B, C
-  A: Accepted(1, "X")
-  B: Accepted(1, "X")
-  C: (delayed, hasn't responded)
-
-P1 has majority → "X" is decided
-
-Meanwhile, P2: Prepare(2) → A, B, C
-  A: Promise(2), previously accepted (1, "X")
-  B: Promise(2), previously accepted (1, "X")
-  
-P2 must propose "X", not own value!
-```
-
-### Multi-Paxos
-
-Optimize for multiple decisions in sequence.
-
-```
-Basic Paxos: 2 round-trips per decision (expensive)
-
-Multi-Paxos:
-  1. Elect stable leader (one Prepare phase)
-  2. Leader issues Accept for many values
-  3. Re-elect only if leader fails
-
-Amortizes Prepare phase across many decisions
-```
-
-### Paxos Challenges
-
-```
-1. Complex state machine
-   - Many edge cases
-   - Hard to implement correctly
-
-2. Livelock possible
-   - P1 prepares, P2 prepares with higher number
-   - P1 retries higher, P2 retries higher
-   - No progress
-
-3. No distinguished leader by default
-   - Multi-Paxos needs leader election on top
-```
-
----
-
-## Raft
-
-### Design Goals
-
-```
-"Understandability first"
-
-Key simplifications:
-  1. Strong leader: all writes through leader
-  2. Clear separation of concerns
-  3. Reduced state space
-```
-
-### Raft Roles
-
-```
-Leader:   Handles all client requests, replicates log
-Follower: Passively replicate leader's log
-Candidate: Trying to become leader
-
-State transitions:
-  Follower → Candidate (election timeout)
-  Candidate → Leader (wins election)
-  Candidate → Follower (discovers current leader)
-  Leader → Follower (discovers higher term)
-```
-
-### Terms
-
-```
-Term: Logical clock, monotonically increasing
-
-Term 1: Leader A
-Term 2: Leader B (A failed, B elected)
-Term 3: Leader B (re-elected)
-Term 4: Leader C (B failed)
-
-Each term has at most one leader
-Terms used to detect stale leaders
-```
-
-### Leader Election
-
-```
-1. Follower times out (no heartbeat from leader)
-2. Increments term, becomes Candidate
-3. Votes for self, sends RequestVote to all
-4. Others reply with vote (if not already voted in term)
-5. Candidate with majority becomes Leader
-6. Leader sends heartbeats to maintain authority
-```
-
-```mermaid
-sequenceDiagram
-    participant A as Node A
-    participant B as Node B
-    participant C as Node C
-    Note over A: Timeout → Candidate
-    A->>B: RequestVote
-    A->>C: RequestVote
-    B-->>A: Vote
-    C-->>A: Vote
-    Note over A: Becomes Leader
-    A->>B: Heartbeat
-    A->>C: Heartbeat
-```
-
-### Log Replication
-
-```
-Client → Leader: Write "X"
-Leader:
-  1. Append "X" to local log
-  2. Send AppendEntries to followers
-  3. Wait for majority acknowledgment
-  4. Commit entry
-  5. Apply to state machine
-  6. Respond to client
-```
-
-```
-Leader log:     [1:A][2:B][3:C][4:D]
-                              ↑
-                          committed
-
-Follower 1 log: [1:A][2:B][3:C][4:D]  ← up to date
-Follower 2 log: [1:A][2:B][3:C]       ← lagging
-Follower 3 log: [1:A][2:B]            ← more lagging
-
-Commit when entry in log of majority (Leader + F1 + F2 = 3/5)
-```
-
-### Log Matching
-
-```
-Property: If two logs contain entry with same index and term,
-          all preceding entries are identical.
-
-Enforcement:
-  - Leader includes previous entry (index, term) in AppendEntries
-  - Follower rejects if doesn't match
-  - Leader decrements and retries until match found
-  - Follower overwrites conflicting entries
-```
-
-### Raft vs Paxos
-
-| Aspect | Paxos | Raft |
-|--------|-------|------|
-| Understandability | Complex | Simple |
-| Leader | Optional (Multi-Paxos) | Required |
-| Log gaps | Allowed | Not allowed |
-| Membership change | Complex | Joint consensus |
-| Industry adoption | Low | High |
-
----
-
-## Practical Consensus Systems
-
-### etcd (Raft)
-
-```
-Distributed key-value store
-
-Client → Leader → Replicate → Majority ack → Commit
-
-Usage: Kubernetes configuration, service discovery
+The failure model matters. Classic Paxos, Viewstamped Replication, and Raft tolerate non-Byzantine crash/recovery and arbitrary message loss, delay, duplication, and reordering. They assume persistent protocol state does not roll backward and nodes do not forge messages. Byzantine behavior, undetected disk corruption, and compromised identities require different protocols or additional integrity mechanisms.
 
-Operations:
-  Put(key, value)
-  Get(key)
-  Watch(prefix)  // Stream changes
-  Transaction    // Atomic compare-and-swap
-```
-
-### ZooKeeper (ZAB)
-
-```
-ZooKeeper Atomic Broadcast
-
-Similar to Raft:
-  - Leader-based
-  - Log replication
-  - Majority commit
-
-Differences:
-  - Designed before Raft
-  - Different recovery protocol
-  - Hierarchical namespace (like filesystem)
-```
-
-### Consul (Raft)
-
-```
-Service mesh and configuration
-
-Raft for:
-  - Catalog (service registry)
-  - KV store
-  - Session management
-
-Each datacenter has Raft cluster
-Cross-DC uses gossip + WAN Raft (optional)
-```
-
----
-
-## Performance Considerations
-
-### Latency
-
-```
-Consensus write latency:
-  1. Client → Leader (network)
-  2. Leader → Followers (network, parallel)
-  3. Disk write at majority nodes
-  4. Leader → Client (network)
-
-Minimum: 2 × network RTT + disk flush
-
-Optimization: Pipeline writes, batch entries
-```
-
-### Throughput
-
-```
-Bottlenecks:
-  1. Network bandwidth (replication)
-  2. Leader CPU (processing all writes)
-  3. Disk I/O (fsync on commit)
-
-Scaling:
-  - Can't add nodes (more replication overhead)
-  - Batch entries
-  - Pipeline replication
-  - Use consensus for metadata, not all data
-```
-
-### Leader Bottleneck
+### Safety is asynchronous; liveness is conditional
 
-```
-All writes through leader = single point of throughput
-
-Solutions:
-  1. Partition data, separate Raft groups per partition
-  2. Use consensus for coordination only
-  3. Offload reads to followers (stale reads acceptable)
-```
-
----
-
-## Membership Changes
-
-### The Problem
+The FLP result says a deterministic consensus protocol cannot guarantee termination in a fully asynchronous system with even one possible crash. It does not say consensus safety is impossible. A protocol can refuse to decide forever rather than decide inconsistently.
 
-```
-Old config: A, B, C (majority = 2)
-New config: A, B, C, D, E (majority = 3)
+Practical systems obtain liveness from partial synchrony, randomized timeouts, failure detectors, or a stable leader: after some unknown point, enough messages and processing complete within a useful bound. Timeouts choose when to try another leader; they must never be used as proof that an old value did not commit.
 
-Danger: During transition, two majorities might exist
+## State that carries the proof across crashes
 
-Old majority: A, B
-New majority: C, D, E
+A production consensus group persists enough information to prevent a restart from contradicting promises made before the crash. Depending on the protocol, that includes:
 
-Could elect two leaders!
-```
+- the highest promised ballot/term;
+- accepted or logged entries with their ballot/term and index;
+- the current membership/configuration epoch;
+- snapshot index, term, checksum, and state-machine image;
+- client-session deduplication state if the API promises retry safety.
 
-### Joint Consensus (Raft)
+Volatile state includes replication progress, next indexes, timers, and cached read barriers. A server may reconstruct volatile progress conservatively. It must not reconstruct a vote, promise, or accepted entry by guessing.
 
-```
-1. Leader creates joint config: C_old + C_new
-2. Replicates joint config
-3. Once committed, both majorities needed
-4. Leader creates C_new config
-5. Replicates C_new
-6. Once committed, old members can leave
-
-Safety: Never two independent majorities
-```
+The replicated state machine separately tracks `commit_index` and `applied_index`. An entry can be durably chosen but not yet applied. A read that observes application state must wait until the required committed index is applied.
 
-### Single-Server Changes
+## Quorum intersection is the safety mechanism
 
-```
-Simpler: Add/remove one server at a time
+With `n = 2f + 1` voters and majority quorums of `f + 1`, any two majorities intersect. If an earlier quorum chose a value, a later protocol round contacts at least one member of that quorum. The protocol's state and selection rule force the later round to preserve the choice.
 
-Adding D to {A, B, C}:
-  1. D syncs log from leader
-  2. Once caught up, add to config
-  3. Now {A, B, C, D}
+Intersection alone is insufficient:
 
-One at a time guarantees overlap between old and new quorums
-```
+- the intersecting node must have persisted the relevant state;
+- a new proposer must actually read and honor that state;
+- membership changes must preserve intersection across configurations;
+- replica placement must make the desired quorum available after correlated failures.
 
----
+Flexible Paxos observes that not every quorum type must intersect every other type; phase-one quorums must intersect phase-two quorums. This can trade read/recovery and write quorum sizes, but it changes the liveness and load calculation. Never change quorum numbers without restating which quorum pairs must intersect.
 
-## Common Patterns
+Replica count is not failure tolerance by itself. Five voters on one rack still share a rack failure. Place voters across the failure domains named in the availability contract, and calculate whether a quorum remains after each domain loss.
 
-### Replicated State Machine
+## Paxos: choosing one value
 
-```mermaid
-graph LR
-    N1["Node 1<br/>Log: [A][B][C]<br/>State: X (from ABC)"]
-    N2["Node 2<br/>Log: [A][B][C]<br/>State: X (from ABC)"]
-    N3["Node 3<br/>Log: [A][B][C]<br/>State: X (from ABC)"]
-```
+Paxos makes the intersection argument explicit through numbered ballots.
 
-```
-Same log → Same state
-All nodes apply same operations in same order
-All arrive at same state
-```
+### Phase 1: prepare and promise
 
-### Linearizable Reads
+A proposer chooses a globally unique, monotonically ordered ballot `b` and sends `PREPARE(b)`. An acceptor replies if `b` is higher than its persisted promise, records that it will reject lower ballots, and returns its highest previously accepted `(ballot, value)`, if any.
 
-```
-Option 1: Read through leader
-  - Leader confirms still leader (heartbeat)
-  - Then responds
-  
-Option 2: ReadIndex
-  - Record commit index
-  - Wait for commit index to be applied
-  - Then respond
-  
-Option 3: Lease-based
-  - Leader has time-based lease
-  - Responds if within lease
-  - No network round-trip if lease valid
-```
+After responses from a phase-one quorum, the proposer must select the value attached to the **highest accepted ballot** it observed. Only if none reported an accepted value may it choose a new client value.
 
-### Snapshots
+### Phase 2: accept
 
-```
-Problem: Log grows forever
-
-Solution: Periodic snapshots
-  1. Serialize state machine to disk
-  2. Truncate log up to snapshot point
-  3. New followers can bootstrap from snapshot
-
-Snapshot = State at log index N
-Resume replication from index N+1
-```
+The proposer sends `ACCEPT(b, value)`. An acceptor accepts if `b` is at least its current promise, persists the acceptance, and replies. The value is chosen after a phase-two quorum accepts it.
 
----
+The selection rule is the bridge between quorums. Suppose `X` was already chosen. Any later phase-one quorum intersects the quorum that accepted `X`; the highest relevant accepted response constrains the new proposer to carry `X` forward. A proposer that takes a local majority vote over returned values, or always prefers its client's new value, is not Paxos.
 
-## When to Use Consensus
+Multiple proposers can repeatedly preempt one another with higher ballots while preserving safety and making no progress. A stable distinguished proposer supplies liveness and lets subsequent instances skip phase one in the normal case.
 
-### Good Use Cases
+## From one value to an ordered replicated log
 
-```
-✓ Configuration management (who is the leader)
-✓ Distributed locks
-✓ Coordination (barriers, leader election)
-✓ Metadata storage
-✓ Sequence number generation
-```
+Multi-Paxos runs a consensus instance per log slot. A stable leader completes phase one for a ballot and drives phase two for many slots. Implementations must handle holes, retransmit chosen entries, prevent two commands at one slot, and apply only a contiguous committed prefix.
 
-### Avoid For
+Viewstamped Replication and Raft organize the same replicated-state-machine problem around a strong primary/leader and explicit logs. Raft narrows the legal states through several coupled rules:
 
-```
-✗ All user data (too expensive)
-✗ High-throughput writes (leader bottleneck)
-✗ Latency-sensitive reads (can use caching instead)
-✗ Data that can tolerate eventual consistency
-```
+- voters grant leadership only to candidates whose logs are sufficiently up to date;
+- AppendEntries verifies the previous `(index, term)`, giving the log-matching property;
+- a leader repairs follower suffixes from its own log;
+- a leader counts replicas to directly commit only entries from its current term; earlier entries become committed through the committed prefix.
 
-### Architecture Pattern
-
-```mermaid
-graph TD
-    M["Metadata<br/>(Raft/etcd)"]
-    S1[("Data Shard 1<br/>(primary-backup)")]
-    S2[("Data Shard 2<br/>(primary-backup)")]
-    S3[("Data Shard 3<br/>(primary-backup)")]
-    M --> S1
-    M --> S2
-    M --> S3
-```
+The current-term rule is essential. An older-term entry can be present on a majority in an intermediate execution and still be legally overwritten until a current leader establishes the necessary election/log relationship. “Stored on most nodes” is not a protocol-independent definition of committed.
 
-```
-Consensus for: Who owns which shard, leader election
-Data: Simpler replication (cheaper)
-```
+Paxos and Raft can implement equivalent fault-tolerant logs, but their state decompositions and proofs differ. Mixing Raft voting with an ad hoc Paxos-style log or changing one commit rule in isolation invalidates the original proof.
 
----
+## Client commands and reads
 
-## Raft Internals Deep Dive
+### Writes and retry identity
 
-### Election Timeout Randomization
+A leader normally appends a command, replicates it to the required quorum, marks it committed under the protocol's rule, applies it, and then replies. Replying after only a local append exposes an uncommitted command that a later leader may discard.
 
-```
-Default range: 150–300ms (per the Raft paper)
+The reply can be lost after application. If the client retries `increment`, the state machine may increment twice even though consensus delivered every log entry exactly once by index. Exactly-once-looking APIs need a stable client/session ID, monotonically increasing request number, and a replicated response cache or an idempotent business operation.
 
-Why this range?
-  - Lower bound must be >> network RTT + disk fsync
-  - Upper bound caps worst-case failover time
+### Linearizable reads
 
-Too narrow (150–160ms): simultaneous timeouts → split votes → no progress
-Too wide (150–5000ms): safe, but 5s worst-case failover is unacceptable
+Reading from “the leader” is not automatically linearizable. An isolated old leader may still believe it is authoritative while a majority has elected another. Safe common patterns are:
 
-Production tuning (etcd recommendation):
-  election_timeout >= 10 × round_trip_time
-  election_timeout >= 10 × disk_fsync_latency
-```
+- append or wait for a committed barrier in the current leadership epoch;
+- confirm current authority with a quorum, capture a read index, and wait until it is applied;
+- use a rigorously bounded lease whose clock and renewal assumptions are part of the proof.
 
-### Log Compaction and Snapshotting
+Follower reads without such a proof are stale reads and should expose a timestamp/index or staleness contract. Lease construction and external fencing belong in [Leader Election](./09-leader-election.md).
 
-```
-Problem: Raft log grows unbounded → memory and disk pressure
-
-Compaction flow:
-  1. State machine serializes state to snapshot file
-  2. Tag with last_included_index and last_included_term
-  3. Discard log entries up to that index
-  4. On restart: load snapshot, replay remaining log
-
-InstallSnapshot RPC (leader → far-behind follower):
-  - Leader sends snapshot in chunks → follower replaces entire state
-  - Follower discards log entries ≤ snapshot index
-  - Resumes normal AppendEntries from snapshot index + 1
-  - Triggered when follower too far behind or just joined
-
-Gotcha: snapshot creation can block state machine
-  - Use copy-on-write (RocksDB checkpoint) or fork-based snapshots
-```
+## Membership, learners, and snapshots
 
-### Pre-Vote Protocol (Raft §9.6)
+### Reconfiguration is consensus state
 
-```
-Problem: Server partitioned from leader, increments term repeatedly
-  - When partition heals, its high term forces current leader to step down
-  - Unnecessary election disrupts healthy cluster
-
-Pre-vote solution:
-  1. Candidate sends PreVote (does NOT increment term yet)
-  2. Other nodes reply: "Would you vote for me IF I started an election?"
-  3. Only if pre-vote majority succeeds → candidate increments term, runs real election
-  4. Partitioned server fails pre-vote → never disrupts the cluster
-
-Adopted by: etcd (default since v3.4), TiKV, CockroachDB
-```
+Switching directly from old voters `{A,B,C}` to new voters `{D,E,F}` permits disjoint majorities to choose incompatible logs. Safe protocols make configuration part of the replicated history and require an overlap rule. Raft's joint consensus temporarily requires majorities of both old and new configurations, then commits the final configuration. Other systems use proven one-at-a-time or epoch-based protocols with their own constraints.
 
-### Membership Changes in Practice
+A new server should normally catch up as a non-voting learner before it is counted toward quorum. Adding an empty voter can raise the quorum size before that voter can acknowledge, reducing availability at the exact moment of expansion.
 
-```
-Joint consensus (Raft paper): commit C_old,new (both quorums needed),
-  then commit C_new. Correct but complex to implement.
-
-Single-server changes (widely adopted):
-  - Add/remove one node at a time → old and new quorums always overlap
-  - Used by: etcd, CockroachDB, Consul
-
-Learner nodes (non-voting replicas):
-  - Receive AppendEntries but do NOT vote
-  - Let new node catch up before counting toward quorum
-  - Without learners: {A,B,C} → {A,B,C,D}, D empty log
-    If B fails, quorum needs 3/4, but D can't ack → stuck
-  - With learners: D catches up first, then promoted to voter
-  - Supported by: etcd (--learner flag), TiKV
-```
+### Snapshot installation
 
----
+Logs cannot grow forever. A snapshot represents state after an applied log index and must include or align with:
 
-## Paxos vs Raft: The Real Differences
+- the last included index and term/ballot;
+- current membership;
+- state-machine bytes and checksum;
+- client deduplication/session state;
+- any application schema version required to interpret it.
 
-### What the Papers Actually Specify
+Publish a snapshot atomically, retain log entries needed by active readers/followers until installation is safe, and install into a temporary location before switching the state pointer. A follower receiving a snapshot concurrently with log entries must not apply an old suffix over the new image. Snapshotting is part of the safety state machine, not a file-copy optimization.
 
-```
-Paxos (Lamport, 1998/2001):
-  - Single-decree: fully specified
-  - Multi-decree: under-specified — no leader election, no log compaction,
-    no membership changes. Each impl fills gaps differently.
-
-Raft (Ongaro & Ousterhout, 2014):
-  - One paper covers everything: election, replication, safety,
-    membership changes, compaction. Implementable from the paper alone.
-```
+## Concrete failure traces
 
-### Leader Completeness Property
+### An acceptor forgets durable state
 
-```
-Raft's key insight: "A leader always has all committed entries in its log"
-  - Logs never flow follower → leader
-  - Conflict resolution trivial: leader's log wins
-
-Paxos lacks this: any node can propose → must reconcile gaps,
-  acceptors may have entries the proposer doesn't
-```
+1. In a three-node group, A and B accept `X` at ballot 10; `X` is chosen.
+2. B restarts from a stale disk image that forgot its promise and accepted value.
+3. A is unreachable. A proposer runs phase one at ballot 11 with B and C.
+4. Neither response reports `X`, so it proposes `Y`; B and C accept it.
 
-### Performance in Practice
+Two values are now chosen. The majority intersection was B, but B forgot the fact that made intersection useful. Stable storage and restore procedures are part of consensus correctness.
 
-```
-Throughput: Raft ≈ Multi-Paxos (both bottleneck on disk fsync + network)
-The real difference is implementability:
-  - Google needed 2+ years for Paxos in Chubby
-  - etcd shipped production Raft in months
-  - Fewer bugs = fewer consensus violations in production
-```
+### Reply before quorum commit
 
-### When to Use Which
+1. Leader L appends command `charge` locally and replies success.
+2. L crashes before any follower accepts it.
+3. A new leader is elected without the command and commits later entries.
+4. The client has a success response for an operation absent from the authoritative log.
 
-```
-             │ Raft            │ Multi-Paxos      │ EPaxos
-─────────────┼─────────────────┼──────────────────┼──────────────────
-Leader       │ Required        │ Required         │ No (leaderless)
-Geo-friendly │ Poor            │ Poor             │ Good
-Complexity   │ Low             │ High             │ Very High
-Used by      │ etcd, Consul,   │ Spanner, Chubby  │ Research only
-             │ CockroachDB     │                  │
-Best for     │ Most new systems│ Google-scale     │ Multi-region
-```
+Local durability is not replicated commitment.
 
----
+### Unsafe reconfiguration
 
-## Production Consensus Configuration
+1. Old configuration `{A,B,C}` allows A+B to commit `X`.
+2. An external control plane activates `{D,E,F}` without a jointly committed transition.
+3. D+E commit `Y` at the same log index.
 
-### etcd Tuning
+No quorum intersects. Reconfiguration must be ordered by the old safety regime before the new regime acts.
 
-```
-Key flags:
-  --heartbeat-interval    100ms  (default)
-  --election-timeout     1000ms  (default)
-
-Critical rule: disk_fsync_latency < election_timeout / 10
-  fsync 80ms → election timeout ≥ 800ms
-  Why? Slow fsync delays heartbeat → followers start elections
-
-Disk: SSD required, dedicated WAL disk, monitor wal_fsync_duration_seconds
-```
+### Non-deterministic application
 
-### ZooKeeper Tuning
+1. Every replica commits command `allocate_random_discount` at index 80.
+2. Each calls its local random generator or wall clock during apply.
+3. Logs match, but materialized state diverges.
 
-```
-tickTime:   2000ms  (base time unit, heartbeat = 1 tick)
-initLimit:  10      (ticks for follower to sync with leader on startup)
-syncLimit:  5       (ticks for follower to fall behind before being dropped)
-
-Session timeout: client-negotiated, bounded by [2×tickTime, 20×tickTime]
-  - Too low: transient network blip kills sessions, ephemeral nodes vanish
-  - Too high: dead client's locks held too long
-
-ZAB vs Raft:
-  - ZAB uses TCP ordering guarantee to simplify replication
-  - Recovery protocol differs: ZAB syncs full history, Raft uses log matching
-```
+Replicate the chosen random value/time as command data or make the state-machine transition deterministic. Consensus orders inputs; it does not reconcile arbitrary execution.
 
-### Cluster Sizing
+### Old leader serves a stale read
 
-```
-Nodes │ Quorum │ Failures tolerated │ Notes
-──────┼────────┼────────────────────┼─────────────────────────
-  3   │   2    │        1           │ Minimum production setup
-  5   │   3    │        2           │ Standard for most systems
-  7   │   4    │        3           │ Rare; higher write latency
-  9   │   5    │        4           │ Almost never justified
-
-Why not more?
-  - Every write must reach majority → more nodes = higher latency
-  - Diminishing returns: 3→5 doubles fault tolerance, 5→7 adds only 1
-  - Cross-region: each additional region adds RTT to commit latency
-```
+1. L is partitioned from the majority but can still reach a client.
+2. The majority elects L2 and commits `x = 9`.
+3. L reads local `x = 7` and responds as if current.
 
-### Cross-Region Consensus
+Leader identity is historical unless refreshed by a quorum/read barrier or a valid lease.
 
-```
-Fundamental constraint:
-  Commit latency ≥ max RTT to reach quorum across regions
-
-Approaches:
-  1. Spanner (TrueTime): atomic clocks → bounded uncertainty (~7ms),
-     read-only txns skip consensus, writes still pay cross-region RTT
-  2. CockroachDB (Leaseholder): leaseholder serves reads locally,
-     writes need Raft quorum, lease migrates toward traffic
-  3. Raft with witnesses: full replicas in 2 regions, lightweight
-     witness in 3rd (votes but stores no data → cheaper)
-```
+## Capacity and cost model
 
-### What to Monitor
+For `n` full voters, a stable leader sends each log byte to roughly `n - 1` followers. At command rate `lambda` and average encoded entry size `s`:
 
+```text
+leader_replication_egress ~= lambda * s * (n - 1)
+cluster_log_write_rate    ~= lambda * s * n   before compaction
 ```
-Critical metrics (etcd/Raft-based systems):
-  1. Committed index lag (leader - follower) → follower falling behind
-  2. Proposal apply duration → state machine bottleneck
-  3. Snapshot send duration → follower was very far behind
-  4. Leader changes counter → frequent = instability
-  5. Proposal failures → normal during elections, abnormal otherwise
-  6. wal_fsync_duration_seconds → disk health indicator
-```
-
----
 
-## Consensus Failure Modes
+Protocol headers, retransmission, snapshots, encryption, and checksums add overhead. A sharded system scales by using many consensus groups with leaders distributed across machines; one global group still has one ordering bottleneck.
 
-### Split Vote Loops
+Normal-case commit latency is governed by the local durable append and the `q-1` fastest follower acknowledgements needed with the leader to form quorum `q`:
 
+```text
+commit_path >= max(local_stable_write,
+                   quorum_order_statistic(follower_network + stable_write))
 ```
-Scenario: 5-node cluster, leader crashes
-  T=0:     Leader dies
-  T=150ms: B and C timeout simultaneously, both become candidates
-  T=152ms: B gets vote from D, C gets vote from E → 2 each, no majority
-  T=300ms: Both timeout, increment term, retry → cycle repeats
-
-Root cause: election timeouts too close together
-Fix: widen randomization range, ensure ≥ 10× RTT spread
-In practice: resolves within 1-3 rounds (sustained loops near-impossible)
-```
-
-### Slow Follower Impact
 
-```
-Myth: "Slow followers don't affect commits — leader only needs majority"
+The slowest follower can lag without delaying a majority, but when a fast quorum member degrades, the next-fastest path defines latency. Batching amortizes log sync and packet cost across commands; larger batches increase queueing delay and recovery units.
 
-Reality: tail latency shifts when a fast follower degrades
+Throughput is bounded by the minimum of leader CPU/apply capacity, durable-log bandwidth and sync rate, leader replication egress, quorum follower ingest, and state-machine execution. Snapshots and catch-up consume the same disks and network. Reserve recovery capacity; a cluster sized only for foreground traffic may be unable to replace a failed voter before another failure.
 
-  5-node cluster, follower latencies: 1ms, 2ms, 50ms, 200ms
-  Commit waits for 2nd fastest → 2ms (good)
+Under independent per-node availability `a`, majority availability is the binomial sum for at least `q` available nodes. This is only a sanity check. Shared racks, zones, software versions, disks, and control planes dominate real outages, so evaluate named correlated failure scenarios directly.
 
-  If one fast follower degrades:  1ms, 80ms, 50ms, 200ms
-  Commit waits for 2nd fastest → 50ms (slow follower now in quorum)
-
-Takeaway: monitor per-follower replication latency, not just average
-```
+## Production operation and verification
 
-### Disk I/O Stalls
+Track proposal rate and failure, commit latency by quorum member, committed-to-applied lag, follower log/snapshot lag, retransmission, durable-log sync tails, snapshot build/install duration, leader changes, current membership, and time without quorum. Alert on **progress**, not just process health: five live processes can be unable to commit.
 
-```
-Scenario: fsync on follower takes > election timeout
-  1. Disk stalls (GC pause, I/O contention, EBS hiccup)
-  2. Follower can't ack → election timer fires → starts election
-  3. If its log is current, it wins → old leader steps down
-  4. Workload shifts to new leader → its disk might stall too
-  Result: election storm, cascading leader changes
-
-Prevention:
-  - Dedicated SSD for consensus WAL (never share with app I/O)
-  - Election timeout >> worst-case fsync (measure p999, not p50)
-  - Pre-vote prevents stalled node from disrupting cluster
-```
+Keep consensus WAL and metadata on storage whose flush semantics are understood. Test power loss, torn/corrupt writes, full disks, restored virtual-machine snapshots, and filesystem errors; crash-fault algorithms do not mask arbitrary storage lies. Backups must capture state-machine and consensus metadata at a compatible index, or restore as a fresh learner rather than a voting replica with rolled-back state.
 
-### Asymmetric Network Partitions
+Use model checking or specification for ballot/log/membership invariants, implementation-level fault injection at every persistence boundary, and history checking for the client contract. Test duplication, delay, reordering, asymmetric partitions, long pauses, clock jumps if leases are used, and membership changes during snapshot/catch-up. A green happy-path integration test provides little evidence for consensus safety.
 
-```
-Topology: A ↔ B OK, A ↔ C OK, B ↔ C BROKEN
-
-If A is leader:
-  - Reaches both B and C → quorum intact, commits proceed normally
-
-If B is leader:
-  - B + A = majority → commits succeed
-  - C can't reach leader → stale reads, eventually times out
-  - C starts elections, increments terms → disruptive without pre-vote
-
-Key insight: asymmetric partitions are hardest to reason about
-  - Test with Jepsen, Toxiproxy, or tc netem
-  - Pre-vote prevents term inflation from partially isolated nodes
-```
+## Decision framework
 
-### Leader Thrashing
+1. What exact operations require one linearizable order, and can they be partitioned into independent groups?
+2. What crash, storage, network, and Byzantine behaviors are inside the failure model?
+3. Which persisted fields preserve promises and accepted history across restart and restore?
+4. Which quorum types must intersect, including during membership change?
+5. What read protocol proves current authority and applied state?
+6. How are duplicate client commands recognized after leader and process failure?
+7. Can quorum replication, snapshots, and replacement fit the latency and recovery-capacity budget?
+8. Has the implemented protocol (not only the paper algorithm) been model- and history-tested?
 
-```
-Symptoms: leader changes every few seconds, write latency spikes (~1-2s
-  per election), sawtooth pattern in leader_changes counter
-
-Common causes:
-  1. Aggressive timeout + bursty load → leader misses heartbeat window
-  2. Resource contention → GC pause > election timeout
-  3. Clock skew → lease-based reads break (leader/follower disagree)
-
-Fixes:
-  - Increase election timeout (trade availability for stability)
-  - Isolate consensus process from application (dedicated CPU/disk)
-  - Priority-based election: prefer nodes with better hardware
-  - Check quorum: leader steps down if can't reach majority
-```
+## Primary references
 
----
-
-## Key Takeaways
-
-1. **Consensus solves agreement** - One value, all nodes agree
-2. **FLP impossibility limits guarantees** - Need timeouts in practice
-3. **Paxos is correct but complex** - Under-specified for multi-decree
-4. **Raft prioritizes clarity** - Leader completeness simplifies everything
-5. **Majority needed (2f+1 nodes)** - 5 nodes is the production sweet spot
-6. **Consensus is expensive** - Use for coordination, not all data
-7. **Leader is bottleneck** - Partition data for scale
-8. **Snapshots prevent log growth** - Essential for long-running systems
-9. **Pre-vote prevents disruption** - Partitioned nodes can't trigger unnecessary elections
-10. **Disk I/O is the silent killer** - fsync latency must be well below election timeout
+- [Fischer, Lynch, and Paterson, *Impossibility of Distributed Consensus with One Faulty Process* (JACM 1985)](https://groups.csail.mit.edu/tds/papers/Lynch/jacm85.pdf)
+- [Lamport, *Paxos Made Simple* (2001)](https://lamport.azurewebsites.net/pubs/paxos-simple.pdf)
+- [Oki and Liskov, *Viewstamped Replication: A New Primary Copy Method to Support Highly-Available Distributed Systems* (PODC 1988)](https://doi.org/10.1145/62546.62549)
+- [Ongaro and Ousterhout, *In Search of an Understandable Consensus Algorithm* (USENIX ATC 2014)](https://www.usenix.org/system/files/conference/atc14/atc14-paper-ongaro.pdf)
+- [Howard, Malkhi, and Spiegelman, *Flexible Paxos: Quorum Intersection Revisited* (2016)](https://arxiv.org/abs/1608.06696)
+- [Ongaro, *Consensus: Bridging Theory and Practice* (Stanford dissertation, 2014)](https://web.stanford.edu/~ouster/cgi-bin/papers/OngaroPhD.pdf)

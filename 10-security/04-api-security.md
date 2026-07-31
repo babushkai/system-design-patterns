@@ -1,723 +1,695 @@
-# API Security
+# API Threat Boundaries and Abuse Resistance
 
 ## TL;DR
 
-API security requires defense in depth: authentication identifies callers, authorization controls access, input validation prevents injection, rate limiting stops abuse, and encryption protects data in transit. No single measure is sufficient.
+API security is the preservation of request meaning and resource authority across clients, proxies, gateways, services, queues, and data stores. TLS protects a channel; authentication identifies a caller; neither prevents object-level authorization bugs, parser disagreement, mass assignment, SSRF, replay, resource exhaustion, or unsafe webhooks.
+
+A production API needs:
+
+- one canonical interpretation of method, authority, path, headers, and body at every hop;
+- schema and size limits before expensive work;
+- action and object authorization at the resource owner;
+- explicit field-level write policy;
+- safe outbound-fetch and webhook protocols;
+- bounded query/fan-out/resource consumption;
+- idempotency/replay identity for effects;
+- tenant-complete cache, storage, and authorization keys;
+- stable error semantics without sensitive leakage;
+- abuse telemetry and deterministic adversarial tests.
+
+This chapter covers the API threat boundary. Identity protocols, authorization models, encryption, and generic rate algorithms remain in their canonical chapters.
 
 ---
 
-## API Authentication Methods
+## 1. Request Contract and Invariants
 
-### API Keys
+Model an accepted request as:
 
-Simple bearer tokens for identifying applications.
-
-```
-Request:
-GET /api/data
-X-API-Key: sk_live_abc123xyz
-
-Or in query parameter (less secure):
-GET /api/data?api_key=sk_live_abc123xyz
-```
-
-**Implementation:**
-
-```python
-import secrets
-import hashlib
-
-def generate_api_key():
-    """Generate a new API key"""
-    # Prefix helps identify key type (like Stripe's sk_live_)
-    prefix = "sk_live_"
-    random_part = secrets.token_urlsafe(32)
-    return prefix + random_part
-
-def hash_api_key(api_key):
-    """Hash for storage - never store plain API keys"""
-    return hashlib.sha256(api_key.encode()).hexdigest()
-
-# Storage
-api_key = generate_api_key()  # Give to customer once
-key_hash = hash_api_key(api_key)  # Store in database
-
-# Validation
-def validate_api_key(provided_key):
-    provided_hash = hash_api_key(provided_key)
-    stored_hash = db.get_key_hash(provided_key[:12])  # Lookup by prefix
-    return secrets.compare_digest(provided_hash, stored_hash)
+```text
+request = (
+  authenticated transport/caller,
+  canonical authority,
+  canonical route and action,
+  validated content type/schema,
+  bounded body,
+  tenant/resource context,
+  replay/idempotency identity,
+  deadline and resource budget
+)
 ```
 
-**Best Practices:**
+### 1.1 Core invariants
 
-```
-□ Hash keys before storage (like passwords)
-□ Use prefixes for key identification (pk_, sk_)
-□ Support key rotation (multiple active keys)
-□ Log key usage for audit
-□ Set expiration dates
-□ Scope keys to specific permissions
-```
-
-### API Key vs. OAuth Token
-
-| Aspect | API Key | OAuth Token |
-|--------|---------|-------------|
-| Identifies | Application | User + Application |
-| Issued by | You | Authorization server |
-| Revocation | Manual | Standard flow |
-| Expiration | Typically long/none | Short-lived |
-| Use case | Server-to-server | User-delegated access |
+1. **Parser agreement:** every security-relevant hop interprets framing and routing identically.
+2. **Authentication before trust:** caller-provided identity/tenant headers are not authoritative.
+3. **Object authorization:** permission is checked against the actual loaded resource and tenant.
+4. **Field allowlist:** clients can modify only explicitly writable fields.
+5. **Canonical identity:** cache, idempotency, signature, and authorization use the same request/resource identity.
+6. **Bounded work:** input controls bound CPU, memory, I/O, fan-out, and downstream cost.
+7. **No internal reachability oracle:** user-controlled URLs cannot access unintended networks/metadata.
+8. **Replay policy:** effectful requests define duplicate behavior and freshness.
+9. **Safe failure:** malformed/unauthorized input does not leak secrets or widen access.
+10. **Complete enforcement:** alternate routes, versions, admin tools, jobs, and direct service paths cannot bypass policy.
 
 ---
 
-## Request Signing (HMAC)
-
-For high-security APIs, sign requests to prevent tampering.
-
-```
-Signature = HMAC-SHA256(secret_key, string_to_sign)
-
-string_to_sign = HTTP_METHOD + "\n" +
-                 PATH + "\n" +
-                 QUERY_STRING + "\n" +
-                 HEADERS + "\n" +
-                 TIMESTAMP + "\n" +
-                 BODY_HASH
-```
-
-### Implementation
-
-```python
-import hmac
-import hashlib
-import time
-
-def sign_request(method, path, body, api_secret):
-    timestamp = str(int(time.time()))
-    body_hash = hashlib.sha256(body.encode() if body else b'').hexdigest()
-    
-    string_to_sign = f"{method}\n{path}\n{timestamp}\n{body_hash}"
-    
-    signature = hmac.new(
-        api_secret.encode(),
-        string_to_sign.encode(),
-        hashlib.sha256
-    ).hexdigest()
-    
-    return {
-        'X-Timestamp': timestamp,
-        'X-Signature': signature
-    }
-
-def verify_signature(request, api_secret):
-    timestamp = request.headers.get('X-Timestamp')
-    provided_signature = request.headers.get('X-Signature')
-    
-    # Check timestamp freshness (prevent replay attacks)
-    if abs(int(timestamp) - time.time()) > 300:  # 5 minute window
-        return False
-    
-    body_hash = hashlib.sha256(request.body or b'').hexdigest()
-    string_to_sign = f"{request.method}\n{request.path}\n{timestamp}\n{body_hash}"
-    
-    expected_signature = hmac.new(
-        api_secret.encode(),
-        string_to_sign.encode(),
-        hashlib.sha256
-    ).hexdigest()
-    
-    return hmac.compare_digest(provided_signature, expected_signature)
-```
-
-### AWS Signature Version 4
-
-AWS uses a sophisticated signing process:
-
-```
-CanonicalRequest =
-    HTTPMethod + '\n' +
-    CanonicalURI + '\n' +
-    CanonicalQueryString + '\n' +
-    CanonicalHeaders + '\n' +
-    SignedHeaders + '\n' +
-    HexEncode(Hash(Payload))
-
-StringToSign =
-    Algorithm + '\n' +
-    RequestDateTime + '\n' +
-    CredentialScope + '\n' +
-    HexEncode(Hash(CanonicalRequest))
-
-Signature = HMAC-SHA256(SigningKey, StringToSign)
-```
-
----
-
-## Input Validation
-
-### Validation Layers
+## 2. Normalize Once, Validate at Every Trust Boundary
 
 ```mermaid
-graph TD
-    GW["API Gateway<br/>Schema validation<br/>Size limits<br/>Basic type checking"]
-    APP["Application Layer<br/>Business rule validation<br/>Authorization checks<br/>Sanitization"]
-    DB["Database Layer<br/>Parameterized queries<br/>Type constraints<br/>Foreign key validation"]
-
-    GW --> APP --> DB
+flowchart LR
+    C[Client] --> E[Edge proxy]
+    E --> G[API gateway]
+    G --> S[Owning service]
+    S --> D[(Data store)]
+    S --> O[Outbound dependencies]
+    E --> SEC[Edge controls]
+    G --> AUTH[Identity and coarse policy]
+    S --> DOM[Object/action policy and invariants]
 ```
 
-### Schema Validation
+The edge normalizes protocol framing and rejects ambiguity. The gateway authenticates and applies coarse policy. The owning service revalidates identity context and enforces domain/object authorization. The database constrains tenant and data invariants where possible.
 
-```python
-from pydantic import BaseModel, Field, validator
-from typing import Optional
-import re
+Do not assume an internal hop is trusted merely because a gateway usually precedes it. Close direct paths or require the same authenticated, integrity-protected context.
 
-class CreateUserRequest(BaseModel):
-    email: str = Field(..., max_length=255)
-    username: str = Field(..., min_length=3, max_length=50)
-    age: Optional[int] = Field(None, ge=0, le=150)
-    
-    @validator('email')
-    def validate_email(cls, v):
-        if not re.match(r'^[\w\.-]+@[\w\.-]+\.\w+$', v):
-            raise ValueError('Invalid email format')
-        return v.lower()
-    
-    @validator('username')
-    def validate_username(cls, v):
-        if not re.match(r'^[a-zA-Z0-9_]+$', v):
-            raise ValueError('Username can only contain alphanumeric and underscore')
-        return v
+### 2.1 Propagated identity
 
-# Usage
-@app.post('/users')
-def create_user(request: CreateUserRequest):
-    # request is already validated
-    pass
-```
+If a proxy injects principal/tenant headers:
 
-### SQL Injection Prevention
+1. strip client-supplied versions;
+2. authenticate at the proxy;
+3. create a signed or channel-protected context;
+4. bind audience, issuer, expiry, tenant, action/route, and request identity;
+5. verify at the service;
+6. retain original workload identity as actor/delegation context.
 
-```python
-# VULNERABLE - string concatenation
-def get_user(username):
-    query = f"SELECT * FROM users WHERE username = '{username}'"
-    return db.execute(query)
-    
-# Attack: username = "'; DROP TABLE users; --"
-
-# SAFE - parameterized query
-def get_user(username):
-    query = "SELECT * FROM users WHERE username = %s"
-    return db.execute(query, (username,))
-```
-
-### NoSQL Injection Prevention
-
-```python
-# VULNERABLE - MongoDB
-def find_user(query):
-    return db.users.find(query)  # query comes from user input
-    
-# Attack: query = {"$gt": ""}  returns all users
-
-# SAFE - explicit field validation
-def find_user(username):
-    if not isinstance(username, str):
-        raise ValueError("Invalid username type")
-    return db.users.find_one({"username": username})
-```
-
-### Command Injection Prevention
-
-```python
-import subprocess
-import shlex
-
-# VULNERABLE
-def ping(host):
-    return subprocess.call(f"ping -c 1 {host}", shell=True)
-    
-# Attack: host = "google.com; rm -rf /"
-
-# SAFE - use list arguments, avoid shell=True
-def ping(host):
-    # Validate host format first
-    if not re.match(r'^[a-zA-Z0-9.-]+$', host):
-        raise ValueError("Invalid host format")
-    return subprocess.call(["ping", "-c", "1", host])
-```
+An unsigned `X-User-ID` is input, not identity.
 
 ---
 
-## Authorization Patterns
+## 3. HTTP Framing and Routing Ambiguity
 
-### Role-Based Access Control (RBAC)
+Request smuggling occurs when two hops disagree about where one request ends and the next begins. Defenses:
 
-```python
-ROLES = {
-    'admin': ['read', 'write', 'delete', 'admin'],
-    'editor': ['read', 'write'],
-    'viewer': ['read']
-}
+- use maintained HTTP stacks;
+- reject ambiguous/multiple/conflicting framing headers;
+- normalize or reject obsolete transfer encodings;
+- do not forward malformed requests after “repair”;
+- align proxy/backend HTTP versions and behavior;
+- test connection reuse and upgrade paths;
+- patch intermediaries as one protocol chain.
 
-def require_permission(permission):
-    def decorator(f):
-        @wraps(f)
-        def decorated(*args, **kwargs):
-            user_role = get_current_user().role
-            if permission not in ROLES.get(user_role, []):
-                return jsonify({'error': 'Forbidden'}), 403
-            return f(*args, **kwargs)
-        return decorated
-    return decorator
+### 3.1 Authority and path
 
-@app.delete('/users/<id>')
-@require_permission('delete')
-def delete_user(id):
-    pass
-```
+Canonicalize before routing/signing/authorization:
 
-### Attribute-Based Access Control (ABAC)
+- scheme and host/authority;
+- port/default port;
+- percent encoding;
+- dot segments;
+- repeated slashes if the framework treats them specially;
+- Unicode normalization;
+- path versus query;
+- case sensitivity;
+- forwarded host/proto headers from trusted proxies only.
 
-More flexible than RBAC, considers context.
+If the gateway authorizes `/admin` but the service normalizes `/%61dmin` differently, enforcement diverges.
 
-```python
-def can_access_document(user, document, action):
-    """
-    Policy: User can edit if:
-    - User is document owner, OR
-    - User is in same department AND document is not confidential, OR
-    - User has admin role
-    """
-    if user.role == 'admin':
-        return True
-    
-    if document.owner_id == user.id:
-        return True
-    
-    if action == 'read':
-        if user.department == document.department and not document.confidential:
-            return True
-    
-    return False
+Reject unsupported methods and method overrides. Route action should come from the matched server route, not a client claim.
 
-@app.put('/documents/<id>')
-def update_document(id):
-    document = get_document(id)
-    user = get_current_user()
-    
-    if not can_access_document(user, document, 'write'):
-        return jsonify({'error': 'Forbidden'}), 403
-    
-    # proceed with update
-```
+### 3.2 Header policy
 
-### Resource-Based Authorization
+Set bounds on:
 
-```python
-# Check ownership or explicit permissions
-def authorize_resource(user, resource_type, resource_id, action):
-    # Check if user owns resource
-    resource = get_resource(resource_type, resource_id)
-    if resource.owner_id == user.id:
-        return True
-    
-    # Check explicit permissions
-    permission = db.query(
-        "SELECT * FROM permissions WHERE user_id = %s AND resource_type = %s AND resource_id = %s AND action = %s",
-        (user.id, resource_type, resource_id, action)
-    )
-    return permission is not None
-```
+- total header bytes;
+- header count;
+- individual field size;
+- duplicates and combination behavior;
+- trusted forwarding chain length.
+
+Never trust `X-Forwarded-For`, `Forwarded`, or original-host headers from untrusted network peers. The first trusted ingress replaces/sanitizes the chain.
 
 ---
 
-## HTTPS and TLS
+## 4. Schema, Content Type, and Input Bounds
 
-### Why HTTPS is Non-Negotiable
+Validate the declared content type and actual parser. Reject ambiguous content negotiation and unsupported charset/encoding.
 
-```mermaid
-sequenceDiagram
-    participant Client
-    participant Attacker
-    participant Server
+Schema validation should define:
 
-    Note over Client, Server: Without HTTPS
-    Client->>Server: GET /api/users Cookie: session=abc123
-    Attacker-->>Client: Sees everything (man-in-the-middle)
+- required and optional fields;
+- types and numeric bounds;
+- string length/normalization;
+- enum evolution;
+- unknown-field policy;
+- collection length;
+- nesting depth;
+- duplicate JSON-key behavior;
+- timestamp/decimal canonical form;
+- cross-field invariants.
+
+Unknown-field tolerance helps forward compatibility but enables hidden mass-assignment if domain binding accepts them later. Parse into an explicit request type, then map allowed fields.
+
+### 4.1 Decompression and parser bombs
+
+Bound compressed and expanded bytes, compression ratio, nesting, entity expansion, and parser time. Apply limits before buffering the whole body.
+
+Streaming parsers reduce memory but do not remove semantic limits. Abort on deadline/budget and stop downstream work.
+
+### 4.2 Batch and graph APIs
+
+A small request can trigger huge work:
+
+- batch of thousands of IDs;
+- GraphQL depth/breadth/aliases;
+- recursive filters;
+- large page size;
+- expensive regex;
+- N+1 backend fan-out;
+- unbounded export.
+
+Use a cost model:
+
+```text
+estimated_cost =
+  base_route_cost
+  + object_count * per_object_cost
+  + fanout_edges * edge_cost
+  + requested_bytes * serialization_cost
 ```
 
-### TLS Configuration Best Practices
-
-```nginx
-# nginx configuration
-server {
-    listen 443 ssl http2;
-    
-    # Use modern TLS versions only
-    ssl_protocols TLSv1.2 TLSv1.3;
-    
-    # Strong cipher suites
-    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
-    ssl_prefer_server_ciphers off;
-    
-    # Enable HSTS
-    add_header Strict-Transport-Security "max-age=63072000" always;
-    
-    # Certificate
-    ssl_certificate /path/to/fullchain.pem;
-    ssl_certificate_key /path/to/privkey.pem;
-}
-```
-
-### Certificate Pinning (Mobile Apps)
-
-```swift
-// iOS - Pin to specific certificate
-let pinnedCertificates: [SecCertificate] = loadPinnedCerts()
-
-func urlSession(_ session: URLSession, 
-                didReceive challenge: URLAuthenticationChallenge,
-                completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
-    
-    guard let serverTrust = challenge.protectionSpace.serverTrust,
-          let certificate = SecTrustGetCertificateAtIndex(serverTrust, 0) else {
-        completionHandler(.cancelAuthenticationChallenge, nil)
-        return
-    }
-    
-    let serverCertData = SecCertificateCopyData(certificate) as Data
-    
-    for pinnedCert in pinnedCertificates {
-        let pinnedCertData = SecCertificateCopyData(pinnedCert) as Data
-        if serverCertData == pinnedCertData {
-            completionHandler(.useCredential, URLCredential(trust: serverTrust))
-            return
-        }
-    }
-    
-    completionHandler(.cancelAuthenticationChallenge, nil)
-}
-```
+Reject, split, defer, or require an asynchronous job when cost exceeds the request class budget. Measure actual versus estimate and refine.
 
 ---
 
-## Rate Limiting for Security
+## 5. Object-Level and Function-Level Authorization
 
-### DDoS Mitigation
+Broken object-level authorization (BOLA/IDOR) occurs when a caller can choose an object ID and the service checks only that the caller is authenticated.
 
-```python
-from redis import Redis
-import time
+Unsafe:
 
-class RateLimiter:
-    def __init__(self, redis_client):
-        self.redis = redis_client
-    
-    def is_allowed(self, key, limit, window_seconds):
-        """Sliding window rate limiter"""
-        now = time.time()
-        window_start = now - window_seconds
-        
-        pipe = self.redis.pipeline()
-        
-        # Remove old entries
-        pipe.zremrangebyscore(key, 0, window_start)
-        
-        # Count current entries
-        pipe.zcard(key)
-        
-        # Add current request
-        pipe.zadd(key, {str(now): now})
-        
-        # Set expiry
-        pipe.expire(key, window_seconds)
-        
-        results = pipe.execute()
-        request_count = results[1]
-        
-        return request_count < limit
-
-# Different limits for different scenarios
-rate_limiter = RateLimiter(redis)
-
-def check_rate_limits(request):
-    ip = request.remote_addr
-    user_id = get_user_id(request)
-    
-    # Global IP limit (DDoS protection)
-    if not rate_limiter.is_allowed(f"ip:{ip}", 1000, 60):
-        return False, "IP rate limit exceeded"
-    
-    # Per-user limit
-    if user_id and not rate_limiter.is_allowed(f"user:{user_id}", 100, 60):
-        return False, "User rate limit exceeded"
-    
-    # Sensitive endpoint limit (login)
-    if request.path == '/login':
-        if not rate_limiter.is_allowed(f"login:{ip}", 5, 300):
-            return False, "Too many login attempts"
-    
-    return True, None
+```text
+load invoice by id
+return invoice
 ```
 
-### Response Headers
+Required:
 
-```python
-@app.after_request
-def add_rate_limit_headers(response):
-    response.headers['X-RateLimit-Limit'] = '100'
-    response.headers['X-RateLimit-Remaining'] = str(get_remaining())
-    response.headers['X-RateLimit-Reset'] = str(get_reset_time())
-    return response
-
-# On rate limit exceeded
-@app.errorhandler(429)
-def rate_limit_exceeded(e):
-    return jsonify({
-        'error': 'Rate limit exceeded',
-        'retry_after': get_retry_after()
-    }), 429, {'Retry-After': str(get_retry_after())}
+```text
+load invoice within authorized tenant/scope
+authorize(subject, action='invoice.read', invoice)
+return filtered representation
 ```
+
+Prefer tenant/resource predicates in the storage query where possible, then domain authorization. This reduces accidental cross-tenant load, but does not replace relationship/action policy.
+
+### 5.1 Never authorize by hidden UI
+
+Removing an admin button or route from a client does not protect the endpoint. Every server operation enforces action policy.
+
+### 5.2 Function-level authorization
+
+Map each route to a stable action name. Review differences across:
+
+- HTTP methods;
+- versioned routes;
+- bulk endpoints;
+- export/import;
+- support/admin endpoints;
+- asynchronous equivalents;
+- mobile/legacy APIs.
+
+A read permission does not imply export; update does not imply delete; tenant admin does not imply platform admin.
+
+### 5.3 Relationship changes
+
+Authorize using current resource state and protect against time-of-check/time-of-use races. If membership/ownership can change between check and mutation, enforce the predicate/version in the same transaction or use an expected resource version.
+
+The authorization models and policy distribution belong to [Authorization at Scale](./07-authorization-patterns.md).
 
 ---
 
-## Security Headers
+## 6. Mass Assignment and Response Exposure
 
-```python
-@app.after_request
-def add_security_headers(response):
-    # Prevent clickjacking
-    response.headers['X-Frame-Options'] = 'DENY'
-    
-    # XSS protection
-    response.headers['X-Content-Type-Options'] = 'nosniff'
-    response.headers['X-XSS-Protection'] = '1; mode=block'
-    
-    # Content Security Policy
-    response.headers['Content-Security-Policy'] = "default-src 'self'"
-    
-    # HTTPS enforcement
-    response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
-    
-    # Referrer policy
-    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
-    
-    return response
+Mass assignment binds request fields directly to a domain/database object:
+
+```text
+user.update(request.json)
 ```
+
+An attacker supplies `role=admin`, `tenant_id=other`, `credit_limit`, or `status=approved`.
+
+Use explicit command DTOs and mappings:
+
+```text
+UpdateProfileCommand:
+  display_name
+  locale
+
+server-owned:
+  tenant_id
+  role
+  account_state
+  risk_score
+```
+
+Field-level authorization may depend on current state or caller role. Reject or explicitly ignore unknown fields consistently; silent acceptance can hide client bugs and future privilege escalation.
+
+Responses also need allowlists. Serializing an internal object can leak:
+
+- password/token hashes;
+- internal notes;
+- risk/abuse signals;
+- encryption metadata;
+- tenant IDs;
+- deleted fields;
+- third-party secrets.
+
+Version response schemas and test sensitive-field absence.
 
 ---
 
-## CORS (Cross-Origin Resource Sharing)
+## 7. Injection and Command Boundaries
 
-### Misconfiguration Vulnerabilities
+Use parameterized database queries, structured subprocess APIs, and safe templates. The deeper rule: do not cross from data to code/command through string concatenation.
 
-```python
-# DANGEROUS - allows any origin
-@app.after_request
-def add_cors(response):
-    response.headers['Access-Control-Allow-Origin'] = '*'
-    response.headers['Access-Control-Allow-Credentials'] = 'true'  # VERY BAD with *
-    return response
+Boundaries include:
 
-# DANGEROUS - reflecting origin without validation
-@app.after_request
-def add_cors(response):
-    origin = request.headers.get('Origin')
-    response.headers['Access-Control-Allow-Origin'] = origin  # Reflects any origin!
-    return response
-```
+- SQL/NoSQL queries;
+- shell/process invocation;
+- LDAP/XPath;
+- template engines;
+- log formats;
+- search query DSL;
+- object-storage paths;
+- email/header generation;
+- spreadsheet/CSV export formulas.
 
-### Safe CORS Configuration
+Allowlists are preferable when input selects an identifier such as sort column, table, field, command, or algorithm. Parameter binding does not safely parameterize every identifier.
 
-```python
-ALLOWED_ORIGINS = [
-    'https://myapp.com',
-    'https://staging.myapp.com'
-]
+Escaping is context-specific. HTML escaping does not secure JavaScript/URL/SQL contexts. Prefer APIs that keep structure.
 
-@app.after_request
-def add_cors(response):
-    origin = request.headers.get('Origin')
-    
-    if origin in ALLOWED_ORIGINS:
-        response.headers['Access-Control-Allow-Origin'] = origin
-        response.headers['Access-Control-Allow-Credentials'] = 'true'
-        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
-        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
-        response.headers['Access-Control-Max-Age'] = '86400'
-    
-    return response
-```
+Log injection matters operationally: encode structured fields and prevent attacker input from forging log lines/severity/tenant.
 
 ---
 
-## Logging and Audit
+## 8. SSRF and Outbound Request Security
 
-### Security Event Logging
+Server-side request forgery turns a trusted server into an attacker-controlled network client.
 
-```python
-import logging
-import json
-from datetime import datetime
+Threats:
 
-security_logger = logging.getLogger('security')
+- cloud metadata and node agents;
+- internal admin/control planes;
+- loopback and link-local services;
+- other tenants;
+- DNS rebinding;
+- redirect to forbidden target;
+- alternate IP encodings/IPv6;
+- credential leakage to attacker endpoint;
+- large/slow response resource exhaustion.
 
-def log_security_event(event_type, details, request=None):
-    event = {
-        'timestamp': datetime.utcnow().isoformat(),
-        'event_type': event_type,
-        'details': details,
-    }
-    
-    if request:
-        event.update({
-            'ip': request.remote_addr,
-            'user_agent': request.headers.get('User-Agent'),
-            'path': request.path,
-            'method': request.method,
-            'user_id': getattr(request, 'user_id', None)
-        })
-    
-    security_logger.info(json.dumps(event))
+### 8.1 Safer architecture
 
-# Usage
-log_security_event('LOGIN_FAILED', {
-    'username': username,
-    'reason': 'invalid_password'
-}, request)
+Prefer not to accept arbitrary URLs. Use:
 
-log_security_event('PERMISSION_DENIED', {
-    'resource': '/admin/users',
-    'required_role': 'admin',
-    'user_role': 'viewer'
-}, request)
+- named integrations/destinations;
+- pre-registered webhook endpoints;
+- allowlisted schemes/ports/domains;
+- dedicated egress proxy/resolver;
+- network policy blocking metadata/internal ranges;
+- destination-specific credentials;
+- response size/time limits.
 
-log_security_event('RATE_LIMIT_EXCEEDED', {
-    'limit': 100,
-    'window': 60
-}, request)
-```
+Validation sequence:
 
-### What to Log
+1. parse URL with one maintained parser;
+2. require allowed scheme and explicit/default port;
+3. reject userinfo/fragments where irrelevant;
+4. resolve through controlled DNS;
+5. evaluate every returned IP against destination policy;
+6. connect to a validated address while preserving intended TLS hostname;
+7. revalidate redirects and DNS changes;
+8. limit bytes, time, redirects, and decompression.
 
-```
-Authentication:
-□ Login attempts (success/failure)
-□ Password changes
-□ MFA enrollment/usage
-□ API key creation/revocation
-□ Session creation/termination
+String prefix/suffix checks are insufficient. DNS names can resolve to private addresses.
 
-Authorization:
-□ Permission denied events
-□ Role changes
-□ Access to sensitive resources
+### 8.2 Egress identity
 
-Security Events:
-□ Rate limit triggers
-□ Invalid input attempts
-□ Suspicious patterns
-□ Token validation failures
-
-Audit Trail:
-□ Data modifications (who, what, when)
-□ Configuration changes
-□ Admin actions
-```
+Outbound calls use per-integration workload identity/credentials. Do not attach a broad cloud credential to arbitrary destinations. Strip sensitive inbound headers before forwarding.
 
 ---
 
-## API Versioning Security
+## 9. Webhooks and Asynchronous Callbacks
 
-### Don't Leave Old Versions Vulnerable
+Incoming webhook verification needs:
 
-```
-Common mistake:
-- v1 has security vulnerability
-- v2 fixes it
-- v1 still active and vulnerable
-
-Best practice:
-- Apply security fixes to all supported versions
-- Deprecate and sunset old versions with clear timeline
-- Monitor for usage of deprecated versions
+```text
+provider identity/key
+timestamp/freshness
+event identity
+signature over exact transmitted bytes and bound metadata
+destination/account binding
+replay/idempotency state
+schema/version
 ```
 
-### Version Sunset Process
+Verify the signature before JSON reserialization changes bytes. Use constant-time comparison for MACs. Restrict algorithms/keys and rotate with overlap.
 
-```
-Month 1: Announce deprecation
-         - Add Deprecation header
-         - Documentation update
-         - Email customers
+The receiver:
 
-Month 3: Warning responses
-         - Log all v1 usage
-         - Return Warning header
+1. bounds body;
+2. verifies key/signature/timestamp;
+3. atomically records event ID/digest;
+4. acknowledges after durable acceptance;
+5. processes asynchronously;
+6. quarantines deterministic failures;
+7. reconciles provider state for high-value events.
 
-Month 6: Disable for new clients
-         - Existing clients still work
-         - New signups get v2 only
+Do not trust an event merely because its source IP matches a published range; signatures provide stronger identity and ranges change.
 
-Month 9: Final shutdown
-         - Return 410 Gone
-         - Log attempts for follow-up
-```
+Outgoing webhooks need:
+
+- destination registration/verification;
+- SSRF-safe egress;
+- per-tenant secrets/keys;
+- signed event ID/timestamp/body;
+- retry with backoff and bounded horizon;
+- delivery attempt log;
+- disable/quarantine for failing destinations;
+- secret rotation overlap;
+- redaction and tenant isolation.
 
 ---
 
-## Security Checklist
+## 10. Browser APIs: Cookies, CSRF, and CORS
 
-```
-Authentication:
-□ Use HTTPS for all endpoints
-□ Implement proper session management
-□ Hash API keys before storage
-□ Use OAuth 2.0 for user-delegated access
-□ Implement MFA for sensitive operations
+If a browser automatically sends credentials (cookies, client certificates), state-changing requests need CSRF protection:
 
-Authorization:
-□ Validate permissions on every request
-□ Use least-privilege principle
-□ Implement resource-level authorization
-□ Audit authorization decisions
+- SameSite cookie policy;
+- unpredictable token bound to session;
+- origin/referer validation where appropriate;
+- no state change via safe methods;
+- content-type/custom-header strategy for APIs.
 
-Input Validation:
-□ Validate all input server-side
-□ Use parameterized queries
-□ Implement request size limits
-□ Sanitize output to prevent XSS
+Bearer tokens in explicit authorization headers are not automatically attached cross-origin like cookies, but token storage/exfiltration and XSS remain.
 
-Rate Limiting:
-□ Implement per-IP and per-user limits
-□ Stricter limits on sensitive endpoints
-□ Return appropriate rate limit headers
-□ Log rate limit events
+CORS is a browser response-reading policy, not server authentication. Avoid reflecting arbitrary `Origin` with credentials. Configure exact trusted origins, methods, headers, and cache `Vary: Origin` correctly.
 
-Headers:
-□ Enable HSTS
-□ Set proper CORS policy
-□ Add security headers (CSP, X-Frame-Options)
-□ Configure proper cache headers
-
-Logging:
-□ Log authentication events
-□ Log authorization failures
-□ Implement audit trail
-□ Monitor for anomalies
-```
+Servers must enforce authorization regardless of CORS; non-browser clients ignore it.
 
 ---
 
-## References
+## 11. Replay, Idempotency, and Request Signatures
 
-- [OWASP API Security Top 10](https://owasp.org/www-project-api-security/)
-- [OWASP REST Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/REST_Security_Cheat_Sheet.html)
-- [RFC 6749: OAuth 2.0](https://datatracker.ietf.org/doc/html/rfc6749)
-- [AWS Signature Version 4](https://docs.aws.amazon.com/general/latest/gr/signature-version-4.html)
-- [Google Cloud API Security Best Practices](https://cloud.google.com/apis/design/security)
+TLS does not prevent a valid request from being repeated by a holder or intermediary.
+
+For effectful operations use [Idempotency and Operation Identity](../01-foundations/08-idempotency.md). Bind operation key to tenant, caller, action, resource, and semantic request digest.
+
+HTTP message signatures or application request signatures can bind:
+
+- method;
+- authority;
+- target URI;
+- selected headers;
+- content digest;
+- creation/expiry;
+- nonce/key identity.
+
+Both signer and verifier must canonicalize identically and account for proxies that rewrite authority/path/headers. Signature validation does not replace authorization or replay state.
+
+Use signed requests where channel termination/intermediaries or webhook/client proof require message-level integrity. Otherwise mTLS/OAuth sender constraint may be simpler.
+
+---
+
+## 12. Resource Exhaustion and Abuse
+
+Rate limits are one layer; resource protection also needs:
+
+- request/body/header limits;
+- concurrency limits;
+- bounded queues;
+- per-tenant query/fan-out budgets;
+- deadlines/cancellation propagation;
+- pagination/export caps;
+- memory/CPU quotas;
+- downstream bulkheads;
+- cost-aware admission;
+- cache-miss/origin protection.
+
+The generic algorithms belong to [Rate Limiting](../06-scaling/05-rate-limiting.md) and [Backpressure](../06-scaling/07-backpressure.md).
+
+### 12.1 Capacity example
+
+Suppose an endpoint:
+
+- receives 6,000 requests/s;
+- performs up to 40 downstream lookups per request;
+- downstream safe capacity is 90,000 lookups/s;
+- target utilization is 70 percent.
+
+Unbounded worst-case demand:
+
+```text
+6,000 * 40 = 240,000 lookups/s
+```
+
+Admissible average downstream budget:
+
+```text
+90,000 * 0.70 = 63,000 lookups/s
+```
+
+Average budget per request at 6,000 rps:
+
+```text
+63,000 / 6,000 = 10.5 lookups/request
+```
+
+The API must reduce requested fan-out, batch/cache efficiently, defer work, or reject. Adding only a request-per-second limit ignores cost variance.
+
+Charge retries and cache misses to the initiating tenant/operation budget. Otherwise attackers amplify work indirectly.
+
+---
+
+## 13. Error and Cache Semantics
+
+Errors should be stable, machine-readable, and minimally revealing:
+
+```text
+type
+title
+status
+code
+request/trace reference
+safe validation details
+```
+
+Do not expose stack traces, SQL, internal hostnames, key material, policy internals, or whether a sensitive resource exists. For object access, returning the same external result for absent and unauthorized may reduce enumeration, while internal audit keeps distinction.
+
+Differentiate:
+
+- malformed request;
+- unauthenticated;
+- unauthorized;
+- conflict/precondition;
+- rate/admission rejection;
+- transient unavailable;
+- accepted asynchronous work.
+
+Cache controls are security controls. Prevent shared-cache leakage by including authorization/tenant in cache semantics or marking private/no-store. Do not cache personalized error/success responses under a public key. Normalize `Vary` behavior across CDN/proxy/app.
+
+---
+
+## 14. Multi-Tenant and Multi-Region Control Planes
+
+Tenant context must be derived from authenticated grant/host/resource relationship and propagated with integrity. Every database/cache/search/object key includes tenant scope unless the resource is deliberately global.
+
+API policy/config includes:
+
+- routes and versions;
+- schema/size/cost rules;
+- identity issuers/audiences;
+- authorization action mapping;
+- egress destinations;
+- webhook keys;
+- rate/admission classes;
+- CORS/cache policy.
+
+Publish versioned, signed snapshots; validate and activate atomically. A partial policy rollout where a new route exists before its authorization mapping can create a bypass.
+
+Regions need last-known-good policy with a staleness bound. Emergency denies and key revocations need convergence telemetry. Do not independently resolve concurrent security policy with last-write-wins if one update removes access and another adds it.
+
+---
+
+## 15. Failure Traces
+
+### 15.1 BOLA across tenants
+
+1. authenticated user changes `/tenants/A/invoices/9` to tenant B's ID.
+2. service loads by invoice ID alone.
+3. authentication succeeds; no object/tenant check occurs.
+4. B's invoice leaks.
+
+**Prevention:** tenant-scoped load plus resource/action authorization.
+
+### 15.2 Proxy/backend parser disagreement
+
+1. edge and backend disagree on request framing.
+2. attacker embeds a second request.
+3. edge security applies to first interpretation.
+4. backend processes hidden request under another user's connection.
+
+**Prevention:** reject ambiguous framing and test the full proxy chain.
+
+### 15.3 Mass assignment
+
+1. profile update deserializes directly into user record.
+2. attacker includes `role=admin`.
+3. ORM persists it.
+
+**Prevention:** explicit command fields and server-owned attributes.
+
+### 15.4 SSRF through redirect
+
+1. initial URL resolves to allowed host.
+2. host redirects to metadata IP.
+3. client follows without revalidation.
+4. credentials leak.
+
+**Prevention:** validate each hop/address and isolate egress.
+
+### 15.5 Webhook replay
+
+1. valid signed payment event is captured.
+2. signature verifies on repeat.
+3. receiver lacks event-id consumption.
+4. credit applied twice.
+
+**Prevention:** freshness plus transactional event idempotency.
+
+### 15.6 Query-cost attack
+
+1. attacker submits deeply aliased graph query under normal request-rate quota.
+2. one request causes thousands of backend calls.
+3. shared dependency saturates.
+
+**Prevention:** structural cost model, depth/breadth/fan-out limits, and concurrency admission.
+
+### 15.7 CORS credential leak
+
+1. server reflects arbitrary origin and allows credentials.
+2. attacker site sends browser request with victim cookie.
+3. browser exposes response to attacker.
+
+**Prevention:** exact origin policy and CSRF/session controls.
+
+### 15.8 Shared cache leaks authorization
+
+1. authenticated response cached by URL only.
+2. next tenant requests same URL.
+3. cache returns first tenant's data.
+
+**Prevention:** private/no-store or complete tenant/auth-aware cache key.
+
+---
+
+## 16. Observability and Incident Response
+
+Track:
+
+- rejected requests by stage/reason;
+- parser/framing anomalies;
+- route/action/policy revision;
+- authentication and authorization denial;
+- cross-tenant/resource mismatch;
+- schema/unknown-field/mass-assignment attempts;
+- body/header/decompression bounds;
+- query estimated versus actual cost;
+- downstream fan-out and cancellation;
+- SSRF destination-policy rejection;
+- webhook signature/replay/delivery state;
+- idempotency conflict/replay;
+- cache authorization anomalies;
+- rate/concurrency/admission outcomes.
+
+Avoid raw tokens, credentials, request bodies, personal data, and attacker-controlled high-cardinality fields in metrics/logs.
+
+Incident controls:
+
+- disable route/client/integration;
+- publish emergency deny;
+- rotate webhook/API credentials;
+- block destination/egress;
+- reduce query/body/fan-out limits;
+- revoke grants/sessions;
+- identify affected resources/tenants from audit evidence;
+- replay quarantined work only after repair.
+
+Security logging must survive the incident without becoming the resource-exhaustion vector. Buffer/bound and preserve critical audit separately.
+
+---
+
+## 17. Verification
+
+1. **Protocol-chain tests:** edge/gateway/backend parse the same corpus.
+2. **Route inventory:** every method/version/admin/async path maps to an action policy.
+3. **Object authorization matrix:** subject × tenant × resource × action, including existence masking.
+4. **Mass-assignment tests:** unexpected/server-owned fields never persist.
+5. **Schema fuzzing:** duplicate keys, deep nesting, encodings, huge numbers/collections.
+6. **SSRF tests:** private/link-local/loopback, IPv6, alternate encodings, DNS rebinding, redirects.
+7. **Injection tests:** every interpreter/identifier boundary.
+8. **Webhook tests:** exact bytes, wrong key/algorithm/timestamp, duplicate/out-of-order, rotation.
+9. **Browser tests:** CSRF, origin confusion, CORS preflight/cache, cookie policy.
+10. **Cost/load tests:** expensive legal requests, fan-out, decompression, cancellation, retries.
+11. **Cache tests:** cross-user/tenant, `Vary`, error caching, authorization changes.
+12. **Control-plane tests:** partial/stale policy, rollback, emergency deny.
+13. **Security regression corpus:** every disclosed incident class becomes a test.
+14. **End-to-end adversarial review:** prove no bypass path reaches protected state.
+
+Test semantic invariants, not only status codes. A `403` on one route proves nothing about its bulk or legacy equivalent.
+
+---
+
+## 18. Decision Framework
+
+Before exposing an endpoint:
+
+1. What exact action and resource does it represent?
+2. Which hop establishes identity, tenant, authority, path, and body meaning?
+3. Can any alternate path bypass enforcement?
+4. How is object/relationship authorization performed atomically enough?
+5. Which fields are writable and readable?
+6. What parser/normalization differences exist across hops?
+7. What is the maximum bytes, nesting, fan-out, CPU, memory, I/O, and deadline?
+8. Does input control an outbound destination or interpreter?
+9. What is the replay/idempotency contract?
+10. How do caches separate authorization/tenant contexts?
+11. What sensitive data can appear in errors/logs/traces?
+12. How do policy, keys, and integrations rotate across regions?
+13. Which evidence proves the endpoint resists its highest-risk abuse cases?
+
+Secure APIs make illegal states and ambiguous interpretations hard to express. A collection of middleware with no coherent request/resource contract does not.
+
+---
+
+## Primary References
+
+- [OWASP API Security Top 10 (2023)](https://owasp.org/API-Security/editions/2023/en/0x11-t10/)
+- [RFC 9110: HTTP Semantics](https://www.rfc-editor.org/rfc/rfc9110)
+- [RFC 9112: HTTP/1.1](https://www.rfc-editor.org/rfc/rfc9112)
+- [RFC 9457: Problem Details for HTTP APIs](https://www.rfc-editor.org/rfc/rfc9457)
+- [RFC 9421: HTTP Message Signatures](https://www.rfc-editor.org/rfc/rfc9421)
+- [OWASP SSRF Prevention Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html)
+- [Fetch Standard: CORS Protocol](https://fetch.spec.whatwg.org/#http-cors-protocol)
+
+---
+
+## Related Chapters
+
+- [OAuth 2.0 and OpenID Connect](./02-oauth2-openid-connect.md)
+- [Authorization at Scale](./07-authorization-patterns.md)
+- [Zero-Trust Service and Workload Architecture](./05-zero-trust-architecture.md)
+- [Idempotency and Operation Identity](../01-foundations/08-idempotency.md)
+- [Rate Limiting](../06-scaling/05-rate-limiting.md)
+- [Backpressure](../06-scaling/07-backpressure.md)
+- [Edge Gateway and API Mediation](../12-service-mesh/02-api-gateway.md)
