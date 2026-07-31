@@ -292,16 +292,13 @@ export default withMermaid({
   ignoreDeadLinks: true,
 
   head: [
-    ['link', { rel: 'preconnect', href: 'https://fonts.googleapis.com' }],
-    ['link', { rel: 'preconnect', href: 'https://fonts.gstatic.com', crossorigin: '' }],
-    ['link', { rel: 'stylesheet', href: 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Noto+Sans+JP:wght@400;500;700&family=Newsreader:ital,opsz,wght@1,6..72,400..600&display=swap' }],
-    // favicon is served from the custom domain root
-    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/logo.svg' }],
-    ['meta', { name: 'theme-color', content: '#0f172a' }],
+    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' }],
+    ['meta', { name: 'theme-color', content: '#f3efe6', media: '(prefers-color-scheme: light)' }],
+    ['meta', { name: 'theme-color', content: '#151411', media: '(prefers-color-scheme: dark)' }],
+    ['meta', { name: 'color-scheme', content: 'light dark' }],
     ['meta', { property: 'og:type', content: 'website' }],
     ['meta', { property: 'og:title', content: 'System Design Patterns' }],
     ['meta', { property: 'og:description', content: 'An architecture fieldbook for reliable distributed, data, ML, and AI systems.' }],
-    ['meta', { property: 'og:image', content: 'https://design.babushkai.com/logo.svg' }],
     ['meta', { name: 'twitter:card', content: 'summary' }],
   ],
 
@@ -311,33 +308,8 @@ export default withMermaid({
       lang: 'en',
       themeConfig: {
         nav: [
-          { text: 'Home', link: '/' },
-          { text: 'Guide', link: '/01-foundations/01-acid-transactions' },
-          {
-            text: 'Sections',
-            items: [
-              { text: 'Foundations', link: '/01-foundations/01-acid-transactions' },
-              { text: 'Distributed Databases', link: '/02-distributed-databases/01-single-leader-replication' },
-              { text: 'Storage Engines', link: '/03-storage-engines/01-b-trees' },
-              { text: 'Caching', link: '/04-caching/01-cache-strategies' },
-              { text: 'Messaging', link: '/05-messaging/01-message-queues' },
-              { text: 'Scaling', link: '/06-scaling/01-load-balancing' },
-              { text: 'Real-Time', link: '/07-real-time/01-polling' },
-              { text: 'Case Studies', link: '/08-case-studies/01-twitter' },
-              { text: 'Whitepapers', link: '/09-whitepapers/01-mapreduce' },
-              { text: 'Security', link: '/10-security/01-authentication-fundamentals' },
-              { text: 'Observability and Operations', link: '/11-observability/01-distributed-tracing' },
-              { text: 'Service Connectivity and APIs', link: '/12-service-mesh/01-service-discovery' },
-              { text: 'Data Pipelines', link: '/13-data-pipelines/01-batch-processing' },
-              { text: 'Search Systems', link: '/14-search-systems/01-inverted-indexes' },
-              { text: 'Deployment', link: '/15-deployment/01-deployment-strategies' },
-              { text: 'ML Systems', link: '/16-ml-systems/01-ml-system-fundamentals' },
-              { text: 'LLM Systems', link: '/17-llm-systems/01-agent-fundamentals' },
-              { text: 'Workflow & Job Systems', link: '/18-workflow-job-systems/01-workflow-system-fundamentals' },
-              { text: 'Coding Agent Platforms', link: '/19-compound-engineering/01-compound-engineering-fundamentals' },
-            ]
-          },
-          { text: 'GitHub', link: 'https://github.com/babushkai/system-design-patterns' }
+          { text: 'Read', link: '/01-foundations/01-acid-transactions' },
+          { text: 'PDF / EPUB', link: 'https://github.com/babushkai/system-design-patterns/releases/latest' },
         ],
         sidebar: { '/': sidebarEN },
         editLink: {
@@ -360,9 +332,8 @@ export default withMermaid({
       lang: 'ja',
       themeConfig: {
         nav: [
-          { text: 'ホーム', link: '/ja/' },
-          { text: 'ガイド', link: '/ja/01-foundations/01-acid-transactions' },
-          { text: 'GitHub', link: 'https://github.com/babushkai/system-design-patterns' }
+          { text: '読む', link: '/ja/01-foundations/01-acid-transactions' },
+          { text: 'PDF / EPUB', link: 'https://github.com/babushkai/system-design-patterns/releases/latest' },
         ],
         sidebar: {
           '/ja/': [
@@ -658,7 +629,6 @@ export default withMermaid({
   },
 
   themeConfig: {
-    logo: '/logo.svg',
     siteTitle: 'System Design Patterns',
 
     socialLinks: [
@@ -670,7 +640,7 @@ export default withMermaid({
     },
 
     outline: {
-      level: [2, 3],
+      level: 2,
       label: 'On this page'
     }
   },
@@ -689,13 +659,13 @@ export default withMermaid({
 mermaid: {
   theme: 'base',
   themeVariables: {
-    primaryColor: '#2563EB',
-    primaryTextColor: '#ffffff',
-    primaryBorderColor: '#1D4ED8',
-    lineColor: '#0F766E',
-    secondaryColor: '#DBEAFE',
-    tertiaryColor: '#FEF3C7',
-    fontFamily: 'Inter, sans-serif',
+    primaryColor: '#8A4B37',
+    primaryTextColor: '#FFFDF8',
+    primaryBorderColor: '#653427',
+    lineColor: '#47675E',
+    secondaryColor: '#E9E0D1',
+    tertiaryColor: '#F2E6CF',
+    fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
   },
 },
 mermaidPlugin: {

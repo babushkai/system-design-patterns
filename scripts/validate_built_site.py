@@ -18,6 +18,11 @@ FENCE_RE = re.compile(r"^\s*(```|~~~)")
 INLINE_CODE_RE = re.compile(r"`+[^`\n]*`+")
 DISPLAY_MATH_RE = re.compile(r"(?<!\\)\$\$")
 INLINE_MATH_RE = re.compile(r"(?<![$\\])\$[^$\n]+?(?<!\\)\$(?!\$)")
+TEXT_OUTPUT_SUFFIXES = {".css", ".html", ".js", ".json", ".xml"}
+FORBIDDEN_RENDERED_REFERENCES = (
+    "logo.svg",
+    "design.babushkai.com/logo",
+)
 
 
 class PageParser(HTMLParser):
@@ -139,6 +144,20 @@ def main() -> int:
             errors.append(
                 f"{path.relative_to(DIST)}: rendered {parser.math_errors} MathJax error node(s)"
             )
+
+    for path in sorted(DIST.rglob("*")):
+        if not path.is_file() or path.suffix not in TEXT_OUTPUT_SUFFIXES:
+            continue
+        output = path.read_text(encoding="utf-8")
+        for reference in FORBIDDEN_RENDERED_REFERENCES:
+            if reference in output:
+                errors.append(
+                    f"{path.relative_to(DIST)}: retired visual identity remains: {reference}"
+                )
+
+    retired_logo = DIST / "logo.svg"
+    if retired_logo.exists():
+        errors.append("retired visual identity was copied to the built site: logo.svg")
 
     for source in sorted(ROOT.rglob("*.md")):
         relative = source.relative_to(ROOT).as_posix()
