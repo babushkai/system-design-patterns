@@ -1,639 +1,596 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { withBase } from 'vitepress'
+import { computed, onBeforeUnmount, ref } from 'vue'
+import { useRouter, withBase } from 'vitepress'
 
 type Locale = 'en' | 'ja'
-type LinkCard = {
-  eyebrow: string
-  title: string
-  body: string
-  href: string
-  external?: boolean
-}
-type Domain = {
-  number: string
-  title: string
-  body: string
-  href: string
-}
 
 const props = withDefaults(defineProps<{ locale?: Locale }>(), {
   locale: 'en',
 })
 
-const domains: Record<Locale, Domain[]> = {
-  en: [
-    { number: '01', title: 'Foundations', body: 'Guarantees and failure', href: '/01-foundations/01-acid-transactions' },
-    { number: '02', title: 'Distributed Databases', body: 'Replication and consensus', href: '/02-distributed-databases/01-single-leader-replication' },
-    { number: '03', title: 'Storage Engines', body: 'Indexes and persistence', href: '/03-storage-engines/01-b-trees' },
-    { number: '04', title: 'Caching', body: 'Latency and invalidation', href: '/04-caching/01-cache-strategies' },
-    { number: '05', title: 'Messaging', body: 'Delivery and ordering', href: '/05-messaging/01-message-queues' },
-    { number: '06', title: 'Scaling', body: 'Load and protection', href: '/06-scaling/01-load-balancing' },
-    { number: '07', title: 'Real-Time', body: 'Streams and presence', href: '/07-real-time/01-polling' },
-    { number: '08', title: 'Case Studies', body: 'Production evidence', href: '/08-case-studies/01-twitter' },
-    { number: '09', title: 'Whitepapers', body: 'Foundational designs', href: '/09-whitepapers/01-mapreduce' },
-    { number: '10', title: 'Security', body: 'Trust and identity', href: '/10-security/01-authentication-fundamentals' },
-    { number: '11', title: 'Observability & Operations', body: 'Telemetry, reliability, cost, and response', href: '/11-observability/01-distributed-tracing' },
-    { number: '12', title: 'Service Connectivity', body: 'Discovery, gateways, mesh, and APIs', href: '/12-service-mesh/01-service-discovery' },
-    { number: '13', title: 'Data Pipelines', body: 'Batch and streams', href: '/13-data-pipelines/01-batch-processing' },
-    { number: '14', title: 'Search Systems', body: 'Retrieve and rank', href: '/14-search-systems/01-inverted-indexes' },
-    { number: '15', title: 'Deployment', body: 'Release and recover', href: '/15-deployment/01-deployment-strategies' },
-    { number: '16', title: 'ML Systems', body: 'Features, serving, drift', href: '/16-ml-systems/01-ml-system-fundamentals' },
-    { number: '17', title: 'LLM Systems', body: 'Agents and context', href: '/17-llm-systems/01-agent-fundamentals' },
-    { number: '18', title: 'Workflow & Jobs', body: 'Workers and recovery', href: '/18-workflow-job-systems/01-workflow-system-fundamentals' },
-    { number: '19', title: 'Coding Agent Platforms', body: 'Controlled software change', href: '/19-compound-engineering/01-compound-engineering-fundamentals' },
-  ],
-  ja: [
-    { number: '01', title: '基礎', body: '保証と障害', href: '/ja/01-foundations/01-acid-transactions' },
-    { number: '02', title: '分散データベース', body: '複製と合意', href: '/ja/02-distributed-databases/01-single-leader-replication' },
-    { number: '03', title: 'ストレージエンジン', body: '索引と永続化', href: '/ja/03-storage-engines/01-b-trees' },
-    { number: '04', title: 'キャッシュ', body: 'レイテンシと無効化', href: '/ja/04-caching/01-cache-strategies' },
-    { number: '05', title: 'メッセージング', body: '配信と順序', href: '/ja/05-messaging/01-message-queues' },
-    { number: '06', title: 'スケーリング', body: '負荷と保護', href: '/ja/06-scaling/01-load-balancing' },
-    { number: '07', title: 'リアルタイム', body: 'ストリームとプレゼンス', href: '/ja/07-real-time/01-polling' },
-    { number: '08', title: 'ケーススタディ', body: '本番の証拠', href: '/ja/08-case-studies/01-twitter' },
-    { number: '09', title: 'ホワイトペーパー', body: '基礎設計', href: '/ja/09-whitepapers/01-mapreduce' },
-    { number: '10', title: 'セキュリティ', body: '信頼と認証', href: '/ja/10-security/01-authentication-fundamentals' },
-    { number: '11', title: 'オブザーバビリティ', body: '追跡と対応', href: '/ja/11-observability/01-distributed-tracing' },
-    { number: '12', title: 'サービスメッシュ', body: '実行時トラフィック', href: '/ja/12-service-mesh/01-service-discovery' },
-    { number: '13', title: 'データパイプライン', body: 'バッチとストリーム', href: '/ja/13-data-pipelines/01-batch-processing' },
-    { number: '14', title: '検索システム', body: '検索と順位付け', href: '/ja/14-search-systems/01-inverted-indexes' },
-    { number: '15', title: 'デプロイメント', body: 'リリースと復旧', href: '/ja/15-deployment/01-deployment-strategies' },
-    { number: '16', title: 'MLシステム', body: '特徴量・サービング・ドリフト', href: '/ja/16-ml-systems/01-ml-system-fundamentals' },
-    { number: '17', title: 'LLMシステム', body: 'エージェントと文脈', href: '/ja/17-llm-systems/01-agent-fundamentals' },
-    { number: '18', title: 'ワークフローとジョブ', body: '実行と復旧', href: '/ja/18-workflow-job-systems/01-workflow-system-fundamentals' },
-    { number: '19', title: 'コンパウンドエンジニアリング', body: 'AIネイティブワークフロー', href: '/ja/19-compound-engineering/01-compound-engineering-fundamentals' },
-  ],
-}
-
-const content = {
+const copy = {
   en: {
-    titleHtml: 'Design systems that keep their <em>promises.</em>',
-    eyebrow: ['Architecture Fieldbook', 'Distributed · Data · ML · AI Systems'],
-    deck: 'A deeply technical field guide for engineers who need more than interview diagrams: invariants, trade-offs, failure modes, capacity math, rollout mechanics, and production case studies.',
-    edition: 'Fieldbook edition · Evidence-first technical reference',
-    primaryCta: { label: 'Start with foundations', href: '/01-foundations/01-acid-transactions' },
-    secondaryCta: { label: 'Explore ML systems', href: '/16-ml-systems/01-ml-system-fundamentals' },
-    downloadCta: { label: 'Download PDF / EPUB', href: 'https://github.com/babushkai/system-design-patterns/releases/latest', external: true },
-    statsLabel: 'Reference statistics',
-    stats: [
-      ['160', 'Articles'],
-      ['19', 'Design domains'],
-      ['13', 'Case studies'],
-      ['15', 'Paper notes'],
-    ],
-    mapHeading: ['Complete map', 'Nineteen domains, one connected system.'],
-    routesHeading: ['Reading routes', 'Choose the pressure you are designing against.'],
-    routes: [
-      { eyebrow: 'Correctness path', title: 'Transactions, isolation, CAP, consistency, time, partitions.', body: 'Use when the system must preserve invariants under concurrency and failure.', href: '/01-foundations/01-acid-transactions' },
-      { eyebrow: 'State path', title: 'Storage engines, replication, indexes, sharding, encoding.', body: 'Use when data layout and write/read paths dominate the architecture.', href: '/03-storage-engines/01-b-trees' },
-      { eyebrow: 'Flow path', title: 'Queues, ordering, delivery guarantees, outbox, backpressure.', body: 'Use when throughput, asynchronous boundaries, and retries decide reliability.', href: '/05-messaging/01-message-queues' },
-      { eyebrow: 'Intelligence path', title: 'ML platforms, features, serving, monitoring, experiments, governance.', body: 'Use when statistical systems meet production control planes.', href: '/16-ml-systems/01-ml-system-fundamentals' },
-    ] satisfies LinkCard[],
-    evidenceEyebrow: 'Evidence shelf',
-    evidenceHeading: 'Use papers and production systems as calibration data.',
-    evidenceBody: 'The goal is not to memorize diagrams. The goal is to recognize load-bearing decisions and defend them with mechanisms, numbers, and failure analysis.',
-    evidenceLinks: [
-      { eyebrow: 'Paper trail', title: 'Raft, Dynamo, Spanner, Kafka, FoundationDB', body: 'Read the original mechanisms behind modern infrastructure.', href: '/09-whitepapers/07-raft' },
-      { eyebrow: 'Production systems', title: 'Netflix, Slack, Discord, Stripe, Cloudflare', body: 'Compare abstractions against systems that served real traffic.', href: '/08-case-studies/04-netflix' },
-      { eyebrow: 'Modern systems', title: 'RAG, agents, orchestration, ML control planes', body: 'Extend classic systems thinking into AI-native architectures.', href: '/17-llm-systems/04-rag-patterns' },
-    ] satisfies LinkCard[],
+    kicker: 'Architecture Fieldbook',
+    titleLead: 'System Design',
+    titleAccent: 'Patterns',
+    subject: 'Distributed systems · Data · ML · AI',
+    edition: 'Fieldbook edition',
+    openHint: 'Open the book',
+    openLabel: 'Open System Design Patterns and begin with ACID Transactions',
+    opening: 'Opening the book',
+    chapter: 'Chapter 01',
+    chapterTitle: 'ACID Transactions',
+    destination: '/01-foundations/01-acid-transactions',
   },
   ja: {
-    titleHtml: '約束を守るシステムを<em>設計する。</em>',
-    eyebrow: ['Architecture Fieldbook', '分散 · データ · ML · AI システム'],
-    deck: '面接用の図ではなく、設計レビューと本番判断のための技術フィールドブック。整合性、障害、容量、ロールアウト、監視、ML/AIシステムまで、実装上のトレードオフを深掘りする。',
-    edition: 'フィールドブック版 · 根拠重視の技術リファレンス',
-    primaryCta: { label: '基礎から始める', href: '/ja/01-foundations/01-acid-transactions' },
-    secondaryCta: { label: 'MLシステムを見る', href: '/ja/16-ml-systems/01-ml-system-fundamentals' },
-    downloadCta: { label: 'PDF / EPUB', href: 'https://github.com/babushkai/system-design-patterns/releases/latest', external: true },
-    statsLabel: 'リファレンス統計',
-    stats: [
-      ['160', '記事'],
-      ['19', '設計領域'],
-      ['13', '本番事例'],
-      ['15', '論文ノート'],
-    ],
-    mapHeading: ['Complete map', '19領域を、ひとつの接続されたシステムとして読む。'],
-    routesHeading: ['Reading routes', '設計で向き合う圧力から読む。'],
-    routes: [
-      { eyebrow: 'Correctness path', title: 'トランザクション、分離、CAP、整合性、時間、分断。', body: '並行性と障害の中で不変条件を守る設計に。', href: '/ja/01-foundations/01-acid-transactions' },
-      { eyebrow: 'State path', title: 'ストレージエンジン、複製、索引、シャーディング、エンコーディング。', body: 'データ配置と読み書き経路が支配的な設計に。', href: '/ja/03-storage-engines/01-b-trees' },
-      { eyebrow: 'Flow path', title: 'キュー、順序、配信保証、Saga、バックプレッシャー。', body: 'スループット、非同期境界、再試行が信頼性を決める設計に。', href: '/ja/05-messaging/01-message-queues' },
-      { eyebrow: 'Intelligence path', title: 'ML基盤、特徴量、サービング、監視、実験、ガバナンス。', body: '統計的システムと本番制御プレーンが交わる設計に。', href: '/ja/16-ml-systems/01-ml-system-fundamentals' },
-    ] satisfies LinkCard[],
-    evidenceEyebrow: 'Evidence shelf',
-    evidenceHeading: '論文と本番システムを、設計判断のキャリブレーションに使う。',
-    evidenceBody: '目的は図を暗記することではない。負荷を支える判断を見抜き、メカニズム、数値、障害分析で説明できるようにすること。',
-    evidenceLinks: [
-      { eyebrow: 'Paper trail', title: 'Raft、Dynamo、Spanner、Kafka、FoundationDB', body: '現代インフラの背後にある原論文のメカニズムを読む。', href: '/ja/09-whitepapers/07-raft' },
-      { eyebrow: 'Production systems', title: 'Netflix、Slack、Discord、Stripe、Cloudflare', body: '抽象化を実トラフィックに耐えたシステムと比較する。', href: '/ja/08-case-studies/04-netflix' },
-      { eyebrow: 'Modern systems', title: 'RAG、エージェント、オーケストレーション、ML制御プレーン', body: '古典的なシステム思考をAIネイティブアーキテクチャへ拡張する。', href: '/ja/17-llm-systems/04-rag-patterns' },
-    ] satisfies LinkCard[],
+    kicker: 'Architecture Fieldbook',
+    titleLead: 'システム設計',
+    titleAccent: 'パターン',
+    subject: '分散システム · データ · ML · AI',
+    edition: 'フィールドブック版',
+    openHint: '本を開く',
+    openLabel: 'システム設計パターンを開き、ACIDトランザクションから読み始める',
+    opening: '本を開いています',
+    chapter: '第1章',
+    chapterTitle: 'ACIDトランザクション',
+    destination: '/ja/01-foundations/01-acid-transactions',
   },
+} satisfies Record<Locale, {
+  kicker: string
+  titleLead: string
+  titleAccent: string
+  subject: string
+  edition: string
+  openHint: string
+  openLabel: string
+  opening: string
+  chapter: string
+  chapterTitle: string
+  destination: string
+}>
+
+const page = computed(() => copy[props.locale])
+const destination = computed(() => withBase(page.value.destination))
+const isOpening = ref(false)
+const router = useRouter()
+
+let navigationTimer: number | undefined
+
+function beginOpening() {
+  if (isOpening.value) return
+
+  isOpening.value = true
+  navigationTimer = window.setTimeout(() => {
+    void router.go(destination.value)
+  }, 720)
 }
 
-const page = computed(() => content[props.locale])
-const domainList = computed(() => domains[props.locale])
+function openBook(event: MouseEvent) {
+  if (
+    event.button !== 0 ||
+    event.metaKey ||
+    event.ctrlKey ||
+    event.shiftKey ||
+    event.altKey
+  ) {
+    return
+  }
 
-function hrefFor(card: { href: string; external?: boolean }) {
-  return card.external ? card.href : withBase(card.href)
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    return
+  }
+
+  event.preventDefault()
+  beginOpening()
 }
 
-function linkRel(card: { external?: boolean }) {
-  return card.external ? 'noreferrer' : undefined
-}
-
-function linkTarget(card: { external?: boolean }) {
-  return card.external ? '_blank' : undefined
-}
+onBeforeUnmount(() => {
+  if (navigationTimer !== undefined) {
+    window.clearTimeout(navigationTimer)
+  }
+})
 </script>
 
 <template>
-  <main class="sdp-home" :lang="locale">
-    <section class="sdp-hero" aria-labelledby="sdp-title">
-      <div class="sdp-shell">
-        <p class="sdp-eyebrow">
-          <span>{{ page.eyebrow[0] }}</span>
-          <span>{{ page.eyebrow[1] }}</span>
-        </p>
-        <h1 id="sdp-title" v-html="page.titleHtml" />
-        <p class="sdp-deck">{{ page.deck }}</p>
-        <nav class="sdp-actions" aria-label="Primary paths">
-          <a class="sdp-cta" :href="hrefFor(page.primaryCta)">{{ page.primaryCta.label }} <b aria-hidden="true">→</b></a>
-          <a class="sdp-link" :href="hrefFor(page.secondaryCta)">{{ page.secondaryCta.label }}</a>
-          <a
-            class="sdp-link"
-            :href="hrefFor(page.downloadCta)"
-            :target="linkTarget(page.downloadCta)"
-            :rel="linkRel(page.downloadCta)"
-          >{{ page.downloadCta.label }}</a>
-        </nav>
-        <div class="sdp-stats" :aria-label="page.statsLabel">
-          <p v-for="stat in page.stats" :key="stat[1]" class="sdp-stat">
-            <span class="home-stat-number">{{ stat[0] }}</span>
-            <span class="home-stat-label">{{ stat[1] }}</span>
-          </p>
-        </div>
-        <p class="sdp-edition">{{ page.edition }}</p>
-      </div>
-    </section>
+  <main class="sdp-home book-landing" :lang="locale">
+    <a
+      class="book-entry"
+      :class="{ 'is-opening': isOpening }"
+      :href="destination"
+      target="_self"
+      :aria-label="page.openLabel"
+      :aria-busy="isOpening"
+      @click="openBook"
+    >
+      <span class="book-status" aria-live="polite">
+        {{ isOpening ? page.opening : '' }}
+      </span>
 
-    <section class="sdp-section" aria-labelledby="sdp-map-title">
-      <div class="sdp-shell">
-        <header class="sdp-section-head">
-          <p>{{ page.mapHeading[0] }}</p>
-          <h2 id="sdp-map-title">{{ page.mapHeading[1] }}</h2>
-        </header>
-        <nav class="sdp-domain-map" aria-label="Architecture sections">
-          <a v-for="domain in domainList" :key="domain.number" class="sdp-domain" :href="withBase(domain.href)">
-            <span>{{ domain.number }}</span>
-            <strong>{{ domain.title }}</strong>
-            <small>{{ domain.body }}</small>
-          </a>
-        </nav>
-      </div>
-    </section>
+      <span class="book-volume">
+        <span class="book-back-cover" aria-hidden="true" />
 
-    <section class="sdp-section" aria-labelledby="sdp-routes-title">
-      <div class="sdp-shell">
-        <header class="sdp-section-head">
-          <p>{{ page.routesHeading[0] }}</p>
-          <h2 id="sdp-routes-title">{{ page.routesHeading[1] }}</h2>
-        </header>
-        <nav class="sdp-routes" aria-label="Curated reading routes">
-          <a v-for="route in page.routes" :key="route.eyebrow" class="sdp-route" :href="hrefFor(route)">
-            <span class="sdp-route-eyebrow">{{ route.eyebrow }}</span>
-            <span class="sdp-route-copy">
-              <strong>{{ route.title }}</strong>
-              <small>{{ route.body }}</small>
+        <span class="book-pages" aria-hidden="true">
+          <span class="book-page-edge book-page-edge-one" />
+          <span class="book-page-edge book-page-edge-two" />
+          <span class="book-first-page">
+            <span class="inside-chapter">{{ page.chapter }}</span>
+            <strong>{{ page.chapterTitle }}</strong>
+            <span class="inside-rule" />
+          </span>
+        </span>
+
+        <span class="book-front-cover">
+          <span class="cover-face">
+            <span class="cover-kicker">{{ page.kicker }}</span>
+            <h1 class="cover-title">
+              <span>{{ page.titleLead }}</span>
+              <strong>{{ page.titleAccent }}</strong>
+            </h1>
+            <span class="cover-plate">
+              <img
+                :src="withBase('/art/systems-constellation-960.webp')"
+                :srcset="`${withBase('/art/systems-constellation-640.webp')} 640w, ${withBase('/art/systems-constellation-960.webp')} 960w`"
+                sizes="(max-width: 680px) 180px, 205px"
+                alt=""
+                width="960"
+                height="960"
+                decoding="async"
+                fetchpriority="high"
+              >
             </span>
-            <b aria-hidden="true">→</b>
-          </a>
-        </nav>
-      </div>
-    </section>
-
-    <section class="sdp-section" aria-labelledby="sdp-evidence-title">
-      <div class="sdp-shell sdp-evidence">
-        <header class="sdp-evidence-copy">
-          <p>{{ page.evidenceEyebrow }}</p>
-          <h2 id="sdp-evidence-title">{{ page.evidenceHeading }}</h2>
-          <p class="sdp-evidence-body">{{ page.evidenceBody }}</p>
-        </header>
-        <nav class="sdp-evidence-list" aria-label="Evidence links">
-          <a v-for="link in page.evidenceLinks" :key="link.eyebrow" class="sdp-evidence-item" :href="hrefFor(link)">
-            <span class="sdp-evidence-eyebrow">{{ link.eyebrow }}</span>
-            <span class="sdp-evidence-copy-inner">
-              <strong>{{ link.title }}</strong>
-              <small>{{ link.body }}</small>
+            <span class="cover-subject">{{ page.subject }}</span>
+            <span class="cover-footer">
+              <span>{{ page.edition }}</span>
+              <span class="cover-open-hint">{{ page.openHint }} <b>→</b></span>
             </span>
-            <b aria-hidden="true">→</b>
-          </a>
-        </nav>
-      </div>
-    </section>
+          </span>
+
+          <span class="cover-inside" aria-hidden="true">
+            <span class="inside-mark" />
+          </span>
+        </span>
+      </span>
+    </a>
   </main>
 </template>
 
 <style>
-.VPDoc:has(.sdp-home) .content,
-.VPDoc:has(.sdp-home) .content-container,
-.VPDoc:has(.sdp-home) .container,
-.VPDoc:has(.sdp-home) .main,
-.VPDoc:has(.sdp-home) {
+.VPDoc:has(.book-landing),
+.VPDoc:has(.book-landing) .main,
+.VPDoc:has(.book-landing) .container,
+.VPDoc:has(.book-landing) .content,
+.VPDoc:has(.book-landing) .content-container {
   width: 100% !important;
   min-width: 0 !important;
   max-width: none !important;
   box-sizing: border-box;
   padding: 0 !important;
-  overflow-x: clip;
 }
-.VPDoc:has(.sdp-home) .vp-doc h1,
-.VPDoc:has(.sdp-home) .vp-doc h2,
-.VPDoc:has(.sdp-home) .vp-doc h3,
-.VPDoc:has(.sdp-home) .vp-doc p {
-  margin: 0;
+
+.VPDoc:has(.book-landing) {
+  overflow: clip;
+}
+
+.Layout:has(.book-landing) .VPFooter {
+  display: none;
 }
 </style>
 
 <style scoped>
-.sdp-home {
-  --sdp-line: var(--vp-c-divider);
-  --sdp-accent: var(--vp-c-brand-1);
-  --sdp-serif: var(--sdp-font-display, 'Newsreader', 'Iowan Old Style', Georgia, serif);
-  width: 100%;
+.book-landing {
+  --cover: #3f2923;
+  --cover-deep: #281914;
+  --cover-ink: #f0e5ce;
+  --paper: #eee5d2;
+  --paper-deep: #d6c8ad;
+  min-height: calc(100svh - var(--vp-nav-height, 64px) - 1px);
   color: var(--vp-c-text-1);
-  background: var(--vp-c-bg);
-  font-feature-settings: 'ss01' on, 'cv01' on;
+  background:
+    radial-gradient(circle at 50% 43%, color-mix(in srgb, var(--sdp-accent) 5%, transparent), transparent 34%),
+    var(--vp-c-bg);
 }
-.sdp-home a {
+
+.book-entry {
+  display: grid;
+  min-height: inherit;
+  place-items: center;
+  box-sizing: border-box;
+  padding: clamp(24px, 5vw, 64px);
   color: inherit;
   text-decoration: none;
-}
-.sdp-home a:focus-visible {
-  border-radius: 2px;
-  outline: 2px solid var(--sdp-accent);
-  outline-offset: 3px;
-}
-.sdp-shell {
-  width: min(1120px, calc(100% - 48px));
-  margin: 0 auto;
+  cursor: pointer;
+  perspective: 1800px;
+  -webkit-tap-highlight-color: transparent;
 }
 
-/* Hero */
-.sdp-hero {
-  padding: clamp(80px, 10vw, 136px) 0 clamp(56px, 7vw, 84px);
+.book-entry:focus-visible {
+  outline: none;
 }
-.sdp-eyebrow {
+
+.book-entry:focus-visible .book-volume {
+  outline: 3px solid var(--sdp-accent);
+  outline-offset: 8px;
+}
+
+.book-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.book-volume {
+  position: relative;
+  display: block;
+  width: min(390px, calc(100vw - 72px), 56svh);
+  aspect-ratio: 0.72;
+  border-radius: 3px 10px 10px 3px;
+  transform: rotateX(1.5deg) rotateY(-5deg);
+  transform-style: preserve-3d;
+  transition: transform 680ms cubic-bezier(0.2, 0.72, 0.18, 1);
+}
+
+.book-back-cover,
+.book-pages,
+.book-front-cover,
+.cover-face,
+.cover-inside {
+  position: absolute;
+  inset: 0;
+  display: block;
+  border-radius: inherit;
+}
+
+.book-back-cover {
+  background: var(--cover-deep);
+  box-shadow:
+    4px 20px 38px rgb(28 20 15 / 22%),
+    18px 22px 42px rgb(28 20 15 / 18%);
+  transform: translateZ(-10px);
+}
+
+.book-pages {
+  inset: 5px 5px 5px 9px;
+  overflow: hidden;
+  background: var(--paper);
+  border: 1px solid rgb(84 64 40 / 16%);
+  border-radius: 2px 8px 8px 2px;
+  box-shadow:
+    inset -8px 0 12px rgb(77 57 35 / 8%),
+    3px 3px 0 var(--paper-deep),
+    6px 6px 0 color-mix(in srgb, var(--paper-deep) 75%, #7d6a4b);
+  transform: translateZ(-2px);
+}
+
+.book-page-edge {
+  position: absolute;
+  right: 0;
+  left: 0;
+  height: 1px;
+  background: rgb(95 74 49 / 16%);
+}
+
+.book-page-edge-one {
+  top: 34%;
+}
+
+.book-page-edge-two {
+  top: 71%;
+}
+
+.book-first-page {
+  position: absolute;
+  inset: 0;
   display: flex;
-  flex-wrap: wrap;
-  gap: 10px 12px;
+  flex-direction: column;
   align-items: center;
-  margin: 0 0 30px !important;
-  color: var(--vp-c-text-3);
-  font-size: 0.72rem;
-  font-weight: 600;
+  justify-content: center;
+  padding: 12%;
+  color: #3f352a;
+  font-family: var(--sdp-font-reading);
+  text-align: center;
+  background:
+    linear-gradient(90deg, rgb(94 70 42 / 8%), transparent 11%),
+    var(--paper);
+}
+
+.inside-chapter {
+  margin-bottom: 14px;
+  color: #77634b;
+  font-family: var(--sdp-font-ui);
+  font-size: 0.68rem;
+  font-weight: 650;
   letter-spacing: 0.16em;
   text-transform: uppercase;
 }
-.sdp-eyebrow span {
-  display: inline-flex;
-  align-items: center;
+
+.book-first-page strong {
+  max-width: 12ch;
+  font-family: var(--sdp-font-display);
+  font-size: clamp(1.6rem, 4vw, 2.25rem);
+  font-weight: 560;
+  line-height: 1.08;
 }
-.sdp-eyebrow span + span::before {
-  width: 3px;
-  height: 3px;
-  margin-right: 12px;
-  border-radius: 999px;
-  background: var(--vp-c-text-3);
+
+.inside-rule {
+  width: 32px;
+  height: 1px;
+  margin-top: 22px;
+  background: #9d6e4a;
+}
+
+.book-front-cover {
+  z-index: 3;
+  transform: translateZ(2px);
+  transform-origin: left center;
+  transform-style: preserve-3d;
+  transition: transform 680ms cubic-bezier(0.2, 0.72, 0.18, 1);
+}
+
+.cover-face,
+.cover-inside {
+  overflow: hidden;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+.cover-face {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+  gap: clamp(12px, 2vw, 18px);
+  box-sizing: border-box;
+  padding: clamp(28px, 5vw, 44px) clamp(26px, 4.5vw, 40px) clamp(24px, 4vw, 34px);
+  color: var(--cover-ink);
+  background:
+    linear-gradient(90deg, rgb(255 255 255 / 4%), transparent 8%, transparent 93%, rgb(0 0 0 / 12%)),
+    var(--cover);
+  border: 1px solid rgb(239 224 193 / 16%);
+  box-shadow:
+    inset 10px 0 18px rgb(0 0 0 / 16%),
+    inset 1px 0 rgb(255 255 255 / 8%),
+    2px 16px 30px rgb(28 20 15 / 24%);
+}
+
+.cover-face::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 16px;
+  width: 1px;
+  background: rgb(237 217 180 / 19%);
+  box-shadow: 4px 0 12px rgb(0 0 0 / 12%);
   content: '';
 }
-.sdp-hero h1 {
-  max-width: 24ch;
-  font-size: clamp(2.6rem, 6vw, 4.75rem);
-  font-weight: 600;
-  line-height: 1.04;
-  text-wrap: balance;
+
+.cover-kicker,
+.cover-subject,
+.cover-footer {
+  position: relative;
+  z-index: 1;
+  font-family: var(--sdp-font-ui);
+  font-weight: 650;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
 }
-.sdp-home:lang(en) .sdp-hero h1 {
-  letter-spacing: -0.02em;
+
+.cover-kicker {
+  font-size: clamp(0.58rem, 1.4vw, 0.68rem);
 }
-.sdp-hero h1 :deep(em) {
-  font-family: var(--sdp-serif);
-  font-style: italic;
-  font-weight: 500;
-  letter-spacing: 0;
-}
-.sdp-home:lang(ja) .sdp-hero h1 {
-  font-size: clamp(2.2rem, 5vw, 3.9rem);
-  line-height: 1.18;
-}
-.sdp-home:lang(ja) .sdp-hero h1 :deep(em) {
-  font-family: serif;
-  font-style: normal;
-  font-weight: 600;
-}
-.sdp-deck {
-  max-width: 62ch;
-  margin: 26px 0 0 !important;
-  color: var(--vp-c-text-2);
-  font-size: clamp(1rem, 1.4vw, 1.125rem);
-  line-height: 1.7;
-  text-wrap: pretty;
-}
-.sdp-actions {
+
+.cover-title {
+  position: relative;
+  z-index: 1;
   display: flex;
-  flex-wrap: wrap;
-  gap: 14px 28px;
-  align-items: center;
-  margin-top: 40px;
-}
-.sdp-home .sdp-cta {
-  display: inline-flex;
-  min-height: 46px;
-  align-items: center;
-  gap: 10px;
-  border-radius: 3px;
-  padding: 0 22px;
-  color: var(--vp-c-bg);
-  background: var(--vp-c-text-1);
-  font-size: 0.92rem;
-  font-weight: 600;
-  transition: background-color 0.15s ease;
-}
-.sdp-home .sdp-cta:hover {
-  color: var(--vp-c-bg);
-  background: var(--vp-c-text-2);
-}
-.sdp-cta b {
-  font-weight: 400;
-}
-.sdp-home .sdp-link {
-  color: var(--vp-c-text-1);
-  font-size: 0.92rem;
-  font-weight: 500;
-  text-decoration: underline;
-  text-decoration-color: var(--sdp-line);
-  text-decoration-thickness: 1px;
-  text-underline-offset: 5px;
-  transition: color 0.15s ease, text-decoration-color 0.15s ease;
-}
-.sdp-link:hover {
-  color: var(--sdp-accent);
-  text-decoration-color: currentColor;
-}
-
-/* Stats strip */
-.sdp-stats {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 24px;
-  margin-top: clamp(56px, 8vw, 96px);
-  border-top: 1px solid var(--sdp-line);
-  padding-top: 28px;
-}
-.sdp-stat {
-  display: grid;
-  gap: 7px;
+  flex-direction: column;
+  font-family: var(--sdp-font-display);
+  font-size: clamp(2.15rem, 7vw, 3.35rem);
+  font-weight: 520;
+  line-height: 0.93;
+  letter-spacing: -0.045em;
   margin: 0 !important;
 }
-.home-stat-number {
-  font-size: clamp(1.7rem, 2.6vw, 2.3rem);
-  font-weight: 600;
-  line-height: 1;
-  letter-spacing: -0.01em;
-}
-.home-stat-label {
-  color: var(--vp-c-text-3);
-  font-size: 0.7rem;
-  font-weight: 600;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-.sdp-edition {
-  margin: 40px 0 0 !important;
-  color: var(--vp-c-text-3);
-  font-size: 0.66rem;
-  font-weight: 600;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
+
+.cover-title strong {
+  color: #dca472;
+  font: inherit;
+  font-style: italic;
 }
 
-/* Sections */
-.sdp-section {
-  border-top: 1px solid var(--sdp-line);
-  padding: clamp(64px, 8vw, 104px) 0;
-}
-.sdp-section-head {
-  display: grid;
-  grid-template-columns: minmax(160px, 0.28fr) minmax(0, 0.72fr);
-  gap: 16px clamp(20px, 4vw, 64px);
-  align-items: baseline;
-  margin-bottom: clamp(36px, 5vw, 60px);
-}
-.sdp-section-head p,
-.sdp-evidence-copy > p:first-child {
-  margin: 0 !important;
-  color: var(--vp-c-text-3);
-  font-size: 0.7rem;
-  font-weight: 600;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-}
-.sdp-section-head h2,
-.sdp-evidence-copy h2 {
-  max-width: 32ch;
-  font-size: clamp(1.6rem, 3vw, 2.4rem);
-  font-weight: 600;
-  line-height: 1.18;
-  text-wrap: balance;
-}
-.sdp-home:lang(en) .sdp-section-head h2,
-.sdp-home:lang(en) .sdp-evidence-copy h2 {
-  letter-spacing: -0.015em;
+.book-landing:lang(ja) .cover-title {
+  font-size: clamp(2rem, 6.5vw, 3rem);
+  line-height: 1.08;
+  letter-spacing: -0.04em;
 }
 
-/* Domain map */
-.sdp-domain-map {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0 40px;
+.book-landing:lang(ja) .cover-title strong {
+  font-style: normal;
 }
-.sdp-domain {
-  display: grid;
-  grid-template-columns: 2.6em minmax(0, 1fr);
-  align-items: baseline;
-  border-top: 1px solid var(--sdp-line);
-  padding: 18px 0 24px;
+
+.cover-plate {
+  position: relative;
+  align-self: center;
+  justify-self: center;
+  width: min(100%, 205px);
+  aspect-ratio: 1;
+  overflow: hidden;
+  border: 1px solid rgb(239 224 193 / 22%);
+  background: #d8cbae;
 }
-.sdp-domain span {
-  color: var(--vp-c-text-3);
-  font-family: var(--vp-font-family-mono, ui-monospace, monospace);
-  font-size: 0.72rem;
+
+.cover-plate img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: sepia(0.12) saturate(0.72) contrast(1.04);
 }
-.sdp-domain strong {
-  font-size: 0.98rem;
-  font-weight: 600;
-  line-height: 1.3;
-  transition: color 0.15s ease;
-}
-.sdp-domain small {
-  grid-column: 2;
-  margin-top: 5px;
-  color: var(--vp-c-text-2);
-  font-size: 0.84rem;
+
+.cover-subject {
+  font-size: clamp(0.52rem, 1.2vw, 0.62rem);
   line-height: 1.5;
 }
-.sdp-domain:hover strong {
-  color: var(--sdp-accent);
+
+.cover-footer {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  font-size: clamp(0.5rem, 1.1vw, 0.58rem);
 }
 
-/* Reading routes */
-.sdp-routes {
-  display: grid;
-  border-bottom: 1px solid var(--sdp-line);
-}
-.sdp-route {
-  display: grid;
-  grid-template-columns: minmax(150px, 0.28fr) minmax(0, 1fr) auto;
-  gap: 10px clamp(20px, 4vw, 64px);
-  align-items: baseline;
-  border-top: 1px solid var(--sdp-line);
-  padding: 28px 0;
-}
-.sdp-route-eyebrow,
-.sdp-evidence-eyebrow {
-  color: var(--vp-c-text-3);
-  font-size: 0.7rem;
-  font-weight: 600;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-}
-.sdp-route strong,
-.sdp-evidence-item strong {
-  display: block;
-  font-size: 1.05rem;
-  font-weight: 600;
-  line-height: 1.4;
-  transition: color 0.15s ease;
-}
-.sdp-route small,
-.sdp-evidence-item small {
-  display: block;
-  margin-top: 6px;
-  color: var(--vp-c-text-2);
-  font-size: 0.9rem;
-  line-height: 1.55;
-}
-.sdp-route b,
-.sdp-evidence-item b {
-  color: var(--vp-c-text-3);
-  font-size: 1.1rem;
-  font-weight: 400;
-  transition: color 0.15s ease, transform 0.15s ease;
-}
-.sdp-route:hover strong,
-.sdp-evidence-item:hover strong {
-  color: var(--sdp-accent);
-}
-.sdp-route:hover b,
-.sdp-evidence-item:hover b {
-  color: var(--sdp-accent);
-  transform: translateX(4px);
+.cover-open-hint {
+  color: #e4ad7b;
 }
 
-/* Evidence shelf */
-.sdp-evidence {
-  display: grid;
-  grid-template-columns: minmax(0, 0.38fr) minmax(0, 0.62fr);
-  gap: clamp(36px, 5vw, 88px);
-  align-items: start;
-}
-.sdp-evidence-copy h2 {
-  margin-top: 16px !important;
-}
-.sdp-evidence-body {
-  margin: 18px 0 0 !important;
-  color: var(--vp-c-text-2);
-  font-size: 0.95rem;
-  line-height: 1.65;
-}
-.sdp-evidence-list {
-  display: grid;
-  border-bottom: 1px solid var(--sdp-line);
-}
-.sdp-evidence-item {
-  display: grid;
-  grid-template-columns: minmax(140px, 0.3fr) minmax(0, 1fr) auto;
-  gap: 10px clamp(16px, 3vw, 40px);
-  align-items: baseline;
-  border-top: 1px solid var(--sdp-line);
-  padding: 24px 0;
+.cover-open-hint b {
+  display: inline-block;
+  font-size: 0.85rem;
+  transition: transform 180ms ease;
 }
 
-/* Responsive */
-@media (max-width: 980px) {
-  .sdp-section-head,
-  .sdp-evidence {
-    grid-template-columns: 1fr;
+.book-entry:hover .cover-open-hint b {
+  transform: translateX(3px);
+}
+
+.cover-inside {
+  background:
+    linear-gradient(90deg, rgb(70 50 31 / 15%), transparent 14%),
+    var(--paper);
+  border: 1px solid rgb(84 64 40 / 18%);
+  transform: rotateY(180deg);
+}
+
+.inside-mark {
+  position: absolute;
+  inset: 10%;
+  border: 1px solid rgb(117 88 54 / 14%);
+}
+
+.book-entry.is-opening {
+  cursor: wait;
+}
+
+.book-entry.is-opening .book-volume {
+  transform: translateX(11%) rotateX(0.5deg) rotateY(0deg) scale(0.96);
+}
+
+.book-entry.is-opening .book-front-cover {
+  transform: translateZ(2px) rotateY(-82deg);
+}
+
+.book-entry.is-opening .book-first-page {
+  animation: page-arrive 750ms 180ms ease both;
+}
+
+@keyframes page-arrive {
+  from {
+    opacity: 0.66;
+    transform: translateX(-5px);
   }
-  .sdp-domain-map {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .sdp-route,
-  .sdp-evidence-item {
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-  .sdp-route-eyebrow,
-  .sdp-evidence-eyebrow {
-    grid-column: 1 / -1;
+  to {
+    opacity: 1;
+    transform: translateX(0);
   }
 }
+
+:global(.dark) .book-landing {
+  --cover: #34231e;
+  --cover-deep: #1d1411;
+  background:
+    radial-gradient(circle at 50% 43%, rgb(198 132 79 / 6%), transparent 34%),
+    var(--vp-c-bg);
+}
+
 @media (max-width: 680px) {
-  .sdp-shell {
-    width: calc(100% - 40px);
+  .book-entry {
+    padding: 24px 20px 34px;
   }
-  .sdp-hero {
-    padding: 56px 0 48px;
+
+  .book-volume {
+    width: min(316px, calc(100vw - 48px));
   }
-  .sdp-hero h1 {
-    font-size: clamp(2.2rem, 11vw, 2.9rem);
+
+  .book-entry.is-opening .book-volume {
+    transform: translateX(8%) rotateX(0deg) rotateY(0deg) scale(0.94);
   }
-  .sdp-actions {
-    align-items: stretch;
-    flex-direction: column;
+
+  .book-entry.is-opening .book-front-cover {
+    transform: translateZ(2px) rotateY(-78deg);
   }
-  .sdp-cta {
-    justify-content: center;
+
+  .cover-face {
+    gap: 13px;
+    padding: 27px 26px 23px 29px;
   }
-  .sdp-stats {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 24px 16px;
-  }
-  .sdp-domain-map {
-    grid-template-columns: 1fr;
-  }
-  .sdp-domain {
-    padding: 15px 0 18px;
-  }
-  .sdp-section {
-    padding: 52px 0;
+
+  .cover-plate {
+    width: min(100%, 180px);
   }
 }
-@media (prefers-reduced-motion: reduce) {
-  .sdp-home .sdp-cta,
-  .sdp-home .sdp-link,
-  .sdp-domain strong,
-  .sdp-route strong,
-  .sdp-route b,
-  .sdp-evidence-item strong,
-  .sdp-evidence-item b {
-    transition: none;
+
+@media (max-height: 720px) and (min-width: 681px) {
+  .book-volume {
+    width: min(330px, calc(100vw - 72px));
   }
-  .sdp-route:hover b,
-  .sdp-evidence-item:hover b {
+
+  .cover-face {
+    gap: 12px;
+    padding: 28px 30px 24px 34px;
+  }
+
+  .cover-plate {
+    width: min(100%, 184px);
+  }
+}
+
+@media (max-height: 540px) {
+  .book-entry {
+    padding-block: 12px;
+  }
+
+  .book-volume {
+    width: min(390px, calc(100vw - 72px), 50svh);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .book-volume,
+  .book-front-cover,
+  .cover-open-hint b {
+    transition-duration: 120ms;
+  }
+
+  .book-entry.is-opening .book-volume {
     transform: none;
+  }
+
+  .book-entry.is-opening .book-front-cover {
+    transform: none;
+  }
+
+  .book-entry.is-opening .book-first-page {
+    animation: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .book-entry:focus-visible .book-volume {
+    outline-color: Highlight;
+  }
+
+  .cover-face,
+  .book-pages,
+  .book-back-cover {
+    border: 2px solid CanvasText;
+  }
+
+  .cover-plate img {
+    opacity: 0.3;
   }
 }
 </style>

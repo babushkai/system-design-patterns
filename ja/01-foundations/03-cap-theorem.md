@@ -268,7 +268,7 @@ quadrantChart
     Cassandra: [0.25, 0.75]
     DynamoDB: [0.25, 0.65]
     Redis: [0.25, 0.85]
-    MongoDB w:maj: [0.25, 0.35]
+    MongoDB majority: [0.25, 0.35]
     Spanner: [0.75, 0.35]
     CockroachDB: [0.75, 0.25]
     etcd: [0.75, 0.15]
