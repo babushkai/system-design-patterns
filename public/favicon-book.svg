@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Warm page block visible behind the closed cover. -->
+  <path
+    d="M7.5 4.25h17.25A2.25 2.25 0 0 1 27 6.5v20.75a2.25 2.25 0 0 1-2.25 2.25H7.5z"
+    fill="#EEE5D2"
+    stroke="#D6C8AD"
+    stroke-linejoin="round"
+    stroke-width="1"
+  />
+
+  <!-- The same dark umber cover and inset spine used on the landing page. -->
+  <path
+    d="M4.5 2.5h18.25A2.25 2.25 0 0 1 25 4.75v20.5a2.25 2.25 0 0 1-2.25 2.25H4.5z"
+    fill="#3F2923"
+    stroke="#281914"
+    stroke-linejoin="round"
+    stroke-width="1.25"
+  />
+  <path d="M7.65 3.2v23.6" fill="none" stroke="#735247" stroke-width="1" />
+  <path d="M5.2 3.2h1.25v23.6H5.2z" fill="#34231E" opacity=".72" />
+
+  <!-- A tiny typographic rhythm, abstracted for 16–32 px legibility. -->
+  <path d="M9.5 6.25h8.75v1.2H9.5zm0 2.05h6.8v1.2H9.5z" fill="#F0E5CE" />
+  <path d="M9.5 10.35h7.75v1.2H9.5z" fill="#DCA472" />
+
+  <!-- Miniature parchment constellation plate from the book cover. -->
+  <rect x="9.5" y="13.15" width="10.25" height="8.25" rx=".55" fill="#D8CBAE" />
+  <path d="m11 19 3.05-3.5 3.95 2.8m-6.4-2.45 5.25-1.1" fill="none" stroke="#8A4B37" stroke-width=".55" opacity=".72" />
+  <circle cx="14.1" cy="15.5" r="1.35" fill="#47675E" />
+  <circle cx="17.95" cy="18.25" r="1.05" fill="#DCA472" />
+  <circle cx="11.55" cy="18.95" r=".7" fill="#8A4B37" />
+  <circle cx="17" cy="14.75" r=".55" fill="#F0E5CE" stroke="#47675E" stroke-width=".4" />
+
+  <path d="M9.5 23.35h7.9v1H9.5z" fill="#F0E5CE" opacity=".78" />
+</svg>

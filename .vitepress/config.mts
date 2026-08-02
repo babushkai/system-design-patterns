@@ -292,7 +292,7 @@ export default withMermaid({
   ignoreDeadLinks: true,
 
   head: [
-    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' }],
+    ['link', { rel: 'icon', type: 'image/svg+xml', sizes: 'any', href: '/favicon-book.svg' }],
     ['meta', { name: 'theme-color', content: '#f3efe6', media: '(prefers-color-scheme: light)' }],
     ['meta', { name: 'theme-color', content: '#151411', media: '(prefers-color-scheme: dark)' }],
     ['meta', { name: 'color-scheme', content: 'light dark' }],
@@ -630,6 +630,10 @@ export default withMermaid({
 
   themeConfig: {
     siteTitle: 'System Design Patterns',
+    logo: {
+      src: '/favicon-book.svg',
+      alt: ''
+    },
 
     socialLinks: [
       { icon: 'github', link: 'https://github.com/babushkai/system-design-patterns' }
