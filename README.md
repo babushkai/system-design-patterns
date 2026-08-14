@@ -1,3 +1,5 @@
+
+
 # System Design Patterns
 
 A framework-agnostic system design fieldbook built around production contracts, protocol mechanics, failure recovery, capacity models, and evidence from papers and operating systems.
@@ -35,6 +37,14 @@ Evidence labels used throughout the fieldbook:
 - **Inference** - The conclusion follows from stated mechanisms and assumptions; it is not attributed to an undisclosed deployment.
 - **Reference design** - A reusable architecture proposed by this book; thresholds and worked numbers remain illustrative until measured.
 
+## Local Development
+
+To preview the interactive fieldbook locally:
+
+```bash
+npm install
+npm run docs:dev
+```
 
 ## Table of Contents
 
