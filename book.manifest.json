@@ -1,0 +1,299 @@
+{
+  "_doc": "Book structure: one entry per part and chapter, in print order. Add a chapter by creating the Markdown file in both languages and adding one route entry here; the VitePress sidebars, the PDF/EPUB chapter list, and the README table of contents are all derived from this file. `title` drives the sidebars, `readmeTitle` overrides the README part heading when it differs, and scripts/book_structure.py --check fails when this file and the repository disagree.",
+  "parts": [
+    {
+      "number": 1,
+      "dir": "01-foundations",
+      "title": {"en": "Foundations", "ja": "基礎"},
+      "chapters": [
+        {"route": "01-foundations/01-acid-transactions", "title": {"en": "ACID Transactions", "ja": "ACIDトランザクション"}},
+        {"route": "01-foundations/02-isolation-levels", "title": {"en": "Isolation Levels", "ja": "分離レベル"}},
+        {"route": "01-foundations/03-cap-theorem", "title": {"en": "CAP Theorem", "ja": "CAP定理"}},
+        {"route": "01-foundations/04-consistency-models", "title": {"en": "Consistency Models", "ja": "整合性モデル"}},
+        {"route": "01-foundations/05-distributed-time", "title": {"en": "Distributed Time", "ja": "分散時間"}},
+        {"route": "01-foundations/06-failure-modes", "title": {"en": "Failure Semantics and Recovery", "ja": "障害セマンティクス・検知・復旧"}},
+        {"route": "01-foundations/08-idempotency", "title": {"en": "Idempotency", "ja": "冪等性"}},
+        {"route": "01-foundations/09-distributed-locks", "title": {"en": "Distributed Locks", "ja": "分散ロック"}},
+        {"route": "01-foundations/10-capacity-planning", "title": {"en": "Capacity Planning & Estimation", "ja": "キャパシティプランニング"}}
+      ]
+    },
+    {
+      "number": 2,
+      "dir": "02-distributed-databases",
+      "title": {"en": "Distributed Databases", "ja": "分散データベース"},
+      "chapters": [
+        {"route": "02-distributed-databases/01-single-leader-replication", "title": {"en": "Single-Leader Replication", "ja": "シングルリーダーレプリケーション"}},
+        {"route": "02-distributed-databases/02-multi-leader-replication", "title": {"en": "Multi-Leader Replication", "ja": "マルチリーダーレプリケーション"}},
+        {"route": "02-distributed-databases/03-leaderless-replication", "title": {"en": "Leaderless Replication", "ja": "リーダーレスレプリケーション"}},
+        {"route": "02-distributed-databases/04-conflict-resolution", "title": {"en": "Conflict Resolution", "ja": "コンフリクト解決"}},
+        {"route": "02-distributed-databases/05-partitioning-strategies", "title": {"en": "Partitioning Strategies", "ja": "パーティショニング戦略"}},
+        {"route": "02-distributed-databases/06-secondary-indexes", "title": {"en": "Secondary Indexes", "ja": "セカンダリインデックス"}},
+        {"route": "02-distributed-databases/07-distributed-transactions", "title": {"en": "Distributed Transactions", "ja": "分散トランザクション"}},
+        {"route": "02-distributed-databases/08-consensus-algorithms", "title": {"en": "Consensus Algorithms", "ja": "コンセンサスアルゴリズム"}},
+        {"route": "02-distributed-databases/09-leader-election", "title": {"en": "Leader Election", "ja": "リーダー選出"}},
+        {"route": "02-distributed-databases/10-data-modeling", "title": {"en": "Workload-Driven Data Modeling", "ja": "データモデリング"}}
+      ]
+    },
+    {
+      "number": 3,
+      "dir": "03-storage-engines",
+      "title": {"en": "Storage Engines", "ja": "ストレージエンジン"},
+      "chapters": [
+        {"route": "03-storage-engines/01-b-trees", "title": {"en": "B-Trees", "ja": "B木"}},
+        {"route": "03-storage-engines/02-lsm-trees", "title": {"en": "LSM Trees", "ja": "LSM木"}},
+        {"route": "03-storage-engines/03-sstables-compaction", "title": {"en": "SSTables & Compaction", "ja": "SSTableとコンパクション"}},
+        {"route": "03-storage-engines/04-write-ahead-logging", "title": {"en": "Write-Ahead Logging", "ja": "先行書き込みログ"}},
+        {"route": "03-storage-engines/05-bloom-filters", "title": {"en": "Bloom Filters", "ja": "ブルームフィルタ"}},
+        {"route": "03-storage-engines/06-column-storage", "title": {"en": "Column Storage", "ja": "カラムストレージ"}},
+        {"route": "03-storage-engines/07-data-encoding", "title": {"en": "Data Encoding", "ja": "データエンコーディング"}},
+        {"route": "03-storage-engines/08-object-storage", "title": {"en": "Object Storage & Commit Protocols", "ja": "オブジェクトストレージ"}}
+      ]
+    },
+    {
+      "number": 4,
+      "dir": "04-caching",
+      "title": {"en": "Caching", "ja": "キャッシング"},
+      "chapters": [
+        {"route": "04-caching/01-cache-strategies", "title": {"en": "Semantics & Economics", "ja": "キャッシュのセマンティクスと経済性"}},
+        {"route": "04-caching/02-cache-invalidation", "title": {"en": "Invalidation & Coherence", "ja": "無効化とコヒーレンス"}},
+        {"route": "04-caching/03-distributed-caching", "title": {"en": "Distributed Cache Internals", "ja": "分散キャッシュの内部構造"}},
+        {"route": "04-caching/04-cache-stampede", "title": {"en": "Stampede, Cold Start & Warming", "ja": "スタンピード、コールドスタート、ウォーミング"}}
+      ]
+    },
+    {
+      "number": 5,
+      "dir": "05-messaging",
+      "title": {"en": "Messaging", "ja": "メッセージング"},
+      "chapters": [
+        {"route": "05-messaging/01-message-queues", "title": {"en": "Message Queue Architecture", "ja": "メッセージキュー"}},
+        {"route": "05-messaging/02-pub-sub", "title": {"en": "Publish-Subscribe Architecture", "ja": "Pub/Sub"}},
+        {"route": "05-messaging/03-message-ordering", "title": {"en": "Message Ordering", "ja": "メッセージ順序"}},
+        {"route": "05-messaging/04-delivery-guarantees", "title": {"en": "Delivery & Effect Boundaries", "ja": "配信保証"}},
+        {"route": "05-messaging/05-event-sourcing", "title": {"en": "Event Sourcing & Domain Logs", "ja": "イベントソーシング"}},
+        {"route": "05-messaging/06-cqrs", "title": {"en": "CQRS & Projection Architecture", "ja": "CQRS"}},
+        {"route": "05-messaging/07-outbox-pattern", "title": {"en": "Outbox, Inbox & CDC", "ja": "Outboxパターン"}},
+        {"route": "05-messaging/08-dead-letter-queues", "title": {"en": "Poison Messages & Redrive", "ja": "デッドレターキュー"}}
+      ]
+    },
+    {
+      "number": 6,
+      "dir": "06-scaling",
+      "title": {"en": "Scaling", "ja": "スケーリング"},
+      "chapters": [
+        {"route": "06-scaling/01-load-balancing", "title": {"en": "Load Balancing", "ja": "ロードバランシング"}},
+        {"route": "06-scaling/02-horizontal-vertical", "title": {"en": "Horizontal vs Vertical", "ja": "水平vs垂直スケーリング"}},
+        {"route": "06-scaling/03-database-sharding", "title": {"en": "Database Sharding", "ja": "データベースシャーディング"}},
+        {"route": "06-scaling/04-cdn-architecture", "title": {"en": "CDN Architecture", "ja": "CDNアーキテクチャ"}},
+        {"route": "06-scaling/05-rate-limiting", "title": {"en": "Rate Limiting", "ja": "レート制限"}},
+        {"route": "06-scaling/06-circuit-breakers", "title": {"en": "Circuit Breakers", "ja": "サーキットブレーカー"}},
+        {"route": "06-scaling/07-backpressure", "title": {"en": "Backpressure", "ja": "バックプレッシャー"}},
+        {"route": "06-scaling/08-auto-scaling", "title": {"en": "Auto-Scaling", "ja": "オートスケーリング"}},
+        {"route": "06-scaling/09-multi-region-architecture", "title": {"en": "Multi-Region Architecture", "ja": "マルチリージョン"}},
+        {"route": "06-scaling/10-retries-timeouts-hedging", "title": {"en": "Retries & Hedging", "ja": "リトライとヘッジング"}},
+        {"route": "06-scaling/11-cell-based-architecture", "title": {"en": "Cell-Based Architecture", "ja": "セルベースアーキテクチャ"}},
+        {"route": "06-scaling/12-multi-tenancy", "title": {"en": "Multi-Tenant Isolation & Lifecycle", "ja": "マルチテナンシー"}},
+        {"route": "06-scaling/13-dns-and-connection-management", "title": {"en": "DNS & Connections", "ja": "DNSとコネクション管理"}},
+        {"route": "06-scaling/14-network-transport-internals", "title": {"en": "Network Transport Internals", "ja": "ネットワークトランスポートの内部構造"}}
+      ]
+    },
+    {
+      "number": 7,
+      "dir": "07-real-time",
+      "title": {"en": "Real-Time", "ja": "リアルタイム"},
+      "readmeTitle": "Real-Time Systems",
+      "chapters": [
+        {"route": "07-real-time/01-polling", "title": {"en": "Client Delivery Transports", "ja": "クライアント配信トランスポート"}},
+        {"route": "07-real-time/05-webrtc", "title": {"en": "WebRTC", "ja": "WebRTC"}},
+        {"route": "07-real-time/06-presence", "title": {"en": "Presence", "ja": "プレゼンス"}},
+        {"route": "07-real-time/07-crdts-collaborative-editing", "title": {"en": "Collaborative Sync & CRDTs", "ja": "CRDTと共同編集"}}
+      ]
+    },
+    {
+      "number": 8,
+      "dir": "08-case-studies",
+      "title": {"en": "Case Studies", "ja": "ケーススタディ"},
+      "chapters": [
+        {"route": "08-case-studies/01-twitter", "title": {"en": "Twitter", "ja": "Twitter"}},
+        {"route": "08-case-studies/02-instagram", "title": {"en": "Instagram", "ja": "Instagram"}},
+        {"route": "08-case-studies/03-uber", "title": {"en": "Uber", "ja": "Uber"}},
+        {"route": "08-case-studies/04-netflix", "title": {"en": "Netflix", "ja": "Netflix"}},
+        {"route": "08-case-studies/05-slack", "title": {"en": "Slack", "ja": "Slack"}},
+        {"route": "08-case-studies/06-stripe", "title": {"en": "Stripe", "ja": "Stripe"}},
+        {"route": "08-case-studies/07-dropbox", "title": {"en": "Dropbox", "ja": "Dropbox"}},
+        {"route": "08-case-studies/08-discord", "title": {"en": "Discord", "ja": "Discord"}},
+        {"route": "08-case-studies/09-google-maps", "title": {"en": "Google Maps", "ja": "Google Maps"}},
+        {"route": "08-case-studies/10-whatsapp", "title": {"en": "WhatsApp", "ja": "WhatsApp"}},
+        {"route": "08-case-studies/11-figma", "title": {"en": "Figma", "ja": "Figma"}},
+        {"route": "08-case-studies/12-cloudflare", "title": {"en": "Cloudflare", "ja": "Cloudflare"}},
+        {"route": "08-case-studies/13-llm-inference-platforms", "title": {"en": "LLM Inference Platforms", "ja": "LLM推論基盤"}}
+      ]
+    },
+    {
+      "number": 9,
+      "dir": "09-whitepapers",
+      "title": {"en": "Whitepapers", "ja": "ホワイトペーパー"},
+      "chapters": [
+        {"route": "09-whitepapers/01-mapreduce", "title": {"en": "MapReduce", "ja": "MapReduce"}},
+        {"route": "09-whitepapers/02-dynamo", "title": {"en": "Dynamo", "ja": "Dynamo"}},
+        {"route": "09-whitepapers/03-bigtable", "title": {"en": "Bigtable", "ja": "Bigtable"}},
+        {"route": "09-whitepapers/04-spanner", "title": {"en": "Spanner", "ja": "Spanner"}},
+        {"route": "09-whitepapers/05-tao", "title": {"en": "TAO", "ja": "TAO"}},
+        {"route": "09-whitepapers/06-kafka", "title": {"en": "Kafka", "ja": "Kafka"}},
+        {"route": "09-whitepapers/07-raft", "title": {"en": "Raft", "ja": "Raft"}},
+        {"route": "09-whitepapers/08-chubby", "title": {"en": "Chubby", "ja": "Chubby"}},
+        {"route": "09-whitepapers/09-aurora", "title": {"en": "Aurora", "ja": "Aurora"}},
+        {"route": "09-whitepapers/10-cockroachdb", "title": {"en": "CockroachDB", "ja": "CockroachDB"}},
+        {"route": "09-whitepapers/11-zanzibar", "title": {"en": "Zanzibar", "ja": "Zanzibar"}},
+        {"route": "09-whitepapers/12-monarch", "title": {"en": "Monarch", "ja": "Monarch"}},
+        {"route": "09-whitepapers/13-foundationdb", "title": {"en": "FoundationDB", "ja": "FoundationDB"}},
+        {"route": "09-whitepapers/14-dynamodb-2022", "title": {"en": "DynamoDB (2022)", "ja": "DynamoDB (2022)"}},
+        {"route": "09-whitepapers/15-attention-transformers", "title": {"en": "The Transformer", "ja": "Transformer"}}
+      ]
+    },
+    {
+      "number": 10,
+      "dir": "10-security",
+      "title": {"en": "Security", "ja": "セキュリティ"},
+      "chapters": [
+        {"route": "10-security/01-authentication-fundamentals", "title": {"en": "Authentication Systems", "ja": "認証の基礎"}},
+        {"route": "10-security/02-oauth2-openid-connect", "title": {"en": "OAuth 2.0 and OpenID Connect", "ja": "OAuth2とOpenID Connect"}},
+        {"route": "10-security/03-jwt-tokens", "title": {"en": "JOSE and JWT Verification", "ja": "JWTトークン"}},
+        {"route": "10-security/04-api-security", "title": {"en": "API Threat Boundaries", "ja": "APIセキュリティ"}},
+        {"route": "10-security/05-zero-trust-architecture", "title": {"en": "Zero-Trust Workload Architecture", "ja": "ゼロトラストアーキテクチャ"}},
+        {"route": "10-security/06-encryption", "title": {"en": "Cryptographic Key Architecture", "ja": "暗号化"}},
+        {"route": "10-security/07-authorization-patterns", "title": {"en": "Authorization at Scale", "ja": "認可パターン"}}
+      ]
+    },
+    {
+      "number": 11,
+      "dir": "11-observability",
+      "title": {"en": "Observability and Operations", "ja": "オブザーバビリティ"},
+      "chapters": [
+        {"route": "11-observability/01-distributed-tracing", "title": {"en": "Tracing & Telemetry Pipelines", "ja": "分散トレーシング"}},
+        {"route": "11-observability/02-metrics-monitoring", "title": {"en": "Metrics Systems & Monitoring", "ja": "メトリクスとモニタリング"}},
+        {"route": "11-observability/03-logging", "title": {"en": "Production Logging", "ja": "ロギング"}},
+        {"route": "11-observability/04-alerting", "title": {"en": "Alert Evaluation & Notification", "ja": "アラート"}},
+        {"route": "11-observability/05-slos-error-budgets", "title": {"en": "SLOs & Error-Budget Control", "ja": "SLOとエラーバジェット"}},
+        {"route": "11-observability/06-finops-cost-engineering", "title": {"en": "FinOps & Cost Engineering", "ja": "FinOpsとコスト工学"}},
+        {"route": "11-observability/07-incident-management", "title": {"en": "Incident Command & Learning", "ja": "インシデント管理"}}
+      ]
+    },
+    {
+      "number": 12,
+      "dir": "12-service-mesh",
+      "title": {"en": "Service Connectivity and APIs", "ja": "サービスメッシュ"},
+      "chapters": [
+        {"route": "12-service-mesh/01-service-discovery", "title": {"en": "Discovery & Control-Plane State", "ja": "サービスディスカバリ"}},
+        {"route": "12-service-mesh/02-api-gateway", "title": {"en": "Edge Gateway & API Mediation", "ja": "APIゲートウェイ"}},
+        {"route": "12-service-mesh/03-sidecar-pattern", "title": {"en": "Mesh Data & Control Planes", "ja": "サイドカーパターン"}},
+        {"route": "12-service-mesh/04-api-design-patterns", "title": {"en": "API Design & Evolution", "ja": "API設計パターン"}}
+      ]
+    },
+    {
+      "number": 13,
+      "dir": "13-data-pipelines",
+      "title": {"en": "Data Pipelines", "ja": "データパイプライン"},
+      "chapters": [
+        {"route": "13-data-pipelines/01-batch-processing", "title": {"en": "Batch Execution", "ja": "バッチ処理"}},
+        {"route": "13-data-pipelines/02-stream-processing", "title": {"en": "Stream Execution", "ja": "ストリーム処理"}},
+        {"route": "13-data-pipelines/04-change-data-capture", "title": {"en": "CDC: Snapshot, Tail & Repair", "ja": "チェンジデータキャプチャ"}},
+        {"route": "13-data-pipelines/05-lakehouse-table-formats", "title": {"en": "Lakehouse Table Formats", "ja": "レイクハウス"}}
+      ]
+    },
+    {
+      "number": 14,
+      "dir": "14-search-systems",
+      "title": {"en": "Search Systems", "ja": "検索システム"},
+      "chapters": [
+        {"route": "14-search-systems/01-inverted-indexes", "title": {"en": "Index Architecture & Internals", "ja": "検索インデックスのアーキテクチャ"}},
+        {"route": "14-search-systems/02-full-text-search", "title": {"en": "Lexical Query Execution", "ja": "字句クエリ実行"}},
+        {"route": "14-search-systems/03-vector-search", "title": {"en": "Vector Retrieval Systems", "ja": "ベクトル検索システム"}},
+        {"route": "14-search-systems/04-ranking-algorithms", "title": {"en": "Ranking & Evaluation", "ja": "ランキングと評価"}},
+        {"route": "14-search-systems/06-typeahead-autocomplete", "title": {"en": "Typeahead & Autocomplete", "ja": "タイプアヘッド"}}
+      ]
+    },
+    {
+      "number": 15,
+      "dir": "15-deployment",
+      "title": {"en": "Deployment", "ja": "デプロイメント"},
+      "chapters": [
+        {"route": "15-deployment/01-deployment-strategies", "title": {"en": "Progressive Delivery", "ja": "デプロイメント戦略"}},
+        {"route": "15-deployment/02-feature-flags", "title": {"en": "Feature-Flag Control Planes", "ja": "フィーチャーフラグ"}},
+        {"route": "15-deployment/03-database-migrations", "title": {"en": "Database Migrations", "ja": "DBマイグレーション"}},
+        {"route": "15-deployment/04-cicd-gitops", "title": {"en": "Delivery Control Planes & GitOps", "ja": "CI/CDとGitOps"}},
+        {"route": "15-deployment/05-disaster-recovery", "title": {"en": "Disaster Recovery & Reconstruction", "ja": "ディザスタリカバリ"}},
+        {"route": "15-deployment/06-migration-strategies", "title": {"en": "Service & Platform Migration", "ja": "マイグレーション戦略"}}
+      ]
+    },
+    {
+      "number": 16,
+      "dir": "16-ml-systems",
+      "title": {"en": "ML Systems", "ja": "MLシステム"},
+      "chapters": [
+        {"route": "16-ml-systems/01-ml-system-fundamentals", "title": {"en": "ML System Fundamentals", "ja": "MLシステム基礎"}},
+        {"route": "16-ml-systems/02-feature-stores", "title": {"en": "Feature Stores", "ja": "フィーチャーストア"}},
+        {"route": "16-ml-systems/03-model-serving", "title": {"en": "Model Serving", "ja": "モデルサービング"}},
+        {"route": "16-ml-systems/04-model-monitoring", "title": {"en": "Model Monitoring", "ja": "モデルモニタリング"}},
+        {"route": "16-ml-systems/05-training-pipelines", "title": {"en": "Training Pipelines", "ja": "トレーニングパイプライン"}},
+        {"route": "16-ml-systems/06-model-deployment-rollouts", "title": {"en": "Model Deployment & Rollouts", "ja": "モデルデプロイとロールアウト"}},
+        {"route": "16-ml-systems/07-recommendation-systems", "title": {"en": "Recommendation Systems", "ja": "推薦システム"}},
+        {"route": "16-ml-systems/08-online-experiments", "title": {"en": "Online Experiments", "ja": "オンライン実験"}},
+        {"route": "16-ml-systems/09-ml-risk-governance", "title": {"en": "ML Risk & Governance", "ja": "MLリスクとガバナンス"}},
+        {"route": "16-ml-systems/10-label-ground-truth-systems", "title": {"en": "Label & Ground-Truth Systems", "ja": "ラベルとグラウンドトゥルース"}},
+        {"route": "16-ml-systems/11-dataset-management-versioning", "title": {"en": "Dataset Management & Versioning", "ja": "データセット管理とバージョニング"}},
+        {"route": "16-ml-systems/12-offline-evaluation-metrics", "title": {"en": "Offline Evaluation & Metrics", "ja": "オフライン評価とメトリクス設計"}},
+        {"route": "16-ml-systems/13-model-registry-metadata", "title": {"en": "Model Registry & Metadata", "ja": "モデルレジストリとMLメタデータ"}},
+        {"route": "16-ml-systems/14-ml-capacity-cost-planning", "title": {"en": "ML Capacity & Cost Planning", "ja": "MLキャパシティとコストプランニング"}},
+        {"route": "16-ml-systems/15-distributed-training-internals", "title": {"en": "Distributed Training Internals", "ja": "分散学習の内部構造"}}
+      ]
+    },
+    {
+      "number": 17,
+      "dir": "17-llm-systems",
+      "title": {"en": "LLM Systems", "ja": "LLMシステム"},
+      "chapters": [
+        {"route": "17-llm-systems/01-agent-fundamentals", "title": {"en": "Agent Fundamentals", "ja": "エージェント基礎"}},
+        {"route": "17-llm-systems/02-orchestration-patterns", "title": {"en": "Orchestration Patterns", "ja": "オーケストレーション"}},
+        {"route": "17-llm-systems/03-multi-agent-systems", "title": {"en": "Multi-Agent Systems", "ja": "マルチエージェント"}},
+        {"route": "17-llm-systems/04-rag-patterns", "title": {"en": "RAG Patterns", "ja": "RAGパターン"}},
+        {"route": "17-llm-systems/05-llm-infrastructure", "title": {"en": "LLM Infrastructure", "ja": "LLMインフラ"}},
+        {"route": "17-llm-systems/06-prompt-engineering", "title": {"en": "Prompt Engineering", "ja": "プロンプトエンジニアリング"}},
+        {"route": "17-llm-systems/07-fine-tuning-patterns", "title": {"en": "Fine-Tuning Patterns", "ja": "ファインチューニング"}},
+        {"route": "17-llm-systems/08-context-management", "title": {"en": "Context Management", "ja": "コンテキスト管理"}},
+        {"route": "17-llm-systems/09-harness-engineering", "title": {"en": "Harness Engineering", "ja": "ハーネスエンジニアリング"}},
+        {"route": "17-llm-systems/10-llm-evaluation", "title": {"en": "LLM Evaluation", "ja": "LLM評価"}},
+        {"route": "17-llm-systems/11-gpu-inference-internals", "title": {"en": "GPU Inference Internals", "ja": "GPU推論の内部構造"}},
+        {"route": "17-llm-systems/12-agent-inference", "title": {"en": "Agent Inference", "ja": "エージェント推論"}}
+      ]
+    },
+    {
+      "number": 18,
+      "dir": "18-workflow-job-systems",
+      "title": {"en": "Workflow & Job Systems", "ja": "ワークフローとジョブシステム"},
+      "chapters": [
+        {"route": "18-workflow-job-systems/01-workflow-system-fundamentals", "title": {"en": "Workflow Fundamentals", "ja": "ワークフローシステム基礎"}},
+        {"route": "18-workflow-job-systems/02-background-jobs-worker-pools", "title": {"en": "Background Jobs & Workers", "ja": "バックグラウンドジョブとワーカー"}},
+        {"route": "18-workflow-job-systems/03-distributed-cron-scheduling", "title": {"en": "Distributed Scheduling & Timers", "ja": "分散cronとスケジューリング"}},
+        {"route": "18-workflow-job-systems/04-durable-execution-workflow-engines", "title": {"en": "Durable Execution", "ja": "Durable Execution"}},
+        {"route": "18-workflow-job-systems/05-dag-orchestration", "title": {"en": "DAG Orchestration", "ja": "DAGオーケストレーション"}},
+        {"route": "18-workflow-job-systems/06-retry-idempotency-compensation", "title": {"en": "Effect Commit Protocols", "ja": "リトライ・冪等性・補償"}},
+        {"route": "18-workflow-job-systems/07-priority-fairness-backpressure", "title": {"en": "Priority, Fairness & Backpressure", "ja": "優先度・公平性・Backpressure"}},
+        {"route": "18-workflow-job-systems/08-leases-heartbeats-recovery", "title": {"en": "Leases, Heartbeats & Recovery", "ja": "リース・Heartbeat・復旧"}},
+        {"route": "18-workflow-job-systems/09-workflow-observability-replay", "title": {"en": "Observability & Replay", "ja": "観測性とリプレイ"}}
+      ]
+    },
+    {
+      "number": 19,
+      "dir": "19-compound-engineering",
+      "title": {"en": "Engineering Systems for Coding Agents", "ja": "コンパウンドエンジニアリング"},
+      "chapters": [
+        {"route": "19-compound-engineering/01-compound-engineering-fundamentals", "title": {"en": "Platform Fundamentals", "ja": "基礎"}},
+        {"route": "19-compound-engineering/02-coding-agent-tool-design", "title": {"en": "Tool & Runtime Contracts", "ja": "コーディングエージェントツール設計"}},
+        {"route": "19-compound-engineering/03-agent-context-engineering", "title": {"en": "Context & Policy Plane", "ja": "エージェントコンテキストエンジニアリング"}},
+        {"route": "19-compound-engineering/04-ai-native-software-architecture", "title": {"en": "Repository Architecture", "ja": "AIネイティブアーキテクチャ"}},
+        {"route": "19-compound-engineering/05-quality-engineering-with-ai-agents", "title": {"en": "Verification & Governance", "ja": "AIエージェント品質エンジニアリング"}},
+        {"route": "19-compound-engineering/06-compound-development-workflows", "title": {"en": "Parallel Development", "ja": "コンパウンド開発ワークフロー"}}
+      ]
+    }
+  ]
+}

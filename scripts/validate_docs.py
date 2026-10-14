@@ -6,6 +6,10 @@ import sys
 from pathlib import Path
 from urllib.parse import unquote
 
+# Part/chapter structure lives in book.manifest.json; scripts/book_structure.py owns
+# the checks that keep the sidebars, book build, and README contents in step with it.
+from book_structure import validate as validate_book_structure
+
 ROOT = Path(__file__).resolve().parents[1]
 IGNORED_DIRS = {
     ".git",
@@ -27,7 +31,6 @@ STAT_COUNT_RE = re.compile(
     + r'<span class="(?:home-)?stat-label">(Articles|記事)</span>',
     re.DOTALL,
 )
-BOOK_CHAPTER_RE = re.compile(r"""["']((?:ja/)?\d{2}-[^"']+\.md)["']""")
 VITEPRESS_LINK_RE = re.compile(r"""link:\s*["']([^"']+)["']""")
 VITEPRESS_HREF_RE = re.compile(r"""href:\s*["']([^"']+)["']""")
 VITEPRESS_ASSET_RE = re.compile(r"""["'](/(?:icons/[^"'\s]+|logo)\.svg)["']""")
@@ -38,7 +41,6 @@ LANDING_STAT_RE = re.compile(
 )
 LEGACY_MATH_DELIMITER_RE = re.compile(r"\\[()\[\]]")
 INLINE_CODE_RE = re.compile(r"`+[^`\n]*`+")
-ARTICLE_ROUTE_RE = re.compile(r"^(?:ja/)?[0-9][0-9]-[^/]+/[^/]+$")
 DOUBLE_DOLLAR_RE = re.compile(r"(?<!\\)\$\$")
 SINGLE_DOLLAR_RE = re.compile(r"(?<!\$)\$(?!\$)")
 INLINE_DOLLAR_MATH_RE = re.compile(r"(?<!\$)\$([^$\n]+?)\$(?!\$)")
@@ -422,79 +424,6 @@ def validate_dollar_math_delimiters(errors: list[str]) -> None:
             )
 
 
-def validate_book_workflow_paths(errors: list[str]) -> None:
-    path = ROOT / ".github/workflows/build-book.yml"
-    if not path.exists():
-        return
-
-    for lineno, line in enumerate(
-        path.read_text(encoding="utf-8").splitlines(), start=1
-    ):
-        for match in BOOK_CHAPTER_RE.finditer(line):
-            target = ROOT / match.group(1)
-            if not target.exists():
-                errors.append(
-                    f"{rel(path)}:{lineno}: missing chapter path: {match.group(1)}"
-                )
-
-
-def validate_chapter_manifests(errors: list[str]) -> None:
-    """Keep the README, web sidebar, and book build in sync with the corpus."""
-
-    expected = article_paths()
-
-    workflow = ROOT / ".github/workflows/build-book.yml"
-    if workflow.exists():
-        listed = [
-            Path(match.group(1))
-            for match in BOOK_CHAPTER_RE.finditer(workflow.read_text(encoding="utf-8"))
-            if not match.group(1).startswith("ja/")
-        ]
-        counts: dict[Path, int] = {}
-        for path in listed:
-            counts[path] = counts.get(path, 0) + 1
-        for path, count in sorted(counts.items()):
-            if count > 1:
-                errors.append(f"{rel(workflow)}: chapter listed {count} times: {path}")
-        for path in sorted(expected - set(listed)):
-            errors.append(f"{rel(workflow)}: English chapter missing from book: {path}")
-        for path in sorted(set(listed) - expected):
-            errors.append(f"{rel(workflow)}: stale book chapter entry: {path}")
-        if set(listed) == expected and listed != sorted(expected):
-            errors.append(
-                f"{rel(workflow)}: chapter order must follow section and filename order"
-            )
-
-    config = ROOT / ".vitepress/config.mts"
-    if config.exists():
-        routes = {
-            match.group(1).split("#", 1)[0].rstrip("/")
-            for match in VITEPRESS_LINK_RE.finditer(config.read_text(encoding="utf-8"))
-            if ARTICLE_ROUTE_RE.match(match.group(1).strip("/").split("#", 1)[0])
-        }
-        expected_routes = {
-            "/" + str(path.with_suffix("")) for path in expected
-        } | {
-            "/ja/" + str(path.with_suffix("")) for path in expected
-        }
-        for route in sorted(expected_routes - routes):
-            errors.append(f"{rel(config)}: chapter missing from sidebar: {route}")
-        for route in sorted(routes - expected_routes):
-            errors.append(f"{rel(config)}: stale sidebar chapter route: {route}")
-
-    readme = ROOT / "README.md"
-    if readme.exists():
-        targets = {
-            Path(target_from_link(match.group(1)).split("#", 1)[0])
-            for match in MARKDOWN_LINK_RE.finditer(
-                strip_fenced_code(readme.read_text(encoding="utf-8"))
-            )
-            if target_from_link(match.group(1)).endswith(".md")
-        }
-        for path in sorted(expected - targets):
-            errors.append(f"{rel(readme)}: English chapter missing from contents: {path}")
-
-
 def validate_vitepress_workflow_links(errors: list[str]) -> None:
     for relative in VITEPRESS_SOURCE_FILES:
         path = ROOT / relative
@@ -597,8 +526,7 @@ def main() -> int:
     validate_unique_substantial_prose(errors)
     validate_portable_math_delimiters(errors)
     validate_dollar_math_delimiters(errors)
-    validate_book_workflow_paths(errors)
-    validate_chapter_manifests(errors)
+    validate_book_structure(errors)
     validate_vitepress_workflow_links(errors)
     validate_generated_assets(errors)
     validate_homepage_html_links(errors)
