@@ -362,3 +362,13 @@ Then define ownership, logical identities, message delivery, budget propagation,
 - [Agent2Agent Protocol specification](https://a2a-protocol.org/latest/specification/): inter-agent task and artifact exchange
 - [Designing Data-Intensive Applications](https://dataintensive.net/): logs, replication, consistency, and distributed coordination foundations
 - [Temporal documentation: durable execution](https://docs.temporal.io/): replay, activities, retries, signals, and workflow versioning
+
+---
+
+## Related Chapters
+
+- [LLM Agent Fundamentals](01-agent-fundamentals.md): each worker still has to satisfy the single-agent tool loop, budget, and termination contract
+- [Agent Orchestration Patterns](02-orchestration-patterns.md): the single control plane that most multi-agent designs should exhaust before splitting
+- [Context Management](08-context-management.md): context is the scarce resource the moment workers exchange state through prompts
+- [LLM Infrastructure](05-llm-infrastructure.md): a shared GPU budget turns worker fan-out into a queueing and admission problem
+- [Durable Execution and Workflow Engines](../18-workflow-job-systems/04-durable-execution-workflow-engines.md): deterministic replay versus probabilistic re-execution when a worker dies mid-effect

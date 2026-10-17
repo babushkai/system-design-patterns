@@ -672,7 +672,7 @@ Secure APIs make illegal states and ambiguous interpretations hard to express. A
 
 ---
 
-## Primary References
+## References
 
 - [OWASP API Security Top 10 (2023)](https://owasp.org/API-Security/editions/2023/en/0x11-t10/)
 - [RFC 9110: HTTP Semantics](https://www.rfc-editor.org/rfc/rfc9110)
@@ -686,10 +686,10 @@ Secure APIs make illegal states and ambiguous interpretations hard to express. A
 
 ## Related Chapters
 
-- [OAuth 2.0 and OpenID Connect](./02-oauth2-openid-connect.md)
-- [Authorization at Scale](./07-authorization-patterns.md)
-- [Zero-Trust Service and Workload Architecture](./05-zero-trust-architecture.md)
-- [Idempotency and Operation Identity](../01-foundations/08-idempotency.md)
-- [Rate Limiting](../06-scaling/05-rate-limiting.md)
-- [Backpressure](../06-scaling/07-backpressure.md)
-- [Edge Gateway and API Mediation](../12-service-mesh/02-api-gateway.md)
+- [OAuth 2.0 and OpenID Connect](02-oauth2-openid-connect.md): the grant type decides what a token claim means, so validation policy starts with that contract
+- [Authorization at Scale](07-authorization-patterns.md): object-level checks are where API security actually fails, and that model lives in authorization
+- [Zero-Trust Service and Workload Architecture](05-zero-trust-architecture.md): once every call carries authority, the gateway stops being the place trust is decided
+- [Idempotency and Operation Identity](../01-foundations/08-idempotency.md): a retried POST is an identity problem, and keys make replay harmless rather than duplicated
+- [Rate Limiting](../06-scaling/05-rate-limiting.md): exhaustion defenses are admission policy, and per-principal budgets are where abuse control becomes real
+- [Backpressure](../06-scaling/07-backpressure.md): a saturated API should shed load deliberately instead of queueing it onto a failing downstream
+- [Edge Gateway and API Mediation](../12-service-mesh/02-api-gateway.md): the layer that terminates credentials is also where spoofed identity headers get invented

@@ -230,3 +230,13 @@ Choose few-shot examples when the desired distinction is easier to demonstrate t
 7. [Defending Against Indirect Prompt Injection (Spotlighting)](https://arxiv.org/abs/2403.14720): Hines et al., 2024
 8. [DSPy: Compiling Declarative Language Model Calls into Self-Improving Pipelines](https://arxiv.org/abs/2310.03714): Khattab et al., 2023
 9. [Writing Effective Tools for Agents](https://www.anthropic.com/engineering/writing-tools-for-agents): Anthropic, 2025
+
+---
+
+## Related Chapters
+
+- [Fine-Tuning Patterns](07-fine-tuning-patterns.md): the next intervention once adding prompt text stops buying measured quality
+- [Context Management](08-context-management.md): instructions compete for the same window as retrieved evidence and history
+- [LLM Evaluation and Observability](10-llm-evaluation.md): a prompt change is a release, so it needs a versioned measurement behind it
+- [Harness Engineering](09-harness-engineering.md): the scaffold that decides whether a good instruction survives contact with tools
+- [Model Deployment and Rollouts](../16-ml-systems/06-model-deployment-rollouts.md): prompt text ships behind the same staged exposure, kill switch, and paired measurement as a model swap

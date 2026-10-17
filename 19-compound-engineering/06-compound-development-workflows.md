@@ -360,3 +360,12 @@ Optimize for the shortest safe path from an accepted requirement to verified, in
 - [Workflow and Job System Fundamentals](../18-workflow-job-systems/01-workflow-system-fundamentals.md)
 - [DAG Orchestration](../18-workflow-job-systems/05-dag-orchestration.md)
 - [Verification and Governance](./05-quality-engineering-with-ai-agents.md)
+
+---
+
+## Related Chapters
+
+- [DAG Orchestration](../18-workflow-job-systems/05-dag-orchestration.md): parallel branches are a dependency graph whose most expensive nodes are reviewers
+- [Verification and Governance for Agentic Change](05-quality-engineering-with-ai-agents.md): throughput nobody reviews is a liability, which is what verification buys back
+- [Service and Platform Migration](../15-deployment/06-migration-strategies.md): long-lived branches and dual-write migrations fail for the same reason
+- [Coding Agent Platform Fundamentals](01-compound-engineering-fundamentals.md): the platform these workflows are meant to compound on top of

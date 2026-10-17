@@ -1,10 +1,12 @@
 # Delivery Guarantees and Effect Boundaries
 
+## TL;DR
+
 Delivery guarantees describe uncertainty between producer, broker, consumer, and effect store. A broker can prove that a record was durably appended, fetched, or transactionally written to another broker partition. It cannot, by itself, prove that a payment, email, filesystem write, or unrelated database transaction happened exactly once. Correct design names each atomicity boundary and closes the gaps end to end.
 
 Delivery guarantees are end-to-end contracts over broker semantics, acknowledgement ambiguity, producer retry deduplication, consumer effect commit, and the limits of “exactly once.” [Outbox and Inbox](07-outbox-pattern.md) owns atomic database-to-broker publication and transactional consumer deduplication. [Ordering](03-message-ordering.md) owns sequences. Workflow-specific retries and compensation belong to [Effect Commit Protocols](../18-workflow-job-systems/06-retry-idempotency-compensation.md).
 
-## Workload and guarantee contract
+## Workload and Guarantee Contract
 
 Draw the complete path:
 
@@ -33,7 +35,7 @@ Use precise vocabulary:
 
 Never shorten these to “exactly once” in an architecture contract.
 
-## State and invariants
+## State and Invariants
 
 Relevant state includes producer identity/epoch/sequence, broker record identity and position, replica commit watermark, delivery/consumer generation, consumer checkpoint, idempotency/inbox record, effect transaction, and reconciliation status.
 
@@ -53,7 +55,7 @@ Enforce:
 
 **Ambiguity is recoverable.** A timeout has a status lookup or reconciliation path; blind retries are not the only option.
 
-## Failure windows
+## Failure Windows
 
 The central ambiguity is the **lost acknowledgement**. Suppose the broker commits event E and sends success, but the response is lost. The producer cannot distinguish committed from uncommitted. Retrying with a new ID creates two logical events; abandoning the attempt can lose it. Retrying with the same identity lets the broker return the existing result.
 
@@ -71,7 +73,7 @@ Other windows include:
 
 Build the protocol around these windows rather than happy-path SDK configuration.
 
-## Producer-side semantics
+## Producer-Side Semantics
 
 ### Fire-and-forget
 
@@ -89,7 +91,7 @@ Producer identity state must be durable enough for failover. If the broker forge
 
 The strongest database-to-broker producer design is not “retry after commit”; it is a [transactional outbox](07-outbox-pattern.md) or authoritative event log whose relay retries with stable identity.
 
-## Broker durability and replication
+## Broker Durability and Replication
 
 A leader append passes stages: accepted, written locally, replicated, committed under the quorum/in-sync policy, and retained in a published segment. Producer acknowledgements choose one of these stages. The contract must state whether process crash, node loss, zone loss, and simultaneous failures are covered.
 
@@ -99,7 +101,7 @@ Fsync policy determines power-loss durability; replication does not protect agai
 
 Retention bounds redelivery. Once the only retained copy is deleted, at-least-once cannot be honored for a consumer that has not checkpointed it. Tie topic retention to maximum permitted lag/replay, or make lagging subscriptions expire/fail explicitly.
 
-## Consumer acknowledgement strategies
+## Consumer Acknowledgement Strategies
 
 **Acknowledge before effect** gives at-most-once processing: a crash loses work. **Acknowledge after effect** gives at-least-once attempt: a crash after effect can repeat it. **Acknowledge atomically with effect** is possible only when broker progress and effect participate in one transactional domain or when a durable inbox/effect transaction lets redelivery converge.
 
@@ -109,7 +111,7 @@ Acknowledgement tokens contain consumer-group generation/claim generation. A con
 
 Cancellation and deadlines matter. If the broker times out a consumer while its database transaction continues, it may redeliver concurrently. The effect store should serialize/idempotently reject the duplicate, and the consumer should stop work when authority/deadline is lost where safe.
 
-## Effectively-once database effects
+## Effectively-Once Database Effects
 
 For an effect in one transactional database, use a uniqueness-constrained inbox:
 
@@ -129,7 +131,7 @@ Idempotency must reflect the logical effect. `event_id` may be appropriate for o
 
 For monotonically versioned state, `UPDATE ... WHERE current_version < incoming_version` can converge naturally, but it discards intermediate deltas. Use it only when the event carries replacement state or the domain allows skipping.
 
-## External effects
+## External Effects
 
 An external API should accept a caller-generated idempotency key, durably bind it to request semantics, and return the original result for retries. It must reject reuse of the key with different parameters. The retention window must cover caller retry, delayed broker replay, and disaster recovery.
 
@@ -144,7 +146,7 @@ If the downstream system lacks idempotency, options are:
 
 Recording “request sent” locally is not proof that the remote effect happened. Recording “done” only from a response is not proof it did not happen when the response is lost. Model `UNKNOWN` as a durable state and resolve it through status lookup or reconciliation.
 
-## Transactional consume-transform-produce
+## Transactional Consume-Transform-Produce
 
 Some brokers allow a consumer to read records, write output records, and commit input positions in one broker transaction. The coordinator tracks producer epoch and transaction markers; read-committed consumers hide aborted output. This can provide exactly-once processing **within that broker transaction domain**.
 
@@ -152,7 +154,7 @@ The guarantee stops at non-participating state. A handler that updates PostgreSQ
 
 Long broker transactions pin unstable data and can time out during processing. Keep them bounded in records, bytes, and duration. External calls inside the transaction couple broker health to remote latency and should be avoided.
 
-## Deduplication scope and storage
+## Deduplication Scope and Storage
 
 Dedup state is indexed by effect scope and stable identity. It stores status, request digest, result reference, first/last observation, and expiry. Partition it with the effect when atomicity is required.
 
@@ -169,7 +171,7 @@ Bloom filters can avoid some negative lookups but cannot be the correctness auth
 
 Expiry is a semantic event. After 72 hours, the same ID can repeat unless the effect itself has a durable natural uniqueness constraint. Document this in replay tooling and disaster-recovery plans.
 
-## Capacity and latency model
+## Capacity and Latency Model
 
 Illustrative broker path:
 
@@ -186,13 +188,13 @@ Fan-out delivery is `60,000 * 4 = 240,000` records/s. If consumer effect transac
 
 Batching amortizes acknowledgements but increases ambiguity/replay suffix and latency. Model batch fill time at low traffic, maximum transaction bytes, and recovery reprocessing, not only peak throughput.
 
-## Concrete failure trace: disaster restore forgets dedup state
+## Concrete Failure Trace: Disaster Restore Forgets Dedup State
 
 A broker and consumer database are restored from backups after regional loss. The broker archive includes 48 hours of events, but the consumer inbox backup is 36 hours old. Replaying the broker suffix repeats 12 hours of already executed effects. The team assumed “at-least-once plus inbox equals exactly once,” but restored the two evidence streams to inconsistent recovery points.
 
 Containment pauses consumers and identifies effects with natural business references. Repair reconciles the 12-hour window before controlled replay. Prevention aligns recovery-point contracts, includes inbox/effect state in recovery manifests, retains downstream idempotency keys beyond maximum replay, and exercises cross-system restore, not independent component restore.
 
-## Operations and observability
+## Operations and Observability
 
 Track each boundary:
 
@@ -207,7 +209,7 @@ Track each boundary:
 
 Runbooks cover producer timeout ambiguity, broker data loss, replay beyond dedup horizon, downstream idempotency outage, stuck broker transaction, and inconsistent disaster restore.
 
-## Security and abuse resistance
+## Security and Abuse Resistance
 
 Authenticate producer identity/epoch issuance and consumer groups. An attacker who can choose another tenant’s event or idempotency IDs can suppress legitimate work or retrieve prior results. Namespace keys by authenticated caller and effect scope; bind them to a request digest.
 
@@ -215,7 +217,7 @@ Protect acknowledgement/checkpoint operations with generation-scoped tokens. Lim
 
 Never deserialize untrusted payloads before schema/size checks. Duplicate storms are an availability attack even when effects are idempotent: the duplicate path still consumes broker, network, lookup, and transaction resources.
 
-## Verification strategy
+## Verification Strategy
 
 - enumerate every crash point between append, acknowledgement, effect, inbox, checkpoint, and response;
 - property-test stable identity reuse and reject same key/different request;
@@ -226,7 +228,7 @@ Never deserialize untrusted payloads before schema/size checks. Duplicate storms
 - restore broker, effect store, and inbox to skewed recovery points;
 - load-test retry storms, duplicate hot keys, transaction aborts, and downstream saturation.
 
-## Decision framework
+## Decision Framework
 
 Select guarantees per effect, not per broker brand:
 
@@ -248,3 +250,11 @@ Use at-most-once only when loss is cheaper than duplication. Use at-least-once w
 - [RabbitMQ: Consumer Acknowledgements and Publisher Confirms](https://www.rabbitmq.com/docs/confirms)
 - [Amazon SQS: At-Least-Once Delivery](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/standard-queues-at-least-once-delivery.html)
 - [Martin Kleppmann et al.: Online Event Processing: Achieving Consistency Where Distributed Transactions Have Failed](https://doi.org/10.1145/3329672.3329679)
+---
+
+## Related Chapters
+
+- [WhatsApp](../08-case-studies/10-whatsapp.md): end-to-end encryption turns the acknowledgement contract into a device-state problem
+- [Idempotency and Operation Identity](../01-foundations/08-idempotency.md): at-least-once is survivable only when the effect can be recognized a second time
+- [Transactional Outbox, Inbox, and CDC Publication](07-outbox-pattern.md): making the write and the publish commit as one decision
+- [Distributed Transactions](../02-distributed-databases/07-distributed-transactions.md): the alternative to reconciling two systems: one commit domain

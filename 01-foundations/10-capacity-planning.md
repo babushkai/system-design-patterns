@@ -1,5 +1,7 @@
 # Capacity Planning and Back-of-the-Envelope Estimation
 
+## TL;DR
+
 Capacity planning turns a workload contract into a resource, failure-headroom, and lead-time plan. The useful result is not one server count. It is a versioned model that explains which resource binds, which assumptions dominate, what happens during a named failure or rollout, when a hard limit will be reached, and which measurements will recalibrate the plan.
 
 A defensible capacity plan combines **technical demand estimation, resource service-demand models, queueing/headroom reasoning, workload forecasts, failure capacity, benchmark calibration, and exhaustion lead time**. [Auto-Scaling](../06-scaling/08-auto-scaling.md) owns delayed feedback, metrics, controller stability, and safe scale-down. [FinOps and Cost Engineering](../11-observability/06-finops-cost-engineering.md) owns prices, allocation, commitments, showback, and unit economics. [Horizontal vs Vertical Scaling](../06-scaling/02-horizontal-vertical.md) owns capacity-change actuators and transition protocols.
@@ -16,7 +18,7 @@ A defensible capacity plan combines **technical demand estimation, resource serv
 
 Static “latency numbers every programmer should know” and generic QPS-per-node tables age quickly and omit workload shape. Use order-of-magnitude arithmetic to find dominant terms, then replace assumptions with measurements from the real software, data, protocol, and failure mode.
 
-## Capacity contract
+## Capacity Contract
 
 Before calculating, define:
 
@@ -40,7 +42,7 @@ offered demand >= admitted demand >= attempted work >= good completed work
 
 Retries can make attempted work exceed admitted logical operations, while errors make goodput smaller. Planning from request attempts alone can reward retry amplification with more machines; planning from goodput alone can hide the offered load that admission must reject.
 
-## Model state, control path, and serving path
+## Model State, Control Path, and Serving Path
 
 **Reference design:** store a capacity model as reviewed, machine-readable state:
 
@@ -74,7 +76,7 @@ flowchart LR
     S --> T
 ~~~
 
-## Unit discipline and first-pass arithmetic
+## Unit Discipline and First-Pass Arithmetic
 
 Track dimensions on every quantity. Network rates are commonly bits/s; payload and storage are bytes. Decimal provider units and binary memory/storage units differ. Compression changes bytes but consumes CPU. Replication and index amplification apply at different stages.
 
@@ -102,7 +104,7 @@ $$
 
 Compute CPU time, memory capacity and bandwidth, storage IOPS and throughput, network packets and bytes, accelerator time/memory, open connections, file descriptors, and every downstream quota. The largest topology-feasible result binds. `u[r]` is not a universal percentage; derive it from the measured latency/recovery knee and the required failure margin.
 
-## Concurrency, queues, and variability
+## Concurrency, Queues, and Variability
 
 ### Little's Law
 
@@ -148,7 +150,7 @@ If a request requires all `k` branches and each independently meets a deadline w
 
 Capacity plans include fan-out width, duplicated/hedged requests, cancellation effectiveness, intermediate bytes, and the slowest required branch. [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md) owns attempt budgets and tail mitigation.
 
-## Demand models: distribution, not one multiplier
+## Demand Models: Distribution, Not One Multiplier
 
 Build scenarios from drivers such as active tenants, devices, orders, content bytes, model tokens, or scheduled jobs:
 
@@ -169,7 +171,7 @@ A global percentile can hide a deterministic regional opening hour or one custom
 
 **Reference design:** compare forecast to actual at every horizon. Track signed model error `(actual - forecast) / forecast` and recalibrate unit costs separately from business-driver forecast. Otherwise a code regression and user growth are indistinguishable.
 
-## Failure, rollout, and topology headroom
+## Failure, Rollout, and Topology Headroom
 
 Capacity must fit the surviving topology, not only the healthy total. If each ready unit provides planned useful capacity $c$, peak admitted demand is $D$, the named scenario removes $f$ units, and a rollout removes $r$ more:
 
@@ -189,7 +191,7 @@ Examples of explicit scenarios:
 
 [Multi-Region Architecture](../06-scaling/09-multi-region-architecture.md) owns cross-region authority/failover. Here the plan records the resulting surviving-capacity constraint.
 
-## Storage and data-movement model
+## Storage and Data-Movement Model
 
 Size storage in stages:
 
@@ -214,7 +216,7 @@ $$
 
 Catch-up, checksums, indexes, replicas, and continuous writes extend the time. Recovery-point and recovery-time targets therefore consume steady spare bandwidth and temporary storage.
 
-## Network and connection model
+## Network and Connection Model
 
 For each edge in the request/dataflow graph:
 
@@ -227,7 +229,7 @@ Include protocol headers, TLS, acknowledgements, replication, retries, compressi
 
 New-connection rate and mean connection lifetime produce mean active connections through Little's Law. Then size file descriptors, socket memory, TLS handshakes, NAT/conntrack, and load-balancer tables through failure/reconnect bursts. [DNS and Connection Management](../06-scaling/13-dns-and-connection-management.md) owns those lifecycle mechanics.
 
-## Worked example with labeled assumptions
+## Worked Example With Labeled Assumptions
 
 Consider an illustrative regional event-ingestion service.
 
@@ -288,7 +290,7 @@ drain time >= 90,000,000 / (105,000 - 75,000) = 3,000 s = 50 min
 
 The plan must prove storage, consumers, and downstream systems tolerate that recovery rate; “the queue can hold it” is not end-to-end capacity.
 
-## Benchmark and load-test methodology
+## Benchmark and Load-Test Methodology
 
 **Documented, Schroeder et al. 2006:** a closed workload waits for completions before generating more work, while an open workload generates arrivals independently. Under overload, a closed test self-throttles and can substantially understate open-system queues and response times.
 
@@ -305,7 +307,7 @@ A capacity test should:
 
 A benchmark result includes binary/configuration, hardware, data shape, concurrency, protocol, cache temperature, duration, failure state, and confidence range. “Database does 50k QPS” is not portable evidence.
 
-## Forecast, limits, and lead time
+## Forecast, Limits, and Lead Time
 
 Maintain an exhaustion date for every hard or slow-moving limit:
 
@@ -324,7 +326,7 @@ Linear extrapolation is only a first alarm. Use scenario forecasts for launches,
 
 Autoscaling handles demand after capacity is available to the actuator. It cannot invent provider quota, split a hot key, shorten a seven-hour state copy, or make a dependency accept more connections. See [Auto-Scaling](../06-scaling/08-auto-scaling.md).
 
-## Specialized failure traces
+## Specialized Failure Traces
 
 ### Average demand hides a deterministic peak
 
@@ -350,7 +352,7 @@ After storage failure, replica rebuild and backlog drain consume the same disks/
 
 Demand stays inside forecast, yet a required accelerator or address quota has a six-week approval lead and exhaustion is three weeks away. Capacity planning includes supply and organizational lead time; a perfect demand model submitted too late still fails.
 
-## Security and abuse boundaries
+## Security and Abuse Boundaries
 
 Capacity telemetry can reveal customer size, traffic patterns, regions, and commercial events. Apply least privilege, aggregation, retention, and redaction to raw dimensions. Authenticate forecast and limit changes; an attacker or mistaken automation that raises concurrency or fleet maximum can create denial of wallet or overload dependencies.
 
@@ -358,7 +360,7 @@ Plan adversarial demand separately from organic peaks: handshake floods, expensi
 
 Resource quotas are safety policy, not a substitute for authorization. Audit overrides and give emergency capacity actions bounded scope and expiry.
 
-## Operations, rollout, and reconciliation
+## Operations, Rollout, and Reconciliation
 
 Introduce a new model in shadow mode. Compute old and new forecasts for the same history, explain deltas, then use the new model for one reversible capacity decision. Reconcile predicted versus observed demand, resource use, ready capacity, and user SLO after every launch, incident, and architecture change.
 
@@ -377,7 +379,7 @@ Dashboards should show:
 
 Rollback of a capacity-model change means restoring decision authority to the prior model while preserving collected evidence. It does not automatically remove already provisioned stateful capacity; that follows the safe scale-in protocol.
 
-## Verification matrix
+## Verification Matrix
 
 | Test | Evidence required |
 |---|---|
@@ -391,7 +393,7 @@ Rollback of a capacity-model change means restoring decision authority to the pr
 | Forecast backtest | Error and interval coverage reported by horizon |
 | Supply | Quota/procurement/migration lead time precedes exhaustion with margin |
 
-## Decision framework
+## Decision Framework
 
 1. What is the useful-work unit, and how do offered demand, attempts, and goodput differ?
 2. Which workload classes, peaks, hot tenants, and failure-correlated bursts must be represented?
@@ -404,7 +406,7 @@ Rollback of a capacity-model change means restoring decision authority to the pr
 9. When does every quota/hard limit exhaust under low/base/high scenarios versus its lead time?
 10. Does the load test preserve open arrivals, production skew, saturation, and recovery?
 
-## Primary references
+## References
 
 - [Little, *A Proof for the Queuing Formula: L = λW* (Operations Research, 1961)](https://pubsonline.informs.org/doi/10.1287/opre.9.3.383)
 - [Kingman, *The Single Server Queue in Heavy Traffic* (Mathematical Proceedings of the Cambridge Philosophical Society, 1961)](https://doi.org/10.1017/S0305004100036094)
@@ -413,3 +415,12 @@ Rollback of a capacity-model change means restoring decision authority to the pr
 - [Google SRE Workbook, *Introducing Non-Abstract Large System Design* (2018)](https://sre.google/workbook/non-abstract-design/)
 - [Gil Tene, *How NOT to Measure Latency*](https://www.infoq.com/presentations/latency-response-time/)
 - [HdrHistogram, coordinated-omission background and implementation](https://github.com/HdrHistogram/HdrHistogram)
+
+---
+
+## Related Chapters
+
+- [Auto-Scaling](../06-scaling/08-auto-scaling.md): a capacity plan becomes a control loop, with the scaling delay inside the headroom
+- [FinOps and Cost Engineering](../11-observability/06-finops-cost-engineering.md): the same arithmetic priced, and reviewed after the fact instead of before
+- [ML Capacity and Cost Planning](../16-ml-systems/14-ml-capacity-cost-planning.md): the method restated for accelerators, where memory rather than traffic sets utilization
+- [Cell-Based Architecture and Shuffle Sharding](../06-scaling/11-cell-based-architecture.md): how to carve one capacity plan into blast radii that fail separately

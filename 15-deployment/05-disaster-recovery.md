@@ -614,3 +614,12 @@ If a design can answer only “where are the backups?”, it has described stora
 - [GitLab database outage postmortem, 2017](https://about.gitlab.com/blog/2017/02/01/gitlab-dot-com-database-incident/): public evidence on backup/restore operational failure
 - [CISA StopRansomware Guide](https://www.cisa.gov/stopransomware/ransomware-guide): isolated backups and recovery preparation against destructive compromise
 - [RFC 8905: The 'payto' URI Scheme for Payments](https://www.rfc-editor.org/rfc/rfc8905): an example of why external financial identifiers and effects require explicit reconciliation, not blind replay
+
+---
+
+## Related Chapters
+
+- [Object Storage Architecture and Commit Protocols](../03-storage-engines/08-object-storage.md): versioning and cross-region replication are not a recovery plan by themselves
+- [Cryptographic Key and Data-Protection Architecture](../10-security/06-encryption.md): a restore that cannot reach its keys is data loss with extra steps
+- [Multi-Region Architecture](../06-scaling/09-multi-region-architecture.md): the topology that decides whether failover is a switch or a rebuild
+- [Workflow Observability and Replay](../18-workflow-job-systems/09-workflow-observability-replay.md): replaying events to rebuild state, which needs the log you hoped nobody would require

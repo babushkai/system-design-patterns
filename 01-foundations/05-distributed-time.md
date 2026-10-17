@@ -349,3 +349,12 @@ Property tests should assert the clock condition: whenever the harness creates a
 - Sandeep S. Kulkarni, Murat Demirbas, Deepak Madappa, Bharadwaj Avva, and Marcelo Leone, [*Logical Physical Clocks and Consistent Snapshots in Globally Distributed Databases*](https://cse.buffalo.edu/tech-reports/2014-04.pdf), 2014.
 - James C. Corbett et al., [*Spanner: Google's Globally-Distributed Database*](https://research.google.com/archive/spanner-osdi2012.pdf), OSDI, 2012.
 - Paulo Sérgio Almeida, Carlos Baquero, and Victor Fonte, [*Interval Tree Clocks: A Logical Clock for Dynamic Systems*](https://gsd.di.uminho.pt/members/cbm/ps/itc2008.pdf), 2008.
+---
+
+## Related Chapters
+
+- [Uber](../08-case-studies/03-uber.md): stale location producing competing offers, with ordering and freshness as one contract
+- [Spanner](../09-whitepapers/04-spanner.md): the paper that made a bounded clock a system primitive
+- [Consistency Models](04-consistency-models.md): clocks order events; consistency models decide which orders a reader may observe
+- [Consensus Algorithms](../02-distributed-databases/08-consensus-algorithms.md): timeouts, terms, and epochs are how a protocol survives an uncertain clock
+- [Multi-Region Architecture](../06-scaling/09-multi-region-architecture.md): the deployment where clock uncertainty and bounded staleness become one budget

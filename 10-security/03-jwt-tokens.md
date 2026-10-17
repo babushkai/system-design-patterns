@@ -546,7 +546,7 @@ JWT reduces a lookup; it does not eliminate identity, authorization, revocation,
 
 ---
 
-## Primary References
+## References
 
 - [RFC 7515: JSON Web Signature](https://www.rfc-editor.org/rfc/rfc7515)
 - [RFC 7516: JSON Web Encryption](https://www.rfc-editor.org/rfc/rfc7516)
@@ -561,7 +561,8 @@ JWT reduces a lookup; it does not eliminate identity, authorization, revocation,
 
 ## Related Chapters
 
-- [OAuth 2.0 and OpenID Connect](./02-oauth2-openid-connect.md)
-- [Authentication Systems](./01-authentication-fundamentals.md)
-- [Authorization at Scale](./07-authorization-patterns.md)
-- [Encryption Patterns](./06-encryption.md)
+- [OAuth 2.0 and OpenID Connect](02-oauth2-openid-connect.md): the framework specifies where tokens are exchanged, not whether these claims are trustworthy here
+- [Authentication Systems](01-authentication-fundamentals.md): server-side sessions solve the revocation problem that self-contained tokens delegate to somebody else
+- [Authorization at Scale](07-authorization-patterns.md): putting permissions inside a token freezes a decision at the moment you issue it
+- [Cryptographic Key and Data-Protection Architecture](06-encryption.md): algorithm choice and key rotation are cryptographic decisions wearing a token header
+- [Distributed Time](../01-foundations/05-distributed-time.md): an expired token is a disagreement about now, so the skew allowance is the failure budget granted to every verifier

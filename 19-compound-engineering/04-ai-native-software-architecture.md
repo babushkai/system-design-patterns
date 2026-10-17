@@ -325,3 +325,12 @@ Design repositories so intent, authority, dependency, evidence, and migration ar
 - [Database Schema Migrations](../15-deployment/03-database-migrations.md)
 - [Service and Platform Migration](../15-deployment/06-migration-strategies.md)
 - [Data Modeling for Access Patterns](../02-distributed-databases/10-data-modeling.md)
+
+---
+
+## Related Chapters
+
+- [Database Schema Migrations](../15-deployment/03-database-migrations.md): agents change schemas, which turns a migration policy into a guardrail
+- [Transactional Outbox, Inbox, and CDC Publication](../05-messaging/07-outbox-pattern.md): a module boundary an agent can violate in one entirely plausible commit
+- [Verification and Governance for Agentic Change](05-quality-engineering-with-ai-agents.md): architecture defines the verification surface that agents will try to skip
+- [Repository Context and Policy Plane](03-agent-context-engineering.md): structure is context: conventions written where an agent will actually read them

@@ -1,5 +1,7 @@
 # Cell-Based Architecture and Shuffle Sharding
 
+## TL;DR
+
 Cell-based architecture scales a service by repeating a bounded, independently operable slice of the stack and assigning each workload unit to one cell. Its value is failure containment: a poison request, hot tenant, bad deployment, exhausted quota, or corrupt local state should affect one bounded population instead of the whole service. Cells work only when placement, routing, global dependencies, and evacuation preserve that boundary.
 
 A cell architecture must define **cell boundaries, placement and routing, tested cell limits, fleet lifecycle, cell deployment rings, evacuation, and shuffle-shard overlap mathematics**. [Multi-Tenant Isolation](./12-multi-tenancy.md) owns tenant identity, authorization, quotas, noisy-neighbor policy, and tenant lifecycle. [Multi-Region Architecture](./09-multi-region-architecture.md) owns regional authority, replication, and regional failover. [Database Sharding](./03-database-sharding.md) owns live data movement and shard fencing.
@@ -14,7 +16,7 @@ A cell architecture must define **cell boundaries, placement and routing, tested
 
 Cells, deployment stamps, scale units, and bulkheads overlap in vocabulary. Here a **cell** means a full serving unit with a declared capacity ceiling and no required synchronous dependency on another peer cell for its normal request path.
 
-## Workload and isolation contract
+## Workload and Isolation Contract
 
 Define:
 
@@ -32,7 +34,7 @@ Define:
 
 A cell may host many tenants; a large tenant may require a dedicated cell or several explicitly partitioned placement units. Tenant policy chooses that mapping; cell placement must preserve bounded blast radius.
 
-## State, authority, and invariants
+## State, Authority, and Invariants
 
 The global cell directory stores:
 
@@ -58,7 +60,7 @@ Each cell owns local canonical data and serving state for its assigned units. Fl
 7. Placement respects residency, isolation, and version constraints through migration and rollback.
 8. Cross-cell operations expose partial failure; they do not silently turn every cell into one distributed transaction domain.
 
-## Data plane and control plane
+## Data Plane and Control Plane
 
 ~~~mermaid
 flowchart LR
@@ -91,7 +93,7 @@ The router must be thinner and more reliable than the cells it protects. It auth
 
 If the global directory is unavailable, existing placements continue from last known good state while new onboarding/moves stop. Security revocation and completed authority transfer may require a shorter stale window than ordinary routing. An empty or unknown placement is not permission to broadcast.
 
-## Designing a real cell boundary
+## Designing a Real Cell Boundary
 
 A useful cell contains every resource whose failure or saturation would otherwise propagate:
 
@@ -112,7 +114,7 @@ Some services remain global: identity roots, placement, artifact distribution, b
 
 **Inference:** a “cellular” frontend backed by one globally shared write database has compute blast-radius isolation but not data or dependency isolation. Name the partial boundary honestly and plan the shared component separately.
 
-## Placement and routing
+## Placement and Routing
 
 ### Explicit placement directory
 
@@ -139,7 +141,7 @@ Avoid request-time fan-out across every cell. Fleet search, reports, and billing
 
 A business transaction spanning placement units may require co-placement, a saga, or a distributed transaction; cells do not make that invariant disappear.
 
-## Cell sizing and capacity
+## Cell Sizing and Capacity
 
 A cell ceiling is a tested multi-resource envelope, not “up to 100 tenants.” Measure:
 
@@ -188,7 +190,7 @@ Even then, data copy, cache cold start, connection reconnects, and dependency qu
 
 An empty “swing cell” helps only if it is continuously patched, warmed enough, quota-complete, security-certified, and tested with real placement traffic.
 
-## Cell lifecycle
+## Cell Lifecycle
 
 ~~~mermaid
 stateDiagram-v2
@@ -219,7 +221,7 @@ Place small canary units first. Admit new units while projected peak plus failur
 
 Close the cell to new placements, move units through persisted workflows, fence source authority, drain connections/jobs, verify no routes/data/keys remain, and only then delete infrastructure. Emergency quarantine stops new work and chooses per-unit failover, queue, degrade, or unavailable semantics.
 
-## Shuffle sharding
+## Shuffle Sharding
 
 Shuffle sharding assigns each workload unit a small subset of a shared resource pool. Unlike cells, subsets overlap; unlike ordinary sharding, the number of possible isolation groups can greatly exceed the resource count.
 
@@ -254,7 +256,7 @@ Keep retries within the assigned subset; falling back to the full pool destroys 
 
 Stateful resources are harder: overlapping subsets do not define one write authority or data location. Use cells or explicit partition placement for canonical data; shuffle sharding may still isolate stateless frontends inside each cell.
 
-## Deployment and configuration
+## Deployment and Configuration
 
 Cells are natural deployment rings:
 
@@ -269,7 +271,7 @@ Do not deploy every cell from one unbounded global job or make cell startup requ
 
 A schema or protocol change spanning interacting cells needs compatibility across the entire mixed-version window. Cells reduce rollout blast radius; they do not remove compatibility requirements.
 
-## Specialized failure traces
+## Specialized Failure Traces
 
 ### Shared global dependency defeats containment
 
@@ -308,7 +310,7 @@ One malformed configuration is atomically published to every cell. Data and comp
 
 A tenant's three assigned workers fail under poison input. Client library retries against the full pool “for availability,” spreading the poison to all workers. Failure behavior must stay inside the subset or reject the operation.
 
-## Security and abuse boundaries
+## Security and Abuse Boundaries
 
 Cell placement is sensitive security state. Authenticate and authorize placement/move operations, enforce tenant identity independently of routing keys, sign or integrity-check directory snapshots, and prevent callers from selecting arbitrary cell addresses.
 
@@ -318,7 +320,7 @@ Compromise of a global artifact, identity root, placement service, or fleet admi
 
 Protect placement and shuffle algorithms from adversarial key choice. Use authenticated tenant IDs and a keyed, versioned hash where predictable subsets would enable deliberate co-location attacks.
 
-## Observability and verification
+## Observability and Verification
 
 Observe both cell and fleet:
 
@@ -336,7 +338,7 @@ Tests include deterministic placement across implementations, directory snapshot
 
 Load-test one cell past every resource knee with the largest supported unit and recovery work. Then repeat across several cells to expose supposedly global limits. The value of a cell ceiling is that it can be tested regularly; an untested number is only a placement guess.
 
-## Decision framework
+## Decision Framework
 
 1. Which placement unit can move and fail independently without cross-cell transactions?
 2. What complete resource set forms one cell, and which global dependencies still create shared fate?
@@ -349,10 +351,19 @@ Load-test one cell past every resource knee with the largest supported unit and 
 9. Are deployments, configurations, identities, and credentials truly cell-scoped?
 10. Can the team provision, certify, load-test, drain, restore, and retire cells repeatedly?
 
-## Primary references
+## References
 
 - [AWS Well-Architected, *Reducing the Scope of Impact with Cell-Based Architecture*](https://docs.aws.amazon.com/wellarchitected/latest/reducing-scope-of-impact-with-cell-based-architecture/welcome.html)
 - [AWS Architecture Blog, *Shuffle Sharding: Massive and Magical Fault Isolation* (April 2014)](https://aws.amazon.com/blogs/architecture/shuffle-sharding-massive-and-magical-fault-isolation/)
 - [AWS Builders' Library, *Workload isolation using shuffle-sharding*](https://aws.amazon.com/builders-library/workload-isolation-using-shuffle-sharding/)
 - [Microsoft Azure Architecture Center, *Deployment Stamps pattern*](https://learn.microsoft.com/en-us/azure/architecture/patterns/deployment-stamp)
 - [Microsoft Azure Architecture Center, *Multitenant control-plane considerations*](https://learn.microsoft.com/en-us/azure/architecture/guide/multitenant/considerations/control-planes)
+
+---
+
+## Related Chapters
+
+- [Multi-Tenant Isolation and Tenant Lifecycle Architecture](12-multi-tenancy.md): isolation as topology you operate instead of policy you hope holds
+- [Multi-Region Architecture](09-multi-region-architecture.md): the topology question a cell answers twice: where state lives and who may write it
+- [Load Balancing](01-load-balancing.md): routing to the correct cell is a correctness requirement rather than an optimization
+- [Netflix](../08-case-studies/04-netflix.md): the published argument for cells, together with the failures that motivated it

@@ -453,7 +453,7 @@ Choose posture per data class. Start from authority and failure semantics, then 
 
 ---
 
-## Primary References
+## References
 
 - James C. Corbett et al., [Spanner: Google’s Globally-Distributed Database](https://research.google/pubs/spanner-googles-globally-distributed-database-2/).
 - Giuseppe DeCandia et al., [Dynamo: Amazon’s Highly Available Key-value Store](https://www.amazon.science/publications/dynamo-amazons-highly-available-key-value-store).
@@ -461,3 +461,12 @@ Choose posture per data class. Start from authority and failure semantics, then 
 - AWS Builders’ Library, [Minimizing Correlated Failures in Distributed Systems](https://aws.amazon.com/builders-library/minimizing-correlated-failures-in-distributed-systems/).
 - Google Cloud Architecture Center, [Architecting Disaster Recovery for Cloud Infrastructure Outages](https://cloud.google.com/architecture/disaster-recovery).
 - Martin Kleppmann, [Designing Data-Intensive Applications](https://dataintensive.net/), chapters on replication, partitioning, and consistency.
+
+---
+
+## Related Chapters
+
+- [Multi-Leader Replication](../02-distributed-databases/02-multi-leader-replication.md): conflict resolution becomes a standing requirement once two regions accept writes
+- [DNS and Connection Management](13-dns-and-connection-management.md): routing is DNS plus connection lifetime, and both lag the failover decision
+- [Disaster Recovery and Data Reconstruction](../15-deployment/05-disaster-recovery.md): disaster recovery states the objective; this chapter chooses who may write first
+- [Spanner](../09-whitepapers/04-spanner.md): the paper that bought geographic consistency with a bounded clock

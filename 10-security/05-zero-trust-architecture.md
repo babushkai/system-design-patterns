@@ -579,7 +579,7 @@ Do not call an architecture zero trust merely because it uses a mesh, proxy, VPN
 
 ---
 
-## Primary References
+## References
 
 - [NIST SP 800-207: Zero Trust Architecture](https://csrc.nist.gov/pubs/sp/800/207/final)
 - [SPIFFE Identity and Verifiable Identity Document Specification](https://spiffe.io/docs/latest/spiffe-specs/spiffe-id/)
@@ -592,9 +592,9 @@ Do not call an architecture zero trust merely because it uses a mesh, proxy, VPN
 
 ## Related Chapters
 
-- [Authentication Systems](./01-authentication-fundamentals.md)
-- [OAuth 2.0 and OpenID Connect](./02-oauth2-openid-connect.md)
-- [Authorization at Scale](./07-authorization-patterns.md)
-- [Encryption Patterns](./06-encryption.md)
-- [Service Mesh Data and Control Planes](../12-service-mesh/03-sidecar-pattern.md)
-- [Multi-Tenancy Patterns](../06-scaling/12-multi-tenancy.md)
+- [Authentication Systems](01-authentication-fundamentals.md): a workload identity is still an authentication problem, relocated rather than removed
+- [OAuth 2.0 and OpenID Connect](02-oauth2-openid-connect.md): short-lived tokens bound to a workload are the credential shape this architecture assumes
+- [Authorization at Scale](07-authorization-patterns.md): policy that binds principal, action, resource, and tenant is an authorization model with more inputs
+- [Cryptographic Key and Data-Protection Architecture](06-encryption.md): mTLS proves little without key custody, rotation, and a revocation path that works under failure
+- [Service Mesh Data and Control Planes](../12-service-mesh/03-sidecar-pattern.md): the mesh is where most teams deploy this enforcement point while leaving the decision logic unspecified
+- [Multi-Tenant Isolation and Tenant Lifecycle Architecture](../06-scaling/12-multi-tenancy.md): segmentation and tenant isolation converge on the same failure: one shared path with shared credentials

@@ -444,7 +444,7 @@ Choose the capture mechanism only after proving bootstrap, retention, failover, 
 
 ---
 
-## Primary References
+## References
 
 - Debezium, [Stable Documentation](https://debezium.io/documentation/reference/stable/), including connector-specific snapshots, offsets, schema changes, and transaction metadata.
 - PostgreSQL, [Logical Decoding](https://www.postgresql.org/docs/current/logicaldecoding.html), [Replication Slots](https://www.postgresql.org/docs/current/view-pg-replication-slots.html), and [Logical Replication Failover](https://www.postgresql.org/docs/current/logical-replication-failover.html).
@@ -456,3 +456,12 @@ Choose the capture mechanism only after proving bootstrap, retention, failover, 
 ---
 
 **Next:** [Lakehouse Table Formats](05-lakehouse-table-formats.md) shows how immutable files, metadata snapshots, and format-specific commit protocols turn CDC and batch output into transactional analytical tables.
+
+---
+
+## Related Chapters
+
+- [Write-Ahead Logging](../03-storage-engines/04-write-ahead-logging.md): the log being tailed, with its truncation, retention, and replay limits
+- [Transactional Outbox, Inbox, and CDC Publication](../05-messaging/07-outbox-pattern.md): the application-side alternative when no commit log is available to tail
+- [Stream Execution](02-stream-processing.md): what changes when the change stream becomes a stateful computation
+- [Database Schema Migrations](../15-deployment/03-database-migrations.md): dual-write migrations, where CDC is both the backfill and the repair path

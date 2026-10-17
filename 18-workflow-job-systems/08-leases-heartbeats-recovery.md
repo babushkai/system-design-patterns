@@ -1,5 +1,11 @@
 # Leases, Heartbeats, and Recovery
 
+## TL;DR
+
+A lease grants one job attempt temporary authority and an epoch names that grant. What makes recovery safe is fencing a stale attempt when it tries to commit, not the expiry timer itself: a replaced attempt must be unable to write state or effects.
+
+The protocol needs three distinct signals (liveness, progress, and deadline), explicit reclaim and checkpoint-resume rules, shutdown that does not release authority early, and reconciliation treated as part of recovery rather than an afterthought.
+
 ## Job-Attempt Authority Protocol
 
 A lease grants one attempt temporary authority; an epoch names that grant; recovery advances authority after expiry or revocation. Stale-attempt fencing (not the timeout itself) prevents a replaced attempt from committing state or effects.
@@ -373,24 +379,22 @@ If any protected effect has neither an enforceable epoch nor a stable deduplicat
 
 ---
 
-## Related Patterns
-
-- [Background Jobs and Worker Pools](./02-background-jobs-worker-pools.md)
-- [Retry, Idempotency, and Compensation](./06-retry-idempotency-compensation.md)
-- [Priority, Fairness, and Backpressure](./07-priority-fairness-backpressure.md)
-- [Workflow Observability and Replay](./09-workflow-observability-replay.md)
-- [Distributed Locks](../01-foundations/09-distributed-locks.md)
-- [Failure Modes](../01-foundations/06-failure-modes.md)
-- [Distributed Time](../01-foundations/05-distributed-time.md)
-- [Leader Election](../02-distributed-databases/09-leader-election.md)
-- [Delivery Guarantees](../05-messaging/04-delivery-guarantees.md)
-
----
-
-## Primary Sources
+## References
 
 1. [Leases: An Efficient Fault-Tolerant Mechanism for Distributed File Cache Consistency](https://doi.org/10.1145/74850.74870): Gray and Cheriton, SOSP 1989.
 2. [The Chubby Lock Service for Loosely-Coupled Distributed Systems](https://www.usenix.org/legacy/events/osdi06/tech/full_papers/burrows/burrows.pdf): Burrows, OSDI 2006; sequencers illustrate effect-side stale-owner rejection.
 3. [ZooKeeper: Wait-free Coordination for Internet-scale Systems](https://www.usenix.org/legacy/event/atc10/tech/full_papers/Hunt.pdf): Hunt et al., USENIX ATC 2010; sessions, versions, and ordered coordination state.
 4. [etcd API guarantees](https://etcd.io/docs/latest/learning/api_guarantees/) and [etcd lease API](https://etcd.io/docs/latest/learning/api/#lease-api): official guarantees distinguish revisions, transactions, and lease TTL.
 5. [Temporal Java SDK ActivityExecutionContext](https://javadoc.io/static/io.temporal/temporal-sdk/1.32.0/io/temporal/activity/ActivityExecutionContext.html): official SDK contract for activity heartbeat details and retry resume data.
+
+---
+
+## Related Chapters
+
+- [Background Jobs and Worker Pools](02-background-jobs-worker-pools.md): a claimed job is the unit of work a lease grants authority over, so both need the same attempt identity
+- [Effect Commit Protocols for Workflows](06-retry-idempotency-compensation.md): a stale attempt that commits after recovery is the exact race fencing exists to prevent
+- [Workflow Observability and Replay](09-workflow-observability-replay.md): operators distinguish a slow attempt from an orphaned one using the epoch this chapter assigns
+- [Distributed Locks and Leases](../01-foundations/09-distributed-locks.md): leases are the failure-tolerant form of a lock, and the comparison explains what expiry really buys
+- [Failure Semantics, Detection, and Recovery Boundaries](../01-foundations/06-failure-modes.md): pause and slow-clock processes break the assumptions behind every timeout you configure
+- [Distributed Time](../01-foundations/05-distributed-time.md): lease arithmetic depends on whose clock you trust, which monotonic time only partly answers
+- [Delivery Guarantees and Effect Boundaries](../05-messaging/04-delivery-guarantees.md): at-least-once delivery assumes a redelivery path, and recovery is where that assumption is tested

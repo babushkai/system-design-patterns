@@ -566,7 +566,7 @@ The best slice is not automatically the least important feature. Choose one that
 
 ---
 
-## Primary References
+## References
 
 - [Martin Fowler: Strangler Fig Application](https://martinfowler.com/bliki/StranglerFigApplication.html)
 - [Martin Fowler: Branch by Abstraction](https://martinfowler.com/bliki/BranchByAbstraction.html)
@@ -580,10 +580,10 @@ The best slice is not automatically the least important feature. Choose one that
 
 ## Related Chapters
 
-- [Database Schema Migrations](./03-database-migrations.md)
-- [Feature-Flag Control Planes](./02-feature-flags.md)
-- [Change Data Capture](../13-data-pipelines/04-change-data-capture.md)
-- [Outbox Pattern](../05-messaging/07-outbox-pattern.md)
-- [Idempotency](../01-foundations/08-idempotency.md)
-- [Multi-Tenancy Patterns](../06-scaling/12-multi-tenancy.md)
-- [Durable Execution and Workflow Engines](../18-workflow-job-systems/04-durable-execution-workflow-engines.md)
+- [Database Schema Migrations](03-database-migrations.md): schema change mechanics are one migration type; this chapter supplies the traffic side of the cutover
+- [Feature-Flag Control Planes](02-feature-flags.md): a flag can gate which behavior is live, so it becomes the switch a dual-write cutover needs
+- [Change Data Capture](../13-data-pipelines/04-change-data-capture.md): snapshot plus tail plus repair is the machinery that keeps a shadow copy converging
+- [Transactional Outbox, Inbox, and CDC Publication](../05-messaging/07-outbox-pattern.md): dual writes need a durable publish path or the two systems diverge silently under retries
+- [Idempotency and Operation Identity](../01-foundations/08-idempotency.md): a backfill is only safe to retry, resume, and overlap if every write in it is idempotent
+- [Multi-Tenant Isolation and Tenant Lifecycle Architecture](../06-scaling/12-multi-tenancy.md): tenant-by-tenant cutover is how a migration bounds its own blast radius
+- [Durable Execution and Workflow Engines](../18-workflow-job-systems/04-durable-execution-workflow-engines.md): a multi-day cutover wants recorded progress so an operator resumes rather than guesses

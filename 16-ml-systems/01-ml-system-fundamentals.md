@@ -391,3 +391,13 @@ The strongest architectures are usually *hybrids*: deterministic rules define th
 4. [Data Validation for Machine Learning](https://mlsys.org/Conferences/2019/doc/2019/167.pdf): Breck et al., 2019
 5. [Machine Learning: The High-Interest Credit Card of Technical Debt](https://research.google/pubs/pub43146/): Sculley et al., 2014
 6. [NIST AI 100-2 E2025: Adversarial Machine Learning: A Taxonomy and Terminology of Attacks and Mitigations](https://csrc.nist.gov/pubs/ai/100/2/e2025/final): lifecycle attack taxonomy, mitigations, and limitations
+
+---
+
+## Related Chapters
+
+- [Feature Stores](02-feature-stores.md): the training and serving split behind most ML platform problems
+- [Model Serving](03-model-serving.md): where a model meets traffic, with a latency budget and a hardware bill attached
+- [Offline Evaluation and Metric Design](12-offline-evaluation-metrics.md): the numbers that let you reject a model before it ever sees production traffic
+- [Online Experiments](08-online-experiments.md): the only evaluation that measures the product rather than the dataset
+- [LLM Agent Fundamentals](../17-llm-systems/01-agent-fundamentals.md): the same argument one layer on, where a prompted controller rather than a trained model supplies behavior nobody authored

@@ -1,5 +1,11 @@
 # Monarch: Google's Planet-Scale In-Memory Time Series Database
 
+## TL;DR
+
+Monarch is a monitoring database, and its unusual decisions follow from that workload: recent data matters most, partial results are often useful, and losing telemetry can beat sharing fate with a storage dependency.
+
+The 2020 paper documents regional autonomy, a recovery log deliberately placed off the synchronous commit path, collection-time aggregation, and a field-hints index that removes most empty fan-out. Availability policy is derived from data value rather than set globally.
+
 ## Publication Boundary
 
 - **Paper:** *Monarch: Google's Planet-Scale In-Memory Time Series Database*
@@ -260,15 +266,16 @@ Partial query metadata is part of correctness. A graph that silently omits an un
 5. Preaggregation is a schema decision, not just an optimization; discarded dimensions are irrecoverable.
 6. Tail evaluation needs workload size and operator placement, not a single platform latency number.
 
-## Primary Reference
+## References
 
 - [Monarch: Google's Planet-Scale In-Memory Time Series Database (PVLDB 13(12), 2020)](https://www.vldb.org/pvldb/vol13/p3181-adams.pdf)
+---
 
 ## Related Chapters
 
-- [Metrics Systems and Monitoring](../11-observability/02-metrics-monitoring.md)
-- [Alert Evaluation and Notification](../11-observability/04-alerting.md)
-- [Distributed Tracing](../11-observability/01-distributed-tracing.md)
-- [Cell-Based Architecture](../06-scaling/11-cell-based-architecture.md)
-- [Partitioning Strategies](../02-distributed-databases/05-partitioning-strategies.md)
-- [SLOs and Error Budgets](../11-observability/05-slos-error-budgets.md)
+- [Metrics Systems and Monitoring](../11-observability/02-metrics-monitoring.md): rollups, downsampling, and retention read differently once you see the workload that forced them
+- [Alert Evaluation and Notification](../11-observability/04-alerting.md): global alert evaluation at this scale is a scheduling problem before it is a threshold problem
+- [Distributed Tracing and Telemetry Pipelines](../11-observability/01-distributed-tracing.md): tracing shares the ingestion flood but needs whole traces rather than aggregates
+- [Cell-Based Architecture and Shuffle Sharding](../06-scaling/11-cell-based-architecture.md): celling the monitoring database is how one region overload stops being a global outage
+- [Partitioning Strategies](../02-distributed-databases/05-partitioning-strategies.md): sharding by metric and series is where hot partitions and skewed tenants show up first
+- [SLOs and Error-Budget Control](../11-observability/05-slos-error-budgets.md): partial results are acceptable until they are not, which makes the objective explicit

@@ -529,3 +529,12 @@ A credible delivery platform makes releases smaller and routine because identity
 - [Argo CD architecture](https://argo-cd.readthedocs.io/en/stable/operator-manual/architecture/) and [Flux architecture](https://fluxcd.io/flux/concepts/): production GitOps controller designs
 - [SRE Workbook: Canarying Releases](https://sre.google/workbook/canarying-releases/): outcome-based release verification
 - [DORA research program](https://dora.dev/research/): delivery performance and reliability research
+
+---
+
+## Related Chapters
+
+- [Progressive Delivery and Deployment Strategies](01-deployment-strategies.md): the pipeline decides how an artifact arrives, which is separate from what it does
+- [Disaster Recovery and Data Reconstruction](05-disaster-recovery.md): a control plane you cannot reconcile is a region you cannot rebuild
+- [Verification and Governance for Agentic Change](../19-compound-engineering/05-quality-engineering-with-ai-agents.md): when agents open pull requests, the pipeline becomes where review is actually enforced
+- [Model Registry and ML Metadata](../16-ml-systems/13-model-registry-metadata.md): promotion for artifacts whose meaning is weights plus an evaluation history

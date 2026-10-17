@@ -643,3 +643,12 @@ Choose pooling when logical controls, fair sharing and lifecycle tooling meet th
 - [Vuppalapati et al., *Building An Elastic Query Engine on Disaggregated Storage*](https://www.usenix.org/conference/nsdi20/presentation/vuppalapati): multi-tenant scheduling and resource separation in analytical infrastructure
 - [Stripe: Online migrations at scale](https://stripe.com/blog/online-migrations): live backfill, dual-read/write and cutover lessons
 - [NIST SP 800-207: Zero Trust Architecture](https://csrc.nist.gov/pubs/sp/800/207/final): identity/resource-based access independent of network location
+
+---
+
+## Related Chapters
+
+- [Cell-Based Architecture and Shuffle Sharding](11-cell-based-architecture.md): isolation by topology versus isolation by policy, and the cost of each per tenant
+- [Rate Limiting](05-rate-limiting.md): fair share is a rate limit with a definition of fair attached to it
+- [Authorization at Scale](../10-security/07-authorization-patterns.md): the tenant as an authorization scope, enforced somewhere other than the query
+- [Partitioning Strategies](../02-distributed-databases/05-partitioning-strategies.md): where rows for one tenant land decides whether isolation is physical or aspirational

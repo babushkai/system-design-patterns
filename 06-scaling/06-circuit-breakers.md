@@ -426,7 +426,7 @@ Start with deadline propagation and concurrency bounds. Add an error-state break
 
 ---
 
-## Primary References
+## References
 
 - Michael Nygard, [Release It!](https://pragprog.com/titles/mnee2/release-it-second-edition/), for the circuit-breaker and stability patterns.
 - Resilience4j, [CircuitBreaker](https://resilience4j.readme.io/docs/circuitbreaker), for count/time sliding windows and half-open state.
@@ -435,3 +435,12 @@ Start with deadline propagation and concurrency bounds. Add an error-state break
 - Netflix, [Concurrency Limits](https://github.com/Netflix/concurrency-limits), including gradient-based adaptive limits.
 - Google SRE, [Addressing Cascading Failures](https://sre.google/sre-book/addressing-cascading-failures/).
 - Nathan Bronson et al., [Metastable Failures in Distributed Systems](https://sigops.org/s/conferences/hotos/2021/papers/hotos21-s11-bronson.pdf).
+
+---
+
+## Related Chapters
+
+- [Retries, Timeouts, and Hedging](10-retries-timeouts-hedging.md): a breaker without a retry budget only moves the burst into the next attempt
+- [Backpressure](07-backpressure.md): shedding load before the dependency fails, versus recovering after it does
+- [Failure Semantics, Detection, and Recovery Boundaries](../01-foundations/06-failure-modes.md): the evidence problem: deciding a dependency is down from replies you may not trust
+- [Service Mesh Data and Control Planes](../12-service-mesh/03-sidecar-pattern.md): the breaker running in another process, with its own metrics and its own lag

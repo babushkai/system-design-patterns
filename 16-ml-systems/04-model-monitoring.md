@@ -467,3 +467,12 @@ The finished design should satisfy `T_signal + T_window + T_alert + T_decision +
 4. [Rules of Machine Learning: Best Practices for ML Engineering](https://developers.google.com/machine-learning/guides/rules-of-ml): Zinkevich
 5. [Evidently: Open-Source ML Monitoring Documentation](https://docs.evidentlyai.com/)
 6. [Arize AI: ML Observability Concepts](https://arize.com/ml-observability/)
+
+---
+
+## Related Chapters
+
+- [Alert Evaluation and Notification](../11-observability/04-alerting.md): thresholds on a drifting distribution are not error rates, however they are paged
+- [Offline Evaluation and Metric Design](12-offline-evaluation-metrics.md): the offline baseline that says whether drift is actually hurting quality
+- [Label and Ground-Truth Systems](10-label-ground-truth-systems.md): delayed labels, the only honest way to measure accuracy in production
+- [ML Risk and Governance](09-ml-risk-governance.md): monitoring as evidence for a control that somebody outside the team must sign

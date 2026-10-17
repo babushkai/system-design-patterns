@@ -1,10 +1,12 @@
 # Ranking and Evaluation Systems
 
+## TL;DR
+
 Retrieval selects eligible documents; ranking orders them. A production ranking system is a versioned, deadline-bound decision pipeline over candidates, features, policy constraints, and experiment assignment. Its evidence must distinguish product improvement from logging bias.
 
 Ranking covers multiple stages, feature consistency, labels, learning-to-rank objectives, offline judgments, online experiments, personalization, diversification, rollout, and relevance operations. [Lexical Query Execution](02-full-text-search.md) and [Vector Retrieval Systems](03-vector-search.md) cover candidate generation; [Search Index Architecture and Internals](01-inverted-indexes.md) covers the physical index lifecycle.
 
-## Decision contract and objective
+## Decision Contract and Objective
 
 Write the ranking contract before choosing a model:
 
@@ -32,7 +34,7 @@ The business objective is normally multi-dimensional. Search can optimize succes
 
 Define primary metrics, guardrails, and invariants separately. A relevance model may optimize expected graded relevance; policy may require eligibility and regional restrictions; diversification may constrain near-duplicates; the serving system must meet a latency/error budget. Mixing these into one opaque score makes changes difficult to audit and rollback.
 
-## State and invariants
+## State and Invariants
 
 Ranking depends on versioned state across online and offline systems:
 
@@ -60,7 +62,7 @@ Enforce these invariants:
 
 **Fallbacks preserve safety.** A feature or model outage may reduce relevance; it must not bypass eligibility or tenant boundaries.
 
-## Ranking as a staged architecture
+## Ranking as a Staged Architecture
 
 Search fleets rarely apply the most expensive scorer to every document. A common pipeline is:
 
@@ -76,7 +78,7 @@ Each boundary has a recall and cost contract. Candidate union size, per-source q
 
 The coordinator passes an absolute deadline and reserves time for downstream rendering. If a feature batch misses its budget, the policy chooses a named degraded mode: default the noncritical feature, use a smaller model, fall back to a lexical score, or fail the request. Arbitrary partial feature vectors make scores incomparable and are difficult to train for.
 
-## Candidate fusion and score boundaries
+## Candidate Fusion and Score Boundaries
 
 Lexical scores, vector distances, popularity, and model probabilities are not naturally comparable. Raw linear interpolation is valid only after a calibrated or empirically justified transformation. Rank-based fusion such as reciprocal rank fusion avoids assuming score scale, but introduces its own rank constant and per-source depth policy.
 
@@ -84,7 +86,7 @@ Candidate identity and deduplication require product semantics. Two documents ma
 
 Track candidate recall using a judged or behavioral target: the fraction of known relevant outcomes present in the candidate union and after every cutoff. Slice it by query class, language, filter selectivity, freshness, and retriever. End-to-end NDCG alone cannot reveal that vector retrieval improved coverage while the first-stage scorer discarded those additions.
 
-## Feature platform and point-in-time correctness
+## Feature Platform and Point-in-Time Correctness
 
 Features fall into different operational classes:
 
@@ -101,7 +103,7 @@ Offline training joins are temporal. Suppose a click occurs at 10:05 and product
 
 Parity tests replay captured requests through offline and online transforms, comparing values with declared tolerance. Monitor feature missingness, staleness, range, distribution, and correlation, not just RPC health. A perfectly available feature service can serve semantically wrong data.
 
-## Learning-to-rank approaches
+## Learning-to-Rank Approaches
 
 **Pointwise models** predict a label or outcome for each candidate independently. They are simple and work with standard regression/classification infrastructure, but the loss does not directly represent ordering and can be dominated by the many easy negatives.
 
@@ -113,7 +115,7 @@ The training objective should correspond to the product task and label quality. 
 
 Calibration is separate from ordering. A ranker can order well while its scores are poor probabilities. Calibrate only when downstream policy interprets score magnitude, and validate by slice and time. Recalibration can change thresholds without changing order, which deserves its own rollout.
 
-## Labels, judgments, and behavioral bias
+## Labels, Judgments, and Behavioral Bias
 
 Human judgments should use a written rubric tied to user intent, with graded labels where degrees of usefulness matter. Sample queries from production strata plus known failure classes; uniform random query sampling overweights the head only if requests themselves are the desired unit, while uniform unique-query sampling can overrepresent rare noise. Record sampling weights.
 
@@ -125,7 +127,7 @@ Randomized interventions can estimate examination propensities, but they impose 
 
 Record the serving propensity or experiment policy needed for later analysis. Trying to reconstruct it from application version months later is unreliable.
 
-## Offline evaluation
+## Offline Evaluation
 
 Use multiple metrics because each encodes different user behavior:
 
@@ -143,7 +145,7 @@ The evaluation corpus needs a lifecycle. Add production failures, remove invalid
 
 A useful failure taxonomy includes no candidates, wrong intent, analyzer/rewrite error, stale or forbidden document, retrieval omission, feature error, misordering, duplicate cluster, insufficient diversity, and rendering/measurement error. Assign each class to the owning subsystem. Otherwise relevance teams compensate for indexing bugs with ranker weights.
 
-## Online experimentation
+## Online Experimentation
 
 An experiment declares hypothesis, unit of randomization, eligibility, control/treatment policy versions, primary metric, guardrails, minimum detectable effect, power, duration, stopping rule, and analysis method before exposure.
 
@@ -165,7 +167,7 @@ Guardrails should include latency/errors, abandonment, reformulation, safety/aut
 
 Interleaving can compare two rankers in one result list and often detects preference with less traffic. Team-draft and probabilistic methods must attribute items correctly, randomize presentation fairly, handle duplicates, and respect policy. Interleaving estimates preference under the mixed presentation; it does not replace a longer experiment for absolute business effects, latency, or ecosystem feedback.
 
-## Personalization and diversification
+## Personalization and Diversification
 
 Personalization requires an explicit benefit, consent/legal basis, retention policy, and non-personalized fallback. Keep subject features isolated by tenant and purpose. Do not expose sensitive attributes to a general feature store merely because they correlate with engagement.
 
@@ -175,7 +177,7 @@ Diversification trades marginal relevance for list utility. Maximal marginal rel
 
 Fairness questions require a declared subject: users, content providers, sellers, regions, or classes protected by law or policy. Measure exposure conditional on relevance and opportunity where appropriate. There is no universal fairness metric; governance chooses the constraint, while the platform makes its effect measurable and auditable.
 
-## Serving, rollout, and rollback
+## Serving, Rollout, and Rollback
 
 Package model artifact, feature-view version, candidate policy, thresholds, and post-ranking policy into one immutable ranking release. A model digest alone cannot reproduce behavior. Validate schema and feature compatibility before loading; reject partial activation.
 
@@ -185,7 +187,7 @@ Rollback switches the complete release pointer. Keep the prior model and compati
 
 Fallback order is explicit and tested: full model; reduced feature/model release; stable non-personalized model; lexical baseline. Hard policy runs in every mode. Track degraded-mode rate as a product-quality metric, not only an availability detail.
 
-## Capacity and cost model
+## Capacity and Cost Model
 
 Consider an illustrative peak workload:
 
@@ -202,7 +204,7 @@ Feature traffic is `8,000 * 4 KiB`, about 31 MiB/s of response payload before pr
 
 Training and evaluation cost includes point-in-time joins, judgment collection, artifact retention, and replay. A larger candidate log can dominate storage: at 8,000 requests/s, logging 1,200 candidate rows of even 100 bytes would produce about 894 MiB/s. Log compact provenance, sample detailed traces under a governed policy, and retain enough to reproduce decisions without indiscriminately copying content.
 
-## Concrete failure trace: offline/online feature skew
+## Concrete Failure Trace: Offline/Online Feature Skew
 
 A new `document_age_hours` feature is computed from event time in training but from a delayed warehouse ingestion timestamp online. Offline NDCG improves, shadow scores look plausible, and the canary begins. Recently updated documents receive large, inconsistent age values online, so they disappear from results. Aggregate feature missingness remains zero.
 
@@ -210,7 +212,7 @@ Containment switches the complete ranking release to the prior version. Diagnosi
 
 This incident demonstrates why feature availability is not correctness. Alerts need freshness, range, distribution, and parity slices; the release manifest needs the feature definition, not merely a field name.
 
-## Security, privacy, and abuse
+## Security, Privacy, and Abuse
 
 Treat ranking inputs as untrusted. Validate numeric finiteness, categorical domains, feature vector length, candidate count, and model schema. Crafted documents can manipulate token repetition, embeddings, freshness, or popularity. Detect coordinated interaction fraud, but keep fraud models and enforcement reviewable; opaque suppression creates its own governance risk.
 
@@ -218,7 +220,7 @@ Model artifacts and feature definitions are executable decision inputs. Sign or 
 
 Explanation endpoints must not reveal private features, hidden policy, model internals exploitable for abuse, or the existence of unauthorized documents. Operational explanations can expose version and coarse score components to authorized staff while storing detailed traces in a protected system.
 
-## Observability and operations
+## Observability and Operations
 
 Join technical and quality telemetry by decision and release version:
 
@@ -234,7 +236,7 @@ Join technical and quality telemetry by decision and release version:
 
 Metric labels use bounded release and slice IDs, not raw queries or subjects. A protected sampled trace should reconstruct a decision from candidate provenance through final policy. Runbooks cover feature-tier failure, corrupt model artifact, quality regression, assignment bug, delayed label pipeline, and emergency policy removal.
 
-## Verification strategy
+## Verification Strategy
 
 - **Feature contract tests** compare offline/online transforms and point-in-time joins, including late events.
 - **Model tests** validate schema, finite outputs, deterministic behavior within declared tolerance, and monotonic/domain constraints where required.
@@ -247,7 +249,7 @@ Metric labels use bounded release and slice IDs, not raw queries or subjects. A 
 
 Before launch, require a claims ledger: which quality, latency, capacity, safety, and business claims are supported by which artifact. “The model passed” is not a deployment decision.
 
-## Decision framework
+## Decision Framework
 
 Adopt additional ranking complexity only after answering:
 
@@ -274,3 +276,12 @@ Often the best next change is better judgments, candidate coverage, or feature c
 - [NIST/SEMATECH e-Handbook of Statistical Methods: Comparing Proportions](https://www.itl.nist.gov/div898/handbook/prc/section3/prc33.htm)
 - [Google: Rules of Machine Learning](https://developers.google.com/machine-learning/guides/rules-of-ml)
 - [NIST AI Risk Management Framework](https://www.nist.gov/itl/ai-risk-management-framework)
+
+---
+
+## Related Chapters
+
+- [Lexical Query Execution](02-full-text-search.md): the retrieval stage whose candidate set bounds every ranking built above it
+- [Recommendation Systems](../16-ml-systems/07-recommendation-systems.md): the same two-stage funnel with a different objective and the same evaluation trap
+- [Offline Evaluation and Metric Design](../16-ml-systems/12-offline-evaluation-metrics.md): offline metrics that predict online quality, which is as hard as it sounds
+- [Retrieval-Augmented Generation Systems](../17-llm-systems/04-rag-patterns.md): ranking inside a retrieval pipeline where a language model tolerates noise differently

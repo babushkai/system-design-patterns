@@ -629,7 +629,7 @@ The smallest scheduler is usually the best one, but “small” still requires d
 
 ---
 
-## Primary References
+## References
 
 - [Varghese and Lauck: Hashed and Hierarchical Timing Wheels](https://dl.acm.org/doi/10.1145/41457.37504)
 - [Brown: Calendar Queues](https://dl.acm.org/doi/10.1145/63039.63045)
@@ -642,8 +642,9 @@ The smallest scheduler is usually the best one, but “small” still requires d
 
 ## Related Chapters
 
-- [Background Jobs and Worker Pools](./02-background-jobs-worker-pools.md)
-- [Effect Commit Protocols for Workflows](./06-retry-idempotency-compensation.md)
-- [Priority, Fairness, and Backpressure](./07-priority-fairness-backpressure.md)
-- [Leases, Heartbeats, and Recovery](./08-leases-heartbeats-recovery.md)
-- [Durable Execution and Workflow Engines](./04-durable-execution-workflow-engines.md)
+- [Background Jobs and Worker Pools](02-background-jobs-worker-pools.md): a scheduler that produces work needs a fleet that can finish it, or the deadline is already lost
+- [Effect Commit Protocols for Workflows](06-retry-idempotency-compensation.md): a missed tick that becomes two occurrences is an effect-commit problem with a calendar attached
+- [Priority, Fairness, and Backpressure](07-priority-fairness-backpressure.md): admitting more occurrences than the fleet can finish converts a schedule into an outage
+- [Leases, Heartbeats, and Recovery](08-leases-heartbeats-recovery.md): fencing is what stops two schedulers from materializing one occurrence after a failover
+- [Durable Execution and Workflow Engines](04-durable-execution-workflow-engines.md): durable execution consumes occurrences; this chapter decides how many there should have been
+- [Distributed Time](../01-foundations/05-distributed-time.md): calendar intent follows civil time through daylight-saving folds while owner fencing needs monotonic elapsed time

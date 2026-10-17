@@ -406,3 +406,10 @@ Then verify the non-negotiable contract: retained replay, snapshot boundary, ide
 - [RFC 7692: Compression Extensions for WebSocket](https://datatracker.ietf.org/doc/html/rfc7692): negotiated per-message compression
 - [RFC 8441: Bootstrapping WebSockets with HTTP/2](https://datatracker.ietf.org/doc/html/rfc8441): Extended CONNECT over HTTP/2
 - [RFC 9220: Bootstrapping WebSockets with HTTP/3](https://datatracker.ietf.org/doc/html/rfc9220): Extended CONNECT adaptation for HTTP/3
+---
+
+## Related Chapters
+
+- [Presence as Derived Multi-Session State](06-presence.md): the workload that turns connection count into a directory service with expiry semantics
+- [Slack](../08-case-studies/05-slack.md): reconnect and boot load, or what a transport contract costs after a client wakes up
+- [WhatsApp](../08-case-studies/10-whatsapp.md): delivery receipts over a persistent connection, plus the reconnect storm after an outage

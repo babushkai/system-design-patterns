@@ -1,10 +1,12 @@
 # Data Encoding
 
+## TL;DR
+
 Encoding is the durable contract between software versions. Bytes written today may be read by a rolling-deploy peer, a delayed queue consumer, a restored backup, or code written years later in another language. Choosing JSON, Protocol Buffers, or Avro therefore decides more than payload size: it decides how a reader identifies fields, skips what it does not know, applies defaults, frames messages, and proves compatibility.
 
 A durable encoding contract covers record and message representation, framing, schema authority, compatibility, parser safety, and format migration. [Column-Oriented Storage](./06-column-storage.md) owns analytical page encodings such as dictionary, run-length, and bit packing. [API Design Patterns](../12-service-mesh/04-api-design-patterns.md) owns public resource and protocol semantics, while [Change Data Capture](../13-data-pipelines/04-change-data-capture.md) owns database-log envelopes and sink application.
 
-## Boundary and workload contract
+## Boundary and Workload Contract
 
 Inventory every boundary separately: public HTTP, internal RPC, event stream, database blob, WAL, snapshot, cache value, and analytical file. For each, record:
 
@@ -20,7 +22,7 @@ A short-lived request between lockstep components may tolerate generated-code co
 
 Encoding does not define business meaning. Changing `timeout_ms` from milliseconds to seconds, reusing enum `3`, or changing an absent boolean from “inherit” to `false` can be wire-compatible and still break every consumer. The schema contract includes units, identity, cardinality, default meaning, normalization, and lifecycle, not just types.
 
-## Envelope state and invariants
+## Envelope State and Invariants
 
 A durable record should be self-identifying enough to find its decoder and delimit its bytes. One general envelope is:
 
@@ -44,7 +46,7 @@ Useful invariants are:
 7. Compatibility gates cover every retained version required by the rollout and replay horizon.
 8. Integrity and signature verification use the exact declared bytes or a standardized canonical form.
 
-## Three representation models
+## Three Representation Models
 
 ### JSON: names and types in every record
 
@@ -87,7 +89,7 @@ FlatBuffers and Cap’n Proto place tables and offsets so generated code can acc
 
 CBOR and MessagePack encode JSON-like values more compactly and include useful binary/numeric types. They improve representation efficiency but do not create a compatibility contract by themselves. CBOR offers deterministic-encoding rules for protocols that need canonical bytes. The decisive axis is schema and evolution model, not “text versus binary” alone.
 
-## Encode and decode paths
+## Encode and Decode Paths
 
 On production, a producer selects the registered schema and method, validates semantic constraints, encodes the payload, frames it, optionally compresses it, and applies checksum, encryption, or authentication in a documented order. Compression, encoding, and encryption are independent layers. Compressing after encryption is ineffective; signing decoded objects rather than canonical bytes invites disagreement.
 
@@ -95,7 +97,7 @@ A consumer first authenticates the peer and checks the outer frame’s magic, ve
 
 Streams need framing because TCP and byte files do not preserve message boundaries. A fixed-width or varint length prefix is common, but parse the prefix under a strict maximum before allocating. Checksums detect corruption; they do not authenticate an attacker. AEAD encryption authenticates the exact ciphertext and associated header fields, but key ID and nonce rules become part of the envelope version.
 
-## Compatibility and rollout mechanics
+## Compatibility and Rollout Mechanics
 
 Use precise direction names:
 
@@ -115,7 +117,7 @@ Breaking changes use a new field identity or message version. Producers may dual
 
 Semantic evolution needs extra gates. Units, enum behavior, normalization, privacy classification, and identifier scope belong in API review and contract fixtures. An enum reader should define what an unknown numeric value does. An intermediary should not convert it to a familiar default and erase evidence of the new state.
 
-## Specialized failure traces
+## Specialized Failure Traces
 
 ### Protobuf tag reuse silently changes identity
 
@@ -141,7 +143,7 @@ An unauthenticated frame declares a 20 GiB payload or a tiny compressed body exp
 
 Both schemas declare `int64 timeout = 4`, but a new producer changes milliseconds to seconds. Every compatibility checker passes and old consumers wait a thousand times too long. Encode the unit in the field name or a semantic type and include meaning in cross-version contract tests.
 
-## Capacity and cost model
+## Capacity and Cost Model
 
 Let message rate be `Q`, mean framed bytes before compression be `B`, compression ratio be `r = compressed/uncompressed`, encode and decode CPU costs be `ce` and `cd` seconds/message, and average number of decode/encode hops be `H`:
 
@@ -157,7 +159,7 @@ Use distributions, not means, for allocation and tail latency. A few multi-megab
 
 Schema-cache memory is roughly active schema count times parsed-schema and generated-decoder footprint. High-cardinality per-tenant schemas can exhaust it or turn registry lookup into a denial of service. Bound schemas per subject and tenant, use eviction that respects hot assignments, and separate cache-miss latency from decode latency.
 
-## Security, governance, and observability
+## Security, Governance, and Observability
 
 Treat parsers and registries as security-sensitive infrastructure. Authenticate schema registration and reads, namespace subjects by environment and tenant, require review for sensitive-field additions, and keep an immutable audit trail. A schema reveals field names and business structure even if payloads are encrypted. Limit who can enumerate it.
 
@@ -167,13 +169,13 @@ Observe encode/decode latency and allocation by schema ID, framed/compressed/dec
 
 Verification includes golden byte fixtures for each supported version and language, an old-reader/new-writer matrix, round trips that preserve unknowns, deterministic-canonicalization tests, and schema-registry compatibility tests against full history. Property and fuzz tests truncate every byte position, mutate lengths and tags, generate deep nesting and duplicate JSON names, and compare independent implementations. Restore tests decode historical queue segments, snapshots, and WAL with the release candidate, not only fresh data generated by it.
 
-## Decision framework
+## Decision Framework
 
 Use JSON for external, human-inspectable boundaries where universality matters and exact numeric/canonical rules are documented. Use Protobuf for typed RPC and streams where numbered-field evolution and generated code fit. Use Avro when writer-schema resolution and registry-backed long-lived records are central. Use FlatBuffers or Cap’n Proto for measured partial-access/allocation bottlenecks with controlled buffers. Use CBOR or MessagePack when a schema-light value model is intentional, not as a substitute for governance.
 
 The best format is the one whose identity and evolution rules match the lifetime and ownership of the data. Payload size matters; the ability to deploy, replay, audit, and reject hostile bytes without ambiguity matters more.
 
-## Primary references
+## References
 
 - IETF. [RFC 8259: The JavaScript Object Notation (JSON) Data Interchange Format](https://www.rfc-editor.org/rfc/rfc8259.html).
 - Rundgren, A., Jordan, B., and Erdtman, S. [RFC 8785: JSON Canonicalization Scheme](https://www.rfc-editor.org/rfc/rfc8785.html).
@@ -182,3 +184,12 @@ The best format is the one whose identity and evolution rules match the lifetime
 - IETF. [RFC 8949: Concise Binary Object Representation (CBOR)](https://www.rfc-editor.org/rfc/rfc8949.html).
 - Google. [FlatBuffers Internals](https://flatbuffers.dev/flatbuffers_internals.html) and [Buffer Verification](https://flatbuffers.dev/languages/cpp/#access-of-untrusted-buffers).
 - Confluent. [Schema Evolution and Compatibility](https://docs.confluent.io/platform/current/schema-registry/fundamentals/schema-evolution.html).
+
+---
+
+## Related Chapters
+
+- [Column-Oriented Storage](06-column-storage.md): the layout where encoding stops being a serialization detail and becomes the design
+- [API Design and Evolution](../12-service-mesh/04-api-design-patterns.md): compatibility rules for messages on the wire, with clients deployed before you were
+- [Change Data Capture](../13-data-pipelines/04-change-data-capture.md): where a schema change becomes an availability event because a consumer must decode history
+- [LSM Trees](02-lsm-trees.md): block encodings sized to the merge, since every rewrite pays for them again

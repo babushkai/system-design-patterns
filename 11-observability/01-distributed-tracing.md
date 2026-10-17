@@ -521,3 +521,12 @@ Inject a synthetic trace across each supported protocol and failure domain. Veri
 - [Workflow Observability and Replay](../18-workflow-job-systems/09-workflow-observability-replay.md): correlation for workflows that outlive a trace
 - [Logging Architecture](./03-logging.md): discrete evidence, ordering, retention, and trace correlation
 - [Metrics Systems](./02-metrics-monitoring.md): population aggregation, histograms, and storage
+
+---
+
+## Related Chapters
+
+- [Production Logging Architecture](03-logging.md): a trace is a correlation id with structure, and logs remain the evidence behind it
+- [Metrics Systems and Monitoring](02-metrics-monitoring.md): aggregates say a service degraded; spans say which dependency did it
+- [FinOps and Cost Engineering](06-finops-cost-engineering.md): sampling is a budget decision, and tail-based sampling is the expensive variety
+- [Service Mesh Data and Control Planes](../12-service-mesh/03-sidecar-pattern.md): instrumentation you never wrote, paid for with latency on every hop

@@ -1,8 +1,10 @@
 # Bigtable (OSDI 2006): Evidence-First Paper Analysis
 
+## TL;DR
+
 Bigtable's central move is to expose **physical locality as part of the data model**. Rows are globally ordered by an application-chosen key; contiguous ranges become independently assignable tablets; column families determine storage and access-control boundaries. That bargain enables enormous sparse tables, but makes schema design a placement decision rather than a purely logical one.
 
-## Publication identity and boundary
+## Publication Identity and Boundary
 
 - **Paper:** *Bigtable: A Distributed Storage System for Structured Data*
 - **Authors:** Fay Chang, Jeffrey Dean, Sanjay Ghemawat, Wilson C. Hsieh, Deborah A. Wallach, Mike Burrows, Tushar Chandra, Andrew Fikes, and Robert E. Gruber
@@ -13,7 +15,7 @@ The paper is a 2006 system snapshot. It is not documentation for the later Googl
 
 This chapter examines how the paper composes [Data Modeling](../02-distributed-databases/10-data-modeling.md), [LSM Trees](../03-storage-engines/02-lsm-trees.md), and [SSTables and Compaction](../03-storage-engines/03-sstables-compaction.md).
 
-## Problem and workload shape
+## Problem and Workload Shape
 
 Google needed one storage substrate for very different applications: web indexing, satellite imagery, per-user histories, analytics, and batch pipelines. A relational schema and distributed joins were not the goal. The desired workload combined:
 
@@ -26,7 +28,7 @@ Google needed one storage substrate for very different applications: web indexin
 
 The paper deliberately excludes a full relational model, SQL query planning, arbitrary secondary indexes, and transactions across rows. Clients serialize their own structured values and choose row keys that encode the access pattern.
 
-## Logical state and invariants
+## Logical State and Invariants
 
 Section 2 defines Bigtable as a sparse, distributed, persistent multidimensional sorted map:
 
@@ -48,7 +50,7 @@ A column name has `family:qualifier` form. Families are created administratively
 
 Each cell can contain multiple versions ordered by 64-bit timestamp. The client may supply the timestamp or use real time. Per-family garbage-collection policy can retain the most recent `n` versions or versions newer than a duration. A timestamp orders versions of one cell; the paper does not turn wall-clock timestamps into a global transaction order.
 
-## System decomposition
+## System Decomposition
 
 The architecture in Sections 4 and 5 separates metadata control from data serving.
 
@@ -66,7 +68,7 @@ Section 5.1 uses three levels. A Chubby file points to the root tablet; the root
 
 The hierarchy avoids one giant central map while retaining an authoritative root. It also establishes a dependency chain: Chubby and metadata availability are required to discover uncached locations, though cached clients can continue direct communication for known tablets.
 
-## Write, read, and compaction paths
+## Write, Read, and Compaction Paths
 
 A valid mutation is appended to the tablet server's GFS commit log, then inserted into an in-memory sorted **memtable**. Group commit amortizes the cost of small writes. A read merges the memtable with the tablet's immutable SSTables. Because each source is sorted, range merging is efficient.
 
@@ -80,7 +82,7 @@ These processes run beside foreground traffic. They trade write and background I
 
 Locality groups place selected column families in separate SSTables, so a query need not read unrelated families. Groups can be compressed or pinned in memory. Two caches serve different reuse patterns: a scan cache stores returned key/value results; a block cache stores SSTable blocks fetched from GFS.
 
-## Assignment, failure, and recovery
+## Assignment, Failure, and Recovery
 
 Each tablet is assigned to exactly one tablet server at a time. On startup, a server creates a uniquely named Chubby file and holds its exclusive lock. If it loses the Chubby session, it stops serving. The master confirms loss by acquiring that lock, deletes the server file so the old process cannot return as an owner, and reassigns its tablets. This is fencing through an external lease service, not failure detection alone.
 
@@ -92,7 +94,7 @@ For planned tablet movement, the source performs a minor compaction, stops servi
 
 The paper's lessons section is unusually candid. Real failures included memory and network corruption, clock skew, hung machines, extended partitions, and bugs in both the system and dependencies, not only clean crash-stop failures. The authors emphasize checksums and avoiding assumptions about rarely exercised recovery paths.
 
-## Quantitative evidence in context
+## Quantitative Evidence in Context
 
 Section 7 used clusters of 1, 50, 250, and 500 tablet servers plus an equal number of clients. Each benchmark read or wrote about 1 GB of 1,000-byte values per tablet server; the in-memory random-read test used 100 MB per server. Other jobs shared the machine pool, so results include some interference.
 
@@ -102,7 +104,7 @@ Section 7 used clusters of 1, 50, 250, and 500 tablet servers plus an equal numb
 
 Production observations complement the microbenchmarks. As of August 2006, the paper reports 388 non-test clusters and about 24,500 tablet servers. Fourteen busy clusters totaling 8,069 servers handled more than 1.2 million requests/s, about 741 MB/s incoming RPC traffic, and 16 GB/s outgoing. Table 2 lists, among other examples, a roughly 200 TB Google Analytics raw-click table compressed to 14% of original size and a roughly 70 TB uncompressed Google Earth imagery table. These are point-in-time deployment facts, not capacity guarantees.
 
-## Assumptions and limitations
+## Assumptions and Limitations
 
 - Clients must know their access paths in advance and encode locality into row keys.
 - One-row atomicity cannot protect cross-row invariants.
@@ -112,13 +114,13 @@ Production observations complement the microbenchmarks. As of August 2006, the p
 - No SQL optimizer, relational constraints, or automatic general-purpose secondary indexes are described.
 - The benchmark does not compare equivalent systems, cost, tail latency, or multi-region consistency.
 
-## Design lineage, without conflation
+## Design Lineage, Without Conflation
 
 Later wide-column stores retained ordered partition keys, sparse dynamic qualifiers, memtable/SSTable write paths, Bloom filters, and compaction. They changed important boundaries: some use replicated consensus per range, different compaction strategies, or different consistency APIs. A recognizable storage shape does not imply Bigtable's exact failure or transaction semantics.
 
 Google's [Spanner paper](./04-spanner.md) addresses a different requirement: synchronous replication and transactions across rows and locations. It retains range partitioning and a structured schema but adds Paxos groups, MVCC timestamps, two-phase commit, and TrueTime. That progression shows the cost of moving from “scale keyed access” to “scale externally consistent transactions.”
 
-## Review questions for a Bigtable-like design
+## Review Questions for a Bigtable-Like Design
 
 1. Does the row key distribute writes while preserving the scans the application needs?
 2. Which invariant fits inside one row, and what protects the rest?
@@ -128,8 +130,17 @@ Google's [Spanner paper](./04-spanner.md) addresses a different requirement: syn
 6. Does a tablet split relieve the actual hot spot, or is one row/key still dominant?
 7. Are benchmark results reported with block size, cache state, value size, topology, and background load?
 
-## Primary sources
+## References
 
 - [Chang et al., *Bigtable: A Distributed Storage System for Structured Data* (OSDI 2006), official Google Research PDF](https://storage.googleapis.com/gweb-research2023-media/pubtools/4443.pdf)
 - [Google Research publication record for Bigtable](https://research.google/pubs/bigtable-a-distributed-storage-system-for-structured-data/)
 - [Corbett et al., *Spanner: Google's Globally-Distributed Database* (OSDI 2012)](https://www.usenix.org/system/files/conference/osdi12/osdi12-final-16.pdf)
+
+---
+
+## Related Chapters
+
+- [LSM Trees](../03-storage-engines/02-lsm-trees.md): the storage engine family this paper named, described as a mechanism rather than a product
+- [Workload-Driven Data Modeling and Derived Projections](../02-distributed-databases/10-data-modeling.md): the sparse distributed map as a data model, and the access pattern it forces on you
+- [SSTables and Compaction](../03-storage-engines/03-sstables-compaction.md): the compaction and tablet-split machinery the paper treats as background noise
+- [Spanner](04-spanner.md): the successor that kept the data model and replaced the consistency story entirely

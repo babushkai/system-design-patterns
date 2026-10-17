@@ -312,3 +312,12 @@ Log archival extends the same stream through time instead of space. Shipping clo
 - MySQL documentation: *InnoDB Redo Log*, *Doublewrite Buffer*.
 - Rebello, A., et al. (2020). *Can Applications Recover from fsync Failures?* USENIX ATC: the systematic follow-up to fsyncgate.
 - LWN: *PostgreSQL's fsync() surprise* (2018): the fsyncgate write-up.
+
+---
+
+## Related Chapters
+
+- [Failure Semantics, Detection, and Recovery Boundaries](../01-foundations/06-failure-modes.md): the failure contract this chapter exists to make explicit at every interruption point
+- [B-Trees](01-b-trees.md): the in-place update that needs a log to be atomic, and the page it can still tear
+- [Amazon Aurora](../09-whitepapers/09-aurora.md): a design that inverts the arrangement by making the log the database
+- [Change Data Capture](../13-data-pipelines/04-change-data-capture.md): the same records sold as a product, where retention becomes a consumer contract

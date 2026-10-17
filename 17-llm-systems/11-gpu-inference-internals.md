@@ -266,3 +266,12 @@ If the platform cannot state what reset or isolation guarantee applies to a devi
 - [NVIDIA Multi-Instance GPU User Guide](https://docs.nvidia.com/datacenter/tesla/mig-user-guide/latest/): supported hardware partitioning, memory paths, deployment, reset, and management boundaries
 - MLPerf Inference results (mlcommons.org); vLLM, SGLang, TensorRT-LLM documentation
 - [Attention & Transformers](../09-whitepapers/15-attention-transformers.md): the architecture this chapter serves
+
+---
+
+## Related Chapters
+
+- [Model Serving](../16-ml-systems/03-model-serving.md): the serving layer that treats this as a black box and inherits its latency distribution
+- [Agent Inference](12-agent-inference.md): multi-step workloads break the assumptions made here about request lifetime
+- [ML Capacity and Cost Planning](../16-ml-systems/14-ml-capacity-cost-planning.md): the capacity plan that consumes the constants measured in this chapter
+- [Attention Is All You Need](../09-whitepapers/15-attention-transformers.md): the paper that fixes the arithmetic these schedulers exist to amortize

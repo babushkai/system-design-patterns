@@ -1,5 +1,7 @@
 # Uber: Evidence, Inference, and a Real-Time Marketplace Reference Design
 
+## TL;DR
+
 Ride fulfillment applies distributed-systems correctness to a physical world that keeps moving while packets are delayed. Driver location is an estimate, an offer is not an assignment, and payment must follow an authoritative trip lifecycle. Public sources describe several generations, not every current service.
 
 Claims are labeled:
@@ -297,7 +299,7 @@ The reusable lessons are:
 5. Bind quotes, routes, and transitions to configuration/model versions for auditability.
 6. Migrate physical-world systems market by market with in-flight draining and reconciliation.
 
-## Primary Sources
+## References
 
 - Uber Engineering, [“Project Mezzanine: The Great Migration”](https://www.uber.com/us/en/blog/mezzanine-codebase-data-migration/), July 2015.
 - Uber Engineering, [“ETA Phone Home: How Uber Engineers an Efficient Route”](https://www.uber.com/us/en/blog/engineering-routing-engine/), November 2015.
@@ -307,3 +309,12 @@ The reusable lessons are:
 - Uber Engineering, [“Uber's Fulfillment Platform: Ground-up Re-architecture”](https://www.uber.com/us/en/blog/fulfillment-platform-rearchitecture/), July 2021.
 - Uber Engineering, [“Building Uber's Fulfillment Platform for Planet-Scale using Google Cloud Spanner”](https://www.uber.com/us/en/blog/building-ubers-fulfillment-platform/), September 2021.
 - Uber Engineering, [“Reinforcement Learning for Modeling Marketplace Balance”](https://www.uber.com/us/en/blog/reinforcement-learning-for-modeling-marketplace-balance/), July 2025.
+
+---
+
+## Related Chapters
+
+- [Distributed Time](../01-foundations/05-distributed-time.md): a marketplace where every decision is a timestamp comparison across regions
+- [Secondary Indexes in Distributed Databases](../02-distributed-databases/06-secondary-indexes.md): finding nearby drivers is a geospatial index with an update rate attached
+- [Message Ordering](../05-messaging/03-message-ordering.md): dispatch, acceptance, and arrival must be ordered per ride or the state machine lies
+- [Database Schema Migrations](../15-deployment/03-database-migrations.md): a schema change at this scale is a capacity event scheduled in advance

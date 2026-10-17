@@ -2,13 +2,6 @@
 
 > **注:** この記事は英語の原文を日本語に翻訳したものです。コードブロック、Mermaidダイアグラム、論文タイトル、システム名、技術用語は原文のまま保持しています。
 
-## 論文概要
-
-- **タイトル**: In Search of an Understandable Consensus Algorithm
-- **著者**: Diego Ongaro, John Ousterhout (Stanford)
-- **発表**: USENIX ATC 2014
-- **背景**: Paxosは理解と正しい実装が困難すぎました
-
 ## TL;DR
 
 Raftは理解しやすさを重視して設計されたコンセンサスアルゴリズムで、以下を提供します：
@@ -16,6 +9,13 @@ Raftは理解しやすさを重視して設計されたコンセンサスアル�
 - LeaderからFollowerへの**ログレプリケーション**
 - Paxosと同等の**安全性保証**
 - 分解による**実装の容易さ**
+
+## 論文概要
+
+- **タイトル**: In Search of an Understandable Consensus Algorithm
+- **著者**: Diego Ongaro, John Ousterhout (Stanford)
+- **発表**: USENIX ATC 2014
+- **背景**: Paxosは理解と正しい実装が困難すぎました
 
 ## 課題
 
@@ -409,7 +409,6 @@ class RaftLeader(RaftNode):
             for peer in self.peers:
                 self.replicate_to_peer(peer)
             time.sleep(0.05)  # 50ms heartbeat interval
-
 
 class RaftFollower(RaftNode):
     """Follower-specific operations."""
@@ -894,7 +893,6 @@ class RaftClient:
 
         # Execute read on state machine
         return leader.state_machine.query(query)
-
 
 class LeaderReadProtocol:
     """Leader-side read protocols."""

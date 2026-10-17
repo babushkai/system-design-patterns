@@ -381,3 +381,11 @@ Use [Client Delivery Transports](./01-polling.md) for the final-hop replay and c
 - [RFC 3856: A Presence Event Package for SIP](https://datatracker.ietf.org/doc/html/rfc3856): subscriptions, notifications, expiry, and authorization semantics
 - [RFC 6455: The WebSocket Protocol](https://datatracker.ietf.org/doc/html/rfc6455): one common transport for live presence delivery
 - [Redis keyspace notifications](https://redis.io/docs/latest/develop/pubsub/keyspace-notifications/): fire-and-forget delivery and delayed expiration-event behavior when Redis is used as ephemeral session infrastructure
+
+---
+
+## Related Chapters
+
+- [Distributed Locks and Leases](../01-foundations/09-distributed-locks.md): leases and fencing are what give a stale-online state a bounded lifetime
+- [Publish-Subscribe Architecture](../05-messaging/02-pub-sub.md): the difference between an event that was delivered and a state that is true
+- [Distributed Cache Internals](../04-caching/03-distributed-caching.md): a derived projection with expiry semantics, plus the cost of one global key

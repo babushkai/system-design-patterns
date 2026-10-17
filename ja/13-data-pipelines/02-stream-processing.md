@@ -619,7 +619,7 @@ Alerts:
 
 ---
 
-## 参考資料
+## 参考文献
 
 - [Streaming Systems](https://www.oreilly.com/library/view/streaming-systems/9781491983867/)
 - [Apache Flink Documentation](https://flink.apache.org/docs/stable/)

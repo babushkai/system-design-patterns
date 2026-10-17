@@ -127,7 +127,7 @@ The deeper point is *which percentile* the budget applies to. A model whose mean
 
 ---
 
-## Cold Start: Why Scale-to-Zero Is Dangerous
+## Cold Start: Why Scale-to-ZeRO Is Dangerous
 
 A serving replica is not ready merely because its process started. It must fetch and initialize the complete artifact/runtime path and pass a representative readiness inference before accepting traffic.
 
@@ -393,3 +393,12 @@ For each feasible point, calculate `cost_per_good_prediction`, not just hourly d
 6. [The Tail at Scale](https://research.google/pubs/pub40801/): Dean & Barroso, 2013
 7. [KServe Documentation](https://kserve.github.io/website/): scale-to-zero and serverless inference
 8. [Hidden Technical Debt in Machine Learning Systems](https://proceedings.neurips.cc/paper_files/paper/2015/file/86df7dcfd896fcaf2674f757a2463eba-Paper.pdf): Sculley et al., 2015
+
+---
+
+## Related Chapters
+
+- [Backpressure](../06-scaling/07-backpressure.md): a model is a slow dependency, so overload gets shed rather than queued
+- [ML Capacity and Cost Planning](14-ml-capacity-cost-planning.md): the utilization arithmetic where batching decides cost and tail latency together
+- [Progressive Delivery and Deployment Strategies](../15-deployment/01-deployment-strategies.md): a model version is a release, and rollback means weights plus their feature contract
+- [GPU Inference Internals](../17-llm-systems/11-gpu-inference-internals.md): what changes when the model is an autoregressive decoder holding a KV cache

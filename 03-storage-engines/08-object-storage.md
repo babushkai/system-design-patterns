@@ -549,3 +549,11 @@ Use object storage when immutable bulk bytes, parallel throughput, independent d
 - [Google Cloud Storage request preconditions](https://cloud.google.com/storage/docs/request-preconditions) and [consistency](https://cloud.google.com/storage/docs/consistency): generation/metageneration and service semantics
 - [Azure Blob conditional headers](https://learn.microsoft.com/rest/api/storageservices/specifying-conditional-headers-for-blob-service-operations) and [data protection overview](https://learn.microsoft.com/azure/storage/blobs/data-protection-overview): concurrency and retained-version controls
 - [OpenStack Swift architecture](https://docs.openstack.org/swift/latest/overview_architecture.html) and [Ceph erasure coding](https://docs.ceph.com/en/latest/rados/operations/erasure-code/): self-operated object/data placement designs
+---
+
+## Related Chapters
+
+- [Dropbox](../08-case-studies/07-dropbox.md): a file product on an object store, where rename and retry meet offline edits
+- [Lakehouse Table Formats](../13-data-pipelines/05-lakehouse-table-formats.md): the commit protocol that turns immutable objects into a table
+- [CDN Architecture](../06-scaling/04-cdn-architecture.md): the origin behind the edge, where cache keys and egress decide the bill
+- [Disaster Recovery and Data Reconstruction](../15-deployment/05-disaster-recovery.md): versioning and replication are not backup: reconstruction needs data you can still read

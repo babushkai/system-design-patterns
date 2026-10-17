@@ -192,3 +192,12 @@ Choose the dataset before the grader, and the acceptance decision before tuning 
 - [SWE-bench Verified](https://www.swebench.com/), [τ-bench](https://arxiv.org/abs/2406.12045), [OSWorld](https://os-world.github.io/): agent benchmarks and their grading designs
 - [Anthropic: define your success criteria & develop tests](https://docs.anthropic.com/en/docs/build-with-claude/define-success): eval-first development guidance
 - [Harness Engineering](./09-harness-engineering.md) and [RAG Patterns](./04-rag-patterns.md): where these evals plug into the systems they protect
+
+---
+
+## Related Chapters
+
+- [Offline Evaluation and Metric Design](../16-ml-systems/12-offline-evaluation-metrics.md): offline measurement with a classical statistics vocabulary already attached
+- [Harness Engineering](09-harness-engineering.md): the harness produces the trajectory an agent evaluation scores
+- [Model Monitoring](../16-ml-systems/04-model-monitoring.md): drift detection when the metric is itself a model with an error profile
+- [Online Experiments](../16-ml-systems/08-online-experiments.md): online comparison against a control, with the same estimator caveats

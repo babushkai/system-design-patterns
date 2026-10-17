@@ -1,5 +1,7 @@
 # Slack: Evidence, Inference, and a Durable Real-Time Messaging Reference Design
 
+## TL;DR
+
 Slack's central systems problem is preserving durable, permissioned conversation state while millions of long-lived connections receive transient updates, reconnect, and cross organizational boundaries, not opening a WebSocket. Slack Engineering documents useful slices of this evolution, but each source is dated and partial.
 
 Claims are labeled:
@@ -318,7 +320,7 @@ The reusable lessons are:
 6. Evaluate ACLs after search retrieval and at live subscription boundaries.
 7. Migrate connection infrastructure with parallel capacity, weighted cohorts, and fast rollback.
 
-## Primary Sources
+## References
 
 - Slack Engineering, [“Getting to Slack faster with incremental boot”](https://slack.engineering/getting-to-slack-faster-with-incremental-boot/), January 2016.
 - Slack Engineering, [“Search at Slack”](https://slack.engineering/search-at-slack/), July 2016.
@@ -330,3 +332,12 @@ The reusable lessons are:
 - Slack Engineering, [“Slack's Migration to a Cellular Architecture”](https://slack.engineering/slacks-migration-to-a-cellular-architecture/), August 2023.
 - Slack Engineering, [“Unified Grid: How We Re-Architected Slack for Our Largest Customers”](https://slack.engineering/unified-grid-how-we-re-architected-slack-for-our-largest-customers/), July 2024.
 - Slack Engineering, [“How we built enterprise search to be secure and private”](https://slack.engineering/how-we-built-enterprise-search-to-be-secure-and-private/), March 2025, updated July 2025.
+
+---
+
+## Related Chapters
+
+- [Delivery Guarantees and Effect Boundaries](../05-messaging/04-delivery-guarantees.md): a message is a promise about delivery, ordering, and what happens on reconnect
+- [Client Delivery Transports](../07-real-time/01-polling.md): the transport choice that decides how a gap gets detected and repaired
+- [Lexical Query Execution](../14-search-systems/02-full-text-search.md): search over your own history is an index with a permission filter on every query
+- [Backpressure](../06-scaling/07-backpressure.md): the morning reconnect storm, which is the failure this design has to survive

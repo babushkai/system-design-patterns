@@ -299,3 +299,12 @@ Build the minimum graph that passes offline evaluations and shadow traffic. Then
 - [How We Built Our Multi-Agent Research System](https://www.anthropic.com/engineering/built-multi-agent-research-system): orchestrator–workers at production scale
 - [Don't Build Multi-Agents](https://cognition.ai/blog/dont-build-multi-agents): Cognition; the context-sharing counterargument
 - [Temporal](https://temporal.io/): durable execution for long-running workflows
+
+---
+
+## Related Chapters
+
+- [LLM Agent Fundamentals](01-agent-fundamentals.md): single-loop behaviour first, because a topology only amplifies what the loop does
+- [Multi-Agent Systems](03-multi-agent-systems.md): when a second model earns its keep, and the coordination cost you accept for it
+- [Durable Execution and Workflow Engines](../18-workflow-job-systems/04-durable-execution-workflow-engines.md): durable execution as the substrate for an agent that has to survive a restart
+- [Context Management](08-context-management.md): orchestration decides who writes to the context window, which is the real budget

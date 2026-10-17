@@ -1,8 +1,10 @@
 # CockroachDB (SIGMOD 2020): Evidence-First Paper Analysis
 
+## TL;DR
+
 CockroachDB's 2020 design assembles range-level Raft, MVCC timestamps, transaction records, leases, and a distribution-aware optimizer. No component alone provides distributed SQL; the challenge is preserving serializable SQL semantics while every table and index is encoded across independently replicated key ranges that can move and fail.
 
-## Publication identity and frozen version
+## Publication Identity and Frozen Version
 
 - **Paper:** *CockroachDB: The Resilient Geo-Distributed SQL Database*
 - **Authors:** Rebecca Taft, Irfan Sharif, Andrei Matei, Nathan VanBenschoten, Jordan Lewis, Tobias Grieger, Kai Niemi, Andy Woods, Anne Birzin, Raphael Poss, Paul Bardea, Amruta Ranade, Ben Darnell, Bram Gruneir, Justin Jaffray, Lucy Zhang, and Peter Mattis
@@ -13,7 +15,7 @@ This analysis uses the paper's 2020 names and guarantees. Transaction locking, s
 
 See [Distributed Transactions](../02-distributed-databases/07-distributed-transactions.md), [Consensus](../02-distributed-databases/08-consensus-algorithms.md), and [Partitioning](../02-distributed-databases/05-partitioning-strategies.md) for the isolated concepts.
 
-## Problem and target contract
+## Problem and Target Contract
 
 The system aims to offer familiar SQL and ACID transactions while scaling horizontally across commodity machines and regions. Any node accepts a client connection. Tables, indexes, and system metadata share one ordered key/value address space; the database automatically splits, replicates, moves, and rejoins its ranges.
 
@@ -29,7 +31,7 @@ The published contract includes:
 
 The contract does not make geography free. A write reaches the leaseholder and a Raft quorum for every touched range; multi-range transactions add coordination; globally distributed joins move rows.
 
-## Layering and data placement
+## Layering and Data Placement
 
 The paper's Figure 1 separates SQL, transactions, distribution, replication, and local storage.
 
@@ -41,7 +43,7 @@ Separating Raft leadership from leaseholdership is useful analytically: Raft ord
 
 Placement constraints attach locality or hardware attributes to schema partitions. Automatic rules spread replicas across failure domains and balance disk/load. Performance depends heavily on placing the leaseholder near writers and a quorum along the desired latency path.
 
-## Timestamp and serialization model
+## Timestamp and Serialization Model
 
 CockroachDB uses multi-version concurrency control. A transaction reads and writes at an HLC timestamp containing a physical component and a logical counter. HLCs preserve causality when messages carry a higher timestamp while remaining close to wall time.
 
@@ -58,7 +60,7 @@ Serializable execution is built from several conflict rules:
 
 The timestamp cache summarizes recent reads so a later write cannot commit beneath them and create an anti-dependency cycle. Latches provide short-lived mutual exclusion while evaluating overlapping commands; replicated intents protect transactional writes across requests and failures.
 
-## Atomicity through intents and transaction records
+## Atomicity Through Intents and Transaction Records
 
 Every provisional write is an **intent**: an MVCC value plus metadata pointing to one transaction record. The record, stored in the range of the transaction's first write, has state `PENDING`, `STAGING`, `COMMITTED`, or `ABORTED`.
 
@@ -71,7 +73,7 @@ Readers encountering an intent consult the record:
 
 This indirection gives one logical status authority for writes spread across many ranges. The transaction coordinator heartbeats long-running pending records. If it dies, contenders can detect expiration and resolve abandoned intents; coordinator memory is not the only record of the outcome.
 
-## Write pipelining and parallel commits
+## Write Pipelining and Parallel Commits
 
 A naive multi-range commit waits for every intent to replicate, then performs another consensus round to commit the transaction record. Section 3.1 removes much of that serial latency.
 
@@ -81,7 +83,7 @@ A naive multi-range commit waits for every intent to replicate, then performs an
 
 The proof obligation is conditional atomicity: nobody may observe only part of a staging transaction. The authors modeled the protocol in TLA+ and checked that staging transactions resolve to one durable outcome without telling clients the opposite.
 
-## Read paths and closed timestamps
+## Read Paths and Closed Timestamps
 
 Current consistent reads normally go to the leaseholder, which has authority over the range's write serialization. Historical reads can use followers.
 
@@ -89,7 +91,7 @@ Leaseholders periodically emit a **closed timestamp** below which they promise n
 
 This is not a current follower read. It is a provably complete historical read whose staleness buys locality. The 2022 multi-region paper later changes this design space; those newer semantics should not be back-projected.
 
-## SQL planning and schema state
+## SQL Planning and Schema State
 
 Any node can be a SQL gateway. It parses and optimizes a query, determines the ranges involved, and constructs a distributed physical plan. Operators run near data where possible and stream intermediate rows between nodes. The optimizer extends a Cascades-style search with distribution properties and network-aware alternatives.
 
@@ -97,7 +99,7 @@ Secondary-index updates are transactional writes to other key ranges, so a singl
 
 Online schema changes use versioned descriptors and background backfills. The paper maintains at most two successive schema versions in use, allowing old and new nodes/transactions to coexist while an index is populated before becoming readable. Schema change is a distributed state machine, not an instantaneous metadata edit.
 
-## Failure and recovery behavior
+## Failure and Recovery Behavior
 
 - **Replica or node loss:** a range continues with a Raft majority. A returning replica catches up by log entries or a full snapshot, depending on divergence.
 - **Long failure:** the allocator creates replacement replicas from surviving copies and rebalances placement.
@@ -108,7 +110,7 @@ Online schema changes use versioned descriptors and background backfills. The pa
 
 Automatic recovery does not guarantee continuous progress for every topology. Three replicas with two in a failed region lose quorum; a surviving quorum across continents may remain correct but slow.
 
-## Evaluation evidence with experiment boundaries
+## Evaluation Evidence With Experiment Boundaries
 
 ### Parallel Commits microbenchmark
 
@@ -140,7 +142,7 @@ The largest case represented about 50 billion rows and 8 TB. The high efficiency
 
 Figure 6 used nine 4-vCPU GCP nodes across three US regions plus regional load generators, running TPC-C 1,000 while injecting an AZ failure and a region failure. All four placement policies tolerated the AZ failure in the experiment. Only the geo-partitioned-leaseholder policy sustained the region-wide failure, at the price of higher p90 latency during normal operation and recovery. This demonstrates policy trade-offs for that replica layout, not automatic region survival for every table.
 
-## Limits and assumptions
+## Limits and Assumptions
 
 - Every range needs a Raft majority; cross-range availability is the intersection of all touched ranges.
 - Maximum clock offset is an operational correctness dependency.
@@ -150,11 +152,11 @@ Figure 6 used nine 4-vCPU GCP nodes across three US regions plus regional load g
 - Follower reads in the paper are roughly two seconds stale, not current linearizable reads.
 - Results are vendor-authored, version-specific, and use several clouds and instance shapes; reused competitor numbers are not equivalent experiments.
 
-## Later multi-region evolution
+## Later Multi-Region Evolution
 
 The SIGMOD 2022 paper adds declarative table-locality/availability syntax and a new transaction-management protocol for local, current reads from any replica. It changes the 2020 trade-off in which follower locality required a closed, stale timestamp. That is a substantive protocol evolution, while range-level replication, placement-aware planning, and serializable transactions remain the architectural spine.
 
-## Design review questions
+## Design Review Questions
 
 1. Which SQL operations touch more than one range after index and constraint expansion?
 2. Where are leaseholders and quorum replicas relative to writers and readers?
@@ -164,8 +166,17 @@ The SIGMOD 2022 paper adds declarative table-locality/availability syntax and a 
 6. Which placement policy survives the named AZ or region failure while meeting latency goals?
 7. Do benchmarks expose transaction locality, replication factor, percentiles, database version, and sustained-run duration?
 
-## Primary sources
+## References
 
 - [Taft et al., *CockroachDB: The Resilient Geo-Distributed SQL Database* (SIGMOD 2020), official Cockroach Labs PDF](https://www.cockroachlabs.com/pdf/cockroachdb-the-resilient-geo-distributed-sql-database-sigmod-2020.pdf)
 - [Cockroach Labs research publication page for the SIGMOD 2020 paper](https://www.cockroachlabs.com/guides/cockroachdb-the-resilient-geo-distributed-sql-database-sigmod-2020)
 - [Shraer et al., *Enabling the Next Generation of Multi-Region Applications with CockroachDB* (SIGMOD 2022)](https://www.cockroachlabs.com/guides/cockroachdb-the-resilient-geo-distributed-sql-database-sigmod-2022)
+
+---
+
+## Related Chapters
+
+- [Consensus Algorithms](../02-distributed-databases/08-consensus-algorithms.md): raft per range, which turns a consensus paper into a capacity planning problem
+- [Distributed Transactions](../02-distributed-databases/07-distributed-transactions.md): serializable SQL over a geo-distributed key value store, plus the latency that implies
+- [Partitioning Strategies](../02-distributed-databases/05-partitioning-strategies.md): ranges and rebalancing, where the paper meets the workload you actually have
+- [Spanner](04-spanner.md): the same problem without atomic clocks, and the transaction latency bill for that choice

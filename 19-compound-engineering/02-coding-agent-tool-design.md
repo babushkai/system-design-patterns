@@ -352,3 +352,12 @@ Fewer orthogonal primitives are easier to secure and teach than dozens of overla
 - [SWE-agent: Agent-Computer Interfaces Enable Automated Software Engineering](https://arxiv.org/abs/2405.15793)
 - [Coding Agent Platform Fundamentals](./01-compound-engineering-fundamentals.md)
 - [Workflow Effect Protocols](../18-workflow-job-systems/06-retry-idempotency-compensation.md)
+
+---
+
+## Related Chapters
+
+- [Context Management](../17-llm-systems/08-context-management.md): every tool result is a write into a context window with a finite budget
+- [LLM Agent Fundamentals](../17-llm-systems/01-agent-fundamentals.md): the loop these tools exist to serve, along with its error classes
+- [API Design and Evolution](../12-service-mesh/04-api-design-patterns.md): a tool is an API whose client is probabilistic and never reads the changelog
+- [Verification and Governance for Agentic Change](05-quality-engineering-with-ai-agents.md): an agent that can run a command must also be able to prove which one it ran

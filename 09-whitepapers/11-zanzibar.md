@@ -1,5 +1,11 @@
 # Zanzibar: Google's Consistent, Global Authorization System
 
+## TL;DR
+
+Zanzibar makes authorization a low-latency graph evaluation: membership is computed from relation tuples observed at a coherent snapshot, with rewrite depth and user-set expansion bounded so that one check fits a latency budget.
+
+Its contract is stricter than fast lookup. ACL writes are externally consistent, a content read can require an authorization snapshot no older than the token it returns (the new-enemy problem), and Leopard materializes large group membership to keep fan-out flat. Read it as a cost model for policy evaluation.
+
 ## Publication Boundary
 
 - **Paper:** *Zanzibar: Google's Consistent, Global Authorization System*
@@ -233,7 +239,7 @@ Denormalizing every effective permission makes reads cheap but writes explode wi
 9. Is the availability SLI deadline aligned with the product's actual authorization deadline?
 10. Which assumptions come from Spanner and cannot be copied by duplicating only the tuple API?
 
-## Later Evolution and Influence
+## Later Evolution and Enduring Lessons
 
 SpiceDB, OpenFGA, and other systems later adopted related tuple/rewrite APIs and consistency-token ideas. They have different policy languages, storage engines, consistency contracts, and deployment models. They should be studied as descendants, not described as implementations proven equivalent by the 2019 paper.
 
@@ -245,15 +251,16 @@ The durable lessons are narrower and stronger:
 - materialize only the graph regions whose live traversal is pathological;
 - availability methodology must include consistency mode and deadline.
 
-## Primary Reference
+## References
 
 - [Zanzibar: Google's Consistent, Global Authorization System (USENIX ATC 2019 paper PDF)](https://www.usenix.org/system/files/atc19-pang.pdf)
+---
 
 ## Related Chapters
 
-- [Spanner](./04-spanner.md)
-- [Authorization at Scale](../10-security/07-authorization-patterns.md)
-- [Consistency Models](../01-foundations/04-consistency-models.md)
-- [Conflict Resolution](../02-distributed-databases/04-conflict-resolution.md)
-- [Change Data Capture](../13-data-pipelines/04-change-data-capture.md)
-- [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md)
+- [Spanner](04-spanner.md): the snapshot that makes a graph read repeatable is the same clock and replica machinery Spanner sells
+- [Authorization at Scale](../10-security/07-authorization-patterns.md): the production form of this data model, with schema migration and rollout constraints the paper omits
+- [Consistency Models](../01-foundations/04-consistency-models.md): monotonic reads and bounded staleness are exactly the guarantees a permission check can tolerate
+- [Conflict Resolution](../02-distributed-databases/04-conflict-resolution.md): concurrent tuple writes have no merge rule here, so the paper relies on ordering instead
+- [Change Data Capture](../13-data-pipelines/04-change-data-capture.md): the invalidation fan-out is a change feed over relation tuples, with the same lag trade-off
+- [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md): the latency budget is met with hedged reads, and the retry amplification shows up in the fleet

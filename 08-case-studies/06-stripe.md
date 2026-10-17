@@ -1,5 +1,7 @@
 # Stripe: Designing a Correct Payment State Machine
 
+## TL;DR
+
 A payment is a long-lived protocol, not one atomic database call. It spans a merchant, Stripe, card or bank rails, asynchronous webhooks, refunds, disputes, and settlement. The core problem is preserving an explainable financial result when any participant can time out after performing its side effect.
 
 Evidence labels separate public facts from design reconstruction:
@@ -10,7 +12,7 @@ Evidence labels separate public facts from design reconstruction:
 
 Stripe publishes API semantics, Ledger, DocDB, and migration techniques, but not a complete topology for every payment path.
 
-## Workload and correctness contract
+## Workload and Correctness Contract
 
 **Documented, API behavior.** Stripe's PaymentIntent lifecycle exposes asynchronous states such as `requires_payment_method`, `requires_action`, `processing`, `requires_capture`, `succeeded`, and `canceled`. This is direct evidence that “charge a card” must be modeled as a durable state machine rather than a request-scoped transaction. [Stripe, PaymentIntent lifecycle](https://docs.stripe.com/payments/paymentintents/lifecycle)
 
@@ -28,7 +30,7 @@ Stripe publishes API semantics, Ledger, DocDB, and migration techniques, but not
 
 “Exactly once” is too imprecise for the first requirement. Networks may deliver requests repeatedly, workers may execute repeatedly, and webhooks may be observed repeatedly. The useful guarantee is **one committed business effect per operation identity**, plus replayable responses and deduplicated downstream effects. See [delivery guarantees](../05-messaging/04-delivery-guarantees.md) and [retries and deadlines](../06-scaling/10-retries-timeouts-hedging.md).
 
-## State, authority, and invariants
+## State, Authority, and Invariants
 
 **Reference design.** Separate four identities that are often accidentally conflated:
 
@@ -77,7 +79,7 @@ Reusing `k` with the same fingerprint replays `r`; reusing it with different par
 
 **Documented, current API reference.** Stripe saves the status code and body of the first request whose endpoint execution begins, including `500` responses; it compares parameters on reuse; and keys may be removed after they are at least 24 hours old. Validation failures and concurrency conflicts before endpoint execution are not cached. [Stripe, idempotent requests](https://docs.stripe.com/api/idempotent_requests)
 
-## Data plane and control plane
+## Data Plane and Control Plane
 
 **Reference design.** The data plane handles merchant commands and rail callbacks:
 
@@ -105,7 +107,7 @@ The control plane configures merchant entitlements, routing rules, connector hea
 
 This does not prove that every PaymentIntent or Ledger record uses DocDB. It establishes a published storage substrate and its scale, not a universal product schema.
 
-## End-to-end payment flow
+## End-to-End Payment Flow
 
 **Reference design.** A robust synchronous-looking payment command is a sequence of durable phases:
 
@@ -132,7 +134,7 @@ The external call cannot participate in the local database transaction. The dura
 
 Stripe's published webhook guidance requires endpoint signature verification and warns that event ordering is not guaranteed. [Stripe, webhook signatures](https://docs.stripe.com/webhooks/signature), [Stripe, webhook best practices](https://docs.stripe.com/webhooks)
 
-## Partitioning and capacity model
+## Partitioning and Capacity Model
 
 **Reference design.** Partition high-volume operational state by a stable merchant/account identifier when most transactions are account-local. Keep globally unique IDs for lookup through a routing index. A very large tenant may need a dedicated shard or a second-level partition, but splitting one merchant introduces cross-partition balance and rate-limit coordination. See [database sharding](../06-scaling/03-database-sharding.md) and [multi-tenancy](../06-scaling/12-multi-tenancy.md).
 
@@ -177,7 +179,7 @@ $$
 
 This links retry policy directly to queue and egress cost.
 
-## Concrete failure trace: timeout, crash, and duplicate callback
+## Concrete Failure Trace: Timeout, Crash, and Duplicate Callback
 
 **Reference-design trace.** Consider one payment operation `op-7`:
 
@@ -194,7 +196,7 @@ This links retry policy directly to queue and egress cost.
 
 The design tolerates duplicate messages at every boundary while committing one payment transition and one economic effect.
 
-## Multi-region authority and failure policy
+## Multi-Region Authority and Failure Policy
 
 **Reference design.** Route a payment to a home region determined by merchant/account or payment ID. Only that region may advance the payment and ledger epoch at a time. Replicate immutable history and read projections outward. A failover controller must issue a higher fencing epoch before another region accepts writes; DNS or health-check routing alone cannot prevent split brain.
 
@@ -207,7 +209,7 @@ For each dependency, specify whether failure causes:
 
 Capacity must satisfy static stability: after losing a region, surviving regions handle evacuated load without relying on emergency provisioning. See [multi-region architecture](../06-scaling/09-multi-region-architecture.md), [cell-based architecture](../06-scaling/11-cell-based-architecture.md), and [disaster recovery](../15-deployment/05-disaster-recovery.md).
 
-## Security and abuse boundaries
+## Security and Abuse Boundaries
 
 **Documented, API surface.** Stripe supports restricted API keys, webhook signatures, and idempotency keys, but idempotency is not authorization. Every replay must re-establish tenant scope and endpoint binding. [Stripe, API keys](https://docs.stripe.com/keys)
 
@@ -215,7 +217,7 @@ Capacity must satisfy static stability: after losing a region, surviving regions
 
 Rate limits should include merchant, credential, endpoint, and expensive-operation dimensions. A global limiter alone permits a hot tenant to consume shared databases. Per-tenant limiting alone permits a distributed attack across many accounts. The canonical mechanisms are in [rate limiting](../06-scaling/05-rate-limiting.md) and [API security](../10-security/04-api-security.md).
 
-## Observability, reconciliation, and operations
+## Observability, Reconciliation, and Operations
 
 **Reference design.** Track state-machine and financial signals, not just HTTP health:
 
@@ -232,7 +234,7 @@ Do not label issuer declines as platform availability failures. Conversely, a su
 
 Operational exercises should inject a response loss after provider acceptance, duplicate and reordered callbacks, a stale regional writer, a stuck ledger consumer, and a webhook endpoint that never acknowledges. Verification asserts invariants over resulting state, not merely that processes stayed up.
 
-## Evolution without a flag day
+## Evolution Without a Flag Day
 
 **Documented, 2017.** Stripe described a four-phase online migration: dual-write old and new stores, compare read paths, switch reads, switch writes, then remove old data. The published example migrated hundreds of millions of Subscription objects while services remained online, using offline snapshots for discovery and production comparisons to find divergence. [Stripe, online migrations at scale](https://stripe.com/blog/online-migrations)
 
@@ -240,7 +242,7 @@ Operational exercises should inject a response loss after provider acceptance, d
 
 **Reference design.** A payment-schema migration should additionally preserve semantic equivalence: replay a historical corpus, shadow-evaluate old and new transition logic, compare ledger postings, block cutover on unexplained divergence, retain rollback reads, and fence old writers before removing compatibility fields. A row-count match is insufficient when two schemas can encode different money meaning.
 
-## What transfers to other systems
+## What Transfers to Other Systems
 
 The most reusable lessons are not “use Stripe's database” or “make everything strongly consistent.” They are:
 
@@ -255,7 +257,7 @@ The most reusable lessons are not “use Stripe's database” or “make everyth
 
 These principles apply to inventory reservation, order fulfillment, cloud provisioning, and any workflow where a remote side effect may succeed while its response is lost.
 
-## Primary sources
+## References
 
 - [Stripe API: idempotent requests](https://docs.stripe.com/api/idempotent_requests)
 - [Stripe: PaymentIntent lifecycle](https://docs.stripe.com/payments/paymentintents/lifecycle)
@@ -264,3 +266,12 @@ These principles apply to inventory reservation, order fulfillment, cloud provis
 - [Stripe Engineering: Ledger, 2024](https://stripe.dev/blog/ledger-stripe-system-for-tracking-and-validating-money-movement)
 - [Stripe Engineering: DocDB and the Data Movement Platform, 2024](https://stripe.dev/blog/how-stripes-document-databases-supported-99.999-uptime-with-zero-downtime-data-migrations)
 - [Stripe documentation: webhook signatures](https://docs.stripe.com/webhooks/signature)
+
+---
+
+## Related Chapters
+
+- [Idempotency and Operation Identity](../01-foundations/08-idempotency.md): an idempotency key is the contract that makes a retried charge not a second charge
+- [Distributed Transactions](../02-distributed-databases/07-distributed-transactions.md): the money-moving invariant, and what it costs to hold across services
+- [SLOs and Error-Budget Control](../11-observability/05-slos-error-budgets.md): an error budget measured in merchant outcomes rather than user sessions
+- [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md): a timeout on a charge is an unresolved question, and hedging makes it worse

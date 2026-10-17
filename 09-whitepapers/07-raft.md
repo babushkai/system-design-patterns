@@ -1,8 +1,10 @@
 # Raft (USENIX ATC 2014): Evidence-First Paper Analysis
 
+## TL;DR
+
 Raft is not merely “leader plus majority”: it reduces legal states and strengthens leadership so consensus safety is easier to implement. Its election and log restrictions force a new leader to contain every committed entry.
 
-## Publication identity and scope
+## Publication Identity and Scope
 
 - **Paper:** *In Search of an Understandable Consensus Algorithm*
 - **Authors:** Diego Ongaro and John Ousterhout
@@ -13,7 +15,7 @@ The paper specifies non-Byzantine replicated-state-machine consensus. Servers ma
 
 This chapter stays with the 2014 protocol; [Consensus Algorithms](../02-distributed-databases/08-consensus-algorithms.md) and [Leader Election](../02-distributed-databases/09-leader-election.md) provide broader comparisons.
 
-## Problem and system contract
+## Problem and System Contract
 
 A replicated state machine needs every surviving replica to apply the same commands in the same order. Clients should see one reliable service even while some servers fail. The consensus module therefore must decide a single log prefix that cannot later be replaced by a different committed prefix.
 
@@ -28,7 +30,7 @@ Raft decomposes that task into:
 
 Safety must hold without timing assumptions. Timing affects whether elections eventually settle and requests complete.
 
-## State and safety properties
+## State and Safety Properties
 
 Figure 2 is the normative condensed specification. Every server persists `currentTerm`, `votedFor`, and its log before responding in ways that depend on them. It keeps volatile `commitIndex` and `lastApplied`; a leader additionally tracks each follower's `nextIndex` and `matchIndex`.
 
@@ -44,7 +46,7 @@ Figure 3 names five properties:
 
 These are not five independent wishes. One vote per term plus majority intersection gives election safety; the up-to-date voting rule and current-term commit rule produce leader completeness; AppendEntries prefix checks produce log matching; applying only committed entries in order yields state-machine safety.
 
-## Terms, roles, and election protocol
+## Terms, Roles, and Election Protocol
 
 A server is follower, candidate, or leader. Terms form a monotonically increasing logical clock. Any RPC carrying a higher term makes a server update its term and step down. Stale-term requests are rejected.
 
@@ -59,7 +61,7 @@ Election timeouts are randomized independently to reduce repeated split votes. R
 
 A voter grants at most one vote per term and only if the candidate's log is at least as up to date as its own. “Up to date” compares the last-log term first, then the last-log index. This restriction is essential: it prevents a candidate missing a committed entry from collecting a majority merely because it responds quickly.
 
-## Log replication and commitment
+## Log Replication and Commitment
 
 The leader appends each client command locally and sends AppendEntries containing `prevLogIndex` and `prevLogTerm`. A follower accepts new entries only if it has that matching predecessor. On conflict it deletes its divergent suffix and appends the leader's entries. The leader backs up `nextIndex` until it finds the common prefix, then advances the follower.
 
@@ -69,13 +71,13 @@ Why not count an older-term entry directly? Figure 8 constructs an execution whe
 
 Followers learn the commit index in subsequent AppendEntries and apply entries sequentially. A leader must not answer a client before the corresponding command is committed and applied under the service's response protocol.
 
-## Membership change
+## Membership Change
 
 Changing directly from configuration `C_old` to `C_new` can elect two leaders if disjoint majorities operate during the transition. Section 6 uses **joint consensus**: a transitional `C_old,new` entry requires separate majorities of both old and new configurations for decisions. After that entry commits, the leader appends and commits `C_new`.
 
 During joint consensus, log entries replicate to all servers in both sets and any leader must satisfy both quorum systems. Overlap carries the safety proof across the transition. A real implementation must also handle removed leaders, newly added catch-up replicas, and crashes during each phase; “update the member list” is not a safe reconfiguration algorithm.
 
-## Failure and recovery reasoning
+## Failure and Recovery Reasoning
 
 - **Follower crash:** the leader retries AppendEntries. Duplicate RPCs are harmless because prefix matching and log indexes make replication idempotent.
 - **Leader crash:** followers elect a new leader. Uncommitted suffixes may be overwritten; committed entries cannot be lost if persistence and the election rules hold.
@@ -85,7 +87,7 @@ During joint consensus, log entries replicate to all servers in both sets and an
 
 Read-only requests need care. A partitioned old leader cannot safely answer from local state merely because it once held leadership. The extended report uses a committed no-op in the leader's term plus quorum confirmation/lease reasoning. Client retries also need unique request IDs and a state-machine response cache to avoid applying a command twice. These details are not fully presented in the shortened conference paper and must not be inferred from basic log replication.
 
-## Evidence and methodology
+## Evidence and Methodology
 
 Raft's evaluation has three distinct parts; only one measures runtime performance.
 
@@ -110,7 +112,7 @@ Figure 14 repeatedly crashed the leader of a five-server cluster whose broadcast
 
 The paper recommends a conservative 150–300 ms range for that environment. It is not a universal configuration value: real deployments must measure heartbeat broadcast tails, pauses, storage latency, and network paths.
 
-## Assumptions and omissions
+## Assumptions and Omissions
 
 - A majority is required for availability; a two-of-three outage stops progress.
 - One leader orders each log, so its CPU, disk, and network can bound throughput.
@@ -120,13 +122,13 @@ The paper recommends a conservative 150–300 ms range for that environment. It 
 - Joint consensus is safe but operationally intricate; later implementations may choose different proven reconfiguration protocols.
 - Election benchmarks are small-cluster experiments, not WAN or overload studies.
 
-## Later practice versus the paper
+## Later Practice versus the Paper
 
 Production Raft families often add pre-vote phases, leadership transfer, accelerated conflict repair, snapshot streaming, read-index protocols, leases, witness/non-voting members, and single-server-at-a-time membership changes. Some additions appear in the dissertation or later implementation work; others are separate protocols. They must be reviewed with their own invariants.
 
 What should be retained from the paper is the review method: enumerate persistent state, term transitions, quorum intersections, the exact commit rule, and every recovery state. A product calling its metadata service “Raft-based” does not establish which of these extensions it uses.
 
-## Implementation review questions
+## Implementation Review Questions
 
 1. Which state is persisted before granting a vote or acknowledging an append?
 2. Does RequestVote compare last term before last index?
@@ -136,9 +138,17 @@ What should be retained from the paper is the review method: enumerate persisten
 6. What quorum intersection protects every membership transition?
 7. Are election timeouts based on measured worst-case broadcast and pause tails?
 
-## Primary sources
+## References
 
 - [Ongaro and Ousterhout, *In Search of an Understandable Consensus Algorithm* (USENIX ATC 2014), official PDF](https://www.usenix.org/system/files/conference/atc14/atc14-paper-ongaro.pdf)
 - [USENIX publication and presentation page](https://www.usenix.org/conference/atc14/technical-sessions/presentation/ongaro)
 - [Ongaro and Ousterhout, extended Raft technical report](https://raft.github.io/raft.pdf)
 - [Ongaro, *Consensus: Bridging Theory and Practice* (Stanford dissertation, 2014)](https://web.stanford.edu/~ouster/cgi-bin/papers/OngaroPhD.pdf)
+
+---
+
+## Related Chapters
+
+- [Consensus Algorithms](../02-distributed-databases/08-consensus-algorithms.md): where Raft sits among the consensus designs a practitioner has to compare
+- [Leader Election](../02-distributed-databases/09-leader-election.md): leadership as an operational protocol with epochs, quorums, and leases
+- [Chubby](08-chubby.md): the service that packaged consensus so application teams could stop writing it

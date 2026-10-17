@@ -251,3 +251,12 @@ Build the smallest runtime that makes the desired guarantee enforceable. Add com
 - [SWE-bench Verified](https://www.swebench.com/), [Terminal-Bench](https://www.tbench.ai/), [τ-bench](https://arxiv.org/abs/2406.12045), [OSWorld](https://os-world.github.io/): harness-sensitive benchmarks
 - [OpenTelemetry GenAI Semantic Conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/): tracing standard for LLM systems
 - [Temporal](https://temporal.io/): durable execution
+
+---
+
+## Related Chapters
+
+- [Agent Orchestration Patterns](02-orchestration-patterns.md): topology is one of the harness decisions rather than a separate concern
+- [LLM Evaluation and Observability](10-llm-evaluation.md): a harness without regression tasks is a demo with good ergonomics
+- [Tool and Runtime Contracts for Coding Agents](../19-compound-engineering/02-coding-agent-tool-design.md): tool contracts as the interface between an agent and a machine you trust
+- [Context Management](08-context-management.md): the part of the harness that decides what the model is allowed to remember

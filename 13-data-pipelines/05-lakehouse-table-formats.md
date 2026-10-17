@@ -486,7 +486,7 @@ Do not choose by origin story, vendor acquisition, or a claim that every engine 
 
 ---
 
-## Primary References
+## References
 
 - Apache Iceberg, [Table Specification](https://iceberg.apache.org/spec/).
 - Apache Iceberg, [Reliability](https://iceberg.apache.org/docs/latest/reliability/) and [Maintenance](https://iceberg.apache.org/docs/latest/maintenance/).
@@ -499,3 +499,12 @@ Do not choose by origin story, vendor acquisition, or a claim that every engine 
 ---
 
 **Previous:** [Change Data Capture](04-change-data-capture.md) covers the ordered, versioned change stream that often feeds row-level lakehouse mutations.
+
+---
+
+## Related Chapters
+
+- [Object Storage Architecture and Commit Protocols](../03-storage-engines/08-object-storage.md): the substrate underneath: immutable files, eventual listing, no cross-file atomicity
+- [Batch Execution](01-batch-processing.md): who rewrites the data files, and what a rerun is allowed to publish
+- [Change Data Capture](04-change-data-capture.md): the feed that turns row changes into table commits
+- [Distributed Transactions](../02-distributed-databases/07-distributed-transactions.md): optimistic concurrency control with a metadata pointer instead of a lock table

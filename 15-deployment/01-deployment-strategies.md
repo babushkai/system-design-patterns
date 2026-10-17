@@ -569,7 +569,7 @@ The strategy is secondary to the protocol. A well-instrumented rolling deploymen
 
 ---
 
-## Primary References
+## References
 
 - [Google SRE Workbook: Canarying Releases](https://sre.google/workbook/canarying-releases/)
 - [Kubernetes Documentation: Deployments](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/)
@@ -582,8 +582,8 @@ The strategy is secondary to the protocol. A well-instrumented rolling deploymen
 
 ## Related Chapters
 
-- [Feature-Flag Control Planes](./02-feature-flags.md)
-- [Database Schema Migrations](./03-database-migrations.md)
-- [CI/CD and GitOps](./04-cicd-gitops.md)
-- [Service and Platform Migration](./06-migration-strategies.md)
-- [SLOs and Error-Budget Control](../11-observability/05-slos-error-budgets.md)
+- [Feature-Flag Control Planes](02-feature-flags.md): behavior exposure is a separate control plane, and keeping it out of the release is the point
+- [Database Schema Migrations](03-database-migrations.md): mixed versions must survive a rollout, which makes schema compatibility a deployment constraint
+- [Software Delivery Control Planes and GitOps Reconciliation](04-cicd-gitops.md): the pipeline that builds an artifact and the policy that decides how it lands are different designs
+- [Service and Platform Migration](06-migration-strategies.md): a migration is a deployment where old and new systems both hold authority for a while
+- [SLOs and Error-Budget Control](../11-observability/05-slos-error-budgets.md): the release decision wants the same error-budget evidence that the objective review uses

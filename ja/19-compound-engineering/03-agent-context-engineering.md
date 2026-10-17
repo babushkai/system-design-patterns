@@ -1133,7 +1133,7 @@ node scripts/transform-context.js --input CLAUDE.md --output .github/copilot-ins
 
 > ツール固有の詳細は2026年第1四半期時点で検証済みです。コンテキストファイルのフォーマットとフックシステムはツールのリリースごとに進化します — お使いのエージェントツールの最新ドキュメントに対して確認してください。
 
-## References
+## 参考文献
 
 1. [HumanLayer - Skill Issue: Harness Engineering for Coding Agents](https://www.humanlayer.dev/blog/skill-issue-harness-engineering-for-coding-agents), 2026
 2. [Anthropic - Claude Code Best Practices](https://code.claude.com/docs/en/best-practices), 2026

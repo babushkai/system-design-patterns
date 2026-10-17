@@ -598,3 +598,12 @@ Start normalized and flexible when requirements evolve and measured joins fit. A
 - [DeCandia et al., *Dynamo: Amazon's Highly Available Key-value Store*](https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf): key partitioning, replication and conflict trade-offs
 - [Helland, *Life beyond Distributed Transactions: An Apostate's Opinion*](https://www.cidrdb.org/cidr2007/papers/cidr07p15.pdf): entity/transaction boundaries and workflow across them
 - [Fowler, *CQRS*](https://martinfowler.com/bliki/CQRS.html): distinct write/read models and their operational cost
+
+---
+
+## Related Chapters
+
+- [Partitioning Strategies](05-partitioning-strategies.md): a key chosen for one query plan becomes an access pattern you cannot leave later
+- [Secondary Indexes in Distributed Databases](06-secondary-indexes.md): every read path you did not model becomes an index with its own freshness contract
+- [Bigtable](../09-whitepapers/03-bigtable.md): the wide-column model as a modeling decision, with the access pattern baked into the row key
+- [Database Schema Migrations](../15-deployment/03-database-migrations.md): the model changing under live traffic, which is where modeling becomes an operational problem

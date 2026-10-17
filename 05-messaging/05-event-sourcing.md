@@ -1,10 +1,12 @@
 # Event Sourcing and Domain Logs
 
+## TL;DR
+
 Event sourcing stores accepted domain transitions as the authoritative record of an aggregate. Current state is obtained by folding an ordered stream of immutable facts, optionally starting from a verified snapshot. This is a domain persistence model, not a synonym for publishing integration events to a broker.
 
 An event-sourced system must define authoritative aggregate streams, optimistic concurrency, event-store transactions, snapshots, evolution, retention, and temporal reconstruction. [CQRS Projections](06-cqrs.md) owns query read models. [Outbox and Inbox](07-outbox-pattern.md) owns atomic publication to other systems. [Ordering](03-message-ordering.md) owns downstream gap/resequence protocols.
 
-## Workload and contract
+## Workload and Contract
 
 An event-sourced store supports:
 
@@ -39,7 +41,7 @@ Define:
 
 Events describe facts the domain accepted: `CreditLimitChanged`, not persistence implementation details such as `RowUpdated`. They carry stable identity, aggregate ID/version, event type/schema, command/causation/correlation IDs, recorded time, optional effective time, actor/authority provenance, and payload.
 
-## State and invariants
+## State and Invariants
 
 The event store keeps stream metadata, immutable event records, transaction/commit records, command-result identities, snapshot records, schema/upcaster registry, and publication/projection checkpoints.
 
@@ -59,7 +61,7 @@ Enforce:
 
 **Derived copies are rebuildable.** Broker messages, indexes, caches, and query models are projections with checkpoints and reconciliation.
 
-## Event store versus message broker
+## Event Store versus Message Broker
 
 An event store is optimized for atomic append to one domain stream, expected-version conflicts, aggregate reconstruction, and long-lived semantic history. A broker is optimized for distribution, subscription progress, fan-out, and retention throughput. One product can implement both roles only if it satisfies both contracts.
 
@@ -74,7 +76,7 @@ A partitioned broker log alone may be insufficient as an aggregate store when:
 
 Conversely, making every integration consumer scan a transactional event table can overload the domain database and couple retention to subscribers. Keep the domain store authoritative, write an outbox/integration record in the same append transaction, and relay it to a broker with stable identity.
 
-## Data plane and control plane
+## Data Plane and Control Plane
 
 The **data plane** authenticates commands, loads streams/snapshots, checks command identity and expected version, appends events/commit metadata, reads committed positions, and constructs snapshots. It returns only committed batches.
 
@@ -82,7 +84,7 @@ The **control plane** owns aggregate/event types, schemas/upcasters, shard place
 
 The command service (not the store) normally owns business decision logic. The store enforces structural concurrency and uniqueness, while the aggregate code enforces domain invariants. Server-side stored procedures can combine them, but then domain-code deployment and replay compatibility move into the data tier.
 
-## Append transaction
+## Append Transaction
 
 A relational layout might have:
 
@@ -109,7 +111,7 @@ Global commit position provides a change feed but not necessarily a business tot
 
 Large aggregates can exceed transaction limits. Revisit the aggregate boundary rather than weakening atomic invariants. A command that legitimately emits many records should have bounded event count/bytes and one semantic summary where possible.
 
-## Aggregate reconstruction
+## Aggregate Reconstruction
 
 Loading folds events in aggregate-version order through deterministic transition functions:
 
@@ -141,7 +143,7 @@ An event append never depends on snapshot success. Invalid, corrupt, or incompat
 
 Snapshots do not justify deleting events unless the product explicitly changes from event sourcing to a compacted-state model. A snapshot usually depends on current code and may not support audit, alternative projections, or corrected reconstruction.
 
-## Event evolution
+## Event Evolution
 
 Separate wire schema version from semantic event type. Compatible additions can remain one type when absence has a stable meaning. Semantic changes use a new event type or version with explicit mapping.
 
@@ -158,7 +160,7 @@ Stream migration is a new derived artifact:
 5. atomically switch command/read ownership;
 6. keep source immutable through rollback/legal policy.
 
-## Temporal queries, corrections, and audit
+## Temporal Queries, Corrections, and Audit
 
 Replaying through commit position or effective time can answer “what did the system know?” or “what was believed effective?” only if the model distinguishes recorded time from domain effective time. Late facts and corrections create bitemporal questions. An event recorded today stating an address was effective last week must not disappear from the record of what the system knew yesterday.
 
@@ -166,7 +168,7 @@ Corrections are new events referencing the corrected fact; they do not overwrite
 
 An append-only table is not automatically an audit trail. Audit requires authenticated actor/authority, tamper evidence, access logging, retention/hold, time provenance, and independent protection against privileged modification. Cryptographic hash chaining or signed checkpoints can detect some tampering, but key custody and external anchoring determine assurance.
 
-## Retention and privacy
+## Retention and Privacy
 
 “Events are immutable forever” conflicts with cost, privacy erasure, and changing legal duties. Classify fields before storing them. Prefer events containing stable identifiers and necessary facts, not copied profiles or secrets. Store especially sensitive payload fields in separately encrypted blobs so key destruction or governed redaction can make data inaccessible while retaining non-sensitive event structure.
 
@@ -174,7 +176,7 @@ Retention can differ by aggregate/event class, but deletion changes reconstructi
 
 Backups, replicas, exported broker events, projections, snapshots, and debug stores are copies subject to the same deletion policy. Maintain a lineage registry and completion evidence.
 
-## Sharding, replication, and recovery
+## Sharding, Replication, and Recovery
 
 Route an aggregate to one write shard/leader at a time. The shard term plus expected aggregate version fences stale writers. Hashing aggregate ID balances ordinary streams; tenant/range placement supports residency but needs hot-tenant splitting at aggregate boundaries.
 
@@ -182,7 +184,7 @@ Cross-aggregate transactions are possible only within a shared transactional sha
 
 Recovery validates the latest complete store checkpoint/snapshot, replays committed database/WAL state, then restarts publication and projections from their durable checkpoints. Align command-result identities with event recovery. Restoring events without idempotent command results can cause a retried client command to append a second logical transition.
 
-## Capacity and cost model
+## Capacity and Cost Model
 
 Illustrative domain:
 
@@ -202,13 +204,13 @@ Replay cost is skewed. At a measured reducer speed of 80,000 events/s/core, reco
 
 A full projection replay of one year at 21,600/s is 681 billion events; even 5 million events/s sustained takes about 37.8 hours before output writes. Rebuild capacity must be designed from day one.
 
-## Concrete failure trace: snapshot published ahead of stream
+## Concrete Failure Trace: Snapshot Published Ahead of Stream
 
 A snapshot worker reads aggregate version 50 from a replica whose transaction view later rolls back/fails over, while the authoritative stream remains at 49. It publishes snapshot `(version=50)` without binding to a committed stream checksum. Loaders accept it and then append command decisions at expected version 49 based on state that includes an uncommitted event.
 
 Containment disables the snapshot generation and reconstructs affected aggregates from authoritative events. Repair removes invalid snapshots and reconciles command results/projections. Prevention requires snapshot source reads from a committed generation, binds snapshot to exact stream version/commit identity and checksum, and rejects any snapshot beyond current authoritative version or with mismatched digest.
 
-## Operations and observability
+## Operations and Observability
 
 Track by aggregate/event type, shard, schema, snapshot version, and projection/publication:
 
@@ -223,13 +225,13 @@ Track by aggregate/event type, shard, schema, snapshot version, and projection/p
 
 Runbooks cover corrupt event, unknown schema, hot aggregate, conflict storm, invalid snapshot, projection/publication lag, replay overload, privacy erasure, and inconsistent disaster restore.
 
-## Security and isolation
+## Security and Isolation
 
 Authorize command handling, stream reads, temporal queries, replay/export, schema registration, snapshots, and repair independently. Tenant ID comes from authenticated context, not untrusted event payload. Encrypt payloads and backups with scoped keys; redact sensitive metadata from logs and traces.
 
 Protect event/upcaster/model artifacts with provenance and review. Limit event/batch size, nesting, aggregate stream length, and replay rate. A crafted long stream or decompression payload can be a denial of service. Privileged repair never mutates silently; it emits audited corrective artifacts or a controlled migration with before/after digests.
 
-## Verification strategy
+## Verification Strategy
 
 - property-test aggregate reducers and invariants over generated event sequences;
 - race concurrent expected-version appends and verify one winner/contiguous range;
@@ -241,7 +243,7 @@ Protect event/upcaster/model artifacts with provenance and review. Limit event/b
 - restore events, command results, snapshots, and outbox to skewed points;
 - test privacy deletion across events, blobs, snapshots, backups, and projections.
 
-## Decision framework
+## Decision Framework
 
 Use event sourcing when domain history is intrinsically valuable, invariants fit aggregates, alternative projections/reconstruction justify the complexity, and the organization can govern long-lived schemas. Do not use it merely to “have an audit log” or because events are already on a broker.
 
@@ -263,3 +265,12 @@ Answer:
 - [Microsoft: CQRS Journey](https://learn.microsoft.com/en-us/previous-versions/msp-n-p/jj554200(v=pandp.10))
 - [CloudEvents Specification](https://github.com/cloudevents/spec)
 - [NIST SP 800-92: Guide to Computer Security Log Management](https://csrc.nist.gov/pubs/sp/800/92/final)
+
+---
+
+## Related Chapters
+
+- [CQRS and Projection Architecture](06-cqrs.md): a log of facts is comfortable to write and awkward to query, which is where that half lives
+- [Message Ordering](03-message-ordering.md): replay is correct only if the log is append-only and ordered per aggregate
+- [Workload-Driven Data Modeling and Derived Projections](../02-distributed-databases/10-data-modeling.md): the current-state table reappears as a projection with its own publication contract
+- [Service and Platform Migration](../15-deployment/06-migration-strategies.md): events are immutable, so schema evolution must stay additive for as long as you keep them

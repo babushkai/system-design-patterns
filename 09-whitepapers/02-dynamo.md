@@ -1,8 +1,10 @@
 # Dynamo (SOSP 2007): Evidence-First Paper Analysis
 
+## TL;DR
+
 Dynamo is a study in making **write acceptance during failure** the primary invariant. It is not a generic claim that eventual consistency is faster, nor is it the architecture of the later Amazon DynamoDB service. The paper describes an internal Amazon key/value system whose applications were prepared to receive concurrent versions and reconcile them.
 
-## Publication identity and reading boundary
+## Publication Identity and Reading Boundary
 
 - **Paper:** *Dynamo: Amazon's Highly Available Key-value Store*
 - **Authors:** Giuseppe DeCandia, Deniz Hastorun, Madan Jampani, Gunavardhan Kakulapati, Avinash Lakshman, Alex Pilchin, Swaminathan Sivasubramanian, Peter Vosshall, and Werner Vogels
@@ -13,7 +15,7 @@ The 2007 system is **not Amazon DynamoDB**. The names share lineage, but the 202
 
 This chapter examines how the paper composes [Leaderless Replication](../02-distributed-databases/03-leaderless-replication.md), [Partitioning](../02-distributed-databases/05-partitioning-strategies.md), and [Conflict Resolution](../02-distributed-databases/04-conflict-resolution.md) for Dynamo's workload and evidence.
 
-## The service problem Dynamo chose
+## The Service Problem Dynamo Chose
 
 Amazon's shopping and service-oriented workloads composed a page from calls to many downstream services. Section 2 observes that a typical page request contacted more than 150 services, so one slow or unavailable dependency could damage the whole customer request. Dynamo therefore optimized for a narrow contract:
 
@@ -26,7 +28,7 @@ Amazon's shopping and service-oriented workloads composed a page from calls to m
 
 The paper explicitly targets applications willing to weaken consistency and resolve divergence. A bank transfer, globally unique username allocation, or invariant spanning multiple keys is outside that contract unless another coordination layer supplies the missing guarantee.
 
-## State, versions, and invariants
+## State, Versions, and Invariants
 
 For each key, Dynamo may retain several causally concurrent object versions. A successful `get` returns the object plus opaque context; the client must return that context on `put`. Internally, the context contains a vector clock.
 
@@ -40,7 +42,7 @@ This makes three boundaries explicit:
 
 Vector clocks can grow as many nodes coordinate writes. Section 4.4 describes truncating old `(node, counter)` pairs using physical timestamps when a threshold is reached. The authors say they had not seen this cause problems in production at the time, but the truncation can lose causal ancestry. It is a pragmatic bounded-metadata compromise, not a proof-preserving optimization.
 
-## Partition and replica protocol
+## Partition and Replica Protocol
 
 Table 1 is the paper's compact design map: consistent hashing for partitioning, vector clocks for versioning, sloppy quorums and hinted handoff for temporary failure, Merkle trees for permanent divergence, and gossip for membership and failure detection.
 
@@ -68,7 +70,7 @@ The coordinator compares returned versions during reads and updates lagging repl
 
 Merkle trees are tied to ownership ranges. Membership changes can invalidate trees and trigger recomputation; this is one reason the paper's later fixed-partition strategy made operations simpler.
 
-## Membership and failure handling
+## Membership and Failure Handling
 
 Failure detection is local: a node treats another as failed when it stops responding to messages, but other nodes may still reach it. This avoids a global agreement step on the write path. Permanent membership changes are explicit administrative actions recorded locally and spread through gossip, reducing the chance that transient reachability problems rewrite the ring.
 
@@ -83,7 +85,7 @@ Recovery is layered by duration:
 
 The system cannot make progress for an operation if fewer than the configured response count are reachable. Nor does it protect correctness when application reconciliation is non-associative, loses information, or is not retried safely.
 
-## Evidence from the production study
+## Evidence from the Production Study
 
 Section 6 states that measurements came from a live `(3,2,2)` deployment of a couple hundred homogeneous nodes spanning multiple data centers. Results should be read with that scope.
 
@@ -95,7 +97,7 @@ Section 6 states that measurements came from a live `(3,2,2)` deployment of a co
 
 The paper also reports an important operational failure mode: anti-entropy and handoff competed with foreground traffic. Dynamo introduced admission control that monitored foreground disk latency, lock contention, transaction timeouts, and queue waits, then limited background work. Repair capacity is part of serving capacity.
 
-## Limits and hidden costs
+## Limits and Hidden Costs
 
 - Only single-key atomicity is provided; no isolation spans keys.
 - Application owners must design, test, and monitor conflict reconciliation.
@@ -107,13 +109,13 @@ The paper also reports an important operational failure mode: anti-entropy and h
 
 These costs explain why Dynamo is a choice for a particular invariant hierarchy, not a default database architecture.
 
-## Published design versus later evolution
+## Published Design versus Later Evolution
 
 The later DynamoDB service retained partitioned key/value access, explicit capacity management, and attention to high-percentile predictability. The 2022 paper says it changed the core replication model to Multi-Paxos leaders, offered strong reads, centralized much control-plane work, and removed application-visible sibling reconciliation. In other words, the product retained Dynamo's workload decomposition while rejecting several mechanisms that imposed operational or application complexity.
 
 Other Dynamo-inspired systems retained different subsets: consistent hashing, tunable quorums, repair, or vector-like version metadata. “Dynamo-style” therefore does not identify one consistency model. A design review must name which replica set, conflict, read, repair, and membership rules are actually present.
 
-## Decision framework
+## Decision Framework
 
 Choose a Dynamo-like design only after answering:
 
@@ -125,8 +127,17 @@ Choose a Dynamo-like design only after answering:
 6. Can one hot key exceed a node's capacity?
 7. Is exposing reconciliation to every application worth the availability gained over a leader-based design?
 
-## Primary sources
+## References
 
 - [DeCandia et al., *Dynamo: Amazon's Highly Available Key-value Store* (SOSP 2007), official author-hosted PDF](https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf)
 - [Werner Vogels, official publication page and HTML paper](https://www.allthingsdistributed.com/2007/10/amazons_dynamo.html)
 - [Elhemali et al., *Amazon DynamoDB: A Scalable, Predictably Performant, and Fully Managed NoSQL Database Service* (USENIX ATC 2022)](https://www.usenix.org/conference/atc22/presentation/elhemali)
+
+---
+
+## Related Chapters
+
+- [Leaderless Replication](../02-distributed-databases/03-leaderless-replication.md): the pattern this paper shipped, restated as a system you have to operate today
+- [Conflict Resolution](../02-distributed-databases/04-conflict-resolution.md): the merge semantics left to the application, and the cost the paper deferred
+- [Amazon DynamoDB](14-dynamodb-2022.md): the same contract twenty years later, where availability replaced consistency as the headline
+- [Partitioning Strategies](../02-distributed-databases/05-partitioning-strategies.md): consistent hashing and virtual nodes, which outlived nearly every other idea in the paper

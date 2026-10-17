@@ -971,3 +971,12 @@ SHOW VARIABLES LIKE 'sync_binlog';                      -- should be 1 for durab
 - [MySQL: SAVEPOINT, ROLLBACK TO SAVEPOINT, and RELEASE SAVEPOINT](https://dev.mysql.com/doc/refman/8.4/en/savepoint.html): InnoDB savepoint and retained-lock behavior
 - [CockroachDB: Foreign Key Constraint](https://www.cockroachlabs.com/docs/stable/foreign-key.html): enforced referential integrity in a distributed SQL database
 - [Spanner: Foreign Keys](https://cloud.google.com/spanner/docs/foreign-keys/overview): enforced and informational foreign-key semantics
+
+---
+
+## Related Chapters
+
+- [Isolation Levels](02-isolation-levels.md): isolation is the letter with a market price, and the levels say what anomalies you accept
+- [Failure Semantics, Detection, and Recovery Boundaries](06-failure-modes.md): atomicity only matters at the moments when a process stops halfway through a write
+- [Distributed Transactions](../02-distributed-databases/07-distributed-transactions.md): what one commit costs once it spans machines and is no longer atomic by luck
+- [Write-Ahead Logging](../03-storage-engines/04-write-ahead-logging.md): the mechanism that makes A and D survivable, with its fsync latency attached

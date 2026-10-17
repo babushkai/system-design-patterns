@@ -1,5 +1,11 @@
 # LLM Inference Platforms: Serving Tokens at Planetary Scale
 
+## TL;DR
+
+No frontier provider publishes its serving architecture, so this chapter reasons from five peer-reviewed systems (Orca, vLLM, DistServe, SGLang, Mooncake) and labels each step as paper evidence, inference, or composite design.
+
+Token serving is a memory-systems problem: the KV cache sets feasible batch size, admission must budget future sequence growth, iteration-level scheduling beats request-level queuing, and goodput against an explicit latency objective replaces peak tokens per second.
+
 ## Scope and Evidence Contract
 
 No single public “frontier provider architecture” exists. This analysis triangulates peer-reviewed systems: Orca (OSDI 2022), vLLM (SOSP 2023), DistServe (OSDI 2024), SGLang (NeurIPS 2024), and Mooncake (FAST 2025). The following labels distinguish paper evidence from inference and composite design:
@@ -10,7 +16,7 @@ No single public “frontier provider architecture” exists. This analysis tria
 
 Results across papers are not directly rankable. They use different models, accelerators, traces, batch policies, latency objectives, and baselines. “2× throughput” is meaningless without that experimental envelope.
 
-## Start with the Serving Contract
+## Start With the Serving Contract
 
 An inference platform accepts more than a prompt. A request contract commonly includes:
 
@@ -332,19 +338,20 @@ See [LLM Evaluation](../17-llm-systems/10-llm-evaluation.md) for model-quality g
 6. Streaming turns retries, billing, and failure into protocol semantics that the API must expose.
 7. A composite industry pattern must retain provenance: continuous batching, paged KV, phase disaggregation, structured-prefix reuse, and multi-tier cache were demonstrated by different systems.
 
-## Primary References
+## References
 
 - [Orca: A Distributed Serving System for Transformer-Based Generative Models (OSDI 2022)](https://www.usenix.org/conference/osdi22/presentation/yu)
 - [Efficient Memory Management for Large Language Model Serving with PagedAttention (SOSP 2023)](https://doi.org/10.1145/3600006.3613165)
 - [DistServe: Disaggregating Prefill and Decoding for Goodput-optimized Large Language Model Serving (OSDI 2024)](https://www.usenix.org/conference/osdi24/presentation/zhong-yinmin)
 - [SGLang: Efficient Execution of Structured Language Model Programs (NeurIPS 2024)](https://papers.nips.cc/paper_files/paper/2024/file/724be4472168f31ba1c9ac630f15dec8-Paper-Conference.pdf)
 - [Mooncake: Trading More Storage for Less Computation (A KVCache-centric Architecture for Serving LLM Chatbot; FAST 2025)](https://www.usenix.org/system/files/fast25-qin.pdf)
+---
 
 ## Related Chapters
 
-- [The Transformer](../09-whitepapers/15-attention-transformers.md)
-- [LLM Infrastructure](../17-llm-systems/05-llm-infrastructure.md)
-- [Harness Engineering](../17-llm-systems/09-harness-engineering.md)
-- [GPU Inference Internals](../17-llm-systems/11-gpu-inference-internals.md)
-- [Multi-Tenancy](../06-scaling/12-multi-tenancy.md)
-- [FinOps and Cost Engineering](../11-observability/06-finops-cost-engineering.md)
+- [Attention Is All You Need](../09-whitepapers/15-attention-transformers.md): the quadratic attention cost this paper accepts is what serving systems spend their budget avoiding
+- [LLM Infrastructure](../17-llm-systems/05-llm-infrastructure.md): the same fleet seen from the control plane: placement, autoscaling, and tenancy at cluster level
+- [Harness Engineering](../17-llm-systems/09-harness-engineering.md): agentic loops multiply one user request into many, turning per-token economics into a product constraint
+- [GPU Inference Internals](../17-llm-systems/11-gpu-inference-internals.md): continuous batching and paged attention pay off only once you accept the bandwidth model
+- [Multi-Tenant Isolation and Tenant Lifecycle Architecture](../06-scaling/12-multi-tenancy.md): noisy neighbors matter most when a single request holds a GPU for minutes
+- [FinOps and Cost Engineering](../11-observability/06-finops-cost-engineering.md): token economics is the cost model this architecture forces you to publish and defend

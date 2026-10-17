@@ -372,3 +372,13 @@ Candidate count is a budget allocation, not a universal constant. Increase it un
 7. [Efficient and Robust Approximate Nearest Neighbor Search Using HNSW](https://arxiv.org/abs/1603.09320)
 8. [Unbiased Learning-to-Rank with Biased Feedback](https://arxiv.org/abs/1608.04468)
 9. [Diversity-Promoting Recommendation with Determinantal Point Processes](https://arxiv.org/abs/1603.07645)
+
+---
+
+## Related Chapters
+
+- [Ranking and Evaluation Systems](../14-search-systems/04-ranking-algorithms.md): the shared ranking stack, plus feedback produced by the policy under evaluation
+- [Vector Retrieval Systems](../14-search-systems/03-vector-search.md): candidate generation as an approximate nearest neighbor query over learned embeddings
+- [Feature Stores](02-feature-stores.md): point-in-time correctness, and the gap between offline and online features
+- [Online Experiments](08-online-experiments.md): the only credible answer to whether the list you produced was better
+- [Cache Invalidation and Coherence](../04-caching/02-cache-invalidation.md): embedding freshness as an invalidation problem with a staleness budget

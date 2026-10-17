@@ -468,7 +468,7 @@ If those answers are unclear, the flag is adding uncertainty rather than control
 
 ---
 
-## Primary References
+## References
 
 - [OpenFeature Specification: Flag Evaluation](https://openfeature.dev/specification/sections/flag-evaluation/)
 - [OpenFeature Specification: Evaluation Context](https://openfeature.dev/specification/sections/evaluation-context/)
@@ -482,9 +482,9 @@ If those answers are unclear, the flag is adding uncertainty rather than control
 
 ## Related Chapters
 
-- [Deployment Strategies](./01-deployment-strategies.md)
-- [Database Schema Migrations](./03-database-migrations.md)
-- [CI/CD and GitOps](./04-cicd-gitops.md)
-- [Online Experiments](../16-ml-systems/08-online-experiments.md)
-- [Authorization at Scale](../10-security/07-authorization-patterns.md)
-- [SLOs and Error-Budget Control](../11-observability/05-slos-error-budgets.md)
+- [Progressive Delivery and Deployment Strategies](01-deployment-strategies.md): artifact rollout and behavior exposure are separate controls, and merging them costs rollback granularity
+- [Database Schema Migrations](03-database-migrations.md): a flag can gate reads from a new column but cannot make the write side compatible with both schemas
+- [Software Delivery Control Planes and GitOps Reconciliation](04-cicd-gitops.md): flag configuration is a control plane with the same reconciliation, drift, and audit problems as GitOps
+- [Online Experiments](../16-ml-systems/08-online-experiments.md): experiments need deterministic assignment and exposure logs, which is flag evaluation plus instrumentation discipline
+- [Authorization at Scale](../10-security/07-authorization-patterns.md): targeting rules quietly become an authorization system with weaker audit trails if nobody notices
+- [SLOs and Error-Budget Control](../11-observability/05-slos-error-budgets.md): a kill switch spends budget deliberately instead of letting you discover the burn rate later

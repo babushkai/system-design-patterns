@@ -2,6 +2,8 @@
 
 > この記事は英語版から翻訳されました。最新版は[英語版](/18-workflow-job-systems/05-dag-orchestration)をご覧ください。
 
+## TL;DR
+
 DAGオーケストレーションは、抽出、変換、モデル学習、メトリクス公開、検索インデックス更新、分析backfillのような依存関係を持つ処理を調整します。DAGシステムは依存構造を実行可能タスクに変換し、data interval、retry、backfill、部分完了を追跡します。
 
 ## DAGモデル

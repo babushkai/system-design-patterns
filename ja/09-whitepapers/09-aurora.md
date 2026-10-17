@@ -2,13 +2,6 @@
 
 > **注:** この記事は英語の原文を日本語に翻訳したものです。コードブロック、Mermaidダイアグラム、論文タイトル、システム名、技術用語は原文のまま保持しています。
 
-## 論文概要
-
-- **タイトル**: Amazon Aurora: Design Considerations for High Throughput Cloud-Native Relational Databases
-- **著者**: Alexandre Verbitski et al. (Amazon Web Services)
-- **発表**: SIGMOD 2017
-- **背景**: AWSは高可用性のクラウドネイティブリレーショナルデータベースを必要としていました
-
 ## TL;DR
 
 Auroraは以下を提供するクラウドネイティブリレーショナルデータベースです：
@@ -16,6 +9,13 @@ Auroraは以下を提供するクラウドネイティブリレーショナル�
 - 3つのアベイラビリティゾーンにまたがる**6方向レプリケーション**
 - コンセンサスオーバーヘッドなしの耐久性のための**クォーラムベースI/O**
 - 並列オンデマンドRedoによる**ほぼ瞬時のクラッシュリカバリ**
+
+## 論文概要
+
+- **タイトル**: Amazon Aurora: Design Considerations for High Throughput Cloud-Native Relational Databases
+- **著者**: Alexandre Verbitski et al. (Amazon Web Services)
+- **発表**: SIGMOD 2017
+- **背景**: AWSは高可用性のクラウドネイティブリレーショナルデータベースを必要としていました
 
 ## 課題
 
@@ -171,7 +171,6 @@ class AuroraQuorum:
         node = self.get_current_node(page_id)
         return node.read_page(page_id)
 
-
 class QuorumProperties:
     """
     Aurora's quorum guarantees.
@@ -315,7 +314,6 @@ class AuroraLogShipping:
         3. Eventually apply to generate page
         """
         return segment.write_log_async(log_record)
-
 
 class StorageNode:
     """Aurora storage node operations."""
@@ -488,7 +486,6 @@ class AuroraRecovery:
         """
         segment = self._get_segment(page_id)
         return segment.read_page(page_id)  # Applies pending logs
-
 
 class FastFailover:
     """Aurora fast failover mechanism."""
@@ -710,7 +707,6 @@ class StorageGossip:
 
         # Re-detect gaps
         self.detect_gaps()
-
 
 class SegmentRepair:
     """

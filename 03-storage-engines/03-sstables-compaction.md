@@ -1,10 +1,12 @@
 # SSTables and Compaction
 
+## TL;DR
+
 An SSTable is an immutable sorted run plus the metadata needed to search and validate it. Immutability makes publication, caching, replication, and recovery tractable; it also means updates and deletes accumulate as newer records. Compaction is the background protocol that rewrites overlapping runs into a new authoritative set without losing snapshots, resurrecting deleted values, or exposing half-built files.
 
 An immutable sorted run has a complete lifecycle: file-format state, publication, lookup across runs, compaction selection and commit, version and tombstone collection, and compaction capacity. [LSM Trees](./02-lsm-trees.md) owns the complete write path from WAL and memtable through the LSM architecture. [Bloom Filters](./05-bloom-filters.md) owns filter design. [Column-Oriented Storage](./06-column-storage.md) owns analytical column layout, pruning, and vectorized execution; a Parquet row group is not an SSTable level merely because both may be immutable.
 
-## Workload and storage contract
+## Workload and Storage Contract
 
 Sorted runs fit workloads where random updates can first become sequential output and reads can tolerate consulting multiple immutable components. The file layer should promise:
 
@@ -18,7 +20,7 @@ Sorted runs fit workloads where random updates can first become sequential outpu
 
 The format is not one universal diagram. Bigtable SSTables, LevelDB tables, RocksDB block-based tables, and other engines differ in block indexes, filters, compression, range deletions, properties, and footer versions. The invariant is that readers can interpret a fully published immutable file and the manifest can name exactly which files form one database version.
 
-## File and manifest state
+## File and Manifest State
 
 A block-based sorted table commonly contains:
 
@@ -41,7 +43,7 @@ For one user key, newer versions appear first. A point tombstone is another reco
 
 The manifest is the authority over file membership. A directory listing is not: it can contain incomplete outputs, obsolete inputs retained for readers, temporary files, logs, and files from a failed compaction.
 
-## Flush and publication protocol
+## Flush and Publication Protocol
 
 A safe memtable flush follows a state transition:
 
@@ -57,7 +59,7 @@ The ordering handles both crash sides. A complete file not named by a durable ma
 
 Readers pin a version of the manifest. Publishing a new version does not invalidate an in-flight reader's old version. Obsolete files are physically removed only after no pinned version, snapshot, iterator, backup, or checkpoint can reference them.
 
-## Read protocol across runs
+## Read Protocol Across Runs
 
 ### Point lookup
 
@@ -77,7 +79,7 @@ A range iterator performs a k-way merge over all overlapping memtables and table
 
 Range scans make compaction quality visible: filters do little when the requested range really overlaps every run. Read-ahead, block cache, compression, and the number of overlapping runs determine throughput.
 
-## Compaction as a versioned transaction
+## Compaction as a Versioned Transaction
 
 A compaction is not “merge files and delete the old ones.” It is an atomic metadata replacement:
 
@@ -95,7 +97,7 @@ If the worker crashes before step 7, outputs are unreferenced garbage. If it cra
 
 Compaction may also update per-file sequence bounds, range-deletion metadata, blob/value-log references, and encryption/checksum metadata. Every side structure must change consistently with the manifest or retain a recoverable reconciliation path.
 
-## Choosing a compaction shape
+## Choosing a Compaction Shape
 
 ### Leveled compaction
 
@@ -119,7 +121,7 @@ If a late write for an old timestamp lands in a new file, file creation time may
 
 Real engines may use tiering near the write frontier and leveling below it, different compression by level, or workload-specific compaction per column family. The correct unit of choice is a workload with measured point reads, scans, overwrites, deletes, TTL, value size, and available background resources.
 
-## Version and tombstone collection
+## Version and Tombstone Collection
 
 Compaction sees several versions of one key, but it can discard one only if no supported reader or unselected file can need it.
 
@@ -135,7 +137,7 @@ Range tombstones are harder because one deletion interval may overlap many outpu
 
 TTL expiry has the same shape. Treat expiration as a versioned deletion under the database's time semantics, and decide whether historical snapshots may read pre-expiry values.
 
-## Concrete failure traces
+## Concrete Failure Traces
 
 ### Manifest references non-durable output
 
@@ -181,7 +183,7 @@ Long snapshots are a storage-capacity input. Limit, isolate, or account for them
 
 The stall is backpressure from an unsustainable file-lifecycle rate, not a random engine pause.
 
-## Capacity and cost model
+## Capacity and Cost Model
 
 Measure the three amplifications from engine counters. For compaction-capacity work, define `F` as the initial encoded/compressed flush bytes produced per second and define file-layer write amplification against that baseline:
 
@@ -207,7 +209,7 @@ Peak disk space must cover current live files, new compaction outputs before com
 
 Compaction can be CPU-bound: checksum, key comparison, decompression, recompression, encryption, filter construction, and range-tombstone processing all consume cores. Track logical and physical bytes per CPU second rather than assuming NVMe bandwidth is the limit.
 
-## Production operation and migration
+## Production Operation and Migration
 
 Monitor pending compaction bytes/work, L0 and run counts, bytes read/written by level and reason, logical ingest, write/read/space amplification, compaction CPU, stall/slowdown duration, oldest snapshot, obsolete bytes pinned by readers, tombstone/expired-version ratios, cache hit by block type, and checksum failures. Node-wide disk utilization can look healthy while one column family accumulates fatal debt.
 
@@ -217,7 +219,7 @@ File-format migration needs readers that understand old and new footers/encoding
 
 Crash tests should stop the process after every file sync, rename/upload, manifest append, manifest sync, version install, and obsolete-file deletion. Corrupt blocks, footers, filters, and manifests independently. Property tests should compare arbitrary flush/compaction schedules against a simple MVCC model across snapshots, point/range tombstones, TTL, and comparator edge cases. Restore old checkpoints only as non-authoritative copies unless their log/file generation is proven current.
 
-## Decision framework
+## Decision Framework
 
 1. What point-read, scan, overwrite, delete, TTL, and snapshot distributions must the run layout support?
 2. Which manifest edit is the atomic publication point, and what durability ordering precedes it?
@@ -228,7 +230,7 @@ Crash tests should stop the process after every file sync, rename/upload, manife
 7. Can recovery distinguish orphan outputs from live files without trusting a directory listing?
 8. How will format, comparator, and encryption changes coexist during migration?
 
-## Primary references
+## References
 
 - [O'Neil et al., *The Log-Structured Merge-Tree (LSM-Tree)* (Acta Informatica 1996)](https://doi.org/10.1007/s002360050048)
 - [Chang et al., *Bigtable: A Distributed Storage System for Structured Data* (OSDI 2006)](https://storage.googleapis.com/gweb-research2023-media/pubtools/4443.pdf)
@@ -236,3 +238,12 @@ Crash tests should stop the process after every file sync, rename/upload, manife
 - [Facebook RocksDB, official leveled-compaction description](https://github.com/facebook/rocksdb/wiki/Leveled-Compaction)
 - [Dayan, Athanassoulis, and Idreos, *Monkey: Optimal Navigable Key-Value Store* (SIGMOD 2017), author publication page](https://stratos.seas.harvard.edu/publications/monkey-optimal-navigable-key-value-store)
 - [Dayan and Idreos, *Dostoevsky: Better Space-Time Trade-Offs for LSM-Tree Based Key-Value Stores* (SIGMOD 2018), author publication page](https://stratos.seas.harvard.edu/publications/dostoevsky-better-space-time-trade-offs-lsm-tree-based-key-value-stores)
+
+---
+
+## Related Chapters
+
+- [LSM Trees](02-lsm-trees.md): the tree whose read amplification turns every compaction choice into a latency curve
+- [Bloom Filters](05-bloom-filters.md): the structure that keeps a leveled read path from opening every run
+- [Column-Oriented Storage](06-column-storage.md): immutable files again, this time shaped for scans instead of point lookups
+- [Search Index Architecture and Internals](../14-search-systems/01-inverted-indexes.md): segments and generations, with the same publication, merge, and tombstone problem

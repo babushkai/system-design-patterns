@@ -434,3 +434,12 @@ Before choosing, answer:
 - Delta Lake, [Transaction Log Protocol](https://github.com/delta-io/delta/blob/master/PROTOCOL.md), protocol specification.
 - Apache Iceberg, [Reliability](https://iceberg.apache.org/docs/latest/reliability/) and [Specification](https://iceberg.apache.org/spec/), current documentation.
 - Jeffrey D. Ullman, [*NP-complete Scheduling Problems*](https://doi.org/10.1016/S0022-0000(75)80008-0), Journal of Computer and System Sciences, 1975.
+
+---
+
+## Related Chapters
+
+- [Batch Execution](../13-data-pipelines/01-batch-processing.md): the workload that produced DAGs, with partitions and backfills as units of work
+- [Durable Execution and Workflow Engines](04-durable-execution-workflow-engines.md): per-step durability versus per-program durability, a different granularity entirely
+- [Training Pipelines](../16-ml-systems/05-training-pipelines.md): an expensive DAG whose nodes are far too large to rerun casually
+- [MapReduce](../09-whitepapers/01-mapreduce.md): the ancestor that fixed the execution shape most schedulers still imitate

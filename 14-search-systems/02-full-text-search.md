@@ -1,10 +1,12 @@
 # Lexical Query Execution
 
+## TL;DR
+
 Lexical search turns a request into bounded work over dictionaries, postings, stored values, and aggregation structures. Correctness requires consistent text semantics across indexing and querying; efficiency requires selective postings traversal, deadline-aware top-k execution, and admission control for adversarial queries.
 
 Analysis and shard-local execution cover query parsing, tokenization, Boolean and positional retrieval, BM25, filters, top-k pruning, facets, distributed scoring, pagination, and query admission. [Search Index Architecture and Internals](01-inverted-indexes.md) covers segment durability, merge lifecycle, sharding, and recovery; [Ranking and Evaluation](04-ranking-algorithms.md) covers learned reranking and relevance experiments; [Typeahead and Autocomplete](06-typeahead-autocomplete.md) covers autocomplete serving.
 
-## Workload and contract
+## Workload and Contract
 
 A query API should expose semantics instead of pretending every search is one string:
 
@@ -36,7 +38,7 @@ Define these service properties:
 - **snapshot pagination**: a continuation cursor identifies a stable generation and last sort key, or the API explicitly allows duplicates and omissions;
 - **partial-result honesty**: missing shards or early termination are visible in the response contract.
 
-## State, versions, and invariants
+## State, Versions, and Invariants
 
 Lexical execution depends on state that is often misclassified as “configuration”:
 
@@ -59,7 +61,7 @@ Important invariants are:
 
 **Continuation state is tamper-evident.** A cursor binds tenant, normalized query, filters, sort, generation, expiry, and last key; changing any field invalidates it.
 
-## Analysis: preserving meaning before retrieval
+## Analysis: Preserving Meaning Before Retrieval
 
 Analysis maps text to a token graph, not merely a bag of lowercase words. Consider “C++ developer in Île-de-France.” Unicode normalization, language detection, punctuation handling, token boundaries, synonym expansion, and stemming can each alter meaning. Lowercasing may be correct for one field and destructive for a case-sensitive identifier. Removing “in” may be harmless in prose and wrong in a product code.
 
@@ -77,7 +79,7 @@ Synonyms are directional product rules. Expanding “laptop” to “notebook”
 
 Query understanding can classify navigational, exact-identifier, broad informational, and structured-filter intent, but it should output an explicit plan fragment rather than mutate a query invisibly. Rewrite provenance (original term, rule ID, version, and expansion type) is essential for relevance debugging.
 
-## Retrieval primitives
+## Retrieval Primitives
 
 For a term query, seek the field’s term dictionary and iterate its sorted postings. Boolean conjunction advances iterators to the greatest current document ordinal; skip data avoids decoding every gap. Disjunction maintains a heap or specialized union over candidate ordinals. Negation should normally subtract from a selective positive set; a pure `NOT` over the corpus is effectively a scan.
 
@@ -87,7 +89,7 @@ Prefix, wildcard, regex, and fuzzy queries enumerate matching dictionary terms a
 
 Filters use exact terms, numeric/geospatial structures, or cached bitsets. They do not contribute to lexical relevance, but they change candidate density. A highly selective filter can lead the plan; a dense filter may be cheaper as a membership check during scoring. The planner needs segment-level statistics because selectivity differs across segments and tenants.
 
-## BM25 as a retrieval score
+## BM25 as a Retrieval Score
 
 BM25 rewards terms that are rare in the corpus and frequent in a document, with saturation and document-length normalization. For query term `t` and document `d`, a common form is:
 
@@ -103,7 +105,7 @@ IDF and average length are properties of the scoring corpus. With shard-local st
 
 BM25 scores are relative evidence, not calibrated relevance probabilities. A score of 12 in one query is not necessarily “twice as relevant” as 6, nor directly comparable across queries.
 
-## Query planning
+## Query Planning
 
 Represent a request as a logical tree, then lower it into segment-local iterators and collectors. Planning steps include:
 
@@ -120,7 +122,7 @@ Plan caches are safe only when the key includes every semantic dependency: tenan
 
 Cost estimation should be adaptive. Dictionary document frequency is useful, but correlated clauses violate independence assumptions. Record actual visited postings, matched documents, heap operations, and aggregation cardinality, then compare them with estimates. A planner that never measures its error will repeatedly choose the same pathological plans.
 
-## Top-k execution and dynamic pruning
+## Top-k Execution and Dynamic Pruning
 
 Sorting every matching document costs too much when the caller needs ten results. A collector maintains a min-heap of the current top `k`; its minimum score is the competitive threshold. Any candidate or postings block whose provable maximum score cannot exceed that threshold may be skipped.
 
@@ -141,7 +143,7 @@ lexical retrieval over many documents
 
 The retrieval candidate size controls both recall and downstream cost. Ranking cannot rescue a relevant document that retrieval never produced. Candidate-recall measurement belongs in the ranking chapter.
 
-## Facets and aggregations
+## Facets and Aggregations
 
 Facets answer questions over the matched population, such as counts by brand or price bucket. They are not free metadata attached to hits. Execution may scan matching ordinals and increment counters through column-oriented values, intersect precomputed bitsets, or use specialized global ordinals.
 
@@ -155,7 +157,7 @@ Clarify the scope of every count:
 
 High-cardinality group-by can consume memory proportional to distinct values. Bound bucket count, per-shard candidates, and total aggregation memory. Distributed top buckets are subtle: if each shard returns only its local top `m`, a globally frequent value that is never locally top `m` can be missed. Overfetching reduces error but does not automatically prove exactness. Exact aggregation may require a second phase or complete enumeration, which should be a separate workload tier.
 
-## Distributed coordination and deadlines
+## Distributed Coordination and Deadlines
 
 The coordinator routes to one replica of each relevant shard, propagates an absolute deadline, and merges responses. Absolute deadlines avoid giving every hop a fresh timeout. Each stage reserves time for network return and final reduction; a shard should stop expensive work when its result can no longer arrive usefully.
 
@@ -165,7 +167,7 @@ Decide failure semantics by request class. An interactive catalog query may retu
 
 Cancellation must travel to dictionary expansion, postings iteration, reranking, highlighting, and aggregation. Dropping the client connection without cancelling shard work leaves a fleet processing results nobody can use.
 
-## Pagination and snapshot semantics
+## Pagination and Snapshot Semantics
 
 Offset pagination forces each shard to find and retain `offset + k` candidates, so work and coordination memory grow with page depth. Prefer keyset/search-after pagination using the full deterministic sort tuple. A cursor should include:
 
@@ -177,7 +179,7 @@ Offset pagination forces each shard to find and retain `offset + k` candidates, 
 
 Without a pinned generation, inserts and deletes between pages can cause duplicates or omissions even with a stable sort. Pinning readers consumes resources, so points in time need leases, limits, and expiry. Bulk export is usually better served by a separate scan/snapshot API than by pretending interactive top-k search is an unbounded iterator.
 
-## Capacity and cost model
+## Capacity and Cost Model
 
 Use a query corpus, not one benchmark string. For an illustrative peak:
 
@@ -194,7 +196,7 @@ The mean conceals the p99 expansion. Admission needs predicted and observed work
 
 Network cost is roughly `shard_requests * candidate_count * bytes_per_candidate`. If 60,000 shard requests/s each return 100 candidates at 40 bytes of metadata, that is about 229 MiB/s before protocol overhead. Returning 1,000 candidates “just in case” multiplies both network and coordinator heap work by ten. Candidate overfetch must be justified by measured recall.
 
-## Concrete failure trace: synonym rollout creates invisible documents
+## Concrete Failure Trace: Synonym Rollout Creates Invisible Documents
 
 Version 7 indexes “notebook computer” as tokens `notebook` and `computer`. A control-plane edit changes the query synonym rule so “laptop” maps only to token `portable_computer`, but no reindex occurs. Query nodes receive the rule at different times. Requests for “laptop” now miss old documents on updated nodes and behave differently across replicas.
 
@@ -202,7 +204,7 @@ The root cause is treating semantic state as mutable configuration. Recovery is 
 
 The prevention is an analyzer compatibility declaration plus atomic policy activation. Serving telemetry attaches the query-policy and index-schema versions, making mixed-version behavior observable.
 
-## Security and abuse resistance
+## Security and Abuse Resistance
 
 Parse structured query DSLs from typed input; never concatenate user text into a privileged query. Restrict callable fields and operators by role. Regex, scripts, nested joins, broad fuzzy expansion, large facets, and arbitrary highlighting require stronger budgets or an offline tier.
 
@@ -210,7 +212,7 @@ Authorization filters must be injected by trusted server code and included in ev
 
 Highlighting source text can produce injection if snippets are rendered as HTML. Escape source content and add markup only through a trusted renderer. Synonym and rewrite dictionaries are control-plane code in data form: review changes, constrain expansion, and audit who activated them.
 
-## Operations and observability
+## Operations and Observability
 
 Break latency into queueing, analysis/rewrite, dictionary seek, postings traversal, scoring, aggregation, fetch/highlight, shard network, and coordinator reduction. Track:
 
@@ -225,7 +227,7 @@ Break latency into queueing, analysis/rewrite, dictionary seek, postings travers
 
 Do not put raw high-cardinality query text in metric labels. Use bounded query-shape IDs and keep sampled text in an access-controlled debugging store.
 
-## Verification strategy
+## Verification Strategy
 
 - **Analyzer golden tests** pin token graphs for multilingual, punctuation, identifier, emoji, and synonym cases.
 - **Differential tests** compare optimized Boolean, phrase, and WAND execution with a simple exhaustive scorer on generated small corpora.
@@ -238,7 +240,7 @@ Do not put raw high-cardinality query text in metric labels. Use bounded query-s
 
 Relevance tests answer whether results are useful; execution tests answer whether the engine produced the intended candidate set within its resource contract. Both are required and should not be conflated.
 
-## Decision framework
+## Decision Framework
 
 Before adding a query feature, answer:
 
@@ -263,3 +265,11 @@ Add fuzzy matching, facets, highlighting, or global statistics only when their m
 - [Shuai Ding and Torsten Suel: Faster Top-k Document Retrieval Using Block-Max Indexes](https://dl.acm.org/doi/10.1145/2009916.2009924)
 - [Elasticsearch: Paginate Search Results](https://www.elastic.co/guide/en/elasticsearch/reference/current/paginate-search-results.html)
 - [Elasticsearch: Search Shard Routing](https://www.elastic.co/guide/en/elasticsearch/reference/current/search-shard-routing.html)
+---
+
+## Related Chapters
+
+- [Google Maps](../08-case-studies/09-google-maps.md): geocoding and place search, where ranking has to respect versioned map data
+- [Search Index Architecture and Internals](01-inverted-indexes.md): the segments and generations this query plane reads, and how fresh they are
+- [Ranking and Evaluation Systems](04-ranking-algorithms.md): scoring, evaluation sets, and the precision you trade for recall
+- [Typeahead and Autocomplete](06-typeahead-autocomplete.md): the same corpus under a 50 ms budget and a hostile input distribution

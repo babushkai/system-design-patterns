@@ -657,3 +657,12 @@ The architecture is incomplete if it demonstrates only an SDK call returning `tr
 - [SpiceDB documentation](https://authzed.com/docs) and [OpenFGA documentation](https://openfga.dev/docs): production implementations of relationship-based authorization
 - [PostgreSQL row security policies](https://www.postgresql.org/docs/current/ddl-rowsecurity.html): database-level row predicate enforcement
 - [Google Cloud IAM consistency](https://cloud.google.com/iam/docs/access-change-propagation): concrete operational treatment of authorization propagation
+---
+
+## Related Chapters
+
+- [Zanzibar](../09-whitepapers/11-zanzibar.md): the reference design for global, low-latency relation evaluation that most systems cite
+- [API Threat Boundaries and Abuse Resistance](04-api-security.md): where an authorization decision stops being a policy lookup and becomes a request boundary
+- [JOSE and JSON Web Token Verification](03-jwt-tokens.md): putting a decision in a token buys latency and pays for it in revocation
+- [Authentication Systems](01-authentication-fundamentals.md): who the caller is stays upstream; what they may do starts here
+- [Cache Invalidation and Coherence](../04-caching/02-cache-invalidation.md): an authorization cache is cache invalidation with a privilege boundary attached

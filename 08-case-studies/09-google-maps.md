@@ -1,5 +1,7 @@
 # Google Maps: Versioned Geospatial Data, Tiles, Routing, and ETA
 
+## TL;DR
+
 A global map is not one database with a spatial index. It is a family of products built from a changing world model: viewport rendering, place lookup, geocoding, road snapping, route search, traffic-aware ETA, incident updates, and turn-by-turn navigation. Each path has different freshness, latency, correctness, and privacy constraints.
 
 Public sources describe Google Maps interfaces and selected algorithms, but not a complete current production topology. The following labels distinguish documented facts from inference and reference design:
@@ -8,7 +10,7 @@ Public sources describe Google Maps interfaces and selected algorithms, but not 
 - **Inference**: follows from documented behavior or geospatial constraints but is not a Google production claim.
 - **Reference design**: an implementable design for a Maps-like platform, not a reconstruction presented as fact.
 
-## Product surfaces and contracts
+## Product Surfaces and Contracts
 
 **Documented, current API behavior.** Google Maps Platform exposes map tiles, geocoding, places, routes, route matrices, and navigation SDKs. The Routes API can return traffic-aware duration separately from static duration and can explicitly report fallback information when the requested computation is unavailable. [Google Maps Platform documentation](https://developers.google.com/maps/documentation), [Routes API route-matrix response](https://developers.google.com/maps/documentation/routes/reference/rest/v2/TopLevel/computeRouteMatrix)
 
@@ -34,7 +36,7 @@ The core invariants are:
 6. location telemetry is minimized, aggregated, retained, and accessed under explicit policy;
 7. a bad regional publication can be rolled back without rebuilding the whole world.
 
-## State, authority, and version composition
+## State, Authority, and Version Composition
 
 **Reference design.** Model the world as separate versioned datasets:
 
@@ -70,7 +72,7 @@ and every edge must satisfy mode, direction, turn, time-window, vehicle, and pol
 
 Each dynamic datum includes event time, processing time, expiry, confidence, and source class. If current time exceeds its expiry, routing falls back to historical/static cost and marks the live component unavailable. “Last updated” without expiry semantics is insufficient.
 
-## Documented spatial and routing foundations
+## Documented Spatial and Routing Foundations
 
 ### Tile coordinates and level of detail
 
@@ -96,7 +98,7 @@ The existence of `4^z` possible coordinates does not mean all tiles are material
 
 **Documented, primary paper, 2010.** Google researchers described transfer patterns: precompute common station-transfer sequences, then answer multi-criteria public-transit queries over large networks quickly. The paper reports use in Google Maps and experiments on networks up to half a billion arcs. This supports transit routing specifically; it is not evidence that road routing uses the same algorithm. [Bast et al., Transfer Patterns](https://research.google/pubs/fast-routing-in-very-large-public-transportation-networks-using-transfer-patterns/)
 
-## Reference architecture
+## Reference Architecture
 
 **Reference design.** Separate offline/streaming publication from online query serving:
 
@@ -125,7 +127,7 @@ flowchart TB
 
 The data plane serves tile, place, geocode, route, and navigation requests. The publication control plane validates source changes, builds indexes, trains/evaluates models, produces signed manifests, rolls versions through cells, and can stop or roll back a release. Live traffic is a streaming data plane with its own expiry and quality controls, not an administrative configuration plane.
 
-## Map-tile path
+## Map-Tile Path
 
 **Reference design.** For a viewport request:
 
@@ -141,7 +143,7 @@ Versioned URLs allow long cache lifetimes. Publishing a new manifest changes whi
 
 Features crossing tile edges must be clipped consistently and rendered with buffer overlap, or roads and labels flicker at seams. Label placement may need a higher-level metatile or deterministic ownership rule so adjacent tiles do not duplicate a label.
 
-## Geocoding and place search
+## Geocoding and Place Search
 
 **Reference design.** Normalize a query using locale-aware tokenization, but retain the raw form for audit and learning. Generate candidates from address components, place names, aliases, categories, and spatial proximity; rank them using text match, geographic context, prominence, freshness, and user-safe personalization. Return stable place IDs and structured ambiguity rather than forcing a low-confidence single answer.
 
@@ -151,7 +153,7 @@ Features crossing tile edges must be clipped consistently and rendered with buff
 
 The canonical search mechanics are covered in [inverted indexes](../14-search-systems/01-inverted-indexes.md), [ranking](../14-search-systems/04-ranking-algorithms.md), and [typeahead](../14-search-systems/06-typeahead-autocomplete.md).
 
-## Route and ETA flow
+## Route and ETA Flow
 
 **Reference design.** A traffic-aware route request proceeds as follows:
 
@@ -167,7 +169,7 @@ The canonical search mechanics are covered in [inverted indexes](../14-search-sy
 
 Shortest path and best route are different. A route objective may combine expected travel time, uncertainty, road suitability, closures, toll preferences, walking distance, transfer count, fuel/energy, and safety constraints. The weights are product policy and must be versioned.
 
-## Partitioning and locality
+## Partitioning and Locality
 
 **Reference design.** Use multiple partition spaces:
 
@@ -181,7 +183,7 @@ No one partitioning scheme is optimal for all queries. Graph partitioning minimi
 
 Routing across partitions can use a hierarchy: local access graph, regional boundary graph, long-distance backbone, then destination-region expansion. A partition must include a halo of neighboring geometry so queries near boundaries do not fail or produce discontinuities.
 
-## Capacity and cost model
+## Capacity and Cost Model
 
 ### Viewport amplification: illustrative assumptions
 
@@ -221,7 +223,7 @@ $$
 
 The raw-event rate may be much higher; privacy aggregation and retention dominate both design and cost. These figures are illustrative, not Google measurements.
 
-## Failure trace: poisoned closure and mixed versions
+## Failure Trace: Poisoned Closure and Mixed Versions
 
 **Reference-design trace.** A source incorrectly marks a major bridge closed:
 
@@ -235,17 +237,17 @@ The raw-event rate may be much higher; privacy aggregation and retention dominat
 
 Without confidence gates, one false report can redirect a city. Without version manifests, the service can combine new graph IDs with old traffic/model features and produce plausible but wrong ETAs.
 
-## Failure trace: traffic stream outage
+## Failure Trace: Traffic Stream Outage
 
 **Reference design.** When live traffic processing stops, route serving should not block behind an ever-growing consumer backlog. Mark the watermark stale, stop presenting values as live, use historical/static duration, expose fallback metadata, and shed expensive optimal-traffic computations. On recovery, process only data that remains useful; expired observations are not worth replaying ahead of current traffic. This is a [backpressure](../06-scaling/07-backpressure.md) and freshness-policy problem, not merely a Kafka lag alert.
 
-## Multi-region design
+## Multi-Region Design
 
 **Reference design.** Replicate immutable map bundles and models to independent regional cells, then direct queries to a nearby cell. A cell activates a bundle only after hashes, schema compatibility, graph connectivity samples, and model-feature contracts pass. Region-specific legal/cartographic policy is an explicit manifest dimension.
 
 Live traffic has a short useful life. Replicate aggregated regional features to the cells that serve that area; losing one ingest region may cause a visible freshness downgrade without preventing static routing. The publication authority should be strongly fenced, while immutable read serving can be active-active. Keep enough compute and cached data for regional evacuation; see [multi-region architecture](../06-scaling/09-multi-region-architecture.md).
 
-## Privacy, security, and abuse
+## Privacy, Security, and Abuse
 
 **Documented, 2020 high-level description.** Google stated that aggregate location data from navigation can be used to understand traffic. The public article describes the aggregate use but not a full retention or anonymization protocol. [Google Maps, traffic and routing](https://blog.google/products-and-platforms/products/maps/google-maps-101-how-ai-helps-predict-traffic-and-determine-routes/)
 
@@ -253,7 +255,7 @@ Live traffic has a short useful life. Replicate aggregated regional features to 
 
 Threats include location stalking, scraping place inventories, fake closures, malicious map edits, API-key theft, and route manipulation. Abuse defenses must avoid making low-volume rural areas permanently invisible; privacy thresholds and coverage quality need joint evaluation.
 
-## Observability and validation
+## Observability and Validation
 
 **Reference design.** Operate semantic quality alongside service health:
 
@@ -270,7 +272,7 @@ An ETA average can hide systematic harm. Track quantiles and calibration: among 
 
 Verification should include golden geographic fixtures, property tests around the antimeridian/poles, graph reachability checks, adversarial source edits, version-skew startup tests, replay of historic traffic days, and regional publication rollback. Online experiments need safety guardrails: route quality cannot be judged only by click-through or reroute acceptance.
 
-## Evolution and migration
+## Evolution and Migration
 
 **Reference design.** Evolve immutable bundles rather than mutating a world database in place:
 
@@ -284,7 +286,7 @@ Verification should include golden geographic fixtures, property tests around th
 
 For model changes, pin feature schema, preprocessing code, graph version range, and model artifact together. Shadow evaluation should include route ranking changes, not only lower ETA error on the already selected route; changing the predictor changes user behavior and therefore future training data. See [model deployment](../16-ml-systems/06-model-deployment-rollouts.md), [monitoring](../16-ml-systems/04-model-monitoring.md), and [dataset versioning](../16-ml-systems/11-dataset-management-versioning.md).
 
-## Transferable lessons
+## Transferable Lessons
 
 1. One “map version” is really a compatibility contract across several independently refreshed datasets.
 2. Tile coordinates, spatial cells, place IDs, and graph partitions solve different locality problems.
@@ -294,7 +296,7 @@ For model changes, pin feature schema, preprocessing code, graph version range, 
 6. Validate semantic diffs in canaries before worldwide map publication.
 7. Treat location data and crowdsourced updates as sensitive, adversarial inputs.
 
-## Primary sources
+## References
 
 - [Google Maps Platform documentation](https://developers.google.com/maps/documentation)
 - [Google Maps JavaScript API: map and tile coordinates](https://developers.google.com/maps/documentation/javascript/coordinates)
@@ -304,3 +306,12 @@ For model changes, pin feature schema, preprocessing code, graph version range, 
 - [Derrow-Pinion et al.: ETA Prediction with Graph Neural Networks in Google Maps, 2021](https://arxiv.org/abs/2108.11482)
 - [Bast et al.: Fast Routing in Public Transportation Networks Using Transfer Patterns, 2010](https://research.google/pubs/fast-routing-in-very-large-public-transportation-networks-using-transfer-patterns/)
 - [S2 Geometry overview and cell hierarchy](https://s2geometry.io/)
+
+---
+
+## Related Chapters
+
+- [Partitioning Strategies](../02-distributed-databases/05-partitioning-strategies.md): tiles are a spatial partition, and they arrive with the same skew problem
+- [CDN Architecture](../06-scaling/04-cdn-architecture.md): a versioned tile is the ideal cache object until a re-render invalidates a region
+- [Typeahead and Autocomplete](../14-search-systems/06-typeahead-autocomplete.md): typeahead over a planet-scale place index, under a keystroke latency budget
+- [Dataset Management and Versioning](../16-ml-systems/11-dataset-management-versioning.md): routing and ETA are models, so map data needs versions and evaluation like any dataset

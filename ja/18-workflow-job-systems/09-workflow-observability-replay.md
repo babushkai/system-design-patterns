@@ -2,6 +2,8 @@
 
 > この記事は英語版から翻訳されました。最新版は[英語版](/18-workflow-job-systems/09-workflow-observability-replay)をご覧ください。
 
+## TL;DR
+
 ワークフロー観測性は通常のサービス観測性と違う問いに答えます。サービスtraceは「このリクエストで何が起きたか」を見ます。ワークフローtraceは「この業務プロセスはどこにいて、何をすでにcommitし、なぜ待っていて、次に何を安全にできるか」を見ます。長時間実行システムでは、observability、replay、repair toolingは正しさの一部です。
 
 ## 観測レイヤー

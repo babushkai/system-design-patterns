@@ -371,3 +371,12 @@ Keep proposal authority separate from release authority regardless of scale. The
 - [Harness Engineering](../17-llm-systems/09-harness-engineering.md)
 - [Durable Execution](../18-workflow-job-systems/04-durable-execution-workflow-engines.md)
 - [Workflow Observability and Replay](../18-workflow-job-systems/09-workflow-observability-replay.md)
+
+---
+
+## Related Chapters
+
+- [Harness Engineering](../17-llm-systems/09-harness-engineering.md): the harness discipline this platform standardizes across teams
+- [Tool and Runtime Contracts for Coding Agents](02-coding-agent-tool-design.md): tools are the surface where agent capability becomes measurable at all
+- [Durable Execution and Workflow Engines](../18-workflow-job-systems/04-durable-execution-workflow-engines.md): agent runs need exactly the durability guarantees this chapter assumes
+- [Verification and Governance for Agentic Change](05-quality-engineering-with-ai-agents.md): verification is the constraint that decides how much autonomy you can grant

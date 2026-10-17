@@ -1,5 +1,7 @@
 # WhatsApp: End-to-End Encrypted Multi-Device Messaging
 
+## TL;DR
+
 An encrypted messenger has two simultaneous correctness problems. The delivery system must route, buffer, retry, and deduplicate messages for intermittently connected devices. The cryptographic system must ensure that only intended devices can read content, even though servers coordinate device discovery and delivery. Multi-device support couples the two: one user is no longer one socket or one encryption identity.
 
 Claims use three evidence labels:
@@ -10,7 +12,7 @@ Claims use three evidence labels:
 
 Exact servers, languages, connection counts, and databases appear only when supported by a primary source.
 
-## Workload and security contract
+## Workload and Security Contract
 
 **Documented, 2021 snapshot.** Meta reported that WhatsApp supported more than 100 billion messages and one billion calls per day while describing its de-identified telemetry system. Those are publication-time global figures, not a current QPS breakdown. [Meta Engineering, de-identified telemetry](https://engineering.fb.com/2021/04/16/security/dit/)
 
@@ -31,7 +33,7 @@ The contract is:
 
 End-to-end encryption does not create exactly-once transport, global ordering, or availability. Those are separate protocol properties.
 
-## Documented device and cryptographic model
+## Documented Device and Cryptographic Model
 
 ### One account, multiple identities
 
@@ -54,7 +56,7 @@ The directory does not reveal message plaintext. Its purpose is to make inconsis
 
 **Documented, 2024.** Meta's EU interoperability article says WhatsApp uses the Signal Protocol as the foundation for end-to-end encryption and describes encrypted protobuf messages packaged into XML message stanzas for third-party delivery. This documents that boundary, not WhatsApp's complete internal transport. [Meta Engineering, messaging interoperability](https://engineering.fb.com/2024/03/06/security/whatsapp-messenger-messaging-interoperability-eu/)
 
-## State, authority, and invariants
+## State, Authority, and Invariants
 
 **Reference design.** Separate server-visible delivery state from client-held cryptographic state:
 
@@ -96,7 +98,7 @@ For multi-device accounts, define aggregation explicitly. “Delivered” may me
 
 Each device mapping belongs to one transparency epoch with a verifiable predecessor. Clients reject a proof inconsistent with previously observed history, outside permitted staleness, or not bound to the queried device set.
 
-## Reference delivery architecture
+## Reference Delivery Architecture
 
 **Reference design.** WhatsApp publishes security components but not a complete current serving topology:
 
@@ -117,7 +119,7 @@ flowchart LR
 
 The data plane accepts encrypted envelopes, durably queues them, delivers to online devices, wakes offline devices, and processes receipts. The account/key control plane authorizes device changes and publishes directory epochs. Fleet placement, abuse policy, schemas, and rollout configuration are a separate control plane whose last known-good snapshot can remain locally usable where security policy permits.
 
-## One-to-one send flow
+## One-to-One Send Flow
 
 **Documented foundation plus reference delivery mechanics.** Device fanout and pairwise encryption are documented; the mailbox transaction is a reference design:
 
@@ -135,7 +137,7 @@ Server acceptance proves custody under the mailbox policy, not recipient decrypt
 
 **Inference.** A client must commit ratchet advancement with local dedup/message state or retain bounded skipped keys. Otherwise a crash can either reuse key material or make a valid ciphertext undecryptable. Cryptographic lifecycle is covered in [encryption](../10-security/06-encryption.md); transport semantics are in [delivery guarantees](../05-messaging/04-delivery-guarantees.md).
 
-## Group messaging
+## Group Messaging
 
 **Documented foundation.** WhatsApp identifies Sender Keys as its scalable group scheme. A sender distributes key material through pairwise encrypted sessions, then encrypts ordinary group messages under the sender's group state. [Meta Engineering, WhatsApp multi-device](https://engineering.fb.com/2021/07/14/security/whatsapp-multi-device/)
 
@@ -149,19 +151,19 @@ For `n` target devices, server delivery remains `O(n)` even when encryption work
 
 This removes large bytes from connection servers. The object reference remains a bearer capability unless access is authenticated; keep it unguessable, scoped, and subject to deletion policy. A server that lacks plaintext cannot claim to perform ordinary plaintext content validation.
 
-## Encrypted state synchronization
+## Encrypted State Synchronization
 
 **Documented, 2021.** When linking a companion, WhatsApp described the primary device encrypting a recent-history bundle, sending its key through an end-to-end encrypted message, and deleting the transfer key after import. Ongoing application state is stored server-side in end-to-end encrypted form with keys known only to the user's devices. [Meta Engineering, WhatsApp multi-device](https://engineering.fb.com/2021/07/14/security/whatsapp-multi-device/)
 
 **Reference design.** Encode mutable state as versioned encrypted operations such as archive, mute, star, contact name, and delete, rather than one last-written opaque blob. Each includes device ID, operation ID, logical version, and encrypted payload. Define deterministic merge per state type. Devices request deltas after a cursor and fall back to an encrypted snapshot after compaction.
 
-## Connections, mailboxes, and partitioning
+## Connections, Mailboxes, and Partitioning
 
 **Reference design.** Terminate persistent connections regionally, but route each device to one mailbox authority keyed by `(account_shard,device_id)` and guarded by an epoch. A connection registry maps an authenticated device lease to its current edge session. The mapping is soft state; the mailbox is durable.
 
 Partition by stable account/device ID. Keep accepted server order per device while clients use conversation/message metadata for presentation. Connection nodes bound every socket queue and pull only a mailbox window. A slow phone leaves backlog in durable storage rather than connection memory. See [backpressure](../06-scaling/07-backpressure.md) and [network transport](../06-scaling/14-network-transport-internals.md).
 
-## Capacity model
+## Capacity Model
 
 ### Device fanout: illustrative assumptions
 
@@ -187,7 +189,7 @@ At 1.1 KiB each, raw backlog is about 38.4 TiB before replication, indexes, and 
 
 For 900 million device connections at a measured 18 KiB application/transport footprint, memory is roughly 14.7 TiB. At 250,000 safe connections per host and 55% occupancy, the lower bound is about 6,546 hosts before regional redundancy. These assumptions are deliberately illustrative, not WhatsApp concurrency or server-density claims.
 
-## Failure trace: lost acknowledgement during device change
+## Failure Trace: Lost Acknowledgement During Device Change
 
 **Reference-design trace.** Alice sends `m77` to Bob, whose directory version `d12` contains phone `B1` and desktop `B2`:
 
@@ -201,13 +203,13 @@ For 900 million device connections at a measured 18 KiB application/transport fo
 
 The trace separates retry deduplication, per-device receipt, revocation, and key-directory freshness. One `delivered=true` field cannot encode it.
 
-## Failure trace: reconnect storm
+## Failure Trace: Reconnect Storm
 
 **Reference design.** A regional interruption disconnects millions of devices. Clients reconnect with exponential backoff and full jitter, presenting resume tokens. The edge authenticates in bounded batches and reads only a mailbox window. Per-account and per-sender admission protects hot targets; push wake-ups are suppressed for live sessions. Saturated shards advertise credits/retry-after rather than copying full backlogs into memory.
 
 This overload stack requires [rate limiting](../06-scaling/05-rate-limiting.md), [backpressure](../06-scaling/07-backpressure.md), and [retries](../06-scaling/10-retries-timeouts-hedging.md) to share budgets. Independent retries at client, edge, mailbox, and push layers multiply load.
 
-## Multi-region authority
+## Multi-Region Authority
 
 **Inference.** Regional connection edges reduce latency, while mailbox order and dedup require a fenced authority. Active-active sockets do not imply active-active mutation of one mailbox.
 
@@ -215,7 +217,7 @@ This overload stack requires [rate limiting](../06-scaling/05-rate-limiting.md),
 
 Keep warm capacity to absorb a region's connections and writes without cold provisioning. Exercise loss of a region, directory publisher, push provider, and key-management dependency separately. See [multi-region architecture](../06-scaling/09-multi-region-architecture.md) and [cell architecture](../06-scaling/11-cell-based-architecture.md).
 
-## Security, privacy, and abuse
+## Security, Privacy, and Abuse
 
 ### Device injection and transparency
 
@@ -233,13 +235,13 @@ Keep warm capacity to absorb a region's connections and writes without cold prov
 
 **Reference design.** When the server cannot inspect content, combine sender reputation, consent/contact relationships, fanout limits, client-side user-selected reporting, device-integrity signals, and privacy-preserving aggregates. Account discovery, key queries, group invitations, and receipts are enumeration surfaces; protect them with cost limits, response indistinguishability where possible, and audited exceptions.
 
-## Privacy-preserving observability
+## Privacy-Preserving Observability
 
 **Documented, 2021.** WhatsApp's De-identified Telemetry design aimed to gather reliability, performance, and usage data while reducing association with a phone number, using de-identified token mechanisms and aggregation. [Meta Engineering, DIT](https://engineering.fb.com/2021/04/16/security/dit/)
 
 **Reference design.** Measure connection success/reconnect reason by coarse region, mailbox acceptance and delivery age, redelivery, proof failures and epoch lag, fanout in coarse buckets, push effectiveness, cryptographic-session failure by client version, blob integrity, replication lag, fencing rejection, and abuse false positives. Avoid plaintext and named social graphs in general dashboards. Use rotating opaque trace IDs and bounded retention.
 
-## Verification and evolution
+## Verification and Evolution
 
 **Reference design.** Test duplicate/reordered envelopes, crash between ratchet and local commit, device change racing with send, stale or inconsistent directory proofs, group changes during key distribution, queue expiry, failover with stale leases, reconnect storms, corrupted media, and old clients through protocol migration. Degraded operation must never fall back to plaintext or unverifiable keys.
 
@@ -249,7 +251,7 @@ Keep warm capacity to absorb a region's connections and writes without cold prov
 
 **Reference design.** Mobile migrations require capability negotiation across a long client tail. Generate only formats every target can verify; block features rather than downgrade security; dual-read old/new envelopes; canary by client cohort; and never roll back by reusing consumed keys or sequence numbers.
 
-## Transferable lessons
+## Transferable Lessons
 
 1. Model a user as independently authenticated devices, not one socket.
 2. Separate logical message identity from per-device ciphertext and delivery state.
@@ -260,7 +262,7 @@ Keep warm capacity to absorb a region's connections and writes without cold prov
 7. Design privacy-preserving observability as part of the protocol.
 8. Never let availability degradation silently weaken encryption or key verification.
 
-## Primary sources
+## References
 
 - [Meta Engineering: WhatsApp multi-device architecture, 2021](https://engineering.fb.com/2021/07/14/security/whatsapp-multi-device/)
 - [Meta Engineering: de-identified telemetry, 2021](https://engineering.fb.com/2021/04/16/security/dit/)
@@ -269,3 +271,12 @@ Keep warm capacity to absorb a region's connections and writes without cold prov
 - [Meta Engineering: enhancing WhatsApp call security, 2023](https://engineering.fb.com/2023/11/08/security/whatsapp-calls-enhancing-security/)
 - [Meta Engineering: messaging interoperability, 2024](https://engineering.fb.com/2024/03/06/security/whatsapp-messenger-messaging-interoperability-eu/)
 - [Meta Engineering: Rust at scale for WhatsApp security, 2026](https://engineering.fb.com/2026/01/27/security/rust-at-scale-security-whatsapp/)
+
+---
+
+## Related Chapters
+
+- [Delivery Guarantees and Effect Boundaries](../05-messaging/04-delivery-guarantees.md): encryption to the device means the server cannot read, only promise delivery
+- [Cryptographic Key and Data-Protection Architecture](../10-security/06-encryption.md): the key model decides what a compromised server can still learn
+- [Client Delivery Transports](../07-real-time/01-polling.md): mobile clients on bad networks: battery, keepalives, and how a message arrives
+- [Network Transport Internals](../06-scaling/14-network-transport-internals.md): connection churn on mobile networks, where resumption is the whole latency story

@@ -1,8 +1,10 @@
 # Spanner (OSDI 2012): Evidence-First Paper Analysis
 
+## TL;DR
+
 Spanner's distinguishing contribution is not merely “a database synchronized by atomic clocks.” It composes **per-shard consensus, multi-version state, pessimistic transactions, and a bounded time API** so commit timestamps respect real-time order. TrueTime does not eliminate coordination; it makes the remaining uncertainty explicit and sometimes waits it out.
 
-## Publication identity and version discipline
+## Publication Identity and Version Discipline
 
 - **Paper:** *Spanner: Google's Globally-Distributed Database*
 - **Authors:** James C. Corbett, Jeffrey Dean, Michael Epstein, Andrew Fikes, Christopher Frost, J. J. Furman, Sanjay Ghemawat, Andrey Gubarev, Christopher Heiser, Peter Hochschild, Wilson Hsieh, Sebastian Kanthak, Eugene Kogan, Hongyi Li, Alexander Lloyd, Sergey Melnik, David Mwaura, David Nagle, Sean Quinlan, Rajesh Rao, Lindsay Rolig, Yasushi Saito, Michal Szymaniak, Christopher Taylor, Ruth Wang, and Dale Woodford
@@ -13,7 +15,7 @@ The analysis below targets the OSDI 2012 design. Where the expanded paper provid
 
 [Distributed Transactions](../02-distributed-databases/07-distributed-transactions.md), [Consensus](../02-distributed-databases/08-consensus-algorithms.md), and [Distributed Time](../01-foundations/05-distributed-time.md) cover the component concepts. This chapter focuses on their joint proof obligation.
 
-## Problem and service contract
+## Problem and Service Contract
 
 Google wanted a database that could automatically shard data across datacenters, synchronously replicate it, move it as load or policy changed, and still offer transactions over arbitrary rows. Earlier manually sharded MySQL deployments made resharding an application and organizational event; weaker NoSQL stores could not protect cross-row invariants.
 
@@ -28,7 +30,7 @@ Spanner's published contract includes:
 
 “Global” is a placement capability, not a promise that every transaction has one latency. A transaction spanning Paxos groups and continents pays the required consensus and two-phase-commit paths.
 
-## Physical and logical state
+## Physical and Logical State
 
 A deployment is a **universe**, divided into zones. A zone contains a zonemaster and many spanservers; location proxies help clients find the spanserver serving data. A spanserver holds 100–1,000 tablet-like data structures in the paper.
 
@@ -36,7 +38,7 @@ Each spanserver tablet stores mappings from `(key, timestamp)` to bytes, giving 
 
 The application data model is more structured than Bigtable's. Tables have schemas and primary keys. Child rows can be **interleaved** under parent rows so related records share key prefixes and placement. A **directory** (a set of rows with a common prefix) is the unit of placement. A directory can split into fragments as it grows, but the placement abstraction is what administrators move and replicate.
 
-## Invariants that make the design work
+## Invariants That Make the Design Work
 
 ### Paxos-group ownership
 
@@ -54,7 +56,7 @@ A replica may serve timestamp `t` only after its safe time is at least `t`. Sect
 
 Every participant either exposes the transaction's writes at the chosen commit timestamp or none does. Paxos makes each participant's prepare/commit state durable; two-phase commit coordinates the outcome across groups. Paxos and 2PC solve different problems and neither replaces the other.
 
-## TrueTime and timestamp assignment
+## TrueTime and Timestamp Assignment
 
 `TT.now()` returns an interval `[earliest, latest]` guaranteed to contain absolute time. Its half-width, usually called epsilon, bounds time uncertainty; TrueTime does not assume zero clock skew. Time masters use GPS and atomic-clock references with different failure modes; per-machine daemons poll several masters, reject inconsistent sources, and increase uncertainty conservatively between polls.
 
@@ -68,7 +70,7 @@ The reasoning is the important part:
 
 Commit wait adds at least the remaining uncertainty to latency. Better clock bounds improve performance; they are not optional for correctness under this protocol.
 
-## Transaction and read protocols
+## Transaction and Read Protocols
 
 ### Read-write path
 
@@ -82,7 +84,7 @@ A read-only transaction is declared read-only in advance. Spanner assigns one ti
 
 The predeclaration matters. A transaction cannot take lock-free snapshot reads and later decide to write without changing the protocol and its guarantees.
 
-## Failure and recovery behavior
+## Failure and Recovery Behavior
 
 - **Replica failure:** the Paxos group continues if a quorum remains. A replacement replays replicated state.
 - **Leader failure:** another replica can lead after lease safety permits it. The timed lease avoids simultaneous leaders but can delay recovery after an abrupt failure.
@@ -92,7 +94,7 @@ The predeclaration matters. A transaction cannot take lock-free snapshot reads a
 
 The failure model assumes bounded clock drift is enforced and Byzantine data corruption is outside the consensus protocol. Operators must keep replicas across genuinely independent failure domains; “five replicas” on one correlated substrate do not provide the intended fault tolerance.
 
-## Evaluation evidence with its boundaries
+## Evaluation Evidence With Its Boundaries
 
 The OSDI evaluation mixes microbenchmarks, failure injection, TrueTime measurements, and F1 production observations. It is evidence for mechanisms, not an independent market comparison.
 
@@ -102,7 +104,7 @@ The OSDI evaluation mixes microbenchmarks, failure injection, TrueTime measureme
 - F1's 24-hour production measurements reported mean client-observed latencies of 8.7 ms over 21.5 billion reads, 72.3 ms over 31.2 million single-site commits, and 103.0 ms over 32.1 million multi-site commits. The read standard deviation was 376.4 ms and write tails included lock contention, emphasizing that means hide broad distributions.
 - The F1 dataset was tens of terabytes uncompressed. The previous manual MySQL resharding had taken more than two years of work across dozens of teams. That is organizational evidence for automatic placement, not a direct throughput benchmark.
 
-## Limits and assumptions
+## Limits and Assumptions
 
 - Synchronous quorum and 2PC latency follow replica placement; geography cannot be abstracted away.
 - Strict 2PL can block and deadlock; contention appears in tail latency.
@@ -112,13 +114,13 @@ The OSDI evaluation mixes microbenchmarks, failure injection, TrueTime measureme
 - The original SQL/query surface was limited; the paper is primarily a storage and transaction design.
 - Reported measurements come from Google-controlled hardware, workloads, and authors.
 
-## Later SQL evolution
+## Later SQL Evolution
 
 The 2017 *Spanner: Becoming a SQL System* paper documents the move from a storage API used through F1 toward a more complete SQL database: query distribution, schema changes, optimizer work, and the operational consequences of offering SQL directly. It retained the foundational combination of Paxos, MVCC, TrueTime, and externally consistent transactions while changing the interface and execution layer substantially.
 
 Later Spanner product features should be evaluated from their own documentation and papers. They must not be back-projected into the 2012 protocol.
 
-## Design review questions
+## Design Review Questions
 
 1. Which transactions actually span ranges or regions, and what latency does their quorum/2PC path imply?
 2. Is real-time-respecting serialization required, or would a weaker snapshot model suffice?
@@ -128,9 +130,18 @@ Later Spanner product features should be evaluated from their own documentation 
 6. How are prepared transactions resolved after coordinator loss?
 7. Do benchmarks report topology, replica count, contention, percentiles, and transaction locality?
 
-## Primary sources
+## References
 
 - [Corbett et al., *Spanner: Google's Globally-Distributed Database* (OSDI 2012), official USENIX PDF](https://www.usenix.org/system/files/conference/osdi12/osdi12-final-16.pdf)
 - [Google Research publication record for the OSDI paper](https://research.google/pubs/spanner-googles-globally-distributed-database-2/)
 - [Corbett et al., expanded *Spanner: Google's Globally Distributed Database* (ACM TOCS 2013)](https://storage.googleapis.com/gweb-research2023-media/pubtools/1974.pdf)
 - [Bacon et al., *Spanner: Becoming a SQL System* (SIGMOD 2017)](https://research.google/pubs/spanner-becoming-a-sql-system/)
+
+---
+
+## Related Chapters
+
+- [Distributed Time](../01-foundations/05-distributed-time.md): true time is a claim about clock hardware, and this is where that claim gets audited
+- [Distributed Transactions](../02-distributed-databases/07-distributed-transactions.md): external consistency over a replicated log, the promise most systems cannot make
+- [FoundationDB](13-foundationdb.md): the same argument made without special clocks, and the latency cost of that decision
+- [Multi-Region Architecture](../06-scaling/09-multi-region-architecture.md): the deployment where Spanner gets justified, with its price visible in the budget

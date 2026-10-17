@@ -612,7 +612,7 @@ If the external system is neither idempotent nor queryable and the effect is irr
 
 ---
 
-## Primary References
+## References
 
 - [Garcia-Molina and Salem: Sagas](https://dl.acm.org/doi/10.1145/38713.38742)
 - [Stripe API: Idempotent Requests](https://docs.stripe.com/api/idempotent_requests)
@@ -625,9 +625,9 @@ If the external system is neither idempotent nor queryable and the effect is irr
 
 ## Related Chapters
 
-- [Durable Execution and Workflow Engines](./04-durable-execution-workflow-engines.md)
-- [Leases, Heartbeats, and Recovery](./08-leases-heartbeats-recovery.md)
-- [Idempotency](../01-foundations/08-idempotency.md)
-- [Delivery Guarantees](../05-messaging/04-delivery-guarantees.md)
-- [Outbox Pattern](../05-messaging/07-outbox-pattern.md)
-- [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md)
+- [Durable Execution and Workflow Engines](04-durable-execution-workflow-engines.md): the engine retry policy is where these commit protocols get implemented or quietly skipped
+- [Leases, Heartbeats, and Recovery](08-leases-heartbeats-recovery.md): an attempt that outlived its lease is the specific case where retry safety needs fencing
+- [Idempotency and Operation Identity](../01-foundations/08-idempotency.md): the per-operation contract this chapter assumes, stated once with its operation identity rules
+- [Delivery Guarantees and Effect Boundaries](../05-messaging/04-delivery-guarantees.md): at-least-once delivery is the same problem wearing a queue costume, with the same obligations
+- [Transactional Outbox, Inbox, and CDC Publication](../05-messaging/07-outbox-pattern.md): the outbox is one concrete commit protocol, complete with its own replay and deduplication machinery
+- [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md): client retry budgets bound the amplification that multi-step workflows multiply

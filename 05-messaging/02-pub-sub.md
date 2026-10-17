@@ -1,10 +1,12 @@
 # Publish-Subscribe Architecture
 
+## TL;DR
+
 Publish-subscribe turns one committed fact into independent consumption streams. Its central abstraction is not “send to many services”; it is a durable event plus subscription state that allows each consumer to progress, pause, replay, filter, and fail without changing another consumer’s position.
 
 A pub/sub contract must define topic semantics, fan-out architecture, subscription state, replay and bootstrap, filtering, and schema governance. It deliberately does not re-teach [Ordering](03-message-ordering.md) or [Delivery Guarantees](04-delivery-guarantees.md). Atomic domain publication belongs to [Outbox and Inbox](07-outbox-pattern.md). Multi-step business execution belongs to [Durable Workflows](../18-workflow-job-systems/04-durable-execution-workflow-engines.md) and [Retry, Idempotency, and Compensation](../18-workflow-job-systems/06-retry-idempotency-compensation.md).
 
-## Workload and contract
+## Workload and Contract
 
 A publisher emits a versioned fact:
 
@@ -47,7 +49,7 @@ Define:
 - partial regional behavior and tenant/residency boundaries;
 - maximum fan-out, subscriber lag, and control-plane scale.
 
-## State and invariants
+## State and Invariants
 
 The system maintains two different categories of durable state.
 
@@ -67,7 +69,7 @@ Enforce these invariants:
 
 **Replay is bounded and auditable.** Operators know who sought which subscription, to what point, with what destination/effect safeguards.
 
-## Data plane and control plane
+## Data Plane and Control Plane
 
 The **data plane** authenticates publishers, validates envelopes, selects partitions, appends/replicates records, evaluates bounded filters, serves subscriptions, and persists checkpoints. It uses cached versioned topic/subscription policy.
 
@@ -75,7 +77,7 @@ The **control plane** owns topics, schemas, publisher ACLs, subscription definit
 
 Schema registration and topic creation are not on the publish hot path. A producer deploy references pre-registered schema IDs and fails closed on unknown or incompatible types. Allowing publishers to auto-create topics or schemas under production traffic turns typos into permanent contracts.
 
-## Fan-out architectures
+## Fan-Out Architectures
 
 ### Shared append log with subscription cursors
 
@@ -91,7 +93,7 @@ Large systems often append once to a regional/topic log, then durable fan-out wo
 
 Choose from event size, publish rate, subscription count, replay requirements, filter selectivity, retention independence, and cross-region topology. “Pub-sub” does not imply one physical architecture.
 
-## Subscription lifecycle and checkpoints
+## Subscription Lifecycle and Checkpoints
 
 A subscription state machine can be:
 
@@ -108,7 +110,7 @@ Store both logical position and event/source time. Position is authoritative for
 
 Membership changes carry a generation. Old members cannot checkpoint after partitions are assigned to a new generation. Cooperative handoff can reduce duplicate work by revoking and draining subsets, but the consumer must still tolerate overlap during crashes.
 
-## Filtering and routing
+## Filtering and Routing
 
 Broker-side filters reduce egress and consumer CPU but add a query engine to the broker. Restrict them to typed, indexed envelope fields with bounded evaluation. Arbitrary payload scripts make broker latency and security dependent on untrusted code.
 
@@ -118,7 +120,7 @@ Filter changes are migrations. Decide whether the new predicate applies only aft
 
 Do not use a filter as authorization unless the broker guarantees it is unbypassable for every fetch, replay, export, cache, and diagnostic path. Strong tenant isolation often requires separate topics/partitions/encryption domains.
 
-## Schema and semantic governance
+## Schema and Semantic Governance
 
 Syntax compatibility is necessary but insufficient. Adding an optional field can be wire-compatible while changing meaning. Maintain an event catalog with owner, purpose, field semantics, privacy classification, ordering key, source-version semantics, examples, and deprecation status.
 
@@ -135,7 +137,7 @@ Upcasting can present old payloads in a new in-memory shape, but the original by
 
 Consumer-driven contract tests are useful signals, but publishers cannot promise to preserve every accidental consumer dependency forever. Topic ownership and compatibility policy arbitrate changes.
 
-## Bootstrap, replay, and new subscribers
+## Bootstrap, Replay, and New Subscribers
 
 A new subscriber to a large stream should not necessarily replay years of changes to reconstruct current state. Publish a versioned snapshot with:
 
@@ -148,7 +150,7 @@ The subscriber loads the snapshot idempotently, then consumes strictly after eac
 
 Replay is a separate workload class. It can multiply broker reads and downstream effects. Require a destination, rate budget, start/end positions, dry-run estimate, idempotency plan, and cancellation. Prefer a new replay subscription or isolated consumer group so production progress is not moved backward. Throttle by bytes and downstream service capacity, not only messages/s.
 
-## Cross-region topology
+## Cross-Region Topology
 
 Replicate domain events according to residency and recovery policy. Active/passive replication gives a clear writer but requires subscription failover and position translation. Region-local topics with asynchronous inter-region relay reduce write latency but do not create one global order; duplicate identities and conflict ownership must be explicit.
 
@@ -156,7 +158,7 @@ The relay records source topic, partition, position, event ID, and source region
 
 During failover, a subscriber can either accept an RPO gap, wait for replication to catch up, or read both sources and deduplicate. Document the choice per event class. “Multi-region broker” is not itself a recovery contract.
 
-## Capacity and cost model
+## Capacity and Cost Model
 
 Illustrative workload:
 
@@ -175,13 +177,13 @@ Subscription metadata can dominate control-plane operations. With 60 subscriptio
 
 If one replay reads the full seven-day logical corpus in 12 hours, it adds about 1.3 GiB/s before replication and downstream writes. Allocate replay capacity explicitly.
 
-## Concrete failure trace: abandoned subscription pins retention
+## Concrete Failure Trace: Abandoned Subscription Pins Retention
 
 A team creates a replayable subscription for an experiment, pauses it, and abandons the project. Retention policy says the oldest active subscription checkpoint protects data. The checkpoint remains six months behind, disk usage grows, and brokers approach full capacity. Deleting old segments would violate the subscription’s apparent replay contract; keeping them threatens the whole topic.
 
 Containment stops low-priority publication or expands storage while identifying the owner. The control plane expires the subscription’s retention lease under audited policy, snapshots/archive if required, and advances the topic watermark. Prevention gives subscriptions owners, maximum retention leases, budget/quota, expiry, and alerts based on retained bytes attributable to each subscription, not merely consumer lag.
 
-## Operations and observability
+## Operations and Observability
 
 Track per topic, partition, subscription, schema, tenant, and region:
 
@@ -196,7 +198,7 @@ Track per topic, partition, subscription, schema, tenant, and region:
 
 Runbooks cover publisher schema regression, slow/abandoned subscription, accidental replay, corrupt snapshot, filter rollout error, control-plane outage, regional relay loop, and retention pressure.
 
-## Security and privacy
+## Security and Privacy
 
 Authorize publish and subscribe separately by topic, event type, tenant, region, and purpose. Schema registration, replay, seek, export, and subscription creation are privileged control-plane operations. Audit them immutably.
 
@@ -204,7 +206,7 @@ Minimize envelopes; routing headers are widely visible to broker infrastructure 
 
 Reject spoofed `source`, subject, trace, and tenant fields; the authenticated publisher identity determines allowed values. Validate sizes, nesting, decompression ratio, and schema before fan-out to prevent one event multiplying resource abuse across every subscriber.
 
-## Verification strategy
+## Verification Strategy
 
 - model-test subscription create/pause/seek/checkpoint/delete and membership generations;
 - crash fan-out workers at every checkpoint boundary and compare with the source log;
@@ -215,7 +217,7 @@ Reject spoofed `source`, subject, trace, and tenant fields; the authenticated pu
 - attempt unauthorized fetch, seek, export, filter change, and cross-tenant cache access;
 - expire an abandoned retention lease and verify evidence plus notifications.
 
-## Decision framework
+## Decision Framework
 
 Use pub-sub when independent consumers need the same fact, can own their checkpoints, and benefit from replay or isolation. Prefer direct synchronous calls when the caller needs an immediate response and both services share one availability budget. Prefer a work queue for one-owner tasks. Prefer a workflow when events are being used to hide an implicit multi-step state machine.
 
@@ -237,3 +239,12 @@ Before creating a topic, answer:
 - [Apache Avro Specification: Schema Resolution](https://avro.apache.org/docs/current/specification/#schema-resolution)
 - [Google Cloud Pub/Sub: Subscription Properties](https://cloud.google.com/pubsub/docs/subscription-properties)
 - [NATS JetStream: Consumers](https://docs.nats.io/nats-concepts/jetstream/consumers)
+
+---
+
+## Related Chapters
+
+- [Message Queue Architecture](01-message-queues.md): competing consumers or broadcast, which is the whole difference in what can be promised
+- [Message Ordering](03-message-ordering.md): fan-out multiplies the number of places where ordering has to be defined
+- [Transactional Outbox, Inbox, and CDC Publication](07-outbox-pattern.md): how an event gets published because a database row says it has to be
+- [Durable Execution and Workflow Engines](../18-workflow-job-systems/04-durable-execution-workflow-engines.md): the consumer that treats an event as resumable program state, not a notification

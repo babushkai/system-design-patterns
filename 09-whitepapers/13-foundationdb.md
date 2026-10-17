@@ -1,5 +1,11 @@
 # FoundationDB: A Distributed, Unbundled, Transactional Key-Value Store
 
+## TL;DR
+
+FoundationDB unbundles a transactional store into separately scalable roles coordinated through a durable ordered log, so conflict detection, logging, and value storage each scale on their own and storage recovery leaves the synchronous commit path.
+
+Optimistic concurrency buys high throughput under light contention and makes hot logical records an application-visible bottleneck. Lag between roles becomes the primary operational variable, and deterministic simulation is how the published failure behavior was validated.
+
 ## Publication Boundary
 
 - **Paper:** *FoundationDB: A Distributed Unbundled Transactional Key Value Store*
@@ -217,15 +223,16 @@ The authors reported more than 0.5 million CloudKit disk-years without detected 
 5. Deterministic simulation transforms rare failures into replayable tests, provided the environment and oracles are faithful.
 6. Product limits such as transaction size and lifetime are load-bearing correctness and memory bounds.
 
-## Primary Reference
+## References
 
 - [FoundationDB: A Distributed Unbundled Transactional Key Value Store (SIGMOD 2021)](https://www.foundationdb.org/files/fdb-paper.pdf)
+---
 
 ## Related Chapters
 
-- [Distributed Transactions](../02-distributed-databases/07-distributed-transactions.md)
-- [B-Trees](../03-storage-engines/01-b-trees.md)
-- [Write-Ahead Logging](../03-storage-engines/04-write-ahead-logging.md)
-- [Aurora](./09-aurora.md)
-- [Spanner](./04-spanner.md)
-- [Disaster Recovery](../15-deployment/05-disaster-recovery.md)
+- [Distributed Transactions](../02-distributed-databases/07-distributed-transactions.md): serializable snapshot isolation is the contrast case to the two-phase-commit designs this book starts with
+- [B-Trees](../03-storage-engines/01-b-trees.md): each storage server is a single-node store, so its tree behavior sets the read amplification budget
+- [Write-Ahead Logging](../03-storage-engines/04-write-ahead-logging.md): the durable ordered log is not a metaphor here but the component every role coordinates through
+- [Amazon Aurora](09-aurora.md): Aurora pushes redo into storage while FoundationDB unbundles roles around a log: two answers to one coupling
+- [Spanner](04-spanner.md): both promise serializable transactions across machines and disagree about where consensus belongs
+- [Disaster Recovery and Data Reconstruction](../15-deployment/05-disaster-recovery.md): taking storage off the commit path changes what a region failover has to prove before it accepts writes

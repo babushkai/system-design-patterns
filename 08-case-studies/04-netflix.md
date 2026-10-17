@@ -1,5 +1,7 @@
 # Netflix: Evidence, Inference, and a Streaming Reference Design
 
+## TL;DR
+
 Netflix is not one “video service”: it separates a control plane for identity, catalog, personalization, playback authorization, and steering from a content plane that prepares and delivers immutable media. Public sources document dated components, not one complete current architecture.
 
 Claims use three labels:
@@ -278,7 +280,7 @@ The reusable lessons are:
 5. Measure playback outcome by ISP/region/device/content slice; global API health is insufficient.
 6. Treat chaos experiments as bounded tests of a declared steady state.
 
-## Primary Sources
+## References
 
 - Netflix Technology Blog, [“Per-Title Encode Optimization”](https://netflixtechblog.com/per-title-encode-optimization-7e99442b62a2), December 2015.
 - Netflix, [“Completing the Netflix Cloud Migration”](https://about.netflix.com/en/news/completing-the-netflix-cloud-migration), February 2016.
@@ -287,3 +289,12 @@ The reusable lessons are:
 - Netflix Open Connect, [appliance overview](https://openconnect.netflix.com/en/appliances/), accessed July 2026.
 - Netflix, [Chaos Monkey repository](https://github.com/Netflix/chaosmonkey), source and documentation accessed July 2026.
 - Netflix Technology Blog, [“Foundation Model for Personalized Recommendation”](https://netflixtechblog.com/foundation-model-for-personalized-recommendation-1a0bd8e02d39), March 2025.
+
+---
+
+## Related Chapters
+
+- [CDN Architecture](../06-scaling/04-cdn-architecture.md): the delivery plane, where the origin answers once and the edge answers the rest
+- [Cell-Based Architecture and Shuffle Sharding](../06-scaling/11-cell-based-architecture.md): the published case for cells, including the failures that motivated it
+- [Durable Execution and Workflow Engines](../18-workflow-job-systems/04-durable-execution-workflow-engines.md): encoding pipelines, where a workflow engine is the product rather than the plumbing
+- [Recommendation Systems](../16-ml-systems/07-recommendation-systems.md): the personalization surface and the evaluation problem behind because-you-watched

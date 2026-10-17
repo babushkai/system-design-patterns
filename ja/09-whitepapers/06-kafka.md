@@ -2,13 +2,6 @@
 
 > **注:** この記事は英語の原文を日本語に翻訳したものです。コードブロック、Mermaidダイアグラム、論文タイトル、システム名、技術用語は原文のまま保持しています。
 
-## 論文概要
-
-- **タイトル**: Kafka: a Distributed Messaging System for Log Processing
-- **著者**: Jay Kreps, Neha Narkhede, Jun Rao (LinkedIn)
-- **発表**: NetDB Workshop 2011
-- **背景**: LinkedInは高スループット・低レイテンシのログ処理を必要としていました
-
 ## TL;DR
 
 Kafkaは分散コミットログで、以下を提供します：
@@ -16,6 +9,13 @@ Kafkaは分散コミットログで、以下を提供します：
 - パーティション化されたトピックによる**スケーラビリティ**
 - レプリケーションによる**耐久性**
 - オフセットベースの追跡による**シンプルなコンシューマモデル**
+
+## 論文概要
+
+- **タイトル**: Kafka: a Distributed Messaging System for Log Processing
+- **著者**: Jay Kreps, Neha Narkhede, Jun Rao (LinkedIn)
+- **発表**: NetDB Workshop 2011
+- **背景**: LinkedInは高スループット・低レイテンシのログ処理を必要としていました
 
 ## 課題
 

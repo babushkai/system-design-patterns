@@ -1,10 +1,12 @@
 # Consensus Algorithms
 
+## TL;DR
+
 Consensus is the safety core of a replicated state machine: replicas choose one ordered history even when processes crash, messages are delayed or duplicated, and the network partitions. Its value is not that every server is always current. Its value is that no two successful majorities can make incompatible decisions under the stated failure model.
 
 Consensus design must preserve **replicated-state-machine safety, quorum intersection, log choice, recovery, membership, and explicit liveness assumptions**. [Leader Election](./09-leader-election.md) covers candidacy, authority epochs, leases, external-resource fencing, failover timing, and handoff. The [Raft paper analysis](../09-whitepapers/07-raft.md) follows one protocol; the sections below compare common proof obligations.
 
-## The contract and failure model
+## The Contract and Failure Model
 
 For a single consensus instance, the usual properties are:
 
@@ -23,7 +25,7 @@ The FLP result says a deterministic consensus protocol cannot guarantee terminat
 
 Practical systems obtain liveness from partial synchrony, randomized timeouts, failure detectors, or a stable leader: after some unknown point, enough messages and processing complete within a useful bound. Timeouts choose when to try another leader; they must never be used as proof that an old value did not commit.
 
-## State that carries the proof across crashes
+## State That Carries the Proof Across Crashes
 
 A production consensus group persists enough information to prevent a restart from contradicting promises made before the crash. Depending on the protocol, that includes:
 
@@ -37,7 +39,7 @@ Volatile state includes replication progress, next indexes, timers, and cached r
 
 The replicated state machine separately tracks `commit_index` and `applied_index`. An entry can be durably chosen but not yet applied. A read that observes application state must wait until the required committed index is applied.
 
-## Quorum intersection is the safety mechanism
+## Quorum Intersection Is the Safety Mechanism
 
 With `n = 2f + 1` voters and majority quorums of `f + 1`, any two majorities intersect. If an earlier quorum chose a value, a later protocol round contacts at least one member of that quorum. The protocol's state and selection rule force the later round to preserve the choice.
 
@@ -52,7 +54,7 @@ Flexible Paxos observes that not every quorum type must intersect every other ty
 
 Replica count is not failure tolerance by itself. Five voters on one rack still share a rack failure. Place voters across the failure domains named in the availability contract, and calculate whether a quorum remains after each domain loss.
 
-## Paxos: choosing one value
+## Paxos: Choosing One Value
 
 Paxos makes the intersection argument explicit through numbered ballots.
 
@@ -70,7 +72,7 @@ The selection rule is the bridge between quorums. Suppose `X` was already chosen
 
 Multiple proposers can repeatedly preempt one another with higher ballots while preserving safety and making no progress. A stable distinguished proposer supplies liveness and lets subsequent instances skip phase one in the normal case.
 
-## From one value to an ordered replicated log
+## From One Value to an Ordered Replicated Log
 
 Multi-Paxos runs a consensus instance per log slot. A stable leader completes phase one for a ballot and drives phase two for many slots. Implementations must handle holes, retransmit chosen entries, prevent two commands at one slot, and apply only a contiguous committed prefix.
 
@@ -85,7 +87,7 @@ The current-term rule is essential. An older-term entry can be present on a majo
 
 Paxos and Raft can implement equivalent fault-tolerant logs, but their state decompositions and proofs differ. Mixing Raft voting with an ad hoc Paxos-style log or changing one commit rule in isolation invalidates the original proof.
 
-## Client commands and reads
+## Client Commands and Reads
 
 ### Writes and retry identity
 
@@ -103,7 +105,7 @@ Reading from “the leader” is not automatically linearizable. An isolated old
 
 Follower reads without such a proof are stale reads and should expose a timestamp/index or staleness contract. Lease construction and external fencing belong in [Leader Election](./09-leader-election.md).
 
-## Membership, learners, and snapshots
+## Membership, Learners, and Snapshots
 
 ### Reconfiguration is consensus state
 
@@ -123,7 +125,7 @@ Logs cannot grow forever. A snapshot represents state after an applied log index
 
 Publish a snapshot atomically, retain log entries needed by active readers/followers until installation is safe, and install into a temporary location before switching the state pointer. A follower receiving a snapshot concurrently with log entries must not apply an old suffix over the new image. Snapshotting is part of the safety state machine, not a file-copy optimization.
 
-## Concrete failure traces
+## Concrete Failure Traces
 
 ### An acceptor forgets durable state
 
@@ -167,7 +169,7 @@ Replicate the chosen random value/time as command data or make the state-machine
 
 Leader identity is historical unless refreshed by a quorum/read barrier or a valid lease.
 
-## Capacity and cost model
+## Capacity and Cost Model
 
 For `n` full voters, a stable leader sends each log byte to roughly `n - 1` followers. At command rate `lambda` and average encoded entry size `s`:
 
@@ -191,7 +193,7 @@ Throughput is bounded by the minimum of leader CPU/apply capacity, durable-log b
 
 Under independent per-node availability `a`, majority availability is the binomial sum for at least `q` available nodes. This is only a sanity check. Shared racks, zones, software versions, disks, and control planes dominate real outages, so evaluate named correlated failure scenarios directly.
 
-## Production operation and verification
+## Production Operation and Verification
 
 Track proposal rate and failure, commit latency by quorum member, committed-to-applied lag, follower log/snapshot lag, retransmission, durable-log sync tails, snapshot build/install duration, leader changes, current membership, and time without quorum. Alert on **progress**, not just process health: five live processes can be unable to commit.
 
@@ -199,7 +201,7 @@ Keep consensus WAL and metadata on storage whose flush semantics are understood.
 
 Use model checking or specification for ballot/log/membership invariants, implementation-level fault injection at every persistence boundary, and history checking for the client contract. Test duplication, delay, reordering, asymmetric partitions, long pauses, clock jumps if leases are used, and membership changes during snapshot/catch-up. A green happy-path integration test provides little evidence for consensus safety.
 
-## Decision framework
+## Decision Framework
 
 1. What exact operations require one linearizable order, and can they be partitioned into independent groups?
 2. What crash, storage, network, and Byzantine behaviors are inside the failure model?
@@ -210,7 +212,7 @@ Use model checking or specification for ballot/log/membership invariants, implem
 7. Can quorum replication, snapshots, and replacement fit the latency and recovery-capacity budget?
 8. Has the implemented protocol (not only the paper algorithm) been model- and history-tested?
 
-## Primary references
+## References
 
 - [Fischer, Lynch, and Paterson, *Impossibility of Distributed Consensus with One Faulty Process* (JACM 1985)](https://groups.csail.mit.edu/tds/papers/Lynch/jacm85.pdf)
 - [Lamport, *Paxos Made Simple* (2001)](https://lamport.azurewebsites.net/pubs/paxos-simple.pdf)
@@ -218,3 +220,12 @@ Use model checking or specification for ballot/log/membership invariants, implem
 - [Ongaro and Ousterhout, *In Search of an Understandable Consensus Algorithm* (USENIX ATC 2014)](https://www.usenix.org/system/files/conference/atc14/atc14-paper-ongaro.pdf)
 - [Howard, Malkhi, and Spiegelman, *Flexible Paxos: Quorum Intersection Revisited* (2016)](https://arxiv.org/abs/1608.06696)
 - [Ongaro, *Consensus: Bridging Theory and Practice* (Stanford dissertation, 2014)](https://web.stanford.edu/~ouster/cgi-bin/papers/OngaroPhD.pdf)
+---
+
+## Related Chapters
+
+- [FoundationDB](../09-whitepapers/13-foundationdb.md): consensus used as a building block for an entire transactional storage system
+- [Chubby](../09-whitepapers/08-chubby.md): the lock-service framing that predates most consensus-library designs
+- [Raft](../09-whitepapers/07-raft.md): the protocol written to be implemented, read against the designs it replaced
+- [Distributed Time](../01-foundations/05-distributed-time.md): the timing assumptions a consensus argument quietly depends on
+- [Multi-Region Architecture](../06-scaling/09-multi-region-architecture.md): quorums across regions, where latency rather than fault tolerance picks the topology

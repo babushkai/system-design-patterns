@@ -1,5 +1,11 @@
 # Cloudflare System Design
 
+## TL;DR
+
+Cloudflare is several documented systems rather than one request path: anycast ingress, Unimog flow steering, Pingora, Workers, Quicksilver, and Durable Objects each carry their own consistency and failure behavior, and no public source shows a request crossing all of them in order.
+
+Treated as an evidence-bounded reference design, the composite teaches that route selection is hierarchical, connection reuse is a capacity feature rather than a latency trick, tenant density comes from constraining the execution model, and edge state still pays distance to its serialization point.
+
 ## Scope and Evidence Contract
 
 Cloudflare publishes detailed engineering accounts, each bounded by component, date, and measurement. The following labels preserve that evidence boundary:
@@ -236,7 +242,7 @@ Cells and a homogeneous fleet are not opposites at every layer. Cloudflare can e
 5. Edge state still obeys physics. Strong coordination requires a serialization point, and callers pay distance to it.
 6. A component catalog is not an architecture diagram. Mark optional edges and evidence boundaries explicitly.
 
-## Primary References
+## References
 
 - [Unimog: Cloudflare's edge load balancer (2020)](https://blog.cloudflare.com/unimog-cloudflares-edge-load-balancer/)
 - [Every service everywhere (2021)](https://blog.cloudflare.com/magic-makes-your-network-faster/)
@@ -246,11 +252,12 @@ Cells and a homogeneous fleet are not opposites at every layer. Cloudflare can e
 - [Eliminating cold starts with Cloudflare Workers (2020)](https://blog.cloudflare.com/eliminating-cold-starts-with-cloudflare-workers/)
 - [Introducing Workers Durable Objects (2020 beta)](https://blog.cloudflare.com/introducing-workers-durable-objects/)
 - [SQLite in Durable Objects (2024, later evolution)](https://blog.cloudflare.com/sqlite-in-durable-objects/)
+---
 
 ## Related Chapters
 
-- [Content Delivery Networks](../06-scaling/04-cdn-architecture.md)
-- [Multi-Region Architecture](../06-scaling/09-multi-region-architecture.md)
-- [Multi-Tenancy](../06-scaling/12-multi-tenancy.md)
-- [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md)
-- [SLOs and Error Budgets](../11-observability/05-slos-error-budgets.md)
+- [CDN Architecture](../06-scaling/04-cdn-architecture.md): the request path most readers picture, minus the subsystems this chapter treats as separate systems
+- [Multi-Region Architecture](../06-scaling/09-multi-region-architecture.md): anycast picks the ingress, while authority and failover are still decided per subsystem
+- [Multi-Tenant Isolation and Tenant Lifecycle Architecture](../06-scaling/12-multi-tenancy.md): running many tenants on one host is a tenancy design, not a CDN feature you can switch on
+- [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md): edge retries are dangerous because the origin may already have committed the effect
+- [SLOs and Error-Budget Control](../11-observability/05-slos-error-budgets.md): a public status page is an objective that customers enforce using your own measurements

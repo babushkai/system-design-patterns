@@ -2,13 +2,6 @@
 
 > **注:** この記事は英語の原文を日本語に翻訳したものです。コードブロック、Mermaidダイアグラム、論文タイトル、システム名、技術用語は原文のまま保持しています。
 
-## 論文概要
-
-- **タイトル**: TAO: Facebook's Distributed Data Store for the Social Graph
-- **著者**: Nathan Bronson, Zach Amsden, George Cabrera, et al.
-- **発表**: USENIX ATC 2013
-- **背景**: Facebookはソーシャルグラフデータの効率的な読み取り重視のストレージを必要としていました
-
 ## TL;DR
 
 TAOは地理的に分散された読み取り最適化データストアで、以下を提供します：
@@ -16,6 +9,13 @@ TAOは地理的に分散された読み取り最適化データストアで、�
 - 効率性のための**リードスルー/ライトスルーキャッシング**
 - オブジェクト単位の整合性を持つ**結果整合性**
 - 最小レイテンシで**毎秒数十億の読み取り**を処理
+
+## 論文概要
+
+- **タイトル**: TAO: Facebook's Distributed Data Store for the Social Graph
+- **著者**: Nathan Bronson, Zach Amsden, George Cabrera, et al.
+- **発表**: USENIX ATC 2013
+- **背景**: Facebookはソーシャルグラフデータの効率的な読み取り重視のストレージを必要としていました
 
 ## 課題
 

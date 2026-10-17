@@ -1,5 +1,11 @@
 # Amazon DynamoDB (2022): Predictability as the Product
 
+## TL;DR
+
+This chapter covers the 2022 USENIX ATC paper on DynamoDB as a managed service, not the 2007 Dynamo paper. The contribution is predictable tail latency inside a large multitenant fleet.
+
+Predictability comes from admitting work against a customer's logical budget instead of per-partition limits, keeping quota decoupled from partition count so splits do not dilute it, restoring quorum durability with a log-only role before full read capacity returns, and treating durability as continuous verification.
+
 ## Publication Boundary
 
 - **Paper:** *Amazon DynamoDB: A Scalable, Predictably Performant, and Fully Managed NoSQL Database Service*
@@ -183,15 +189,16 @@ The Prime Day 89.2 million requests/s figure and this YCSB experiment have diffe
 5. Durability is a continuous verification process: checksum, compare, reconstruct, and exercise restore.
 6. A managed service can hide capacity controls from customers but cannot abolish hot keys, feedback delay, or finite hardware.
 
-## Primary Reference
+## References
 
 - [Amazon DynamoDB: A Scalable, Predictably Performant, and Fully Managed NoSQL Database Service (USENIX ATC 2022)](https://www.usenix.org/system/files/atc22-elhemali.pdf)
+---
 
 ## Related Chapters
 
-- [Dynamo (2007)](./02-dynamo.md)
-- [Partitioning Strategies](../02-distributed-databases/05-partitioning-strategies.md)
-- [Leader Election](../02-distributed-databases/09-leader-election.md)
-- [Rate Limiting](../06-scaling/05-rate-limiting.md)
-- [Multi-Tenancy](../06-scaling/12-multi-tenancy.md)
-- [Disaster Recovery](../15-deployment/05-disaster-recovery.md)
+- [Dynamo](02-dynamo.md): the 2007 paper is the lineage; this one is what fifteen years of operating it as a service changed
+- [Partitioning Strategies](../02-distributed-databases/05-partitioning-strategies.md): predictable tails start with partition placement, which is where the paper locates its work
+- [Leader Election](../02-distributed-databases/09-leader-election.md): per-partition replication and failover remain leader problems hidden behind a stable API
+- [Rate Limiting](../06-scaling/05-rate-limiting.md): throttling is the central mechanism here, framed as flow control rather than a billing decision
+- [Multi-Tenant Isolation and Tenant Lifecycle Architecture](../06-scaling/12-multi-tenancy.md): tail latency at fleet scale is an isolation problem before it is a hardware problem
+- [Disaster Recovery and Data Reconstruction](../15-deployment/05-disaster-recovery.md): the paper describes repair and replication behavior that any restore runbook has to assume

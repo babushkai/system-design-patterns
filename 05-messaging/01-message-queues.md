@@ -1,10 +1,12 @@
 # Message Queue Architecture
 
+## TL;DR
+
 A message queue is a durable ownership-transfer mechanism for asynchronous work. Producers append an intent; one worker at a time receives a temporary claim; completion becomes final only when the queue records an acknowledgement. The core design problem is managing that state under crashes, overload, rebalancing, and retention, not choosing an SDK call.
 
 A queue contract must specify enqueue, claim and visibility, acknowledgement, partitioning, worker flow control, backlog, retention, and capacity. [Message Ordering](03-message-ordering.md) owns sequence guarantees, [Delivery Guarantees](04-delivery-guarantees.md) owns duplicate/loss boundaries, and [Poison-Message Quarantine](08-dead-letter-queues.md) owns failed-message repair.
 
-## Workload and contract
+## Workload and Contract
 
 Define the API in state-machine terms:
 
@@ -31,7 +33,7 @@ Specify separately:
 
 The queue contract should not promise that a handler’s external effect happens once. [Delivery Guarantees](04-delivery-guarantees.md) covers acknowledgement and side-effect ambiguity end to end.
 
-## State and invariants
+## State and Invariants
 
 A durable queue tracks:
 
@@ -58,7 +60,7 @@ The design enforces these invariants:
 
 **Admission is bounded.** Producers cannot consume unbounded disk simply because consumers are slow.
 
-## Data plane and control plane
+## Data Plane and Control Plane
 
 The **data plane** appends messages, replicates records, indexes ready/scheduled state, issues claims, validates claim generations, records acknowledgements, and streams payloads. Its hot path should use a cached versioned queue assignment rather than a global metadata lookup per message.
 
@@ -66,7 +68,7 @@ The **control plane** creates queues, defines durability/retention/quotas, assig
 
 Separate queue metadata from message payloads. Large payloads amplify replication, memory, and redelivery cost. A claim-check design places an immutable encrypted object in durable storage and queues a content-addressed reference plus integrity digest. Publication must not expose the reference before the object is durable, and retention must not delete the object while any message or replay can reference it.
 
-## Claim and acknowledgement protocol
+## Claim and Acknowledgement Protocol
 
 For a work-table design, claiming is one transaction:
 
@@ -83,7 +85,7 @@ Acknowledgement includes the latest claim generation. If claim 8 expires and wor
 
 Batch claims reduce round trips but increase invisible work, memory, and recovery delay. A worker should claim according to available execution slots, not prefetch thousands while only ten can run. Track claimed-but-not-started age separately from execution time.
 
-## Ready, delayed, and priority structures
+## Ready, Delayed, and Priority Structures
 
 A single FIFO list is insufficient when messages can be delayed, expire, or carry priority. Common structures are:
 
@@ -97,7 +99,7 @@ Moving scheduled messages into ready state must be idempotent. A crash between r
 
 Strict priority can starve normal work. Use weighted service, reserved capacity, or age promotion. Priority is an admission/scheduling policy, not a field that workers independently interpret. Backfills and retries need separate budgets so they cannot crowd out new work.
 
-## Partitioning and consumer assignment
+## Partitioning and Consumer Assignment
 
 Partitions are the unit of storage placement and parallelism. Hash routing balances arbitrary keys; entity routing keeps related work together; tenant routing supports isolation but creates skew. [Message Ordering](03-message-ordering.md) covers the ordering consequences.
 
@@ -107,7 +109,7 @@ Consumer assignment is epoch-based. A coordinator publishes `(group, partition, 
 
 Hot partitions require better routing or isolated capacity, not merely more consumers: one partition may allow only limited concurrent claims or one ordered lane. Split a hot tenant/entity only if its semantic scope permits it. Otherwise apply per-key admission and expose that key as the bottleneck.
 
-## Worker flow control and overload
+## Worker Flow Control and Overload
 
 The queue is a buffer, not infinite capacity. Apply backpressure at three boundaries:
 
@@ -119,7 +121,7 @@ Queue depth alone is ambiguous. Ten million tiny messages may be cheap; ten thou
 
 When consumers fall behind, retries and lease expirations can create positive feedback. Stop speculative prefetch, lengthen leases only for demonstrably progressing tasks, reduce producer acceptance for low-priority classes, and protect downstream services with concurrency budgets. Scaling workers into a saturated database makes the incident worse.
 
-## Retention, compaction, and payload lifecycle
+## Retention, Compaction, and Payload Lifecycle
 
 Work queues can remove acknowledged records after a repair/audit window; log queues retain by time/size independently of acknowledgement. Define retention from replay, incident investigation, legal, and cost requirements. “Keep forever” is not an operational plan.
 
@@ -127,7 +129,7 @@ Deletion proceeds from a watermark: all required replicas have the segment; no l
 
 External payloads need reference accounting or expiry derived from the queue’s maximum retention plus safety margin. A periodic reconciliation compares live message references with objects and detects both missing payloads and orphaned cost.
 
-## Capacity and cost model
+## Capacity and Cost Model
 
 Consider an illustrative queue:
 
@@ -144,13 +146,13 @@ The burst adds `(25,000 - 19,000) * 1,200 = 7.2 million` messages. At the post-b
 
 At 18 ms mean service time, 25,000/s consumes 450 concurrent worker-seconds. At 60% target utilization, plan about 750 execution slots before failure reserve. Validate with the actual service-time tail and downstream limits; Little’s Law relates average in-flight work to throughput and residence time but does not promise acceptable tails.
 
-## Concrete failure trace: lease shorter than execution
+## Concrete Failure Trace: Lease Shorter Than Execution
 
 A media task normally takes 40 seconds, but its visibility lease is 30 seconds. Worker A starts and remains healthy. At 30 seconds the queue exposes the message; worker B receives claim generation 12 while A still holds generation 11. Both upload the result. A’s late acknowledgement is correctly rejected, yet the duplicate external upload already occurred.
 
 Containment reduces concurrency for that task class and uses a safe longer lease. Repair identifies duplicate outputs through the message/effect idempotency key. Prevention adds progress-based extension, a bound on claimed-but-not-started time, claim-generation propagation to the effect service, and a test that pauses a worker across lease expiry. The queue behaved according to its contract; the end-to-end effect protocol was incomplete.
 
-## Operations and observability
+## Operations and Observability
 
 Observe by queue, partition, tenant, message class, and consumer group:
 
@@ -165,7 +167,7 @@ Observe by queue, partition, tenant, message class, and consumer group:
 
 Runbooks cover growing backlog, hot partition, full disk, stuck scheduled mover, consumer rebalance loop, mass lease expiry, corrupt payload, and control-plane outage. Drills should use production-sized backlogs; empty-queue failover proves little.
 
-## Security and isolation
+## Security and Isolation
 
 Authenticate producers and consumers separately and authorize queue, tenant, operation, and message type. A worker that can claim should not automatically be allowed to purge, replay, or inspect every payload. Delivery tokens are unguessable, scoped, short-lived capabilities.
 
@@ -173,7 +175,7 @@ Validate envelope size, headers, delay, expiry, routing-key length, and payload 
 
 Control-plane changes (retention reduction, purge, replay, quota, consumer identity) need review, audit, and staged activation. Purge and bulk redrive are destructive operations with separate privileges and dry-run counts.
 
-## Verification strategy
+## Verification Strategy
 
 - model-test random enqueue/claim/extend/expire/ack transitions against a simple state machine;
 - kill brokers after every append/replication/publication boundary and verify acknowledged durability;
@@ -184,7 +186,7 @@ Control-plane changes (retention reduction, purge, replay, quota, consumer ident
 - reconcile inline/external payloads after expiry, quarantine, and replay;
 - fuzz malformed envelopes, oversized headers, and unauthorized operations.
 
-## Decision framework
+## Decision Framework
 
 Use a work queue when one logical worker should perform each item and buffering isolates producers from consumers. Use pub-sub when multiple independent subscriptions need the same event. Use a durable workflow engine when work contains timers, multi-step state, compensation, or human waits; see [Durable Execution](../18-workflow-job-systems/04-durable-execution-workflow-engines.md).
 
@@ -206,3 +208,12 @@ Choose the queue design by answering:
 - [PostgreSQL: SELECT, SKIP LOCKED](https://www.postgresql.org/docs/current/sql-select.html)
 - [John D. C. Little: A Proof for the Queuing Formula L = λW](https://doi.org/10.1287/opre.9.3.383)
 - [CloudEvents Specification](https://github.com/cloudevents/spec)
+---
+
+## Related Chapters
+
+- [Kafka](../09-whitepapers/06-kafka.md): where the log-as-abstraction argument was first made at scale
+- [Twitter/X Timelines](../08-case-studies/01-twitter.md): fan-out on write, and the viral publish that turns one event into a million writes
+- [Delivery Guarantees and Effect Boundaries](04-delivery-guarantees.md): what a broker can promise about one message, and what it leaves to you
+- [Backpressure](../06-scaling/07-backpressure.md): a queue is a buffer with an opinion: what happens when it fills
+- [Background Jobs and Worker Pools](../18-workflow-job-systems/02-background-jobs-worker-pools.md): the consumer side, where a queue becomes a work system with retries and leases

@@ -850,7 +850,7 @@ jobs:
 
 > *相互参照：DDDの境界付きコンテキストパターンについては`01-foundations/`を参照。コンテキストウィンドウ最適化戦略については`17-llm-systems/08-context-management.md`を参照。クロスサービスエージェント作業に関連するマイクロサービス通信パターンについては`12-service-mesh/`を参照。*
 
-## References
+## 参考文献
 
 1. [Anthropic - Long Context Prompting Tips](https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching#long-context-tips), 2025
 2. [Anthropic - Building Effective Agents](https://www.anthropic.com/engineering/building-effective-agents), 2025

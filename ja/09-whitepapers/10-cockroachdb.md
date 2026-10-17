@@ -2,13 +2,6 @@
 
 > **注:** この記事は英語の原文を日本語に翻訳したものです。コードブロック、Mermaidダイアグラム、論文タイトル、システム名、技術用語は原文のまま保持しています。
 
-## 論文概要
-
-- **タイトル**: CockroachDB: The Resilient Geo-Distributed SQL Database
-- **著者**: Rebecca Taft et al. (Cockroach Labs)
-- **発表**: SIGMOD 2020
-- **背景**: Spannerにインスパイアされた地理分散SQLデータベースの構築
-
 ## TL;DR
 
 CockroachDBはオープンソースの分散SQLデータベースで、以下を提供します：
@@ -16,6 +9,13 @@ CockroachDBはオープンソースの分散SQLデータベースで、以下を
 - データローカリティコンプライアンスのための**ジオパーティショニング**
 - 手動介入なしの**自動シャーディングとリバランシング**
 - 単一Leaderなしの**マルチアクティブ可用性**
+
+## 論文概要
+
+- **タイトル**: CockroachDB: The Resilient Geo-Distributed SQL Database
+- **著者**: Rebecca Taft et al. (Cockroach Labs)
+- **発表**: SIGMOD 2020
+- **背景**: Spannerにインスパイアされた地理分散SQLデータベースの構築
 
 ## 課題
 
@@ -252,7 +252,6 @@ class CockroachMVCC:
                 return intent.value
             else:
                 raise IntentError("Cannot resolve intent")
-
 
 class HybridLogicalClock:
     """
@@ -574,7 +573,6 @@ class RangeLeaseholder:
             self.hlc.now() < self.lease.expiration
         )
 
-
 class LeaseTransfer:
     """
     Transfer lease to optimize for locality.
@@ -890,7 +888,6 @@ class ClockSkewHandling:
         # Re-execute transaction
         return self.execute_transaction(txn)
 
-
 class ClockSynchronization:
     """
     Clock synchronization strategies.
@@ -967,7 +964,6 @@ class RangeManagement:
 
             if adjacent and self.can_merge(range_id, adjacent):
                 self.raft_propose_merge(range_id, adjacent)
-
 
 class RebalancingScheduler:
     """Automatic replica rebalancing."""

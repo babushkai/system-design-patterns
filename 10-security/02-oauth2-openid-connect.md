@@ -51,7 +51,7 @@ The client and resource server may be operated by different parties. Never infer
 
 ---
 
-## 2. Authorization Code with PKCE
+## 2. Authorization Code With PKCE
 
 ```mermaid
 sequenceDiagram
@@ -641,7 +641,7 @@ Prefer a maintained, standards-conformant authorization server and mature protoc
 
 ---
 
-## Primary References
+## References
 
 - [RFC 6749: The OAuth 2.0 Authorization Framework](https://www.rfc-editor.org/rfc/rfc6749)
 - [RFC 9700: Best Current Practice for OAuth 2.0 Security](https://www.rfc-editor.org/rfc/rfc9700)
@@ -659,8 +659,8 @@ Prefer a maintained, standards-conformant authorization server and mature protoc
 
 ## Related Chapters
 
-- [Authentication Systems](./01-authentication-fundamentals.md)
-- [JSON Web Tokens](./03-jwt-tokens.md)
-- [Zero-Trust Service and Workload Architecture](./05-zero-trust-architecture.md)
-- [Authorization at Scale](./07-authorization-patterns.md)
-- [API Design and Evolution](../12-service-mesh/04-api-design-patterns.md)
+- [Authentication Systems](01-authentication-fundamentals.md): delegation begins where authentication ends, and the two protocols are easiest to confuse here
+- [JOSE and JSON Web Token Verification](03-jwt-tokens.md): the serialization that carries these claims, plus the verification rules clients get wrong
+- [Zero-Trust Service and Workload Architecture](05-zero-trust-architecture.md): a token naming a workload rather than a user is the credential shape that architecture needs
+- [Authorization at Scale](07-authorization-patterns.md): scopes delegate coarse authority; deciding one object permission is a different system entirely
+- [API Design and Evolution](../12-service-mesh/04-api-design-patterns.md): the contract that decides which client may hold which scope without breaking during rotation

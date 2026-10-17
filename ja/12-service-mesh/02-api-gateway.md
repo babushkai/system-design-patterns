@@ -692,7 +692,7 @@ class VersionRouter:
 
 ---
 
-## 参考資料
+## 参考文献
 
 - [API Gateway Pattern](https://microservices.io/patterns/apigateway.html)
 - [Kong Documentation](https://docs.konghq.com/)

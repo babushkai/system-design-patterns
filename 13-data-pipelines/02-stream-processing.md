@@ -419,7 +419,7 @@ Select a runtime after these answers. Benchmark the complete path with checkpoin
 
 ---
 
-## Primary References
+## References
 
 - Tyler Akidau et al., [The Dataflow Model: A Practical Approach to Balancing Correctness, Latency, and Cost](https://www.vldb.org/pvldb/vol8/p1792-Akidau.pdf).
 - Apache Beam, [Programming Guide: Windowing, Watermarks, and Triggers](https://beam.apache.org/documentation/programming-guide/#windowing).
@@ -433,3 +433,13 @@ Select a runtime after these answers. Benchmark the complete path with checkpoin
 ---
 
 **Next:** [Change Data Capture](04-change-data-capture.md) explains how a database log becomes a replayable stream without losing the snapshot-to-tail boundary or source transaction semantics.
+
+---
+
+## Related Chapters
+
+- [Batch Execution](01-batch-processing.md): the same contract over a bounded input, where replay is complete and cheap
+- [Delivery Guarantees and Effect Boundaries](../05-messaging/04-delivery-guarantees.md): the delivery semantics inherited before any operator state exists
+- [Backpressure](../06-scaling/07-backpressure.md): the overload mechanism that stops state from becoming an unbounded queue
+- [LSM Trees](../03-storage-engines/02-lsm-trees.md): state backends are a storage-engine argument about write amplification and restore time
+- [Lakehouse Table Formats](05-lakehouse-table-formats.md): where results land, and what snapshot isolation costs an exactly-once claim

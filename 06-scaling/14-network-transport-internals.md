@@ -752,7 +752,7 @@ The test passes only when the chosen hypothesis is visible in transport state an
 7. **Measure packets and queues, not only bits.** A line-rate capacity plan without packet-size distribution, cycles/packet, queue delay, and connection state is incomplete.
 8. **Keep ownership boundaries intact.** Transport protects path and receiver state; connection lifecycle, request admission, retry semantics, and durable deduplication remain higher-layer designs.
 
-## Primary Evidence and Scope
+## References
 
 | Claim area | Primary source | Scope used here |
 |---|---|---|
@@ -769,14 +769,15 @@ The test passes only when the chosen hypothesis is visible in transport state an
 | IPv4/IPv6 PMTU and datagram probing | [RFC 1191](https://www.rfc-editor.org/rfc/rfc1191.html), [RFC 8200](https://www.rfc-editor.org/rfc/rfc8200.html), [RFC 8201](https://www.rfc-editor.org/rfc/rfc8201.html), [RFC 8899](https://www.rfc-editor.org/rfc/rfc8899.html) | Normative signaling, fragmentation responsibilities, and DPLPMTUD |
 | Linux scaling and offloads | [Linux kernel networking scaling documentation](https://docs.kernel.org/networking/scaling.html), [segmentation offloads](https://docs.kernel.org/networking/segmentation-offloads.html), [kTLS](https://docs.kernel.org/networking/tls.html), and [AF_XDP](https://docs.kernel.org/networking/af_xdp.html) | Linux mechanisms; the labeled capacity models require local measurement |
 | qlog-shaped diagnostics | [IETF QUIC qlog main-schema draft](https://datatracker.ietf.org/doc/draft-ietf-quic-qlog-main-schema/) | Useful implementation telemetry with draft/version caveat, not a stable RFC guarantee |
+---
 
-## Related Patterns
+## Related Chapters
 
-- [DNS and Connection Management](./13-dns-and-connection-management.md): resolver behavior, address selection, connection pooling, draining, and invisible ceilings
-- [Load Balancing](./01-load-balancing.md): L4/L7 boundaries, affinity, and QUIC connection-ID routing
-- [CDN Architecture](./04-cdn-architecture.md): regional termination and last-mile protocol deployment
-- [Backpressure](./07-backpressure.md): bounded application queues and overload control
-- [Retries, Timeouts, and Hedging](./10-retries-timeouts-hedging.md): deadline budgets and ambiguous transport outcomes
-- [Idempotency](../01-foundations/08-idempotency.md): durable effect deduplication
-- [Encryption](../10-security/06-encryption.md): certificate, key, and rotation policy
-- [Polling, SSE, and WebSockets](../07-real-time/01-polling.md): long-lived connection behavior
+- [DNS and Connection Management](13-dns-and-connection-management.md): resolver behavior and address selection decide which connection optimizations you can even use
+- [Load Balancing](01-load-balancing.md): L4 and L7 boundaries, affinity, and QUIC connection identifiers all move when transport semantics change
+- [CDN Architecture](04-cdn-architecture.md): regional termination is where a transport upgrade reaches real clients
+- [Backpressure](07-backpressure.md): congestion control is the transport version of a bounded queue with an explicit drop policy
+- [Retries, Timeouts, and Hedging](10-retries-timeouts-hedging.md): a lost packet and a lost response look identical, so attempt budgets must survive that ambiguity
+- [Idempotency and Operation Identity](../01-foundations/08-idempotency.md): hedging and retransmission make duplicates normal, which is why effect deduplication belongs above transport
+- [Cryptographic Key and Data-Protection Architecture](../10-security/06-encryption.md): certificate, key, and rotation policy determines how often a connection has to be rebuilt
+- [Client Delivery Transports](../07-real-time/01-polling.md): long-lived connections inherit every failure mode of the transport underneath them

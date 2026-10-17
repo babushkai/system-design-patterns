@@ -1,5 +1,7 @@
 # Instagram: Evidence, Inference, and a Media-System Reference Design
 
+## TL;DR
+
 Instagram combines durable social state, a large media pipeline, personalized retrieval, and privacy-sensitive delivery. Public sources describe dated slices, not one timeless architecture. Claims use three labels:
 
 - **Documented**: stated in a dated Instagram or Meta primary source.
@@ -287,7 +289,7 @@ The main lessons are:
 5. Give deletion a fast suppression path and measurable cleanup paths.
 6. Preserve dated evidence boundaries; a 2012 storage post and a 2025 ML post do not describe one simultaneous architecture.
 
-## Primary Sources
+## References
 
 - Instagram Engineering, [“Sharding & IDs at Instagram”](https://medium.com/instagram-engineering/sharding-ids-at-instagram-1cf5a71e5a5c), December 2012.
 - Instagram Engineering, [“Instagration Pt. 2: Scaling our infrastructure to multiple data centers”](https://medium.com/instagram-engineering/instagration-pt-2-scaling-our-infrastructure-to-multiple-data-centers-5745cbad7834), 2015.
@@ -295,3 +297,12 @@ The main lessons are:
 - Meta Engineering, [“How Instagram suggests new content”](https://engineering.fb.com/2020/12/10/web/how-instagram-suggests-new-content/), December 2020.
 - Meta Engineering, [“Scaling the Instagram Explore recommendations system”](https://engineering.fb.com/2023/08/09/ml-applications/scaling-instagram-explore-recommendations-system/), August 2023.
 - Meta Engineering, [“Journey to 1000 models: Scaling Instagram's recommendation system”](https://engineering.fb.com/2025/05/21/production-engineering/journey-to-1000-models-scaling-instagrams-recommendation-system/), May 2025.
+
+---
+
+## Related Chapters
+
+- [CDN Architecture](../06-scaling/04-cdn-architecture.md): the media read path, where cache keys and egress decide latency and cost together
+- [Cache Stampede, Cold Start, and Warming](../04-caching/04-cache-stampede.md): a cold rendition after a viral spike is the dogpile with a filename attached
+- [Object Storage Architecture and Commit Protocols](../03-storage-engines/08-object-storage.md): durability for originals and derivatives, plus the copies nobody counted
+- [Recommendation Systems](../16-ml-systems/07-recommendation-systems.md): the feed as a ranking problem once the social graph stops being sufficient

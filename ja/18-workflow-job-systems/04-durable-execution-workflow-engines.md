@@ -2,6 +2,8 @@
 
 > この記事は英語版から翻訳されました。最新版は[英語版](/18-workflow-job-systems/04-durable-execution-workflow-engines)をご覧ください。
 
+## TL;DR
+
 Durable executionは、通常のプログラムのようにワークフローコードを書きながら、クラッシュ後に復元できるだけの履歴を記録する方式です。エンジンは決定、タイマー、Activity完了、signalを永続化し、再起動時に履歴をreplayして状態を再構築します。
 
 ## 中核アイデア

@@ -1,5 +1,7 @@
 # Dropbox: Convergent File Sync over Immutable Content
 
+## TL;DR
+
 A file-sync system must reconcile two very different kinds of state. File bytes are large, mostly immutable, and cheap to identify by content; namespace metadata is small, highly mutable, shared, and ordered by user actions. Treating both as generic “files in object storage” hides the central design problem: how devices converge after offline edits, renames, deletes, partial transfers, and conflicting writes without losing user data.
 
 Claims use three evidence labels:
@@ -8,7 +10,7 @@ Claims use three evidence labels:
 - **Inference**: derived from public behavior or distributed-sync constraints, not asserted as private Dropbox implementation.
 - **Reference design**: an explicit design for a Dropbox-like service where public sources do not specify the production mechanism.
 
-## Workload and service contract
+## Workload and Service Contract
 
 **Documented, 2016 architecture.** Dropbox publicly separates file content from metadata. Magic Pocket stores encrypted, immutable file blocks up to 4 MiB, while changes and revision history live above it in metadata systems such as FileJournal. The 2016 article described multi-zone storage, asynchronous cross-zone replication, cells, a block index, and repair machinery. [Dropbox, Inside the Magic Pocket](https://dropbox.tech/infrastructure/inside-the-magic-pocket)
 
@@ -28,7 +30,7 @@ The design contract is:
 
 Unlike collaborative document editing, general file sync cannot merge arbitrary byte sequences semantically. Preserve both versions on an unresolved concurrent edit rather than inventing a “last writer wins” merge that silently discards data. The CRDT design space is covered in [collaborative editing](../07-real-time/07-crdts-collaborative-editing.md); a filesystem sync engine has different user expectations.
 
-## State, authority, and identifiers
+## State, Authority, and Identifiers
 
 **Reference design.** Separate these records:
 
@@ -67,7 +69,7 @@ Publishing metadata before blocks satisfy this predicate creates a valid-looking
 
 **Reference design.** A mutation includes `base_revision`. If it equals the current revision, commit normally. If it is stale and the operation cannot commute, preserve the current branch and create a conflict revision linked to the common ancestor. Directory creation with distinct names may commute; simultaneous byte replacement generally does not.
 
-## Documented storage components
+## Documented Storage Components
 
 ### Magic Pocket: immutable content
 
@@ -87,7 +89,7 @@ Publishing metadata before blocks satisfy this predicate creates a valid-looking
 
 This supports a broad lesson: reducing nondeterministic interleavings in the orchestrator can be more valuable than maximizing local parallelism.
 
-## Reference architecture
+## Reference Architecture
 
 **Reference design.** Public articles describe components at different times, not one complete current diagram. A defensible reconstruction keeps the content and metadata planes separate:
 
@@ -108,7 +110,7 @@ flowchart LR
 
 The data plane transfers blocks, commits metadata transactions, lists deltas, and downloads manifests. The control plane assigns storage, repairs failures, rebalances shards, advances garbage-collection watermarks, manages schemas, and rolls out client compatibility policy. Notifications are hints: a dropped hint delays sync, but the durable cursor/journal repairs the gap.
 
-## Upload and commit flow
+## Upload and Commit Flow
 
 **Reference design.** A resumable upload proceeds as follows:
 
@@ -130,7 +132,7 @@ Block existence is not proof that the caller may reference or read that block. C
 
 A notification channel must not carry the only copy of a change. This is the distinction between [pub/sub](../05-messaging/02-pub-sub.md) and a durable [message queue](../05-messaging/01-message-queues.md).
 
-## Partitioning and hotspot control
+## Partitioning and Hotspot Control
 
 **Reference design.** Partition metadata by namespace or stable owner, not by full path. This makes most rename and directory mutations local. Shared folders that outgrow one partition require an explicit strategy:
 
@@ -141,7 +143,7 @@ A notification channel must not carry the only copy of a change. This is the dis
 
 Content is naturally distributed by block/bucket ID. Placement must spread encoded fragments across independent failure domains and prevent one cell or rack from holding too many fragments needed for reconstruction. Metadata and content have different skew: a celebrity shared folder is a metadata hot key even if its blocks are perfectly balanced.
 
-## Capacity and cost model
+## Capacity and Cost Model
 
 ### Content traffic: illustrative assumptions
 
@@ -173,7 +175,7 @@ $$
 
 Reference counting alone is dangerous under lost or reordered metadata updates. Periodic reachability scans and a quarantine interval provide independent evidence.
 
-## Concrete failure trace: offline edit meets rename and retry
+## Concrete Failure Trace: Offline Edit Meets Rename and Retry
 
 **Reference-design trace.** Two devices start from file revision `r10` at `/team/plan.md`.
 
@@ -188,7 +190,7 @@ Reference counting alone is dangerous under lost or reordered metadata updates. 
 
 Path identity would have misclassified A's update as a new file at the old name. Last-write-wins would have discarded either A's or B's content. Stable identity, base revisions, and idempotent receipts avoid both failures.
 
-## Region failure and disaster recovery
+## Region Failure and Disaster Recovery
 
 **Documented, 2022.** Dropbox described Magic Pocket as active-active across data centers, while metadata resilience evolved through a separate multi-phase program. In a disaster-readiness exercise, Dropbox deliberately “blackholed” a data center and documented the operational dependencies found during failover. [Dropbox, disaster readiness test](https://dropbox.tech/infrastructure/disaster-readiness-test-failover-blackhole-sjc)
 
@@ -196,13 +198,13 @@ Path identity would have misclassified A's update as a new file at the old name.
 
 **Reference design.** Give each metadata shard one write authority with fencing epochs. A failover promotes a sufficiently caught-up replica, issues a higher epoch, redirects clients, and rejects stale writers. Content reads may remain multi-homed. Maintain enough regional egress and metadata capacity for evacuation without waiting for autoscaling; see [multi-region architecture](../06-scaling/09-multi-region-architecture.md) and [disaster recovery](../15-deployment/05-disaster-recovery.md).
 
-## Security and privacy
+## Security and Privacy
 
 **Reference design.** Use short-lived, capability-scoped block upload/download tokens tied to account, block, operation, and expiry. Check share authorization against a versioned policy at metadata commit and content fetch. Encrypt bytes in transit and at rest, envelope-encrypt storage keys, and isolate key-management authority from block storage.
 
 Client filenames, sharing graphs, device cursors, and access telemetry are sensitive even when content is encrypted. Audit privileged access, minimize log payloads, and separate abuse detection from broad employee access. Malware scanning and previews require an explicit trust boundary; client-side encrypted products cannot transparently reuse a server-side plaintext scanning pipeline.
 
-## Observability and verification
+## Observability and Verification
 
 **Reference design.** Operate the convergence contract with:
 
@@ -221,7 +223,7 @@ Client filenames, sharing graphs, device cursors, and access telemetry are sensi
 
 Useful invariant tests include: no committed manifest has a missing block; applying the same journal prefix twice is idempotent; two clients that receive the same complete history converge; interrupted materialization never exposes partial bytes; and garbage collection never deletes a reachable block.
 
-## Evolution and migration
+## Evolution and Migration
 
 **Documented, 2014–2015 snapshot.** Dropbox described dark-launching Magic Pocket by mirroring data across regional locations in August 2014, retaining additional backups, and beginning exclusive in-house file serving in February 2015. [Dropbox, scaling to exabytes](https://dropbox.tech/infrastructure/magic-pocket-infrastructure)
 
@@ -229,7 +231,7 @@ Useful invariant tests include: no committed manifest has a missing block; apply
 
 **Reference design.** A storage migration should mirror writes, backfill immutable blocks, verify content independently, shadow reads, compare manifests, canary by account, and retain a rollback source until deletion lag closes. A client-protocol migration must support old cursors and operations across the full client-upgrade tail; mobile clients cannot all be upgraded on demand.
 
-## Transferable lessons
+## Transferable Lessons
 
 1. Split large immutable content from small mutable metadata.
 2. Use stable object identity; treat paths as names that can change.
@@ -240,7 +242,7 @@ Useful invariant tests include: no committed manifest has a missing block; apply
 7. Include repair, compaction, migration, and garbage collection in capacity, not just foreground reads and writes.
 8. Design client determinism and failure simulation as architecture, not test polish.
 
-## Primary sources
+## References
 
 - [Dropbox: Inside the Magic Pocket, 2016](https://dropbox.tech/infrastructure/inside-the-magic-pocket)
 - [Pocket watch: Verifying exabytes of data (Dropbox, 2016)](https://dropbox.tech/infrastructure/pocket-watch)
@@ -250,3 +252,12 @@ Useful invariant tests include: no committed manifest has a missing block; apply
 - [Dropbox: Testing sync, 2020](https://dropbox.tech/infrastructure/-testing-our-new-sync-engine)
 - [Dropbox: Disaster readiness test, 2022](https://dropbox.tech/infrastructure/disaster-readiness-test-failover-blackhole-sjc)
 - [Dropbox: Improving storage efficiency in Magic Pocket, 2026](https://dropbox.tech/infrastructure/improving-storage-efficiency-in-magic-pocket-our-immutable-blob-store)
+
+---
+
+## Related Chapters
+
+- [Object Storage Architecture and Commit Protocols](../03-storage-engines/08-object-storage.md): content-addressed blobs as the unit of sync, with dedup riding on the integrity check
+- [Collaborative Document Replication and CRDT Sync Engines](../07-real-time/07-crdts-collaborative-editing.md): convergence without a lock, which is what sync needs after both sides edited offline
+- [Publish-Subscribe Architecture](../05-messaging/02-pub-sub.md): the notification plane that tells every other device something changed
+- [Disaster Recovery and Data Reconstruction](../15-deployment/05-disaster-recovery.md): a deletion is durable too, so recovery needs history rather than a snapshot

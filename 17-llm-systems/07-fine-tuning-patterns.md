@@ -301,3 +301,12 @@ Safety tuning does not replace runtime policy. Distribution shift, adversarial i
 8. [S-LoRA: Serving Thousands of Concurrent LoRA Adapters](https://arxiv.org/abs/2311.03285): Sheng et al., 2023
 9. [TRL - Transformers Reinforcement Learning](https://huggingface.co/docs/trl): SFT/DPO/GRPO tooling
 10. [Distilling Step-by-Step!](https://arxiv.org/abs/2305.02301): Hsieh et al., 2023
+
+---
+
+## Related Chapters
+
+- [Retrieval-Augmented Generation Systems](04-rag-patterns.md): the usual first alternative: put the knowledge in retrieval rather than in weights
+- [Training Pipelines](../16-ml-systems/05-training-pipelines.md): a fine-tune is a training run, with every lineage obligation that implies
+- [Dataset Management and Versioning](../16-ml-systems/11-dataset-management-versioning.md): an instruction dataset you cannot version cannot be retrained or audited
+- [LLM Evaluation and Observability](10-llm-evaluation.md): telling a real capability gain apart from evaluation set contamination

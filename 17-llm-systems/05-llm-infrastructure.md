@@ -12,7 +12,7 @@ Infrastructure covers the gateway, provider/self-hosted abstraction, global mode
 
 ---
 
-## Begin with the Workload and SLO
+## Begin With the Workload and SLO
 
 An infrastructure design is meaningful only for a specified workload distribution. Record at least:
 
@@ -411,3 +411,12 @@ Prefer the least operationally complex architecture that meets quality, policy, 
 - [FlashAttention-3: Fast and Accurate Attention with Asynchrony and Low-precision](https://arxiv.org/abs/2407.08608): accelerator-aware attention kernels
 - [OpenTelemetry GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/): trace and metric vocabulary for generative AI systems
 - [NIST AI Risk Management Framework: Generative AI Profile](https://www.nist.gov/publications/artificial-intelligence-risk-management-framework-generative-artificial-intelligence): generative-AI risk management guidance
+
+---
+
+## Related Chapters
+
+- [GPU Inference Internals](11-gpu-inference-internals.md): the scheduler and cache behaviour underneath every capacity number here
+- [Model Serving](../16-ml-systems/03-model-serving.md): serving a stateless model, which is simpler than this in almost every way
+- [Backpressure](../06-scaling/07-backpressure.md): a token stream is a slow response, so overload must be shed at admission
+- [LLM Inference Platforms](../08-case-studies/13-llm-inference-platforms.md): the same infrastructure sold as a product, with tenants, quotas, and incidents

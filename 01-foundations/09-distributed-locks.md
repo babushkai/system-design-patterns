@@ -1,5 +1,7 @@
 # Distributed Locks and Leases
 
+## TL;DR
+
 A distributed lock is a protocol for serializing a named critical section across processes that can pause, disconnect, restart, and disagree about time. Mutual exclusion at the lock service is only half the safety argument. A former holder may continue after its grant expires, so correctness-critical effects need a monotonically ordered fencing token that the protected resource validates atomically with the effect.
 
 A distributed-lock contract must specify **lock API semantics, critical-section scope, wait queues, fencing at protected resources, multi-lock deadlocks, and lock-service operation**. [Leader Election](../02-distributed-databases/09-leader-election.md) owns long-lived leadership terms, activation barriers, and failover. [Leases, Heartbeats, and Recovery](../18-workflow-job-systems/08-leases-heartbeats-recovery.md) owns task-claim renewal and abandoned-work recovery. [Consensus Algorithms](../02-distributed-databases/08-consensus-algorithms.md) owns how a replicated service agrees on lock state.
@@ -14,7 +16,7 @@ A distributed-lock contract must specify **lock API semantics, critical-section 
 | etcd API guarantees and lock API | Mutations receive increasing revisions; lock ownership is tied to a lease/key and can be composed with etcd transactions | Guarantees inside etcd do not automatically fence another resource |
 | PostgreSQL 18 documentation | Transaction/session advisory locks, row/table conflicts, deadlock detection, and lock observability | Locks apply within one database cluster and remain advisory where documented |
 
-## Lock contract before implementation
+## Lock Contract Before Implementation
 
 “Lock `orders`” is not a contract. Define:
 
@@ -34,7 +36,7 @@ An **efficiency lock** avoids duplicate computation while tolerating overlap. A 
 
 Prefer the smallest lock scope that contains the invariant. A global lock is easy to name and turns unrelated work into one queue. A per-entity lock increases concurrency but requires callers to derive exactly the same canonical entity key.
 
-## State, authority, and invariants
+## State, Authority, and Invariants
 
 The authoritative lock record contains at least:
 
@@ -62,7 +64,7 @@ The protected resource separately stores the greatest accepted fencing generatio
 7. Multi-resource acquisitions use a declared order or transactional protocol and have bounded wait.
 8. Losing the lock service does not authorize holders to extend grants locally.
 
-## Control path and protected data path
+## Control Path and Protected Data Path
 
 ~~~mermaid
 sequenceDiagram
@@ -83,7 +85,7 @@ The **control path** serializes acquisition, queues contenders, renews sessions,
 
 **Inference:** if a protected resource must make a linearizable lock-service read before every write, the lock service is effectively in the write transaction anyway. A conditional write or database transaction at the resource may be simpler and stronger.
 
-## Why expiry does not stop a holder
+## Why Expiry Does Not Stop a Holder
 
 A lease makes abandoned state reclaimable; it does not terminate the process that held it. The holder may be paused by garbage collection, host suspension, page fault, debugger, scheduler starvation, or a partition. It cannot run a “lease lost” callback while paused.
 
@@ -91,7 +93,7 @@ Detailed renewal timing and failure detection belong to [Leader Election](../02-
 
 **Documented:** Chubby's 2006 paper describes sequencers that protected services can validate and a lock-delay fallback for services that cannot validate them. Lock delay waits before regranting after session loss; it reduces the chance that old requests survive but is a timing mitigation, not proof that an arbitrarily delayed request is gone.
 
-## Fencing at the effect boundary
+## Fencing at the Effect Boundary
 
 Suppose client A holds generation 83, pauses beyond its lease, and client B receives generation 84. The resource applies:
 
@@ -110,7 +112,7 @@ Token scope matters. A generation for `tenant/42/invoice/7` does not order write
 
 Do not use wall-clock timestamps as fencing tokens. Clock regressions, equal timestamps, restore, and multi-writer allocation can violate monotonicity. Use a sequence allocated by the linearizable authority and preserve it through backup/restore.
 
-## Acquisition protocols
+## Acquisition Protocols
 
 ### Linearizable compare-and-set
 
@@ -140,7 +142,7 @@ A single cache `SET if absent` with random owner value and TTL can be an efficie
 
 Redis's Redlock documentation proposes quorum acquisition across independent Redis masters under timing assumptions. The published safety debate centers on pauses, clock bounds, and absent resource fencing. **Reference design:** do not make correctness depend on a timing-only cache lock. If overlap is acceptable, label it an efficiency lock; if overlap is not acceptable, use a linearizable authority and resource-side fencing.
 
-## Shared locks, upgrades, and multiple resources
+## Shared Locks, Upgrades, and Multiple Resources
 
 A shared/exclusive lock needs a compatibility matrix and one atomic grant decision. Writer starvation occurs when new readers continually bypass a queued writer; reader starvation occurs when writer preference is absolute. State the fairness policy and test it under cancellation and session expiry.
 
@@ -154,7 +156,7 @@ Release-and-reacquire avoids deadlock but loses atomicity between observations. 
 
 For several lock keys, acquire in one global canonical order. If dynamic discovery makes the full set unknown, use bounded try-lock plus release/backoff, a database transaction, or redesign the invariant. Never hold lock A while making an unbounded network call to discover lock B.
 
-## Contention and capacity model
+## Contention and Capacity Model
 
 One exclusive lock is a single-server queue. Let acquisition arrival rate be $\lambda$, mean protected hold time be $S$, and utilization be $\rho$. Under an illustrative M/M/1 assumption:
 
@@ -174,7 +176,7 @@ Add waiter watches, acquire/release writes, audit events, and recovery bursts. A
 
 Capacity planning must include the hottest resource key, not just total acquisitions. Ten million cold locks do not offset one global lock at 99% utilization.
 
-## Specialized failure traces
+## Specialized Failure Traces
 
 ### Paused holder writes after regrant
 
@@ -220,7 +222,7 @@ Restore must preserve an epoch greater than every pre-restore grant, or rotate t
 
 A holds customer lock and calls service B, which holds inventory lock and calls back for customer lock. Neither database sees the whole wait-for graph. Deadlines eventually abort both, possibly after holding scarce resources. Enforce cross-service lock ordering, avoid lock-held RPCs, or move the invariant into one transactional authority.
 
-## Security and abuse boundaries
+## Security and Abuse Boundaries
 
 Lock possession is authority metadata, not user authorization. Authenticate clients and authorize exact namespaces, modes, TTL ranges, and administrative break operations. Canonicalize Unicode and path forms so two names cannot alias one resource or one tenant access another's key.
 
@@ -228,7 +230,7 @@ Protect the coordinator from denial of service through waiter, lock-count, watch
 
 A malicious holder can retain the critical section until expiry or deliberately create hot-lock contention. The protected resource still enforces business authorization and rate limits on every operation.
 
-## Operations, rollout, and migration
+## Operations, Rollout, and Migration
 
 To introduce a correctness lock safely:
 
@@ -243,7 +245,7 @@ Rolling upgrades keep key encoding, owner incarnation, queue ordering, and token
 
 Runbooks cover hot-key overload, stuck waiter, lost session, mass expiry, coordinator quorum loss, stale-holder rejections, token exhaustion/wrap, restore, and authorized emergency break. Breaking a lock is not “making the error go away”; it deliberately creates a newer authority generation and may start duplicate work.
 
-## Observability and verification
+## Observability and Verification
 
 Measure by namespace and resource class:
 
@@ -258,7 +260,7 @@ Verification includes linearizability/history tests for incompatible grants, det
 
 The decisive assertion is historical: after a resource accepts generation `g`, it never accepts a mutating operation from a generation lower than `g`.
 
-## Designing the lock away
+## Designing the Lock Away
 
 Prefer an invariant-enforcing primitive:
 
@@ -273,7 +275,7 @@ Prefer an invariant-enforcing primitive:
 
 A lock reduces concurrency and adds another availability dependency. Use it when serialization matches the invariant and the protected boundary can enforce the grant, not because “distributed systems need locks.”
 
-## Decision framework
+## Decision Framework
 
 1. What exact invariant and resource key require serialization?
 2. Is overlap merely wasteful or correctness-breaking?
@@ -286,7 +288,7 @@ A lock reduces concurrency and adds another availability dependency. Use it when
 9. Which effects cannot be fenced, and how are duplicates repaired?
 10. Can the lock service and protected resources survive pause, partition, herd, and restore tests?
 
-## Primary references
+## References
 
 - [Gray and Cheriton, *Leases: An Efficient Fault-Tolerant Mechanism for Distributed File Cache Consistency* (SOSP 1989)](https://web.stanford.edu/class/cs240/readings/leases.pdf)
 - [Burrows, *The Chubby Lock Service for Loosely-Coupled Distributed Systems* (OSDI 2006)](https://research.google.com/archive/chubby-osdi06.pdf)
@@ -297,3 +299,12 @@ A lock reduces concurrency and adds another availability dependency. Use it when
 - [PostgreSQL 18, *Explicit Locking and Advisory Locks*](https://www.postgresql.org/docs/current/explicit-locking.html)
 - [Redis, *Distributed Locks with Redis*](https://redis.io/docs/latest/develop/clients/patterns/distributed-locks/)
 - [Kleppmann, *How to do distributed locking* (2016)](https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html)
+---
+
+## Related Chapters
+
+- [Chubby](../09-whitepapers/08-chubby.md): the naming and lease service that lock designs keep converging on
+- [Raft](../09-whitepapers/07-raft.md): what changes when the lock service is built from consensus instead of a filesystem
+- [Idempotency and Operation Identity](08-idempotency.md): the cheaper answer to a lock: make the effect safe to repeat instead of exclusive
+- [Leases, Heartbeats, and Recovery](../18-workflow-job-systems/08-leases-heartbeats-recovery.md): the lock held by a worker that may die, with heartbeats and fencing attached
+- [Leader Election](../02-distributed-databases/09-leader-election.md): one holder chosen by quorum rather than one holder negotiated per operation

@@ -906,3 +906,12 @@ Choose:
 - [Transactional Outbox](../05-messaging/07-outbox-pattern.md): atomic event publication after a domain transaction
 - [Database Migrations](../15-deployment/03-database-migrations.md): expand/migrate/contract across service and storage schemas
 - [Edge Gateway](./02-api-gateway.md): public routing, authentication, authorization, admission, and aggregation
+
+---
+
+## Related Chapters
+
+- [Data Encoding](../03-storage-engines/07-data-encoding.md): the wire format question sitting underneath every compatibility rule here
+- [Edge Gateway and API Mediation](02-api-gateway.md): evolution rules enforced by a mediation layer instead of by team convention
+- [Transactional Outbox, Inbox, and CDC Publication](../05-messaging/07-outbox-pattern.md): an event is an API whose audience you cannot enumerate in advance
+- [Database Schema Migrations](../15-deployment/03-database-migrations.md): two versions of a contract live at once, in storage as well as on the wire

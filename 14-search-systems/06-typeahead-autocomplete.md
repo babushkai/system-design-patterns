@@ -1,10 +1,12 @@
 # Typeahead and Autocomplete
 
+## TL;DR
+
 Typeahead predicts useful completions while a person is still typing. Nearly every keystroke creates a request, prefix popularity is highly skewed, rankings change quickly, and results can amplify private, abusive, or manipulated queries. A purpose-built suggestion service is usually safer than a full search query with a prefix operator.
 
 Suggestion serving covers generation, prefix data structures, popularity and freshness pipelines, abuse controls, low-latency serving, personalization boundaries, and client interaction. [Lexical Query Execution](02-full-text-search.md) covers general lexical retrieval; [Ranking and Evaluation](04-ranking-algorithms.md) covers model training and experiment methodology.
 
-## Workload and product contract
+## Workload and Product Contract
 
 A request is more than a prefix:
 
@@ -43,7 +45,7 @@ The contract should specify:
 
 The primary performance objective is usually end-to-end time from a stable keystroke to rendered suggestions, not server p50 alone. Client debounce, network scheduling, stale-response suppression, and rendering all contribute.
 
-## State and invariants
+## State and Invariants
 
 Separate authoritative source state from derived serving state:
 
@@ -71,7 +73,7 @@ Enforce these invariants:
 
 **Deletion dominates stale popularity.** Once a candidate is removed at source version `v`, delayed counts or replayed events below `v` cannot reintroduce it.
 
-## Data plane and control plane
+## Data Plane and Control Plane
 
 The **offline data plane** collects events, validates candidate eligibility, aggregates privacy-safe signals, joins canonical entity state, computes scores, builds compact prefix structures, verifies them, and publishes immutable generations.
 
@@ -94,7 +96,7 @@ eligible source records + governed interaction events
 
 Every output candidate retains provenance: source type, canonical ID, source version, score-policy version, and safety decision. Raw user text is not automatically a candidate source.
 
-## Prefix structures
+## Prefix Structures
 
 ### Trie and radix tree
 
@@ -116,7 +118,7 @@ Do not estimate storage as `queries * average_prefix_length * full_string_size` 
 
 A hybrid design commonly uses an immutable compact base plus small mutable overlays for trends, emergency removals, and newly created entities. Lookup merges bounded lists with stable deduplication and policy filters. Overlay size must be capped; otherwise it becomes an unplanned second primary index.
 
-## Normalization and locale semantics
+## Normalization and Locale Semantics
 
 Normalize lookup keys deterministically under a named version. A pipeline might apply validated UTF-8 decoding, Unicode normalization, locale-aware case handling, whitespace folding, and selected punctuation rules. Do not apply universal accent stripping or transliteration without product evidence: it can merge distinct words and names.
 
@@ -126,7 +128,7 @@ Locale is part of the key because token boundaries, case, script variants, and u
 
 Normalization migrations require dual generations. Build `n+1` from canonical source strings, shadow lookups using captured raw prefixes, compare coverage/collisions, then atomically route clients. Re-normalizing old normalized keys loses information and compounds prior mistakes.
 
-## Ranking suggestions
+## Ranking Suggestions
 
 A suggestion score can combine governed signals:
 
@@ -145,7 +147,7 @@ Precompute expensive global scoring offline. Online ranking should merge a small
 
 The general experiment and learned-ranking lifecycle is covered in the ranking chapter. Typeahead-specific evaluation includes prefix coverage, accepted-suggestion rate, time to successful action, keystrokes saved, inappropriate suggestion rate, diversity, zero-suggestion rate, stale/removed exposure, and end-to-end latency. Acceptance alone can reward obvious but unhelpful completions, so include downstream success and reformulation.
 
-## Freshness and trending overlays
+## Freshness and Trending Overlays
 
 Batch generations give compact serving and reproducibility; trend signals need shorter latency. Use an overlay keyed by normalized prefix and candidate ID, populated from a durable stream with event-time windows and versioned checkpoints. Its record includes score contribution, support, expiry, source version, and policy version.
 
@@ -155,7 +157,7 @@ Late events update aggregate windows idempotently. Exactly-once transport is unn
 
 Emergency removal is a separate high-priority negative overlay with independent availability and audit. It should suppress a canonical candidate across base, trends, personalization, caches, and replicas within a tested bound. The next full generation incorporates the removal, after which the overlay can expire safely.
 
-## Typos and fuzzy completions
+## Typos and Fuzzy Completions
 
 Fuzzy lookup expands work rapidly, especially for short prefixes. One edit on a two-character prefix can touch much of the dictionary and produce surprising suggestions. Gate it by minimum grapheme length, locale, candidate support, and a strict visited-state/candidate budget.
 
@@ -163,7 +165,7 @@ Options include traversing the term automaton jointly with a Levenshtein automat
 
 Expose when a suggestion corrects rather than completes the prefix. The client should not silently replace user input. Exact matches generally retain a protected path so fuzzy popularity does not displace what the user actually typed.
 
-## Personalization boundary
+## Personalization Boundary
 
 Personal suggestions can use a subject’s explicitly eligible recent queries, entities, or actions. Store them separately from the global aggregate index, under per-subject authorization, retention, and deletion. Merge a bounded personal list at request time; never let one person’s raw history enter global suggestions without aggregate privacy controls.
 
@@ -171,7 +173,7 @@ Incognito, logged-out, child, enterprise, and regulated contexts may require dif
 
 Cache keys include tenant, normalized prefix, locale, surface, generation, and policy-relevant context. Personalized results are either not shared or keyed to a protected subject/cohort identity with appropriate isolation. Caching only by prefix is a common privacy leak.
 
-## Sharding, caching, and serving
+## Sharding, Caching, and Serving
 
 Prefixes are highly skewed: empty and one-character prefixes dominate traffic, while long prefixes have enormous key cardinality. Serve or reject empty prefixes deliberately. Cache hot short prefixes at the edge or process, but bound policy staleness and make removals override cache entries.
 
@@ -190,7 +192,7 @@ An alternative is range partitioning by prefix, which supports local traversal b
 
 Serving nodes memory-map immutable generations, verify manifest and block checksums before readiness, warm the highest-traffic prefixes, and atomically swap the active generation. Keep the prior generation open for rollback and for in-flight requests. Never overwrite files under active readers.
 
-## Client protocol
+## Client Protocol
 
 Debounce reduces requests but adds visible latency. Choose it from measured typing intervals and network latency, and allow immediate requests after actions such as paste or navigation. Cancel obsolete requests when possible, but also attach a monotonically increasing `request_sequence`; networks and servers can deliver cancelled work late.
 
@@ -198,7 +200,7 @@ The client renders a response only if its sequence and normalized prefix match c
 
 Client telemetry records impressions only for suggestions actually rendered, with position and generation. Do not log every raw prefix indiscriminately; prefixes can contain names, secrets, medical terms, or pasted credentials. Apply collection minimization at the client boundary.
 
-## Capacity and cost model
+## Capacity and Cost Model
 
 Consider an illustrative product workload:
 
@@ -215,7 +217,7 @@ Response bandwidth at the edge is `96,000 * 1.2 KiB`, about 110 MiB/s before pro
 
 For build capacity, measure input candidates, distinct normalized prefixes, emitted candidate references, sort/shuffle bytes, final generation bytes, and peak temporary disk. If 30 million candidates produce a measured 420 million prefix-candidate pairs at 24 encoded bytes before compaction, the intermediate is about 9.4 GiB. This is an illustrative arithmetic input, not a universal amplification factor; real strings, locales, and prefix caps determine it.
 
-## Concrete failure trace: query-log poisoning
+## Concrete Failure Trace: Query-Log Poisoning
 
 An attacker sends the same offensive phrase from thousands of automated requests. The daily pipeline counts raw events, builds a new generation, and the phrase becomes the first completion for a popular two-character prefix. Caches propagate it globally before manual detection.
 
@@ -223,7 +225,7 @@ Containment publishes an emergency negative overlay and purges/bypasses affected
 
 Prevention combines distinct-subject support, per-actor contribution caps, bot/fraud signals, candidate allow/deny policy, minimum support for trends, manual review for high-exposure prefixes, staged canary publication, and automated diffs of newly promoted suggestions. Telemetry alerts on abrupt score/share changes and on candidates entering high-traffic prefixes for the first time.
 
-## Security, privacy, and abuse resistance
+## Security, Privacy, and Abuse Resistance
 
 Autocomplete is an output publication system. Apply stronger review to suggestions than to ordinary search results because the product proactively displays them. Enforce tenant and region boundaries before all caches. Escape display text; typed navigation targets must be validated server-side and limited to approved schemes/routes.
 
@@ -231,7 +233,7 @@ Protect build inputs and manifests with authenticated writers, provenance, check
 
 Query-event collection needs purpose limitation, access control, short retention where feasible, deletion workflows, and aggregation privacy. Redact or drop patterns likely to be credentials or sensitive identifiers before durable logging. Differential privacy may be appropriate for published aggregates, but it does not replace eligibility, minimum support, or abuse controls.
 
-## Operations and observability
+## Operations and Observability
 
 Track by locale, surface, tenant, prefix-length bucket, generation, and policy version:
 
@@ -249,7 +251,7 @@ Never place raw prefixes or subject IDs in metric labels. Keep tightly sampled, 
 
 Runbooks cover offensive/unsafe suggestion, legal or privacy removal, corrupt generation, stale trend overlay, hot-prefix overload, bad normalization rollout, cross-tenant cache leak, and event-pipeline replay. Exercise emergency suppression end-to-end, including client and CDN caches.
 
-## Verification strategy
+## Verification Strategy
 
 - **Normalization golden tests** cover scripts, combining marks, locale-specific case, whitespace, emoji, malformed input, and client/server parity.
 - **Structure tests** compare trie/FST/precomputed lookups with a simple sorted-list oracle over generated candidate sets.
@@ -263,7 +265,7 @@ Runbooks cover offensive/unsafe suggestion, legal or privacy removal, corrupt ge
 
 The golden corpus should include adversarial and sensitive cases maintained by the appropriate reviewers, not only popular benign prefixes.
 
-## Decision framework
+## Decision Framework
 
 Choose the simplest serving structure that satisfies the measured corpus and freshness needs:
 
@@ -295,3 +297,12 @@ Autocomplete quality is inseparable from publication governance. A fast prefix l
 - [W3C: WAI-ARIA Authoring Practices, Combobox Pattern](https://www.w3.org/WAI/ARIA/apg/patterns/combobox/)
 - [Unicode Standard Annex #15: Unicode Normalization Forms](https://unicode.org/reports/tr15/)
 - [Unicode Standard Annex #29: Unicode Text Segmentation](https://unicode.org/reports/tr29/)
+
+---
+
+## Related Chapters
+
+- [Lexical Query Execution](02-full-text-search.md): why a prefix operator on a general search query is usually the wrong tool
+- [Cache Semantics and Economics](../04-caching/01-cache-strategies.md): the hottest prefix cache in the product, and what it discloses about other users
+- [Recommendation Systems](../16-ml-systems/07-recommendation-systems.md): a ranking problem with user-specific feedback and its own poisoning risk
+- [API Threat Boundaries and Abuse Resistance](../10-security/04-api-security.md): every keystroke is a request, so abuse resistance belongs in the protocol

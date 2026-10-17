@@ -1,10 +1,12 @@
 # CQRS and Projection Architecture
 
+## TL;DR
+
 Command Query Responsibility Segregation separates the model that validates writes from models built for specific reads. The write side owns invariants and produces committed changes; projection pipelines maintain replaceable read models with explicit freshness, publication, and rebuild state. CQRS is useful only when that separation buys measurable query, scale, or ownership advantages.
 
 A CQRS projection needs an explicit read-model lifecycle covering query ownership, rebuild, atomic application, publication, freshness, and read-after-write behavior. [Event Sourcing](05-event-sourcing.md) owns authoritative domain logs; CQRS does not require event sourcing. [Outbox and Inbox](07-outbox-pattern.md) owns the publication and dedup atomicity patterns used here.
 
-## Workload and contract
+## Workload and Contract
 
 Commands express intent and return command outcomes:
 
@@ -34,7 +36,7 @@ Define per read model:
 
 Do not expose a “read database” as a shared data dump. A projection service owns a contract for one bounded set of queries; downstream teams do not write its tables or depend on undocumented columns.
 
-## State and invariants
+## State and Invariants
 
 A projection has:
 
@@ -64,7 +66,7 @@ Enforce:
 
 **Authorization is query-complete.** Access restrictions shape rows, filters, counts, aggregations, caches, and exports, not only final objects.
 
-## Data plane and control plane
+## Data Plane and Control Plane
 
 The **write data plane** validates commands and commits authoritative state plus a durable change record. The **projection data plane** consumes that record, applies deterministic transformations, commits progress, and serves queries. The two can scale and deploy independently.
 
@@ -72,7 +74,7 @@ The **control plane** registers projection types, schemas, source contracts, che
 
 The query hot path should not ask the control plane per request. It consumes a cached signed/versioned routing snapshot and returns the active generation in response metadata. During a short control-plane outage, serving can continue from a pinned generation while builds/cutovers pause.
 
-## Designing read models from queries
+## Designing Read Models from Queries
 
 Start with access patterns and invariants. A read model may be:
 
@@ -91,7 +93,7 @@ Indexes and partition keys follow measured filters/sorts. Include stable tie-bre
 
 One generic projection serving every consumer tends to recreate a coupled operational database. Prefer a small number of models aligned to coherent query workloads and ownership, while avoiding one model per trivial UI widget.
 
-## Atomic projection application
+## Atomic Projection Application
 
 For a transactional read store, consume one source record as:
 
@@ -116,7 +118,7 @@ Some stores cannot transact the inbox and all derived structures together. For e
 
 Calling two stores and then checkpointing is not an atomic projection.
 
-## Ordering, gaps, and deletes
+## Ordering, Gaps, and Deletes
 
 Projection semantics determine ordering needs. Replacement events with monotonic source versions can ignore stale arrivals. Deltas require ordered application or commutative identities. Cross-entity aggregates may require one source partition/checkpoint or a transactional batch marker.
 
@@ -126,7 +128,7 @@ Deletes are versioned domain changes. Use tombstones carrying source version so 
 
 Projection code is deterministic over event plus declared reference snapshots. Network lookups to “current” data during replay make rebuild results depend on when they run. If enrichment is necessary, consume a versioned local projection or record the chosen reference version.
 
-## Freshness and read-your-writes
+## Freshness and Read-Your-Writes
 
 Transport offset lag and time lag measure different things. Track:
 
@@ -149,7 +151,7 @@ Sleeping for a fixed delay is neither correct nor efficient. A token scoped to o
 
 Waiters need bounds and cancellation. Register by position/entity, wake on checkpoint progress, expire on deadline, and cap per-tenant waiters. During projection outage, fail clearly rather than holding every request until the fleet exhausts connections.
 
-## Rebuild and generation publication
+## Rebuild and Generation Publication
 
 Rebuilds are normal operations, not emergencies. Use blue/green generations:
 
@@ -168,7 +170,7 @@ Do not truncate the active model and rebuild in place; it converts a data migrat
 
 Publication manifest includes projection type, generation, schema/code digests, source snapshot/checkpoints, compatible query API version, validation artifact, created time, and owner. Query nodes reject an incomplete/incompatible generation.
 
-## Schema and query evolution
+## Schema and Query Evolution
 
 Additive read columns can be populated lazily only if queries define absence. Breaking changes use a new generation. Query APIs version semantics, not merely table columns; changing sort/tie-break, total-count accuracy, or authorization filtering can be breaking even if schema is compatible.
 
@@ -176,7 +178,7 @@ Projection consumers accept old/new source event forms through tested adapters. 
 
 When a projection changes ownership, transfer source contract, checkpoint history, rebuild artifacts, runbooks, privacy classification, and query SLO, not just database credentials.
 
-## Capacity and cost model
+## Capacity and Cost Model
 
 Illustrative read model:
 
@@ -193,13 +195,13 @@ Blue/green rebuild needs at least 28 TiB for two generations plus build spill, l
 
 At 90,000 queries/s and a measured 3.2 ms mean query CPU, demand is 288 CPU-seconds/s. At 55% target utilization, plan about 524 logical cores before cache misses and failure reserve. Read/write capacity and rebuild I/O need separate budgets so a rebuild cannot destroy query tails.
 
-## Concrete failure trace: checkpoint commits outside projection
+## Concrete Failure Trace: Checkpoint Commits Outside Projection
 
 A consumer updates a search document, then writes its broker checkpoint to a separate metadata database. The search update times out but may have succeeded; the checkpoint commits. After restart, the event is skipped. Later a rebuild from the search index itself preserves the missing/ambiguous state.
 
 Containment compares source versions and rebuilds the affected partition from the authoritative source. Repair introduces versioned idempotent search writes plus a durable local projection outbox/checkpoint, and makes rebuild read the source, not the derived index. Prevention fault-injects every cross-store boundary and requires reconciliation before checkpoint promotion.
 
-## Operations and observability
+## Operations and Observability
 
 Track by projection, generation, source partition/schema, tenant, and query class:
 
@@ -215,7 +217,7 @@ Track by projection, generation, source partition/schema, tenant, and query clas
 
 Runbooks cover lag, poison schema, permanent gap, corrupt generation, query regression, failed cutover, rebuild overload, and privacy deletion. Operators need per-entity repair and partition rebuild tools with audit/dry-run.
 
-## Security and privacy
+## Security and Privacy
 
 Projection consumers authenticate the source and derive tenant/authority from trusted envelope fields. Query authorization is enforced in the model/query plan; post-filtering top results leaks counts and can produce incomplete responses. Separate tenant partitions/stores when policy requires stronger isolation.
 
@@ -223,7 +225,7 @@ Read models multiply sensitive data. Minimize copied fields, encrypt stores/back
 
 Restrict projection publication, checkpoint seek, bulk export, repair, and generation deletion. Validate event and query sizes. A malicious high-fanout change can cause write amplification; enforce per-event mutation bounds or route large expansions through controlled backfills.
 
-## Verification strategy
+## Verification Strategy
 
 - reducer golden/property tests for every event schema and delete/version edge;
 - crash/concurrency tests proving inbox, rows, version, and checkpoint atomicity;
@@ -234,7 +236,7 @@ Restrict projection publication, checkpoint seek, bulk export, repair, and gener
 - load tests combining query peak, source peak, backlog catch-up, and rebuild;
 - reconciliation drills that corrupt/drop/duplicate a partition and repair it.
 
-## Decision framework
+## Decision Framework
 
 Adopt CQRS when write invariants and read workloads genuinely need different models, read scale/query shape justifies denormalization, or independent projection ownership/rebuild adds value. Avoid it for ordinary CRUD where one transactional model answers queries adequately.
 
@@ -256,3 +258,12 @@ Before creating a projection:
 - [PostgreSQL: Materialized Views](https://www.postgresql.org/docs/current/rules-materializedviews.html)
 - [Elasticsearch: Index Aliases](https://www.elastic.co/guide/en/elasticsearch/reference/current/aliases.html)
 - [CloudEvents Specification](https://github.com/cloudevents/spec)
+
+---
+
+## Related Chapters
+
+- [Event Sourcing and Domain Logs](05-event-sourcing.md): the write side that supplies the facts these projections are built from
+- [Message Ordering](03-message-ordering.md): a projection is only as correct as the stream order feeding it
+- [Workload-Driven Data Modeling and Derived Projections](../02-distributed-databases/10-data-modeling.md): read models are denormalized work, paid for once and maintained forever
+- [Stream Execution](../13-data-pipelines/02-stream-processing.md): the machinery that keeps a projection current through restarts and replays

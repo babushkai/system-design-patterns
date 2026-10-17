@@ -2,16 +2,16 @@
 
 > **翻訳についての注記:** 本ドキュメントは英語原文 `09-whitepapers/11-zanzibar.md` を日本語に翻訳したものです。コードブロックおよびMermaidダイアグラムは原文のまま維持しています。
 
+## TL;DR
+
+Zanzibarは権限を**関係タプル**(`object#relation@user`)としてSpannerに保存し、「ユーザーUはオブジェクトOに対してRできるか?」をグラフ到達可能性問題として答えます。アプリケーションごとの設定は**userset書き換えルール**(owner ⊆ editor ⊆ viewer、親フォルダ継承)です。最も深い貢献は整合性です: **new-enemy問題** — 古いACLの読み取りにより、直前に剥奪されたユーザーが新しいコンテンツを見られてしまう — を、SpannerのTrueTime順序を利用してコンテンツのバージョンをACLのバージョンに固定するスナップショットトークン、**zookie**で防ぎます。サービングアーキテクチャ(積極的なキャッシング+深くネストしたグループのための**Leopard**インデックス)は数百万QPSでp95約10ms、3年間で99.999%の可用性を達成しました。現代のすべてのReBACシステム — SpiceDB、OpenFGA、Ory Keto — はこの論文の実装です。
+
 ## 論文概要
 
 - **タイトル**: Zanzibar: Google's Consistent, Global Authorization System
 - **著者**: Ruoming Pang, Ramón Cáceres, Mike Burrows, et al. (Google)
 - **発表**: USENIX ATC 2019
 - **背景**: Calendar、Cloud、Drive、Maps、Photos、YouTubeのための単一の認可システム — 数兆のACL、数百万QPS、そしてどのキャッシュも破ってはならない正しさの要件
-
-## TL;DR
-
-Zanzibarは権限を**関係タプル**(`object#relation@user`)としてSpannerに保存し、「ユーザーUはオブジェクトOに対してRできるか?」をグラフ到達可能性問題として答えます。アプリケーションごとの設定は**userset書き換えルール**(owner ⊆ editor ⊆ viewer、親フォルダ継承)です。最も深い貢献は整合性です: **new-enemy問題** — 古いACLの読み取りにより、直前に剥奪されたユーザーが新しいコンテンツを見られてしまう — を、SpannerのTrueTime順序を利用してコンテンツのバージョンをACLのバージョンに固定するスナップショットトークン、**zookie**で防ぎます。サービングアーキテクチャ(積極的なキャッシング+深くネストしたグループのための**Leopard**インデックス)は数百万QPSでp95約10ms、3年間で99.999%の可用性を達成しました。現代のすべてのReBACシステム — SpiceDB、OpenFGA、Ory Keto — はこの論文の実装です。
 
 ---
 

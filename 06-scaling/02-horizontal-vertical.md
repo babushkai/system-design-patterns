@@ -1,5 +1,7 @@
 # Horizontal vs Vertical Scaling
 
+## TL;DR
+
 Scaling is the deliberate change of a system's useful-capacity envelope. “Scale up” and “scale out” describe actuators, not outcomes: a larger machine can remain blocked on a serial lock, and ten more application replicas can overload a database, connection limit, or shared cache. Start with the workload, identify the limiting resource and coordination path, then design a reversible transition that preserves authority while capacity changes.
 
 A scaling plan must define **scaling dimensions, bottleneck models, and safe manual or planned scale transitions**. [Auto-Scaling](./08-auto-scaling.md) owns metric selection, delayed feedback, hysteresis, stabilization, and controller mechanics. [Database Sharding](./03-database-sharding.md) owns the operational lifecycle for distributing application data, while [Partitioning Strategies](../02-distributed-databases/05-partitioning-strategies.md) owns the underlying key-to-partition primitives.
@@ -15,7 +17,7 @@ A scaling plan must define **scaling dimensions, bottleneck models, and safe man
 | Verma et al., Borg paper (EuroSys 2015) | Large-scale scheduling uses admission, resource estimation, priorities, and overcommit rather than equating requested replicas with useful capacity | Historical Borg design |
 | Google SRE book (2016) | Overload, retries, load shifts, and simultaneous change can produce cascading failure | Operational guidance, not a copied threshold policy |
 
-## Scaling contract
+## Scaling Contract
 
 A scaling proposal is incomplete until it states:
 
@@ -33,7 +35,7 @@ A scaling proposal is incomplete until it states:
 
 Scaling should improve **goodput** (valid work completed within its contract), not merely requests accepted, threads created, or CPU consumed.
 
-## State, authority, and invariants
+## State, Authority, and Invariants
 
 Capacity may be fungible; authority rarely is. A stateless replica still holds connections and in-flight work. A stateful replica may own a lease, log position, partition, or local durable bytes. Separate:
 
@@ -54,7 +56,7 @@ Capacity may be fungible; authority rarely is. A stateless replica still holds c
 6. A failed transition has a defined data and routing rollback path, not only an infrastructure rollback.
 7. Metrics remain comparable across old and new shapes; otherwise the transition cannot be judged.
 
-## Scaling dimensions
+## Scaling Dimensions
 
 Horizontal and vertical are two axes in a larger design space.
 
@@ -70,7 +72,7 @@ Horizontal and vertical are two axes in a larger design space.
 
 “Stateless” means no durable request authority is local; it does not mean the instance is instantly fungible. Cold caches, connection pools, JIT compilation, model weights, and in-flight work can make a nominally ready replica harmful during its first minutes.
 
-## Bottleneck model before actuator choice
+## Bottleneck Model Before Actuator Choice
 
 For each request class `j`, measure service demand on resource `r`, `d[j,r]`, and arrival rate `λ[j]`. The mean demand on that resource is:
 
@@ -120,7 +122,7 @@ C(N) = N / (1 + α(N - 1) + βN(N - 1))
 
 **Inference from the probability model.** If a request requires all `k` independent branches whose latency CDF is `F(t)`, the optimistic probability that all finish by `t` is `F(t)^k`. With 100 branches each independently within a deadline 99.9% of the time, the request succeeds within it only about `0.999^100 ≈ 90.5%` of the time. Real branches share queues and networks, so independence can be optimistic. Scaling by increasing fan-out may raise throughput while destroying request-tail latency.
 
-## Vertical scaling
+## Vertical Scaling
 
 **Reference design.** Vertical scaling changes capacity within one authority or failure unit. It is often the best first move when:
 
@@ -143,7 +145,7 @@ Its simplicity is conditional. A 4× larger machine is not a 4× faster system i
 
 When no replica path exists, the resize is a maintenance event with explicit downtime, backup/restore time, and abort points, not an instantaneous capacity toggle.
 
-## Horizontal scaling
+## Horizontal Scaling
 
 ### Independent compute and replicated reads
 
@@ -169,7 +171,7 @@ Write and storage scale usually require more independent authority domains, not 
 
 One ever-larger homogeneous fleet can make every controller, dependency, and rollout global. [Cell-Based Architecture](./11-cell-based-architecture.md) repeats a bounded stack and assigns tenants to cells, trading spare-capacity overhead and cross-cell complexity for a capped blast radius. Cells are horizontal scale units only when the placement service and global dependencies remain simpler and safer than the cells they coordinate.
 
-## Safe scale transitions
+## Safe Scale Transitions
 
 Treat capacity change as a versioned state machine:
 
@@ -207,7 +209,7 @@ stateDiagram-v2
 
 The transition invariants remain the actuator's safety contract; [Auto-Scaling](./08-auto-scaling.md) adds delayed metrics, stabilization, and controller-conflict handling.
 
-## Capacity and cost example
+## Capacity and Cost Example
 
 Consider an API with an illustrative peak of `48,000 requests/s` and measured CPU demand of `3 ms/request` at the production request mix:
 
@@ -239,7 +241,7 @@ cost per useful request =
 
 Vertical price curves, spot availability, and transfer tariffs are volatile. Insert current provider quotes only in a decision record with region, date, commitment, and failure assumptions; do not bake them into an architectural rule.
 
-## Failure traces
+## Failure Traces
 
 ### Application scale-out causes a database connection storm
 
@@ -283,7 +285,7 @@ Authority transfer needs a monotonic term/epoch checked by the storage or commit
 
 Reserve and enforce a movement budget, prioritize foreground work, and estimate catch-up under continuous writes before starting. Scaling from zero spare capacity may require temporary vertical or admission relief first.
 
-## Overload, operations, and migration
+## Overload, Operations, and Migration
 
 Capacity changes take time. Admission control, [rate limiting](./05-rate-limiting.md), bounded queues, and degraded modes keep the system inside its current envelope while new capacity becomes useful. Retries must use budgets because a failing scale transition is exactly when unbounded extra attempts are most destructive.
 
@@ -301,7 +303,7 @@ Avoid changing instance shape, runtime version, partition function, and traffic 
 
 Runbooks need current answers for quota exhaustion, placement failure, image/secret startup failure, cold-capacity rejection, backfill throttling, stuck drains, duplicate authority, dependency saturation, and a scale action that increased cost without goodput.
 
-## Security and governance
+## Security and Governance
 
 Scaling control can create machines, move data, and multiply spend. Treat it as privileged production authority:
 
@@ -315,7 +317,7 @@ Scaling control can create machines, move data, and multiply spend. Treat it as 
 
 Horizontal scale also widens the supply-chain and secret-distribution surface. A compromised image deployed to 500 replicas is not safer than one large server.
 
-## Observability and verification
+## Observability and Verification
 
 Observe offered demand, admitted demand, goodput, and rejected work separately. Then correlate:
 
@@ -336,7 +338,7 @@ Verification should include:
 - multiplied-budget checks for connections, retries, polling, leases, and rate limits;
 - correctness comparison across old and new shapes, including tail and degraded responses.
 
-## Decision framework
+## Decision Framework
 
 1. Which user outcome must improve, and is throughput currently limited by capacity or by correctness/admission policy?
 2. What resource or serial path saturates first at the production workload distribution?
@@ -351,7 +353,7 @@ Verification should include:
 11. What evidence triggers rollback, and how long must duplicate capacity/state be retained?
 12. Which metrics prove lower cost per good result rather than higher resource consumption?
 
-## Primary references
+## References
 
 - [Amdahl, *Validity of the Single Processor Approach to Achieving Large Scale Computing Capabilities* (AFIPS 1967)](https://dl.acm.org/doi/10.1145/1465482.1465560)
 - [Little, *A Proof for the Queuing Formula: L = λW* (Operations Research, 1961)](https://pubsonline.informs.org/doi/10.1287/opre.9.3.383)
@@ -362,3 +364,12 @@ Verification should include:
 - [Google SRE, *Addressing Cascading Failures* (2016)](https://sre.google/sre-book/addressing-cascading-failures/)
 - [Kubernetes, *Horizontal Pod Autoscaling*](https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/)
 - [Kubernetes Autoscaler, *Vertical Pod Autoscaler*](https://github.com/kubernetes/autoscaler/tree/master/vertical-pod-autoscaler)
+
+---
+
+## Related Chapters
+
+- [Capacity Planning and Back-of-the-Envelope Estimation](../01-foundations/10-capacity-planning.md): the arithmetic that decides which axis is available before you buy either one
+- [Auto-Scaling](08-auto-scaling.md): the actuator for horizontal scaling, with its reaction delay inside the headroom
+- [Database Sharding](03-database-sharding.md): the stateful case, where scaling horizontally means splitting data instead of adding compute
+- [Cell-Based Architecture and Shuffle Sharding](11-cell-based-architecture.md): where horizontal stops being elastic and becomes a fixed partition of blast radius

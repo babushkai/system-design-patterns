@@ -946,7 +946,7 @@ git worktree prune
 
 ---
 
-## References
+## 参考文献
 
 1. [Git — git-worktree Documentation](https://git-scm.com/docs/git-worktree)
 2. [Superset IDE — Open-Source Parallel Agent Terminal](https://supersetide.com/)

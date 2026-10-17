@@ -492,9 +492,19 @@ Each SLO needs a measurement source and a declared response when telemetry is mi
 - [ ] A mass invalidation cannot exceed protected-origin capacity.
 - [ ] User-visible staleness is measured directly.
 
+## Key Takeaways
+
+1. **Invalidation is a consistency protocol between a write and its projections.** A commit and a cache operation that sit next to each other in application code are not atomic, so the change signal has to be durable in a transaction or log rather than retried from memory.
+2. **Freshness is a contract with numbers.** Removing all regional copies within 2 seconds for 99.9% of invalidations and keeping 99.99% of served entries at most 30 seconds old are testable; “eventually consistent” is not.
+3. **Prefer idempotent deletion to value updates.** Without a version comparison a delayed update for version 41 can overwrite version 42, and a writer that does not know the derived representation cannot safely write it either.
+4. **Deletion alone loses to slow readers.** Close the refill race with a lease generation, an atomic version fence or tombstone, a single authoritative materializer, a verifying second read plus conditional fill, or an explicitly measured TTL window.
+5. **Scope invalidation with generations and tags.** Bumping a generation is O(1) logical invalidation for a namespace, and tag sets such as product:123 or seller:9 let one domain change reach derived responses without enumerating keys.
+6. **Never reset age across tiers.** Every fill carries the authoritative generated_at and source_version, an L1 populated from L2 receives remaining freshness rather than a new TTL, and HTTP encodes the same rule in Age.
+7. **Replacing an invalidator is a migration.** Offsets, the first uncertain source version, dual-run overlap, and replay drills for new consumers decide when the old path may stop, not the deploy date.
+
 ---
 
-## Primary References
+## References
 
 - [RFC 9111: HTTP Caching](https://www.rfc-editor.org/rfc/rfc9111.html)
 - [RFC 5861: stale-while-revalidate and stale-if-error](https://www.rfc-editor.org/rfc/rfc5861.html)
@@ -502,3 +512,12 @@ Each SLO needs a measurement source and a declared response when telemetry is mi
 - [PostgreSQL logical decoding](https://www.postgresql.org/docs/current/logicaldecoding.html)
 - [Redis server-assisted client-side caching](https://redis.io/docs/latest/develop/reference/client-side-caching/)
 - [Scaling Memcache at Facebook, NSDI 2013](https://www.usenix.org/conference/nsdi13/technical-sessions/presentation/nishtala)
+
+---
+
+## Related Chapters
+
+- [Cache Semantics and Economics](01-cache-strategies.md): the consistency target chosen earlier, which this chapter has to keep on every tier
+- [Transactional Outbox, Inbox, and CDC Publication](../05-messaging/07-outbox-pattern.md): making the invalidation signal commit with the write instead of shortly after it
+- [TAO](../09-whitepapers/05-tao.md): an entity cache with associations, where dependency graphs stop being hypothetical
+- [Authorization at Scale](../10-security/07-authorization-patterns.md): a cached decision is still a decision, and revocation is an invalidation problem

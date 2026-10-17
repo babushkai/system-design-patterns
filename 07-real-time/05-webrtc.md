@@ -354,3 +354,12 @@ The final design should name the room authority, ordering/session epochs, signal
 - [RFC 8826: Security Considerations for WebRTC](https://datatracker.ietf.org/doc/html/rfc8826) and [RFC 8827: WebRTC Security Architecture](https://datatracker.ietf.org/doc/html/rfc8827): threat model and security properties
 - [RFC 8831: WebRTC Data Channels](https://datatracker.ietf.org/doc/html/rfc8831): SCTP data-channel transport and reliability modes
 - [RFC 9605: Secure Frame (SFrame)](https://datatracker.ietf.org/doc/html/rfc9605): application end-to-end media encryption through forwarding servers
+
+---
+
+## Related Chapters
+
+- [Client Delivery Transports](01-polling.md): delivery over a request/response plane, and where its latency floor sits next to media
+- [Presence as Derived Multi-Session State](06-presence.md): the session directory that tells an SFU which legs are worth keeping alive
+- [Network Transport Internals](../06-scaling/14-network-transport-internals.md): NAT traversal inherits UDP behavior, path MTU, and congestion control you do not own
+- [CDN Architecture](../06-scaling/04-cdn-architecture.md): relay placement is an economics problem: TURN traffic is the line item teams find late

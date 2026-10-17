@@ -1,10 +1,12 @@
 # Transactional Outbox, Inbox, and CDC Publication
 
+## TL;DR
+
 The transactional outbox closes one specific dual-write gap: domain state and an intent to publish are committed in the same local transaction. A relay then delivers that durable intent to a broker at least once. The transactional inbox closes the corresponding consumer gap by committing message identity, local effect, and progress in one local transaction. Together they provide recoverable publication and effectively-once local effects without pretending two independent systems share one atomic commit.
 
 Outbox/inbox design includes transactional rows, polling or CDC relay, and consumer effect commit. [Delivery Guarantees](04-delivery-guarantees.md) defines end-to-end semantics; [Change Data Capture](../13-data-pipelines/04-change-data-capture.md) covers general log architecture, snapshots, and schema capture.
 
-## Workload and contract
+## Workload and Contract
 
 The producer transaction is:
 
@@ -39,7 +41,7 @@ Define:
 
 An outbox guarantees **no committed domain transition is missing its publication intent** if application code writes both correctly. It does not guarantee one broker record, one delivery, one consumer attempt, or one external effect.
 
-## State and invariants
+## State and Invariants
 
 Producer-side state includes domain rows/event stream, outbox rows, relay claim/attempt state or CDC position, broker publication evidence, and cleanup watermark. Consumer-side state includes inbox identities, domain/projection effects, source/entity versions, and checkpoints.
 
@@ -59,7 +61,7 @@ Enforce:
 
 **Retention horizons align.** Outbox history, CDC log/slot, broker replay, inbox identity, and external idempotency cover the declared recovery window.
 
-## Outbox schema and write path
+## Outbox Schema and Write Path
 
 A minimal logical record contains:
 
@@ -83,7 +85,7 @@ Keep outbox rows append-only in semantic fields. Relay status is mutable operati
 
 Payloads should be self-contained enough for consumers to act without synchronously calling the producer for mutable state. Reference-only events reintroduce temporal coupling: by fetch time the entity may have changed or disappeared. For large data, use an immutable content-addressed claim-check object with digest, schema, encryption metadata, and retention tied to the outbox/broker contract.
 
-## Polling relay protocol
+## Polling Relay Protocol
 
 A scalable poller uses leased claims:
 
@@ -103,7 +105,7 @@ Use absolute retry deadlines and backpressure from broker health. A relay outage
 
 Polling indexes should cover eligibility without indexing large payloads. Partition rows by creation/commit range so cleanup drops sealed partitions rather than issuing huge deletes. Measure vacuum/compaction and primary-cache impact.
 
-## CDC relay protocol
+## CDC Relay Protocol
 
 Log-based CDC reads committed changes from the database’s replication/change log. Because the outbox insert shares the domain transaction, the log exposes it only on commit and in database commit order. A connector transforms the row into the public envelope and publishes it.
 
@@ -123,7 +125,7 @@ The outbox contract remains stable across both. Migration can run old and new re
 
 CDC is not inherently “exactly once.” Source read, destination append, and source checkpoint still have crash windows unless they share a proven transaction protocol; downstream effect idempotency remains required.
 
-## Transactional inbox and local effects
+## Transactional Inbox and Local Effects
 
 For each consumer/effect scope, create an inbox with a unique key:
 
@@ -147,7 +149,7 @@ Inbox cleanup uses the maximum of broker replay, operator redrive, disaster reco
 
 If an effect is in a remote system, the local inbox transaction can record an intent/outbox to call it; it cannot mark the remote effect complete. Pass a stable downstream idempotency key and reconcile ambiguous outcomes, or use a durable workflow.
 
-## Ordering and transaction boundaries
+## Ordering and Transaction Boundaries
 
 Database commit position provides a total order within its source log, but broker partitioning may preserve only per-key order. Carry aggregate version and route consistently. Consumers should version-gate or repair gaps instead of depending on wall-clock timestamps.
 
@@ -155,7 +157,7 @@ One database transaction can emit multiple outbox rows. Include a transaction/ba
 
 Multiple source databases have no shared commit order. A relay timestamp does not create causality. Model cross-database processes as workflows with explicit correlation/dependencies, or consolidate the invariant into one transaction boundary.
 
-## Cleanup and archival
+## Cleanup and Archival
 
 Separate status update from physical deletion. A cleanup watermark advances only when:
 
@@ -169,7 +171,7 @@ Time/range partitions make reclamation predictable. Archive only if there is a r
 
 Periodic reconciliation samples or scans domain transitions requiring events and verifies corresponding outbox IDs, broker identities, consumer source versions, and effect invariants. Count equality is insufficient because duplicates can hide omissions.
 
-## Schema and relay migration
+## Schema and Relay Migration
 
 Outbox event schemas evolve like public APIs. Producers write registered schema IDs. Relays preserve identity/type and do not apply mutable “latest” transforms without version provenance. Consumers deploy compatible readers before producers emit new required semantics.
 
@@ -185,7 +187,7 @@ Relay changes use generations:
 
 Changing partition keys requires the barrier protocol in [Message Ordering](03-message-ordering.md).
 
-## Capacity and cost model
+## Capacity and Cost Model
 
 Illustrative producer database:
 
@@ -205,13 +207,13 @@ To drain the six-hour backlog in three hours while live ingress continues, relay
 
 Inbox storage at 6,300/s and 30-day replay is 16.3 billion identities. At a measured 72 bytes/identity, one logical copy is about 1.09 TiB. Partition/compact by time and effect scope, use natural uniqueness where valid, and align replay policy deliberately.
 
-## Concrete failure trace: lost CDC slot after cleanup
+## Concrete Failure Trace: Lost CDC Slot After Cleanup
 
 A CDC relay is down for two days. The replication slot is accidentally dropped, and an aggressive job has already deleted published-looking outbox rows older than one day. A new slot starts at the current WAL position. Domain transactions from the missing day have neither replayable rows nor retained log entries, so their integration events disappear silently.
 
 Containment stops the connector and downstream claims of completeness. Repair reconstructs required events from the authoritative domain/event store using stable deterministic IDs and publishes through a controlled backfill. Prevention backs up/checks connector source positions, ties cleanup watermark to recoverable publication evidence rather than row age, monitors retained WAL, and rehearses slot-loss recovery.
 
-## Operations and observability
+## Operations and Observability
 
 Track by source DB/shard, destination, relay generation, event type, consumer, and tenant:
 
@@ -226,7 +228,7 @@ Track by source DB/shard, destination, relay generation, event type, consumer, a
 
 Runbooks cover relay outage, broker ambiguity, database overload, stuck claims, CDC slot/log loss, schema rejection, duplicate storm, cleanup error, and replay beyond inbox retention.
 
-## Security and privacy
+## Security and Privacy
 
 Application roles may insert outbox rows only through owned domain transactions. Relay roles read/claim/publish but cannot mutate domain state or alter payloads. CDC connectors receive least-privilege replication access and isolate schema-history/checkpoint credentials.
 
@@ -234,7 +236,7 @@ Authenticate destination routes from trusted configuration, not payload-supplied
 
 Replay, seek, cleanup, connector reset, and bulk redrive are privileged audited operations. An event ID is not a secret, but allowing callers to choose another tenant’s ID can suppress effects through inbox uniqueness; namespace and bind identity to authenticated source plus digest.
 
-## Verification strategy
+## Verification Strategy
 
 - transaction tests prove every committed domain transition has its required outbox row and rollbacks publish none;
 - kill pollers before/after broker acknowledgement and mark-published to prove duplicates but no loss;
@@ -245,7 +247,7 @@ Replay, seek, cleanup, connector reset, and bulk redrive are privileged audited 
 - compare domain/outbox/broker/inbox/effect IDs and source versions under reconciliation;
 - load-test six-hour outage accumulation plus bounded catch-up against primary/broker/downstream capacity.
 
-## Decision framework
+## Decision Framework
 
 Use outbox when a local transaction must reliably cause asynchronous publication to another transactional domain. Use a simple local job table if the work remains inside the same database/service and a broker adds no value. Consider distributed transactions only when every participant supports the protocol and blocking/availability trade-offs fit; see [Distributed Transactions](../02-distributed-databases/07-distributed-transactions.md).
 
@@ -267,3 +269,12 @@ Choose relay and consumer design by answering:
 - [PostgreSQL: Replication Slots](https://www.postgresql.org/docs/current/warm-standby.html#STREAMING-REPLICATION-SLOTS)
 - [AWS Prescriptive Guidance: Transactional Outbox Pattern](https://docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/transactional-outbox.html)
 - [Martin Kleppmann et al.: Online Event Processing: Achieving Consistency Where Distributed Transactions Have Failed](https://doi.org/10.1145/3329672.3329679)
+
+---
+
+## Related Chapters
+
+- [Delivery Guarantees and Effect Boundaries](04-delivery-guarantees.md): at-least-once is the honest promise here, and the inbox is what makes it survivable
+- [Change Data Capture](../13-data-pipelines/04-change-data-capture.md): reading the log instead of polling the table, with a coupling cost of its own
+- [Distributed Transactions](../02-distributed-databases/07-distributed-transactions.md): the alternative this pattern exists to avoid: one commit across two systems
+- [Effect Commit Protocols for Workflows](../18-workflow-job-systems/06-retry-idempotency-compensation.md): when the relay dies halfway, recovery becomes a compensation problem
