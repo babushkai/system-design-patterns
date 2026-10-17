@@ -922,7 +922,7 @@ GROUP BY source_type;
 
 ---
 
-## References
+## 参考文献
 
 1. [MITRE — CWE-78: Improper Neutralization of Special Elements used in an OS Command](https://cwe.mitre.org/data/definitions/78.html)
 2. [MITRE — CWE-89: Improper Neutralization of Special Elements used in an SQL Command](https://cwe.mitre.org/data/definitions/89.html)

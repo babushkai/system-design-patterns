@@ -1,5 +1,7 @@
 # Workflow System Fundamentals
 
+## TL;DR
+
 A workflow system turns a request to perform work into durable, inspectable execution state that can outlive every process involved. Its first promise is not “the function ran.” It is that accepted work has an identity, an authority, a recoverable next action, and a declared outcome when workers, networks, control planes, or dependencies fail.
 
 Workflow fundamentals define workload and durability contracts, execution identity, common control/execution-plane boundaries, durable acceptance, mechanism selection, and system invariants. [Background Jobs and Worker Pools](./02-background-jobs-worker-pools.md) covers queue claims and execution; [Distributed Scheduling](./03-distributed-cron-scheduling.md) covers occurrence materialization; [Durable Execution](./04-durable-execution-workflow-engines.md) covers history replay; [DAG Orchestration](./05-dag-orchestration.md) covers graph scheduling; [Effect Commit Protocols](./06-retry-idempotency-compensation.md) covers external effects; [Leases and Recovery](./08-leases-heartbeats-recovery.md) covers attempt authority; [Workflow Observability](./09-workflow-observability-replay.md) covers operator views and forensic replay.
@@ -14,7 +16,7 @@ Workflow fundamentals define workload and durability contracts, execution identi
 | Temporal event-history documentation | Per-execution append-only events and replay reconstruct durable workflow progress | Temporal-specific implementation and limits |
 | Azure Durable Task programming model | Orchestrators, activities, durable timers, external events, event sourcing, and replay separate decisions from effects | Durable Task family; other engines may interpret a state machine instead of replaying user code |
 
-## Workload and guarantee contract
+## Workload and Guarantee Contract
 
 “Run this later” leaves the important decisions undefined. Record:
 
@@ -41,7 +43,7 @@ The contract names at least three outcomes separately:
 
 Returning HTTP `202 Accepted` after putting an item in process memory satisfies none of the durable promises. Conversely, a queue message can be durably accepted while the business entity that motivated it was rolled back. The acceptance transaction must match the product promise.
 
-## Taxonomy: mechanisms are not one ladder
+## Taxonomy: Mechanisms Are Not One Ladder
 
 Scheduling, dependency shape, and recovery granularity are orthogonal. A distributed cron service decides **when** to create work; that work may be a queue job, DAG run, or durable workflow. A DAG engine is not simply a weaker durable-execution engine: it makes graph nodes and data intervals explicit, while a code-replay engine makes dynamic per-entity control flow and long waits natural.
 
@@ -68,7 +70,7 @@ Select with several axes, not a framework popularity list:
 
 Do not choose durable execution merely because a side effect is dangerous. An engine cannot make an arbitrary remote effect atomic with its history. Dangerous effects need the protocol in [Effect Commit Protocols](./06-retry-idempotency-compensation.md) regardless of orchestration surface.
 
-## Common reference architecture
+## Common Reference Architecture
 
 ~~~mermaid
 flowchart LR
@@ -103,7 +105,7 @@ Workers are replaceable compute. The authoritative state store answers which log
 
 **Reference-design availability boundary:** loss of the definition/deployment control plane stops new versions and risky administrative changes, but compatible workers continue advancing already accepted executions from last-known-good policy. Security revocation, quota changes, and cancellation may require a shorter stale-policy interval than ordinary execution.
 
-## Durable identity and state
+## Durable Identity and State
 
 A common execution envelope contains:
 
@@ -137,7 +139,7 @@ The full representation differs by mechanism: a job row may have one claim; a DA
 9. A delayed or duplicate notification cannot create a second logical occurrence without a distinct occurrence identity.
 10. Visibility/search lag cannot authorize execution, cancellation, or repair against stale state.
 
-## Durable acceptance protocols
+## Durable Acceptance Protocols
 
 ### Idempotent start API
 
@@ -161,7 +163,7 @@ When a database change creates the obligation, commit an execution intent or [ou
 
 The scan is a correctness mechanism, not merely an incident script. Its lag contributes directly to the execution-start SLO.
 
-## Failure and effect boundaries
+## Failure and Effect Boundaries
 
 Durable orchestration can serialize its own state transitions. It cannot atomically include arbitrary payment, email, object store, or partner API state. The unavoidable ambiguity is:
 
@@ -176,7 +178,7 @@ The workload contract records that boundary. [Effect Commit Protocols](./06-retr
 
 Likewise, a lease decides when another worker may try; it cannot prove the first worker stopped. Detailed renewal/fencing belongs to [Leases and Recovery](./08-leases-heartbeats-recovery.md).
 
-## Capacity model across planes
+## Capacity Model Across Planes
 
 Plan execution transitions independently from worker CPU. Let start rate be $\lambda_{\mathrm{start}}$, mean durable transitions per completed execution be $\mathbb{E}[N_{\mathrm{transitions/run}}]$, and incoming signal/timer/recovery rates be separate:
 
@@ -206,7 +208,7 @@ $$
 
 Mechanism selection does not remove this conservation law; see [Capacity Planning](../01-foundations/10-capacity-planning.md).
 
-## Security and tenant isolation
+## Security and Tenant Isolation
 
 Starting, signaling, canceling, resetting, and reading an execution are distinct permissions. Authorize namespace, workflow type, execution identity, and action; do not accept a caller-supplied tenant only because it appears in the payload. Worker task queues and handler registrations are capabilities: a worker that can poll sensitive tasks can receive inputs and report results.
 
@@ -216,7 +218,7 @@ Bound starts, signals, fan-out, timers, payload bytes, retained history, and ope
 
 Definitions and worker artifacts are production code. Sign/provenance-check them, restrict registration and routing changes, stage activation, and audit emergency reset/terminate/re-drive operations. Administrative repair must preserve tenant authorization and business invariants.
 
-## Evolution and compatibility
+## Evolution and Compatibility
 
 An execution may outlive many deployments. Treat these as independently versioned contracts:
 
@@ -232,7 +234,7 @@ Pin or record the versions needed to interpret each execution. Deploy readers/up
 
 Rollback restores compatible execution code and routing; it does not delete newly appended state. If a new definition emitted a command or value the old version cannot interpret, rollback is a forward compatibility operation.
 
-## Specialized failure traces
+## Specialized Failure Traces
 
 ### Acceptance response precedes durable state
 
@@ -270,7 +272,7 @@ An operator marks the execution canceled after a payment activity committed. The
 
 Search says an execution is still running, but authoritative state already completed. An operator resets it from a stale projection and repeats later steps. Repair reads and conditionally updates the authoritative execution revision; visibility is navigation, not authority.
 
-## Observability and verification
+## Observability and Verification
 
 At the system boundary, measure:
 
@@ -298,7 +300,7 @@ Verification should include:
 9. production-shaped transition, timer, fan-out, backlog, and recovery load;
 10. business-ledger reconciliation proving accepted obligations reach a declared terminal outcome.
 
-## Decision framework
+## Decision Framework
 
 1. What exact durable commit makes the product allowed to say “accepted”?
 2. What are the logical operation, execution, run, occurrence, task, and effect identities?
@@ -313,7 +315,7 @@ Verification should include:
 11. Who may start, signal, inspect, cancel, reset, terminate, or repair each tenant's executions?
 12. Does the selected mechanism buy necessary recovery semantics without imposing an unnecessary replay/graph/operations tax?
 
-## Primary references
+## References
 
 - [Amazon SQS, *What is Amazon Simple Queue Service?*](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/welcome.html)
 - [Kubernetes, *Jobs*](https://kubernetes.io/docs/concepts/workloads/controllers/job/)
@@ -323,3 +325,12 @@ Verification should include:
 - [Microsoft, *Durable Task programming model*](https://learn.microsoft.com/en-us/azure/azure-functions/durable/programming-model-overview)
 - [Microsoft, *Durable orchestrations*](https://learn.microsoft.com/en-us/azure/durable-task/common/durable-task-orchestrations)
 - [Pat Helland, *Life Beyond Distributed Transactions: an Apostate's Opinion* (CIDR 2007)](https://www.cidrdb.org/cidr2007/papers/cidr07p15.pdf)
+
+---
+
+## Related Chapters
+
+- [Background Jobs and Worker Pools](02-background-jobs-worker-pools.md): a job is a workflow with one step, and the difference shows up in retries
+- [Durable Execution and Workflow Engines](04-durable-execution-workflow-engines.md): the engine that makes an interrupted program resumable instead of rerunnable
+- [Transactional Outbox, Inbox, and CDC Publication](../05-messaging/07-outbox-pattern.md): how a step commits somewhere else exactly once when the world is not transactional
+- [Capacity Planning and Back-of-the-Envelope Estimation](../01-foundations/10-capacity-planning.md): throughput, queue depth, and worker count are one equation with three owners

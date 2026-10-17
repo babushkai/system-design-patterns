@@ -472,3 +472,12 @@ Then require the operating design to answer:
 11. [PyTorch FSDP: Experiences on Scaling Fully Sharded Data Parallel](https://arxiv.org/abs/2304.11277): Zhao et al., 2023
 12. [PyTorch FullyShardedDataParallel Documentation](https://docs.pytorch.org/docs/stable/fsdp.html): sharding and reshard semantics
 13. [NVIDIA NCCL Collective Operations](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/collectives.html)
+
+---
+
+## Related Chapters
+
+- [Training Pipelines](05-training-pipelines.md): the orchestration layer that decides what a failed worker actually means
+- [GPU Inference Internals](../17-llm-systems/11-gpu-inference-internals.md): the same hardware run as a throughput pipeline instead of a synchronized job
+- [Dataset Management and Versioning](11-dataset-management-versioning.md): an input pipeline that must replay identical bytes to count as reproducible
+- [Object Storage Architecture and Commit Protocols](../03-storage-engines/08-object-storage.md): checkpoints as large immutable objects, where restore bandwidth sets the failure budget

@@ -1,5 +1,7 @@
 # Database Schema Migrations
 
+## TL;DR
+
 A database schema migration changes the contract shared by stored data, application binaries, database engines, replicas, change streams, and offline consumers. Safety requires mixed-version compatibility, bounded metadata locks and rewrite work, backfills that cannot overwrite newer rows, and a lossless rollback representation.
 
 Schema evolution covers compatibility, engine DDL/lock mechanics, constraints and indexes, in-database representation changes, backfills, and contract cleanup. [Service and Platform Migration](./06-migration-strategies.md) covers authority transfer, strangler seams, cross-system shadowing, and migration ledgers; [Change Data Capture](../13-data-pipelines/04-change-data-capture.md) covers log extraction and downstream delivery.
@@ -15,7 +17,7 @@ Schema evolution covers compatibility, engine DDL/lock mechanics, constraints an
 
 Do not copy an operation-safety table across engines or versions. Ask the actual engine for its plan/algorithm where possible, pin the version, inspect locks and space, and rehearse on production-shaped data.
 
-## Migration contract
+## Migration Contract
 
 Before writing DDL, record:
 
@@ -33,7 +35,7 @@ Before writing DDL, record:
 
 “Zero downtime” is not a mechanism. State maximum acquisition pause, allowed latency/lag impact, cutover behavior, and recovery after cancellation or process death.
 
-## State, authority, and invariants
+## State, Authority, and Invariants
 
 The schema history table is not enough for a multi-phase change. Keep a durable record:
 
@@ -64,7 +66,7 @@ actor, approvals, timestamps, and engine job identity
 9. Migration and serving traffic share explicit I/O, log, connection, and storage budgets.
 10. Irreversible cleanup records evidence and preserves backup/audit obligations.
 
-## Control path and database data path
+## Control Path and Database Data Path
 
 ~~~mermaid
 flowchart LR
@@ -85,7 +87,7 @@ flowchart LR
 
 The migration **control path** sequences phases, checks compatibility, admits maintenance work, and decides pause/abort/advance. The database **data path** continues serving transactions. The controller should disappear without leaving an ambiguous phase: engine job identity, cursor, transform version, and evidence are durable.
 
-## Compatibility is a matrix, not “N−1” alone
+## Compatibility Is a Matrix, Not “N−1” Alone
 
 During a rolling release, several actors coexist:
 
@@ -104,7 +106,7 @@ For every phase, test every supported actor. “The new binary works” does not
 
 Prefer additive changes first: new nullable column/table/index/constraint state that old code ignores. Avoid `SELECT *`, positional decoding, and implicit type conversions because additive schema can still change result shape or wire encoding for brittle clients.
 
-## Expand, migrate, switch, contract
+## Expand, Migrate, Switch, Contract
 
 The canonical state machine is:
 
@@ -181,7 +183,7 @@ Stopping writes to the old representation is the point at which rollback may req
 
 Contract/removal is a separately reviewed deployment. First prove no old query, prepared statement, view, ORM, report, replica, CDC schema, restore script, or rollback artifact refers to the object. Rename-to-tombstone or revoke access can expose hidden dependencies before destructive drop, but even metadata renames can break actors and require locks.
 
-## Engine mechanics: plan the actual operation
+## Engine Mechanics: Plan the Actual Operation
 
 ### Metadata locks and blocker chains
 
@@ -227,7 +229,7 @@ For a rewrite not safely supported in place:
 
 **Documented, GitHub 2016:** gh-ost tails the MySQL binary log rather than installing triggers, incrementally copies rows, supports pause/throttle and test-on-replica, and postpones cutover. Its constraints and prerequisites remain product-specific; use a released version and read its current limitations.
 
-## Capacity and duration model
+## Capacity and Duration Model
 
 Every migration consumes at least:
 
@@ -269,7 +271,7 @@ Effective rate is constrained by source IOPS, target write/redo, replicas, lock 
 
 Temporary space must survive original table + ghost/new index + logs/undo + sort/temp + backups/snapshots + free-space threshold. Disk-full during DDL can threaten the database, not merely the migration.
 
-## Specialized failure traces
+## Specialized Failure Traces
 
 ### “Instant” DDL queues the application
 
@@ -312,7 +314,7 @@ Ghost copy and change apply are complete, but a long transaction prevents the at
 
 New writers emit values outside the old type/enum domain. Rolling back code while retaining schema does not help; old code truncates, rejects, or misinterprets data. Gate new-value emission separately from new-code rollout and record the irreversible compatibility boundary.
 
-## Security, privacy, and governance
+## Security, Privacy, and Governance
 
 Migration roles are unusually powerful. Grant only required DDL/DML/catalog privileges for named objects and time-bound them. Separate author, approver, and production executor where risk requires it. Sign or digest immutable migration definitions so a reused version cannot execute changed SQL.
 
@@ -322,7 +324,7 @@ Temporary tables, snapshots, change logs, old columns, and backups extend the da
 
 Protect migration APIs from arbitrary SQL, unbounded batch sizes, broad table targeting, and unauthorized contract/drop. Emergency cancellation and lock termination are audited production actions.
 
-## Operations, rollout, and rollback
+## Operations, Rollout, and Rollback
 
 Run one phase per deployable change:
 
@@ -341,7 +343,7 @@ Do not combine engine upgrade, schema rewrite, ORM change, and traffic migration
 
 Runbooks cover blocked metadata lock, replication/CDC lag, disk/log growth, invalid index, failed constraint validation, stuck/ambiguous engine job, ghost divergence, cutover blocker, old consumer discovered after switch, and accidental contract.
 
-## Observability and verification
+## Observability and Verification
 
 Track:
 
@@ -359,7 +361,7 @@ Verification includes engine-plan assertions, migration lint, exact-version inte
 
 Property-test transformations for nulls, boundaries, encodings, timezone/collation, overflow, and round-trip reversibility. A count match can hide every semantic error that matters.
 
-## Decision framework
+## Decision Framework
 
 1. Which readers, writers, replicas, CDC consumers, and offline jobs share this schema contract?
 2. What exact lock, scan/rewrite, temporary-space, log, and cancellation mechanics apply on the deployed engine version?
@@ -372,7 +374,7 @@ Property-test transformations for nulls, boundaries, encodings, timezone/collati
 9. Until when is rollback lossless, and what forward migration is required afterward?
 10. Has crash/timeout/retry recovery been tested for each engine and workflow state?
 
-## Primary references
+## References
 
 - [PostgreSQL 18, *ALTER TABLE*](https://www.postgresql.org/docs/current/sql-altertable.html)
 - [PostgreSQL 18, *Explicit Locking*](https://www.postgresql.org/docs/current/explicit-locking.html)
@@ -382,3 +384,12 @@ Property-test transformations for nulls, boundaries, encodings, timezone/collati
 - [GitHub Engineering, *gh-ost: GitHub's online migration tool for MySQL* (August 2016)](https://github.blog/news-insights/company-news/gh-ost-github-s-online-migration-tool-for-mysql/)
 - [GitHub, *gh-ost source and design documentation*](https://github.com/github/gh-ost)
 - [Fowler and Sadalage, *Evolutionary Database Design*](https://martinfowler.com/articles/evodb.html)
+
+---
+
+## Related Chapters
+
+- [Progressive Delivery and Deployment Strategies](01-deployment-strategies.md): code and schema deploy independently only when the two rollback plans agree
+- [Secondary Indexes in Distributed Databases](../02-distributed-databases/06-secondary-indexes.md): a backfill is an index build, with the same correctness problem at a larger scale
+- [Change Data Capture](../13-data-pipelines/04-change-data-capture.md): the trick that turns a schema migration into a stream you can replay
+- [Incident Command and Learning](../11-observability/07-incident-management.md): many of these incidents are migrations, and the rollback is not a git revert

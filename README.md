@@ -35,6 +35,89 @@ Evidence labels used throughout the fieldbook:
 - **Inference** - The conclusion follows from stated mechanisms and assumptions; it is not attributed to an undisclosed deployment.
 - **Reference design** - A reusable architecture proposed by this book; thresholds and worked numbers remain illustrative until measured.
 
+## How to Read This Fieldbook
+
+The parts are grouped by role, not by difficulty. Pick an entry point, then follow links: every chapter is written to be read alone, with the terms it needs either defined in place or linked. The link graph is part of the build, so it cannot rot quietly: every chapter ends with a curated Related Chapters list that states why each neighbor follows from the page you just read, and no chapter ships that nothing else points to.
+
+| Parts | Role | How to read them |
+|---|---|---|
+| 1-7: [Foundations](01-foundations/01-acid-transactions.md) through [Real-Time](07-real-time/01-polling.md) | Mechanisms that every later chapter assumes | Read in order once, then keep as reference |
+| 8-9: [Case Studies](08-case-studies/01-twitter.md), [Whitepapers](09-whitepapers/01-mapreduce.md) | Evidence for the mechanisms above | Read beside the mechanism chapter that names the system, not as a tour of companies; the pairing tables below give those neighbors |
+| 10-15: [Security](10-security/01-authentication-fundamentals.md) through [Deployment](15-deployment/01-deployment-strategies.md) | Complete subsystems with their own failure models | Any order; each is one design surface |
+| 16-19: [ML](16-ml-systems/01-ml-system-fundamentals.md), [LLM](17-llm-systems/01-agent-fundamentals.md), [Workflow](18-workflow-job-systems/01-workflow-system-fundamentals.md), and [Agent Engineering](19-compound-engineering/01-compound-engineering-fundamentals.md) | Applied domains built on Parts 1-6 | Start with Part 1, then take a track |
+
+### Reading one chapter
+
+Every chapter opens the same way, so you can stop as early as the question allows:
+
+1. **TL;DR** - The verdict and the contract in two paragraphs. Usually enough to decide whether this chapter is yours.
+2. **Primary Evidence and Scope** (where present) - Which source establishes each claim and where that source stops applying. Read it before repeating a number.
+3. **Mechanism sections** - Behavior under load, contention, partial failure, and migration, with the arithmetic behind the claims.
+4. **Failure traces and verification** - What breaks, what the evidence looks like in production, and how to prove a fix worked.
+5. **Decision framework and Key Takeaways** (where present) - The part worth pasting into a design review.
+6. **References** - Primary sources for the chapter, not a bibliography of anything adjacent.
+7. **Related Chapters** - Three to eight neighbors, each with one line on why it follows from this one. Read it before opening a new tab.
+
+Chapters own one concept each. Where two designs meet, the boundary is stated in both directions rather than repeated, so read the linked chapter instead of guessing where the other half lives.
+
+### Tracks
+
+- **Data correctness** - [ACID Transactions](01-foundations/01-acid-transactions.md) and [Isolation Levels](01-foundations/02-isolation-levels.md), then [Consistency Models](01-foundations/04-consistency-models.md), the three [replication](02-distributed-databases/01-single-leader-replication.md) chapters, [Distributed Transactions](02-distributed-databases/07-distributed-transactions.md), and [Consensus Algorithms](02-distributed-databases/08-consensus-algorithms.md). Finish in [Storage Engines](03-storage-engines/01-b-trees.md) to see where durability actually lands.
+- **Traffic that survives its own success** - [Capacity Planning](01-foundations/10-capacity-planning.md), then [Load Balancing](06-scaling/01-load-balancing.md), [Rate Limiting](06-scaling/05-rate-limiting.md), [Circuit Breakers](06-scaling/06-circuit-breakers.md), [Backpressure](06-scaling/07-backpressure.md), [Retries & Hedging](06-scaling/10-retries-timeouts-hedging.md), and [Cell-Based Architecture](06-scaling/11-cell-based-architecture.md).
+- **Multi-region and edge** - [DNS & Connections](06-scaling/13-dns-and-connection-management.md), [Network Transport Internals](06-scaling/14-network-transport-internals.md), [Multi-Region Architecture](06-scaling/09-multi-region-architecture.md), [CDN Architecture](06-scaling/04-cdn-architecture.md), and [Disaster Recovery](15-deployment/05-disaster-recovery.md).
+- **Moving data without lying** - [Message Queue Architecture](05-messaging/01-message-queues.md), [Message Ordering](05-messaging/03-message-ordering.md), [Delivery & Effect Boundaries](05-messaging/04-delivery-guarantees.md), [Outbox, Inbox & CDC](05-messaging/07-outbox-pattern.md), then [Batch Execution](13-data-pipelines/01-batch-processing.md), [Stream Execution](13-data-pipelines/02-stream-processing.md), and [Lakehouse Table Formats](13-data-pipelines/05-lakehouse-table-formats.md).
+- **Owning it in production** - [Tracing & Telemetry Pipelines](11-observability/01-distributed-tracing.md), [Metrics Systems](11-observability/02-metrics-monitoring.md), [Production Logging](11-observability/03-logging.md), [Alert Evaluation](11-observability/04-alerting.md), [SLOs & Error-Budget Control](11-observability/05-slos-error-budgets.md), and [Incident Command](11-observability/07-incident-management.md), plus [Progressive Delivery](15-deployment/01-deployment-strategies.md) and [Database Migrations](15-deployment/03-database-migrations.md).
+- **Identity and trust** - [Authentication Systems](10-security/01-authentication-fundamentals.md), [OAuth 2.0 and OpenID Connect](10-security/02-oauth2-openid-connect.md), [JOSE and JWT Verification](10-security/03-jwt-tokens.md), [API Threat Boundaries](10-security/04-api-security.md), [Cryptographic Key Architecture](10-security/06-encryption.md), and [Authorization at Scale](10-security/07-authorization-patterns.md).
+- **Work that outlives the request** - [Workflow Fundamentals](18-workflow-job-systems/01-workflow-system-fundamentals.md), [Background Jobs & Workers](18-workflow-job-systems/02-background-jobs-worker-pools.md), [Durable Execution](18-workflow-job-systems/04-durable-execution-workflow-engines.md), [Effect Commit Protocols](18-workflow-job-systems/06-retry-idempotency-compensation.md), and [Leases, Heartbeats & Recovery](18-workflow-job-systems/08-leases-heartbeats-recovery.md).
+- **AI systems** - [ML System Fundamentals](16-ml-systems/01-ml-system-fundamentals.md), [Feature Stores](16-ml-systems/02-feature-stores.md), [Model Serving](16-ml-systems/03-model-serving.md), and [Offline Evaluation](16-ml-systems/12-offline-evaluation-metrics.md), then [LLM Infrastructure](17-llm-systems/05-llm-infrastructure.md), [GPU Inference Internals](17-llm-systems/11-gpu-inference-internals.md), [RAG Patterns](17-llm-systems/04-rag-patterns.md), and [LLM Evaluation](17-llm-systems/10-llm-evaluation.md).
+
+- **Reads that stay fast and honest** - [Cache Strategies & Economics](04-caching/01-cache-strategies.md) and [Invalidation & Coherence](04-caching/02-cache-invalidation.md) decide how much staleness you are selling, then [Distributed Cache Internals](04-caching/03-distributed-caching.md) and [Stampede, Cold Start & Warming](04-caching/04-cache-stampede.md) show what happens when the cache leaves, with [CDN Architecture](06-scaling/04-cdn-architecture.md) for the same argument one layer out.
+- **Real-time delivery and collaboration** - [Client Delivery Transports](07-real-time/01-polling.md) picks how a client learns that something changed, [Publish-Subscribe Architecture](05-messaging/02-pub-sub.md) and [Presence](07-real-time/06-presence.md) carry the fan-out, [WebRTC](07-real-time/05-webrtc.md) covers peer media, and [Collaborative Sync & CRDTs](07-real-time/07-crdts-collaborative-editing.md) with [Conflict Resolution](02-distributed-databases/04-conflict-resolution.md) settle two people typing at once.
+- **Service boundaries and API contracts** - [Discovery & Control-Plane State](12-service-mesh/01-service-discovery.md), [Mesh Data & Control Planes](12-service-mesh/03-sidecar-pattern.md), and [Edge Gateway & API Mediation](12-service-mesh/02-api-gateway.md) decide where cross-cutting policy lives, then [API Design & Evolution](12-service-mesh/04-api-design-patterns.md), [API Threat Boundaries](10-security/04-api-security.md), and [Zero-Trust Workload Architecture](10-security/05-zero-trust-architecture.md) decide what each hop is allowed to assume.
+- **Retrieval and ranking** - [Index Architecture & Internals](14-search-systems/01-inverted-indexes.md) and [Lexical Query Execution](14-search-systems/02-full-text-search.md) build the lexical path, [Vector Retrieval Systems](14-search-systems/03-vector-search.md) builds the semantic one, then [Ranking & Evaluation](14-search-systems/04-ranking-algorithms.md) and [Typeahead & Autocomplete](14-search-systems/06-typeahead-autocomplete.md) turn scores into a product, with [RAG Patterns](17-llm-systems/04-rag-patterns.md) and [Recommendation Systems](16-ml-systems/07-recommendation-systems.md) as the two consumers.
+- **Engineering systems for coding agents** - [Platform Fundamentals](19-compound-engineering/01-compound-engineering-fundamentals.md), [Tool & Runtime Contracts](19-compound-engineering/02-coding-agent-tool-design.md), and [Context & Policy Plane](19-compound-engineering/03-agent-context-engineering.md) build the platform, then [Repository Architecture](19-compound-engineering/04-ai-native-software-architecture.md), [Verification & Governance](19-compound-engineering/05-quality-engineering-with-ai-agents.md), and [Parallel Development](19-compound-engineering/06-compound-development-workflows.md) make it survive a fleet of agents, on top of [Agent Fundamentals](17-llm-systems/01-agent-fundamentals.md) and [Harness Engineering](17-llm-systems/09-harness-engineering.md).
+
+### Papers next to mechanisms
+
+The whitepaper chapters are analyses of what a paper actually established, so they are most useful paired with the chapter that uses the design. Read the mechanism first when you need a decision; read the paper first when you want to know where the vocabulary came from.
+
+| Paper | Mechanism chapters it grounds |
+|---|---|
+| [MapReduce](09-whitepapers/01-mapreduce.md) | [Batch Execution](13-data-pipelines/01-batch-processing.md) |
+| [Dynamo](09-whitepapers/02-dynamo.md) | [Leaderless Replication](02-distributed-databases/03-leaderless-replication.md), [Conflict Resolution](02-distributed-databases/04-conflict-resolution.md) |
+| [Bigtable](09-whitepapers/03-bigtable.md) | [LSM Trees](03-storage-engines/02-lsm-trees.md), [Column Storage](03-storage-engines/06-column-storage.md) |
+| [Spanner](09-whitepapers/04-spanner.md) | [Distributed Time](01-foundations/05-distributed-time.md), [Distributed Transactions](02-distributed-databases/07-distributed-transactions.md) |
+| [TAO](09-whitepapers/05-tao.md) | [Secondary Indexes](02-distributed-databases/06-secondary-indexes.md), [Partitioning Strategies](02-distributed-databases/05-partitioning-strategies.md) |
+| [Kafka](09-whitepapers/06-kafka.md) | [Message Ordering](05-messaging/03-message-ordering.md), [Delivery & Effect Boundaries](05-messaging/04-delivery-guarantees.md) |
+| [Raft](09-whitepapers/07-raft.md) | [Consensus Algorithms](02-distributed-databases/08-consensus-algorithms.md), [Leader Election](02-distributed-databases/09-leader-election.md) |
+| [Chubby](09-whitepapers/08-chubby.md) | [Distributed Locks](01-foundations/09-distributed-locks.md), [Leader Election](02-distributed-databases/09-leader-election.md) |
+| [Aurora](09-whitepapers/09-aurora.md) | [Write-Ahead Logging](03-storage-engines/04-write-ahead-logging.md), [Single-Leader Replication](02-distributed-databases/01-single-leader-replication.md) |
+| [CockroachDB](09-whitepapers/10-cockroachdb.md) | [Distributed Transactions](02-distributed-databases/07-distributed-transactions.md), [Partitioning Strategies](02-distributed-databases/05-partitioning-strategies.md) |
+| [Zanzibar](09-whitepapers/11-zanzibar.md) | [Authorization at Scale](10-security/07-authorization-patterns.md) |
+| [Monarch](09-whitepapers/12-monarch.md) | [Metrics Systems & Monitoring](11-observability/02-metrics-monitoring.md), [Tracing & Telemetry Pipelines](11-observability/01-distributed-tracing.md) |
+| [FoundationDB](09-whitepapers/13-foundationdb.md) | [Consensus Algorithms](02-distributed-databases/08-consensus-algorithms.md), [Distributed Transactions](02-distributed-databases/07-distributed-transactions.md) |
+| [DynamoDB (2022)](09-whitepapers/14-dynamodb-2022.md) | [Database Sharding](06-scaling/03-database-sharding.md), [Secondary Indexes](02-distributed-databases/06-secondary-indexes.md) |
+| [The Transformer](09-whitepapers/15-attention-transformers.md) | [GPU Inference Internals](17-llm-systems/11-gpu-inference-internals.md), [LLM Infrastructure](17-llm-systems/05-llm-infrastructure.md) |
+
+### Products next to mechanisms
+
+Each case study starts from a product you can use today and works back to the mechanism that decided its shape. Read the mechanism chapter first when the design question is already yours; read the case study first when you want to see what the constraint looks like at real scale.
+
+| Product | Mechanism chapters it stresses |
+|---|---|
+| [Twitter/X](08-case-studies/01-twitter.md) | [Partitioning Strategies](02-distributed-databases/05-partitioning-strategies.md), [Backpressure](06-scaling/07-backpressure.md), [Outbox, Inbox & CDC](05-messaging/07-outbox-pattern.md) |
+| [Instagram](08-case-studies/02-instagram.md) | [CDN Architecture](06-scaling/04-cdn-architecture.md), [Stampede, Cold Start & Warming](04-caching/04-cache-stampede.md), [Object Storage & Commit Protocols](03-storage-engines/08-object-storage.md) |
+| [Uber](08-case-studies/03-uber.md) | [Distributed Time](01-foundations/05-distributed-time.md), [Secondary Indexes](02-distributed-databases/06-secondary-indexes.md), [Message Ordering](05-messaging/03-message-ordering.md) |
+| [Netflix](08-case-studies/04-netflix.md) | [Cell-Based Architecture](06-scaling/11-cell-based-architecture.md), [Durable Execution](18-workflow-job-systems/04-durable-execution-workflow-engines.md), [Recommendation Systems](16-ml-systems/07-recommendation-systems.md) |
+| [Slack](08-case-studies/05-slack.md) | [Delivery & Effect Boundaries](05-messaging/04-delivery-guarantees.md), [Client Delivery Transports](07-real-time/01-polling.md), [Lexical Query Execution](14-search-systems/02-full-text-search.md) |
+| [Stripe](08-case-studies/06-stripe.md) | [Idempotency](01-foundations/08-idempotency.md), [Distributed Transactions](02-distributed-databases/07-distributed-transactions.md), [SLOs & Error-Budget Control](11-observability/05-slos-error-budgets.md) |
+| [Dropbox](08-case-studies/07-dropbox.md) | [Object Storage & Commit Protocols](03-storage-engines/08-object-storage.md), [Collaborative Sync & CRDTs](07-real-time/07-crdts-collaborative-editing.md), [Disaster Recovery & Reconstruction](15-deployment/05-disaster-recovery.md) |
+| [Discord](08-case-studies/08-discord.md) | [Partitioning Strategies](02-distributed-databases/05-partitioning-strategies.md), [Presence](07-real-time/06-presence.md), [LSM Trees](03-storage-engines/02-lsm-trees.md) |
+| [Google Maps](08-case-studies/09-google-maps.md) | [Typeahead & Autocomplete](14-search-systems/06-typeahead-autocomplete.md), [Partitioning Strategies](02-distributed-databases/05-partitioning-strategies.md), [Dataset Management & Versioning](16-ml-systems/11-dataset-management-versioning.md) |
+| [WhatsApp](08-case-studies/10-whatsapp.md) | [Cryptographic Key Architecture](10-security/06-encryption.md), [Client Delivery Transports](07-real-time/01-polling.md), [Network Transport Internals](06-scaling/14-network-transport-internals.md) |
+| [Figma](08-case-studies/11-figma.md) | [Conflict Resolution](02-distributed-databases/04-conflict-resolution.md), [Collaborative Sync & CRDTs](07-real-time/07-crdts-collaborative-editing.md), [Write-Ahead Logging](03-storage-engines/04-write-ahead-logging.md) |
+| [Cloudflare](08-case-studies/12-cloudflare.md) | [Multi-Region Architecture](06-scaling/09-multi-region-architecture.md), [Multi-Tenant Isolation & Lifecycle](06-scaling/12-multi-tenancy.md), [SLOs & Error-Budget Control](11-observability/05-slos-error-budgets.md) |
+| [LLM Inference Platforms](08-case-studies/13-llm-inference-platforms.md) | [GPU Inference Internals](17-llm-systems/11-gpu-inference-internals.md), [LLM Infrastructure](17-llm-systems/05-llm-infrastructure.md), [FinOps & Cost Engineering](11-observability/06-finops-cost-engineering.md) |
 
 ## Table of Contents
 
@@ -265,12 +348,14 @@ Evidence labels used throughout the fieldbook:
 ### Original Papers
 
 #### Distributed Systems Foundations
+
 - [Time, Clocks, and the Ordering of Events](https://lamport.azurewebsites.net/pubs/time-clocks.pdf) - Lamport, 1978
 - [Impossibility of Distributed Consensus with One Faulty Process (FLP)](https://groups.csail.mit.edu/tds/papers/Lynch/jacm85.pdf) - Fischer, Lynch, Paterson, 1985
 - [The Part-Time Parliament (Paxos)](https://lamport.azurewebsites.net/pubs/lamport-paxos.pdf) - Lamport, 1998
 - [Paxos Made Simple](https://lamport.azurewebsites.net/pubs/paxos-simple.pdf) - Lamport, 2001
 
 #### Storage & Databases
+
 - [The Google File System](https://static.googleusercontent.com/media/research.google.com/en//archive/gfs-sosp2003.pdf) - Ghemawat et al., 2003
 - [MapReduce: Simplified Data Processing on Large Clusters](https://static.googleusercontent.com/media/research.google.com/en//archive/mapreduce-osdi04.pdf) - Dean & Ghemawat, 2004
 - [Bigtable: A Distributed Storage System for Structured Data](https://static.googleusercontent.com/media/research.google.com/en//archive/bigtable-osdi06.pdf) - Chang et al., 2006
@@ -279,20 +364,24 @@ Evidence labels used throughout the fieldbook:
 - [Amazon Aurora: Design Considerations for High Throughput Cloud-Native Relational Databases](https://web.stanford.edu/class/cs245/readings/aurora.pdf) - Verbitski et al., 2017
 
 #### Consensus & Coordination
+
 - [The Chubby Lock Service for Loosely-Coupled Distributed Systems](https://static.googleusercontent.com/media/research.google.com/en//archive/chubby-osdi06.pdf) - Burrows, 2006
 - [ZooKeeper: Wait-free coordination for Internet-scale systems](https://www.usenix.org/legacy/event/atc10/tech/full_papers/Hunt.pdf) - Hunt et al., 2010
 - [In Search of an Understandable Consensus Algorithm (Raft)](https://raft.github.io/raft.pdf) - Ongaro & Ousterhout, 2014
 
 #### Messaging & Streaming
+
 - [Kafka: a Distributed Messaging System for Log Processing](http://notes.stephenholiday.com/Kafka.pdf) - Kreps et al., 2011
 - [The Log: What every software engineer should know about real-time data's unifying abstraction](https://engineering.linkedin.com/distributed-systems/log-what-every-software-engineer-should-know-about-real-time-datas-unifying) - Jay Kreps, 2013
 
 #### Social & Web Scale
+
 - [TAO: Facebook's Distributed Data Store for the Social Graph](https://www.usenix.org/system/files/conference/atc13/atc13-bronson.pdf) - Bronson et al., 2013
 - [Scaling Memcache at Facebook](https://www.usenix.org/system/files/conference/nsdi13/nsdi13-final170_update.pdf) - Nishtala et al., 2013
 - [F4: Facebook's Warm BLOB Storage System](https://www.usenix.org/system/files/conference/osdi14/osdi14-paper-muralidhar.pdf) - Muralidhar et al., 2014
 
 #### NewSQL
+
 - [CockroachDB: The Resilient Geo-Distributed SQL Database](https://dl.acm.org/doi/pdf/10.1145/3318464.3386134) - Taft et al., 2020
 - [TiDB: A Raft-based HTAP Database](https://www.vldb.org/pvldb/vol13/p3072-huang.pdf) - Huang et al., 2020
 
@@ -339,6 +428,7 @@ Evidence labels used throughout the fieldbook:
 ### Additional Books
 
 #### Architecture & Design Patterns
+
 | Book | Author | Topics |
 |------|--------|--------|
 | [Clean Architecture](https://www.oreilly.com/library/view/clean-architecture-a/9780134494272/) | Robert C. Martin | Dependency rule, boundaries, components, frameworks |
@@ -351,6 +441,7 @@ Evidence labels used throughout the fieldbook:
 | [A Philosophy of Software Design](https://web.stanford.edu/~ouster/cgi-bin/book.php) | John Ousterhout | Complexity, modules, abstractions, comments |
 
 #### Distributed Systems & Reliability
+
 | Book | Author | Topics |
 |------|--------|--------|
 | [Site Reliability Engineering](https://sre.google/sre-book/table-of-contents/) | Google | SLOs, error budgets, toil, monitoring, on-call |
@@ -361,6 +452,7 @@ Evidence labels used throughout the fieldbook:
 | [Web Scalability for Startup Engineers](https://www.oreilly.com/library/view/web-scalability-for/9780071843669/) | Artur Ejsmont | Practical scaling strategies |
 
 #### Data & Streaming
+
 | Book | Author | Topics |
 |------|--------|--------|
 | [Streaming Systems](https://www.oreilly.com/library/view/streaming-systems/9781491983867/) | Akidau, Chernyak, Lax | Watermarks, windows, triggers, exactly-once |
@@ -370,6 +462,7 @@ Evidence labels used throughout the fieldbook:
 | [The Data Warehouse Toolkit](https://www.kimballgroup.com/data-warehouse-business-intelligence-resources/books/) | Ralph Kimball | Dimensional modeling, ETL, BI |
 
 #### Performance & Optimization
+
 | Book | Author | Topics |
 |------|--------|--------|
 | [Systems Performance](https://www.brendangregg.com/systems-performance-2nd-edition-book.html) | Brendan Gregg | Linux, observability, methodologies, tools |
@@ -380,6 +473,7 @@ Evidence labels used throughout the fieldbook:
 ### More Papers
 
 #### Consistency & Transactions
+
 - [Linearizability: A Correctness Condition for Concurrent Objects](https://cs.brown.edu/~mph/HerlihyW90/p463-herlihy.pdf) - Herlihy & Wing, 1990
 - [A Critique of ANSI SQL Isolation Levels](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/tr-95-51.pdf) - Berenson et al., 1995
 - [Large-scale Incremental Processing Using Distributed Transactions and Notifications (Percolator)](https://research.google/pubs/pub36726/) - Peng & Dabek, 2010
@@ -388,17 +482,20 @@ Evidence labels used throughout the fieldbook:
 - [Serializable Snapshot Isolation in PostgreSQL](https://drkp.net/papers/ssi-vldb12.pdf) - Ports & Grittner, 2012
 
 #### Distributed Data Structures
+
 - [Consistent Hashing and Random Trees](https://www.cs.princeton.edu/courses/archive/fall09/cos518/papers/chash.pdf) - Karger et al., 1997
 - [CRUSH: Controlled, Scalable, Decentralized Placement of Replicated Data](https://ceph.io/assets/pdfs/weil-crush-sc06.pdf) - Weil et al., 2006
 - [A Comprehensive Study of Convergent and Commutative Replicated Data Types (CRDTs)](https://hal.inria.fr/inria-00555588/document) - Shapiro et al., 2011
 - [The Phi Accrual Failure Detector](https://www.cs.cornell.edu/projects/Quicksilver/public_pdfs/SRDS04.pdf) - Hayashibara et al., 2004
 
 #### Search & Indexing
+
 - [The Anatomy of a Large-Scale Hypertextual Web Search Engine](http://infolab.stanford.edu/~backrub/google.html) - Brin & Page, 1998
 - [Web Search for a Planet: The Google Cluster Architecture](https://static.googleusercontent.com/media/research.google.com/en//archive/googlecluster-ieee.pdf) - Barroso et al., 2003
 - [Elasticsearch: The Definitive Guide (online)](https://www.elastic.co/guide/en/elasticsearch/guide/current/index.html) - Clinton Gormley, Zachary Tong
 
 #### Machine Learning Systems
+
 - [Scaling Distributed Machine Learning with the Parameter Server](https://www.cs.cmu.edu/~muli/file/parameter_server_osdi14.pdf) - Li et al., 2014
 - [TensorFlow: A System for Large-Scale Machine Learning](https://www.usenix.org/system/files/conference/osdi16/osdi16-abadi.pdf) - Abadi et al., 2016
 - [Hidden Technical Debt in Machine Learning Systems](https://papers.nips.cc/paper/2015/file/86df7dcfd896fcaf2674f757a2463eba-Paper.pdf) - Sculley et al., 2015
@@ -419,6 +516,7 @@ Evidence labels used throughout the fieldbook:
 - [NIST AI Risk Management Framework](https://www.nist.gov/itl/ai-risk-management-framework) - NIST, 2023
 
 #### Container & Orchestration
+
 - [Borg, Omega, and Kubernetes](https://queue.acm.org/detail.cfm?id=2898444) - Burns et al., 2016
 - [Large-scale cluster management at Google with Borg](https://research.google/pubs/pub43438/) - Verma et al., 2015
 - [Mesos: A Platform for Fine-Grained Resource Sharing in the Data Center](https://people.eecs.berkeley.edu/~alig/papers/mesos.pdf) - Hindman et al., 2011

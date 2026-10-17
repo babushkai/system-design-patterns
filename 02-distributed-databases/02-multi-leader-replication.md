@@ -1,10 +1,12 @@
 # Multi-Leader Replication
 
+## TL;DR
+
 Multi-leader replication lets more than one site commit writes without first obtaining permission from a single remote leader. That can keep a disconnected client productive and remove an inter-region round trip from the foreground path. It also creates independent histories that must later be combined. The design is therefore not “single-leader replication, twice”: its core product contract is what a local acknowledgement means while other writers are unreachable.
 
 This chapter traces replication streams between writable sites through durable capture, topology, ordering, deduplication, causal sessions, bootstrap, rejoin, and regional operations. [Conflict Resolution](./04-conflict-resolution.md) owns merge algebra and CRDT mechanics. [Partitioning Strategies](./05-partitioning-strategies.md) owns key placement, while [Consensus Algorithms](./08-consensus-algorithms.md) covers systems that choose one ordered history instead of reconciling several.
 
-## Workload and consistency contract
+## Workload and Consistency Contract
 
 Start with operations, not a topology diagram. For each command class, specify:
 
@@ -18,7 +20,7 @@ A typical active-active contract says that a write acknowledged in region A surv
 
 The distinction matters for money and scarce resources. If A and B can each decrement the last inventory unit, no deterministic merge can make both promises true. Route that item to one authority, allocate regional escrow quotas, or coordinate the reservation. Multi-leader replication is appropriate only for the remaining state whose concurrent outcomes have an explicit meaning.
 
-## Durable state and invariants
+## Durable State and Invariants
 
 Each committed mutation needs an immutable replication identity. A useful envelope contains:
 
@@ -47,7 +49,7 @@ The following invariants make recovery reason-able:
 
 An `event_id` alone is not enough. If the deduplication marker commits and the data mutation does not, the event is lost; if the data commits and the marker does not, replay repeats it. They must be atomic, or the target operation must itself be conditional on a stored version.
 
-## Architecture: data plane and control plane
+## Architecture: Data Plane and Control Plane
 
 ```mermaid
 flowchart LR
@@ -66,7 +68,7 @@ The data plane commits, ships, receives, and applies mutations. The control plan
 
 In a small full mesh, every origin sends directly to every other region. Delivery paths are short, but directed streams and credentials grow as `M(M-1)` for `M` regions. A hub or log fan-out reduces connections, yet the hub becomes a lag and availability dependency. Multi-hop topologies require immutable origin identity: a B-origin event forwarded by C must still be recognized as B’s event when it reaches A, or replication loops amplify it forever.
 
-## Commit, ship, and apply protocol
+## Commit, Ship, and Apply Protocol
 
 For a local transaction, the writer changes application state and appends one or more ordered replication records in the same database transaction or WAL boundary. It then acknowledges locally. A shipper reads from a durable cursor, batches records without crossing unsupported transaction boundaries, and sends them with the destination’s topology epoch.
 
@@ -89,7 +91,7 @@ Hybrid logical clocks can provide stable ordering inputs and bound clock anomali
 
 Merge policy belongs in [Conflict Resolution](./04-conflict-resolution.md). The replication layer’s responsibility is to retain enough context for that policy and to apply one version of it deterministically. Changing a resolver while old events are in flight requires versioned semantics or an offline convergence rewrite.
 
-## Topology and schema evolution
+## Topology and Schema Evolution
 
 Adding a writable region is a state machine, not a load-balancer edit:
 
@@ -102,7 +104,7 @@ Take a consistent snapshot at source frontier `L`, restore it, then apply every 
 
 Schema changes use expand–migrate–contract. Readers and appliers first learn both encodings; producers then emit the new representation; old events and offline sites are drained or translated; only then may the old field disappear. Replication records keep an immutable schema identifier. The general compatibility rules live in [Data Encoding](../03-storage-engines/07-data-encoding.md), and large data backfills should follow the log-boundary discipline in [Change Data Capture](../13-data-pipelines/04-change-data-capture.md).
 
-## Specialized failure traces
+## Specialized Failure Traces
 
 ### Acknowledgement outruns durable capture
 
@@ -124,7 +126,7 @@ B was offline longer than tombstone retention. A deletion replicated among the r
 
 A deploys a required new field and emits version 9. B’s applier understands only version 8, quarantines event 501, but incorrectly advances through event 502. B now advertises progress while permanently missing state. Schema gates must precede producer rollout, and sequence frontiers must expose (not skip) the blocked record.
 
-## Capacity and cost model
+## Capacity and Cost Model
 
 Let global accepted mutation rate be `W` events/s, mean encoded event size `B`, writable regions `M`, retained-log time `T`, and mean apply CPU `c_apply` seconds/event. In a direct fan-out design:
 
@@ -141,7 +143,7 @@ Conflict exposure grows with both hot-key rate and visibility delay. For a key r
 
 Cost includes duplicated regional storage, egress, conflict retention, repair scans, and operator time. A design that saves 80 ms of write latency but doubles every byte across four destinations should make that exchange explicit.
 
-## Security, isolation, and observability
+## Security, Isolation, and Observability
 
 Replication identities are privileged database writers. Use mutually authenticated, encrypted channels; short-lived credentials per direction; destination-side allow-lists for origins, tenants, schemas, and operations; and immutable audit records for topology or resolver changes. An applier must re-establish tenant and row-security context rather than bypass authorization because traffic is “internal.” Encrypt sensitive conflict payloads and bound who may inspect them.
 
@@ -151,13 +153,13 @@ The primary dashboard is a matrix of `origin -> destination`, showing durable-re
 
 Test histories, not just APIs: crash at every local-commit/outbox/inbox/apply boundary; duplicate, drop, delay, and reorder batches; partition one direction only; roll clocks; reuse a restored origin counter; hold a site offline past retention; mix schema and resolver versions; and inject a hot tenant. Property tests should assert convergence after delivering the same event set, replay idempotence, monotonic frontiers, and preservation of each declared business invariant.
 
-## Decision framework
+## Decision Framework
 
 Use multi-leader replication when local or offline write acceptance is a product requirement, cross-site latency is material, and every concurrently writable command has a defensible reconciliation or ownership rule. Prefer [single-leader replication](./01-single-leader-replication.md) when writes can tolerate one authority and operational simplicity matters. Prefer consensus per partition when a single current value or cross-writer invariant must be decided synchronously. Prefer asynchronous replicas or CDC-fed views when only read locality is needed.
 
 The decisive review question is: **what user-visible promise can two isolated sites both make, and how is that promise still true when their histories meet?** If the answer is “the timestamp winner,” the design is unfinished.
 
-## Primary references
+## References
 
 - Terry, D. B., et al. [Managing Update Conflicts in Bayou, a Weakly Connected Replicated Storage System](https://doi.org/10.1145/224056.224070). SOSP, 1995.
 - Petersen, K., et al. [Flexible Update Propagation for Weakly Consistent Replication](https://doi.org/10.1145/268998.266711). SOSP, 1997.
@@ -165,3 +167,12 @@ The decisive review question is: **what user-visible promise can two isolated si
 - Apache CouchDB. [Replication Protocol](https://docs.couchdb.org/en/stable/replication/protocol.html).
 - MySQL. [Group Replication](https://dev.mysql.com/doc/refman/8.4/en/group-replication.html).
 - Amazon DynamoDB. [Global tables: multi-active, multi-Region replication](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/GlobalTables.html).
+
+---
+
+## Related Chapters
+
+- [Conflict Resolution](04-conflict-resolution.md): the cost of the second leader arrives here, as a merge function you have to own
+- [Change Data Capture](../13-data-pipelines/04-change-data-capture.md): most multi-leader systems are a change data capture pipeline with a write path attached
+- [Multi-Region Architecture](../06-scaling/09-multi-region-architecture.md): the topology where this pattern is usually justified, and the latency budget that comes with it
+- [Single-Leader Replication](01-single-leader-replication.md): the simpler contract to compare against once conflicts stop being rare

@@ -700,3 +700,12 @@ Exercise the socio-technical system, not only a failover command. Include missin
 - [SLOs and Error-Budget Control](./05-slos-error-budgets.md): user impact, burn, and reliability policy
 - [Production Logging Architecture](./03-logging.md): event evidence, ordering, retention, and restricted access
 - [Deployment Strategies](../15-deployment/01-deployment-strategies.md): safe rollout, rollback, and recovery mechanics
+
+---
+
+## Related Chapters
+
+- [Alert Evaluation and Notification](04-alerting.md): the page starts this process, and a badly routed page ruins the first ten minutes
+- [Progressive Delivery and Deployment Strategies](../15-deployment/01-deployment-strategies.md): most incidents are changes, which is why rollback has to be a designed capability
+- [Production Logging Architecture](03-logging.md): the evidence available at three in the morning, already shaped by retention and sampling
+- [Multi-Region Architecture](../06-scaling/09-multi-region-architecture.md): a region failure is a decision to shed or fail over on incomplete evidence

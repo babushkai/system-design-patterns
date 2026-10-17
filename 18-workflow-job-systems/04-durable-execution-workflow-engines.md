@@ -1,5 +1,7 @@
 # Durable Execution and Workflow Engines
 
+## TL;DR
+
 A durable workflow engine persists orchestration decisions so a process can wait, crash, move to another worker, and continue without treating volatile stack memory as progress. In a code-replay engine, workers reconstruct local workflow state by rerunning deterministic orchestration code against an ordered event history. In an interpreted engine, the service advances a persisted declarative state machine. Both models separate durable orchestration decisions from external activity effects.
 
 Durable execution covers event history, deterministic replay matching, orchestration/activity separation, timers and signals, history rollover, replay performance, worker/definition versioning, and engine evolution. [Workflow System Fundamentals](./01-workflow-system-fundamentals.md) covers mechanism selection; [Effect Commit Protocols](./06-retry-idempotency-compensation.md) covers activity effects; [Leases and Recovery](./08-leases-heartbeats-recovery.md) covers heartbeat and fencing; [Workflow Observability](./09-workflow-observability-replay.md) covers operator timelines; [DAG Orchestration](./05-dag-orchestration.md) covers static graphs and data intervals.
@@ -14,7 +16,7 @@ Durable execution covers event history, deterministic replay matching, orchestra
 | Cadence topology and versioning documentation | Frontend, History, Matching, persistence, external workers, and explicit code version markers form a durable code-replay system | Cadence terminology/APIs |
 | AWS Step Functions workflow-type documentation | Standard and Express workflow types have different execution semantics and interpret persisted state-machine definitions | Do not project code-replay constraints or one delivery claim across all Step Functions modes |
 
-## Durable-execution contract
+## Durable-Execution Contract
 
 Define:
 
@@ -33,7 +35,7 @@ Define:
 
 Durable execution does not mean physical exactly-once execution. Workflow code may replay many times. Activity/task semantics differ by engine and configuration, and arbitrary remote effects remain outside the history transaction.
 
-## Two engine families
+## Two Engine Families
 
 ### Code replay
 
@@ -47,7 +49,7 @@ AWS Step Functions and other declarative engines persist a definition/state and 
 
 Do not flatten product guarantees. AWS currently documents different semantics for Step Functions Standard, asynchronous Express, and synchronous Express workflows. Even when a service describes a state transition/task execution as exactly once, an explicitly configured retry or an external API's commit/response ambiguity can repeat effects. Record the exact workflow type and boundary.
 
-## Reference architecture
+## Reference Architecture
 
 ~~~mermaid
 flowchart LR
@@ -81,7 +83,7 @@ The **History/transition authority** serializes events for one run and maintains
 
 The engine cluster does not normally execute user code. Application workers poll outbound through authenticated task queues, which improves network isolation but makes task-queue routing and worker availability part of progress.
 
-## Durable state and invariants
+## Durable State and Invariants
 
 An engine commonly persists:
 
@@ -116,7 +118,7 @@ An event envelope contains monotonically ordered event ID within a run, type, se
 10. A worker/definition version is not retired while any reachable history still requires it, unless an explicitly compatible path has been proven.
 11. Restore preserves history order, run identity, timer/task reconciliation, and version/key availability.
 
-## Workflow-task replay protocol
+## Workflow-Task Replay Protocol
 
 ~~~mermaid
 sequenceDiagram
@@ -148,7 +150,7 @@ Detailed flow:
 
 The system records the commands and externally observed outcomes needed to reconstruct orchestration, not necessarily every physical retry event. For example, Temporal's current documentation says activity retries can remain represented by the scheduled event until a terminal activity event is written. Treat provider event density as measured capacity data.
 
-## Deterministic workflow code
+## Deterministic Workflow Code
 
 Determinism means: given the same workflow code version, start input, and ordered history, replay must make a compatible sequence of durable commands. It does not require every CPU instruction or log line to be identical.
 
@@ -175,7 +177,7 @@ Push external work into activities. Use a product's recorded side-effect API onl
 
 Nondeterminism is often latent: a warm sticky worker may retain reconstructed state and avoid full replay until deploy, eviction, failover, or cache miss. Replay tests are release gates, not optional recovery tests.
 
-## Activities and the external-effect boundary
+## Activities and the External-Effect Boundary
 
 A workflow command schedules an activity task with logical activity identity, input, task queue/capability, and timeout policy. An activity worker executes unrestricted code and reports result/failure. The history service records the accepted outcome and wakes the workflow.
 
@@ -203,7 +205,7 @@ An activity heartbeat can carry a bounded checkpoint so a retry resumes applicat
 
 Large activity inputs/results make every history fetch, replication, archival, and replay expensive. Store large immutable artifacts externally and put authenticated reference, version, size, and checksum in history. The artifact lifetime and encryption key must cover workflow retention/replay.
 
-## Durable timers, messages, and cancellation
+## Durable Timers, Messages, and Cancellation
 
 A durable timer is state such as `(run, timer_id, fire_at, status)`, indexed by due time. Starting it appends/commits the timer decision; the workflow task completes and the application worker can forget the execution. At/after `fire_at`, the timer processor records a fire transition and schedules another workflow task.
 
@@ -215,7 +217,7 @@ History prevents the classic lost wakeup: an event accepted before workflow code
 
 Cancellation is a recorded request. Workflow/activity code must observe it at defined yield/heartbeat points and decide cleanup/compensation. Termination is an administrative stop that may bypass cleanup. Neither undoes external effects.
 
-## History growth, caches, snapshots, and rollover
+## History Growth, Caches, Snapshots, and Rollover
 
 History is an audit/recovery log and a capacity liability. Every activity, timer, child, message, retry outcome, and workflow task can add transitions/events. Products impose event/byte/message limits that change by version; store current configured limits as policy and alert well before them.
 
@@ -233,7 +235,7 @@ An engine may persist a snapshot/checkpoint of reconstructed state. Bind it to w
 
 Use rollover before the emergency threshold, driven by history length/bytes, replay latency, signal count, and a business-safe boundary. It is not garbage collection for an arbitrary mid-effect state.
 
-## Capacity and performance model
+## Capacity and Performance Model
 
 Size at least four workloads:
 
@@ -270,7 +272,7 @@ Timer capacity follows the due-time distribution, not only sleeping count. If 20
 
 Activities follow the worker/backlog model in [Background Jobs](./02-background-jobs-worker-pools.md). More workflow workers do not fix history persistence, matching, or downstream saturation.
 
-## Safe workflow evolution
+## Safe Workflow Evolution
 
 Long-lived histories make code deployment a data-compatibility migration. Classify changes by whether they alter durable command sequence for existing history.
 
@@ -305,7 +307,7 @@ Release gates:
 
 Rollback routes tasks back to compatible code. It does not remove events written by the new build; if old code cannot replay them, recovery requires the compatible branch/build or a new forward repair.
 
-## Specialized failure traces
+## Specialized Failure Traces
 
 ### Sticky cache hides nondeterminism
 
@@ -351,7 +353,7 @@ Search lags and says a workflow is stuck before an activity; authoritative histo
 
 Events persist for audit/replay, but the codec key or artifact referenced by an activity result is deleted first. Failover can load bytes but cannot reconstruct state. Couple payload/artifact/key retention to every open, archived, resettable, and legally held history.
 
-## Security and abuse boundaries
+## Security and Abuse Boundaries
 
 Authorize start, signal/update, query, cancel, pause, reset, terminate, and history read separately by namespace/workflow/tenant. Treat task-queue polling and worker registration as capabilities: a malicious worker can read activity inputs, execute effects, and submit results unless the service authenticates and authorizes it.
 
@@ -361,7 +363,7 @@ Validate and quota signals, updates, child fan-out, timers, history bytes/events
 
 Reset/terminate/skip/patch actions can repeat or bypass business effects. Require reason, approval where needed, dry-run/current-revision evidence, immutable audit, and post-action reconciliation. Do not give observability users implicit mutation privileges.
 
-## Observability and verification
+## Observability and Verification
 
 Observe per namespace, workflow type/version/build, task queue, and tenant:
 
@@ -390,7 +392,7 @@ Verification includes:
 9. mixed-version workers, missing compatible pollers, patch markers, rollback, and old-branch retirement;
 10. payload/codec/key/artifact retention plus authorization and malicious fan-out tests.
 
-## Decision framework
+## Decision Framework
 
 1. Does the process require durable waits/dynamic control flow and finer recovery than a bounded job or DAG node?
 2. Is the engine replaying user code or interpreting a persisted definition, and which constraints follow?
@@ -405,7 +407,7 @@ Verification includes:
 11. Do history payload, artifacts, codecs, and encryption keys survive every replay/reset/retention horizon?
 12. Can operators repair from authoritative state without silently repeating or bypassing effects?
 
-## Primary references
+## References
 
 - [Temporal, *Workflow Execution overview*](https://docs.temporal.io/workflow-execution)
 - [Temporal, *Events and Event History*](https://docs.temporal.io/workflow-execution/event)
@@ -420,3 +422,12 @@ Verification includes:
 - [Microsoft, *Durable orchestration versioning*](https://learn.microsoft.com/en-us/azure/durable-task/common/durable-orchestration-versioning)
 - [AWS Step Functions, *Choosing workflow type*](https://docs.aws.amazon.com/step-functions/latest/dg/choosing-workflow-type.html)
 - [Amazon States Language specification](https://states-language.net/spec.html)
+
+---
+
+## Related Chapters
+
+- [Effect Commit Protocols for Workflows](06-retry-idempotency-compensation.md): replay replaces idempotency only for effects the engine can actually observe
+- [Write-Ahead Logging](../03-storage-engines/04-write-ahead-logging.md): an event history is a log, with replay and compaction in its own sense
+- [Multi-Agent Systems](../17-llm-systems/03-multi-agent-systems.md): agents as workflows where a model makes the branch decision
+- [Workflow Observability and Replay](09-workflow-observability-replay.md): debugging a resumable program means replaying it, which demands determinism

@@ -597,3 +597,12 @@ If these are manual investigations, the registry is incomplete. If they are quer
 6. [Deployment Strategies](../15-deployment/01-deployment-strategies.md)
 7. [SLSA Provenance](https://slsa.dev/spec/v1.0/provenance): attested artifact build provenance
 8. [Model Deployment and Rollouts](./06-model-deployment-rollouts.md)
+
+---
+
+## Related Chapters
+
+- [Dataset Management and Versioning](11-dataset-management-versioning.md): the dataset version is a dependency edge in the graph, not a comment field
+- [Model Deployment and Rollouts](06-model-deployment-rollouts.md): promotion gates only matter if the rollout consumes the same artifact identity
+- [Offline Evaluation and Metric Design](12-offline-evaluation-metrics.md): evaluation results are claims until the registry can reproduce them
+- [Software Delivery Control Planes and GitOps Reconciliation](../15-deployment/04-cicd-gitops.md): the same desired-state reconciliation, applied to model artifacts

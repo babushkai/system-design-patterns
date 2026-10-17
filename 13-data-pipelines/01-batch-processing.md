@@ -8,7 +8,7 @@ Use batch execution when the input can be bounded and recomputation fits the fre
 
 ---
 
-## 1. Begin with the Workload Contract
+## 1. Begin With the Workload Contract
 
 “Run this SQL every day” is a schedule, not a contract. Before choosing an engine, define:
 
@@ -368,7 +368,7 @@ Prefer the simplest execution mode that meets freshness, replay, and correction 
 
 ---
 
-## Primary References
+## References
 
 - Jeffrey Dean and Sanjay Ghemawat, [MapReduce: Simplified Data Processing on Large Clusters](https://research.google/pubs/mapreduce-simplified-data-processing-on-large-clusters/).
 - Matei Zaharia et al., [Resilient Distributed Datasets: A Fault-Tolerant Abstraction for In-Memory Cluster Computing](https://www.usenix.org/system/files/conference/nsdi12/nsdi12-final138.pdf).
@@ -381,3 +381,10 @@ Prefer the simplest execution mode that meets freshness, replay, and correction 
 ---
 
 **Next:** [Stream Execution](02-stream-processing.md) applies the same contract-first reasoning to unbounded input, event time, state, checkpoints, replay, and backpressure.
+---
+
+## Related Chapters
+
+- [MapReduce](../09-whitepapers/01-mapreduce.md): the paper that fixed the batch contract, with the runtime owning placement, shuffle, retry, and output publication
+- [Lakehouse Table Formats](05-lakehouse-table-formats.md): snapshot isolation for the files a rerun overwrites
+- [DAG Orchestration](../18-workflow-job-systems/05-dag-orchestration.md): dependency scheduling once one batch run becomes a pipeline with retry boundaries

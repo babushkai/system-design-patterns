@@ -1,10 +1,12 @@
 # LSM Trees
 
+## TL;DR
+
 A log-structured merge tree turns foreground random writes into an append plus an in-memory ordered update. Immutable sorted files are produced later, and background work reconciles them. This shifts (not removes) cost: write latency becomes smooth while read amplification, space amplification, and deferred rewrite debt become operating concerns.
 
 The end-to-end LSM pipeline spans WAL and memtable admission, internal versions, point and range reads across components, recovery, snapshots, and overload control. [SSTables and Compaction](./03-sstables-compaction.md) owns immutable-file publication, compaction transactions, strategy mechanics, and safe version/tombstone collection. [Bloom Filters](./05-bloom-filters.md) owns filter mathematics, and [Write-Ahead Logging](./04-write-ahead-logging.md) owns general WAL recovery theory.
 
-## Workload and service contract
+## Workload and Service Contract
 
 Record sustained and burst write bytes, key and value sizes, update frequency, point-hit and point-miss rates, range widths, snapshot lifetime, delete/TTL behavior, durability latency, and device bandwidth shared with reads. LSMs excel when foreground random page modification is the constraint and background sequential work has headroom. They are less attractive when the same hot records are overwritten repeatedly, long ranges dominate, or the device is already saturated by reads.
 
@@ -12,7 +14,7 @@ Define acknowledgement precisely. A durable write normally means its WAL record 
 
 For reads, declare snapshot semantics and maximum acceptable staleness. A point lookup must return the newest visible version or a deletion. A range iterator must produce each user key once in comparator order at its snapshot, even though versions reside in several memtables and files.
 
-## State and invariants
+## State and Invariants
 
 The logical map is represented by several physical components:
 
@@ -40,7 +42,7 @@ Correct implementations preserve these invariants:
 
 A merge operator is application logic inside storage. It must be associative under the engine’s partial-merge plan and safe under replay; non-idempotent external effects have no place there. Changing its semantics while old operands remain requires versioned operands or a full materialization migration.
 
-## Architecture: foreground and background planes
+## Architecture: Foreground and Background Planes
 
 ```mermaid
 flowchart LR
@@ -61,7 +63,7 @@ The foreground plane assigns order, appends WAL, changes memory, and reads a pin
 
 Memtables may be skip lists, balanced trees, tries, or hash-plus-ordered structures. The choice changes CPU, memory overhead, prefix performance, and concurrent insertion, but not the durable protocol. An arena allocator often makes freeze and reclamation cheap: once no reader pins an immutable memtable, the whole arena can be released.
 
-## Write path and durability
+## Write Path and Durability
 
 A write batch receives a contiguous sequence range. The engine encodes a checksummed WAL record, appends it, applies the same batch to the active memtable, and acknowledges according to the durability mode. With synchronous durability, acknowledgement waits until the WAL bytes are confirmed durable. Group commit lets many batches share one persistence operation; their ordering and individual outcomes must still be deterministic after a short write or error.
 
@@ -71,7 +73,7 @@ WAL recycling uses the oldest unflushed sequence across all column families or t
 
 Deletes append tombstones; they do not immediately remove older bytes. TTL expiration, snapshot visibility, replica repair, and lower-level overlap determine when a marker can be collected. Those proofs belong to the file lifecycle in [SSTables and Compaction](./03-sstables-compaction.md).
 
-## Read path and MVCC
+## Read Path and MVCC
 
 A point read captures snapshot sequence `S` and a manifest version. It searches the active memtable and immutable memtables, then selects candidate files whose key ranges may contain the key. Filters avoid most negative file reads; indexes locate the data block. The reader compares internal versions and returns the newest value at sequence `<= S`, unless a point or covering range tombstone hides it.
 
@@ -81,7 +83,7 @@ A range scan creates one ordered iterator per relevant component and performs a 
 
 Snapshots pin old sequence visibility. Even when a newer value shadows an older one for current readers, background collection must retain the old version while any snapshot may need it. Long transactions therefore create physical space and rewrite pressure without issuing writes themselves.
 
-## Recovery and restart
+## Recovery and Restart
 
 At startup, read and validate the current manifest, identify the maximum durably published flush frontier, and replay later WAL records in sequence order into new memtables. Checksums and record lengths distinguish a valid prefix from a torn tail. Replaying an already published sequence is harmless only if file and memtable visibility resolve by the same identity; blindly generating a new sequence duplicates it.
 
@@ -93,7 +95,7 @@ restart replay time >= max(Lwal / Bread, Lwal / Rapply)
 
 Large memtables reduce flush frequency but enlarge the failure replay window. Frequent flushes shorten restart while increasing file creation and background work. Recovery tests must include a crash during log rotation, a valid record followed by a torn record, and a manifest that intentionally excludes an otherwise complete orphan file.
 
-## Amplification and capacity model
+## Amplification and Capacity Model
 
 Use separate quantities rather than one vague “write amplification.” Let `F` be incoming encoded bytes/s that initially flush to files. Let `WA_file` be `(flush output + compaction output) / initial flush bytes`, as defined in [SSTables and Compaction](./03-sstables-compaction.md). If WAL and data files share a device, approximate write demand is:
 
@@ -109,7 +111,7 @@ For a point miss across `S` candidate runs with per-run filter false-positive pr
 
 Stored bytes include live values, overwritten versions, tombstones, file-level space amplification, pinned snapshots, and temporary outputs. Size the volume for peak simultaneous input and output during background jobs. Running an LSM near full disk can deadlock reclamation because compaction needs free space to create the file that would let it delete inputs.
 
-## Specialized failure traces
+## Specialized Failure Traces
 
 ### Success precedes durable WAL
 
@@ -135,7 +137,7 @@ New code orders encoded keys differently but opens old runs under the new compar
 
 A merge operator rounds after each partial sum. Background compaction combines operands `(a+b)+c`, while recovery combines `a+(b+c)`, producing different values. The engine converges only if merge algebra satisfies its documented grouping and ordering assumptions.
 
-## Overload, isolation, and observability
+## Overload, Isolation, and Observability
 
 Apply backpressure before the immutable queue or first file level reaches a hard limit. A controller can derive an allowed foreground byte rate from measured flush and background throughput, smooth it over time, and allocate it per tenant. Bound write batches, range-scan read-ahead, concurrent compactions, cache admission, and iterator count. Separate latency-critical reads from bulk scans so a recovery or backfill does not evict the entire block cache.
 
@@ -145,13 +147,13 @@ Core signals are accepted bytes/s, WAL sync latency and group size, active and i
 
 Verification uses a simple versioned ordered map as an oracle. Generate puts, deletes, merge operands, snapshots, and ranges; compare every visible result across arbitrary flush and compaction schedules. Cut power after every WAL append, sync, memtable freeze, file sync, and manifest step. Inject full disks, short writes, checksum corruption, stalled background threads, and enormous snapshots. Test N-1 format opening, backup restore plus WAL replay, and comparator/merge-operator rejection. Assert bounded memory and that throttling starts before hard stall.
 
-## Migration and decision framework
+## Migration and Decision Framework
 
 Most tunable changes (memtable size, compression, filter policy, or background concurrency) affect newly produced files and converge gradually through normal maintenance. Comparator, internal-key, sequence, encryption, or merge semantics are format changes. Build a new column family or database, copy a consistent snapshot, tail later mutations, validate range digests and query results, then switch an atomic handle while keeping rollback state.
 
 Choose an LSM when sustained ingest, sequential device writes, immutable snapshots, and high write concurrency outweigh added read and background complexity. Choose a [B+-tree](./01-b-trees.md) for predictable point/range latency and update locality in a cacheable working set. For TTL data, choose a file policy that can expire whole time windows rather than creating per-key deletion debt. The decisive capacity question is not “can the foreground append this fast?” but **can the whole system rewrite, read, repair, and reclaim this stream indefinitely?**
 
-## Primary references
+## References
 
 - O’Neil, P., Cheng, E., Gawlick, D., and O’Neil, E. [The Log-Structured Merge-Tree](https://doi.org/10.1007/s002360050048). Acta Informatica, 1996.
 - Chang, F., et al. [Bigtable: A Distributed Storage System for Structured Data](https://www.usenix.org/legacy/event/osdi06/tech/chang.html). OSDI, 2006.
@@ -159,3 +161,10 @@ Choose an LSM when sustained ingest, sequential device writes, immutable snapsho
 - Dayan, N., Athanassoulis, M., and Idreos, S. [Monkey: Optimal Navigable Key-Value Store](https://doi.org/10.1145/3035918.3064054). SIGMOD, 2017.
 - Dayan, N., and Idreos, S. [Dostoevsky: Better Space-Time Trade-Offs for LSM-Tree Based Key-Value Stores](https://doi.org/10.1145/3183713.3196927). SIGMOD, 2018.
 - RocksDB. [Write Stalls](https://github.com/facebook/rocksdb/wiki/Write-Stalls) and [MemTable](https://github.com/facebook/rocksdb/wiki/MemTable) documentation.
+---
+
+## Related Chapters
+
+- [Bigtable](../09-whitepapers/03-bigtable.md): the tablet and sstable design these compaction trade-offs come from
+- [Column-Oriented Storage](06-column-storage.md): the same sorted runs read column by column instead of row by row
+- [Discord](../08-case-studies/08-discord.md): a write-heavy message archive where compaction cost and hot partitions are one argument

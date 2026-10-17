@@ -371,3 +371,12 @@ The correct level is selected per transaction class. One service can reasonably 
 - PostgreSQL, [Transaction Isolation](https://www.postgresql.org/docs/current/transaction-iso.html), current documentation.
 - MySQL, [InnoDB Transaction Model](https://dev.mysql.com/doc/refman/8.4/en/innodb-transaction-model.html), 8.4 Reference Manual.
 - Philip A. Bernstein, Vassos Hadzilacos, and Nathan Goodman, [*Concurrency Control and Recovery in Database Systems*](https://www.microsoft.com/en-us/research/people/philbe/book/), 1987.
+
+---
+
+## Related Chapters
+
+- [ACID Transactions](01-acid-transactions.md): where isolation sits among the letters it is named after, and what the others cost
+- [Consistency Models](04-consistency-models.md): replica freshness is a different axis from history serializability, and conflating them causes outages
+- [Idempotency and Operation Identity](08-idempotency.md): retries belong to the transaction protocol, and idempotency decides how expensive they are
+- [Distributed Transactions](../02-distributed-databases/07-distributed-transactions.md): anomalies that move outside the coordinator when no single node sees every lock

@@ -62,7 +62,7 @@ The controller changes **desired capacity**. The actual plant includes scheduler
 
 ---
 
-## 3. Capacity Model before Metric Selection
+## 3. Capacity Model Before Metric Selection
 
 Benchmark one ready unit with:
 
@@ -175,7 +175,7 @@ then apply bounds and placement. Record forecast error and its cost.
 
 ---
 
-## 6. Cold Start and Scale-to-Zero
+## 6. Cold Start and Scale-to-ZeRO
 
 Cold-start path:
 
@@ -263,7 +263,7 @@ Fix it by calculating workers from arrival + drain objective, including actuatio
 
 ---
 
-## 10. Composition with Overload Budgets
+## 10. Composition With Overload Budgets
 
 Autoscaling changes capacity after other controls decide what survives:
 
@@ -406,7 +406,7 @@ Choose the simplest stable controller whose signal leads the objective and whose
 
 ---
 
-## Primary References
+## References
 
 - Kubernetes, [Horizontal Pod Autoscaling](https://kubernetes.io/docs/concepts/workloads/autoscaling/horizontal-pod-autoscale/), including the control loop and replica-ratio algorithm.
 - Kubernetes, [Pod Lifecycle and Termination](https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/).
@@ -414,3 +414,12 @@ Choose the simplest stable controller whose signal leads the objective and whose
 - KEDA, [Scaling Deployments and StatefulSets](https://keda.sh/docs/latest/concepts/scaling-deployments/).
 - AWS Builders’ Library, [Static Stability Using Availability Zones](https://aws.amazon.com/builders-library/static-stability-using-availability-zones/).
 - Google SRE Workbook, [Managing Load](https://sre.google/workbook/managing-load/).
+
+---
+
+## Related Chapters
+
+- [Capacity Planning and Back-of-the-Envelope Estimation](../01-foundations/10-capacity-planning.md): the headroom target a controller is holding without being told what it is
+- [Horizontal vs Vertical Scaling](02-horizontal-vertical.md): what the loop is actually allowed to add, and at what granularity
+- [Metrics Systems and Monitoring](../11-observability/02-metrics-monitoring.md): sampling interval, clock skew, and signal causality decide the control loop
+- [FinOps and Cost Engineering](../11-observability/06-finops-cost-engineering.md): capacity bought and unused is the cost side of the same decision

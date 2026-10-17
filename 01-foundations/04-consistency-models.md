@@ -1,10 +1,12 @@
 # Consistency Models
 
+## TL;DR
+
 A consistency model is a contract over histories: given concurrent invocations, responses, failures, and replication, which results may a client observe? “Strong,” “eventual,” and a database consistency-level name are not adequate specifications. The contract must name its scope, ordering relation, failure outcome, and whether it covers one object, a session, or a transaction.
 
 This chapter defines client-observable models, including linearizable, sequential, causal, PRAM/session, bounded-staleness, and eventual/convergent behavior, and explains their composition, mechanisms, and verification. [CAP Theorem](./03-cap-theorem.md) applies linearizability to one partitioned read/write object. [ACID Transactions](./01-acid-transactions.md) owns database isolation and invariant enforcement; [Conflict Resolution](../02-distributed-databases/04-conflict-resolution.md) owns merge algebra and CRDT mechanics.
 
-## Start with histories, not product labels
+## Start With Histories, Not Product Labels
 
 An operation has an invocation and a matching response. Its interval lies between them. A history records operations from all clients; each client’s **program order** is the order of its own calls. Operation `a` precedes `b` in real time when `a` responds before `b` is invoked. Overlapping operations are concurrent and may be ordered either way by many models.
 
@@ -23,7 +25,7 @@ liveness:    when writes propagate and what happens if dependencies are unreacha
 
 Consistency and liveness are separate. A service can preserve linearizability by never responding. Eventual convergence needs assumptions such as eventual delivery and no new writes. Availability behavior during communication loss is covered in [CAP Theorem](./03-cap-theorem.md).
 
-## The models are not one total ladder
+## The Models Are Not One Total Ladder
 
 Some guarantees imply others for the same object and operation set, but the useful models live on different axes. Session guarantees constrain one client. Causal consistency constrains dependency order. Bounded staleness constrains age or version distance. Transaction isolation constrains groups of reads and writes. A simple strongest-to-weakest spectrum hides those scope differences.
 
@@ -99,13 +101,13 @@ Bounded staleness adds a measurable limit, such as at most `K` committed version
 
 Strong eventual consistency additionally requires replicas that have incorporated the same update set to be equivalent regardless of delivery order. CRDTs can supply this when their algebra and delivery assumptions hold. A last-writer-wins register may converge through a total tie-broken order while silently discarding concurrent intent. Eventual propagation alone does not choose either rule.
 
-## Transactional isolation is a separate axis
+## Transactional Isolation Is a Separate Axis
 
 Linearizability concerns individual object operations. **Serializability** asks whether committed transactions are equivalent to some serial transaction order, but that order need not respect real time. **Strict serializability** combines serializability with real-time precedence. Snapshot isolation provides a consistent snapshot and write-conflict checks but can permit write skew; read committed permits still more histories.
 
 Atomic visibility is another obligation: a reader should not see half of a multi-key commit when the API promises an atomic transaction. Two individually linearizable keys do not provide that automatically. Conversely, a serializable database can expose a stale but serializable snapshot unless it also promises real-time recency. See [ACID Transactions](./01-acid-transactions.md) and [Distributed Transactions](../02-distributed-databases/07-distributed-transactions.md#isolation-fails-despite-atomic-commit) for transaction mechanisms and anomalies.
 
-## Composition, scope, and mixed modes
+## Composition, Scope, and Mixed Modes
 
 Always attach the model to a scope. “Linearizable database” may mean point operations per key while range indexes, follower reads, and transactions have different contracts. A batch API may read keys at different frontiers. A cache can turn a linearizable source into an eventual endpoint. An external side effect is outside the database history unless it participates through fencing or idempotent workflow state.
 
@@ -113,7 +115,7 @@ Mixing modes creates a new contract rather than preserving the strongest compone
 
 Linearizability composes across objects, but multi-object **operations** still need their own sequential specification. Sequential consistency, session guarantees, and causal consistency need shared program/dependency context to compose. When teams independently assign scopes, document where contexts join and where the guarantee ends.
 
-## Mechanisms and their real costs
+## Mechanisms and Their Real Costs
 
 | Contract | Essential mechanism/state | Foreground consequence | Failure behavior |
 |---|---|---|---|
@@ -130,7 +132,7 @@ Stronger history does not have one universal latency multiplier. Placement, dura
 
 **Illustrative metadata bound.** A dense causal vector with one unsigned 64-bit counter for each of `A` actors needs at least `8A` bytes before actor IDs and framing. At 1,000 actors that lower bound is about 8,000 bytes per context, motivating dotted, hierarchical, partition-scoped, or server-held contexts. The calculation is a representation example, not a claim that causal consistency always has that overhead.
 
-## Make the contract observable
+## Make the Contract Observable
 
 An API should return enough evidence for the chosen model: commit/request ID, authority epoch, logical position or version, session/dependency token, and for stale reads an `as_of` frontier or timestamp. The request can carry a minimum frontier and a policy such as `wait`, `route`, or `fail`; it should not rely on sleeping an assumed replication delay.
 
@@ -140,7 +142,7 @@ Authorization can itself require consistency. Credential revocation, ownership t
 
 Observe required versus served frontier, replica apply position and age, wait/route/fallback counts, session-token size and rejection, authority term and lease evidence, stale-read age distribution, causal dependency queue, incomplete-operation outcomes, conflict backlog, and contract mode by endpoint and tenant. Measure semantic outcomes rather than calling every successful HTTP response “consistent.”
 
-## Specialized failure traces
+## Specialized Failure Traces
 
 ### Acknowledgement precedes the durable linearization point
 
@@ -170,7 +172,7 @@ A transfer changes `debit` and `credit` under separate linearizable key operatio
 
 Two eventual replicas apply concurrent values through a resolver that depends on local iteration order. Delivery completes, yet final states differ. Eventual delivery is not convergence; use a deterministic total choice or merge satisfying the required algebra.
 
-## Verification and evolution
+## Verification and Evolution
 
 Capture client-side invocation and response events, values, stable operation IDs, requested model, tokens, and unknown outcomes. Do not reconstruct real-time order solely from unsynchronized server timestamps. Inject process crashes, pauses, asymmetric partitions, reordered and duplicate delivery, clock faults, disk faults, lease expiry, replica migration, and mixed software/configuration versions.
 
@@ -188,7 +190,7 @@ Check safety and liveness separately. A finite test finding no violation is evid
 
 Changing consistency is an API migration. Introduce new tokens and response metadata before requiring them; dual-run old and new read paths; compare histories; then gate writes or reads at a versioned activation frontier. Rollback must not route a token-requiring client to a server that silently ignores the token. Never change a mode name in place while retaining its old clients.
 
-## Decision framework
+## Decision Framework
 
 Choose from the invariant outward:
 
@@ -203,7 +205,7 @@ Choose from the invariant outward:
 
 Do not pay for a stronger model by reflex, and do not weaken one based on generic latency folklore. State the smallest history that keeps the product invariant true, expose its evidence and failure outcome, then test that exact contract across every serving path.
 
-## Primary references
+## References
 
 - Herlihy, M. P., and Wing, J. M. [Linearizability: A Correctness Condition for Concurrent Objects](https://doi.org/10.1145/78969.78972). ACM TOPLAS, 1990.
 - Lamport, L. [How to Make a Multiprocessor Computer That Correctly Executes Multiprocess Programs](https://doi.org/10.1109/TC.1979.1675439). IEEE Transactions on Computers, 1979.
@@ -213,3 +215,12 @@ Do not pay for a stronger model by reflex, and do not weaken one based on generi
 - Adya, A., Liskov, B., and O’Neil, P. [Generalized Isolation Level Definitions](https://doi.org/10.1109/ICDE.2000.839388). ICDE, 2000.
 - Horn, A., and Kroening, D. [Faster Linearizability Checking via P-Compositionality](https://doi.org/10.1007/978-3-319-19195-9_4). FORTE, 2015.
 - Kingsbury, K., and Alvaro, P. [Elle: Inferring Isolation Anomalies from Experimental Observations](https://www.vldb.org/pvldb/vol14/p268-alvaro.pdf). PVLDB, 2020.
+
+---
+
+## Related Chapters
+
+- [Isolation Levels](02-isolation-levels.md): a second axis, more often mislabeled as a rung on the same ladder than treated as one
+- [CAP Theorem](03-cap-theorem.md): the impossibility result that makes every model here a choice rather than an oversight
+- [Distributed Transactions](../02-distributed-databases/07-distributed-transactions.md): the transactional counterpart, where the guarantee is about histories instead of replicas
+- [Zanzibar](../09-whitepapers/11-zanzibar.md): a consistency contract shipped as a service, with its tradeoffs visible in the API

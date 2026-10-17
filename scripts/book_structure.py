@@ -36,6 +36,18 @@ ARTICLE_GLOB = "[0-9][0-9]-*/*.md"
 CHAPTER_HEADING_RE = re.compile(r"^# (.+?)\s*$", re.MULTILINE)
 FENCE_RE = re.compile(r"^\s*(```|~~~)")
 
+# Chapter numbers are reading order, so they stay contiguous inside a part: when two
+# chapters merge, the survivors move down and no hole is left where a chapter used to
+# be. The parts below still carry holes from earlier merges; closing one means
+# renumbering the part (rename files, update routes, regenerate the README table of
+# contents) and deleting its entry here.
+LEGACY_NUMBER_GAPS: dict[str, tuple[int, ...]] = {
+    "01-foundations": (7,),
+    "07-real-time": (2, 3, 4),
+    "13-data-pipelines": (3,),
+    "14-search-systems": (5,),
+}
+
 
 class ManifestError(Exception):
     """Raised when the manifest cannot be read or is shaped incorrectly."""
@@ -259,8 +271,55 @@ def validate(errors: list[str], parts: list[dict[str, Any]] | None = None) -> No
         errors.append(f"{rel(MANIFEST_PATH)}: stale chapter entry: {path}")
 
     validate_readme_toc(errors, parts)
+    validate_chapter_numbering(errors, parts)
     validate_config(errors)
     validate_book_workflow(errors)
+
+
+def validate_chapter_numbering(errors: list[str], parts: list[dict[str, Any]]) -> None:
+    """Assert chapter numbers are contiguous inside every part."""
+
+    for part in parts:
+        directory = part.get("dir")
+        if not directory:
+            continue
+
+        numbers: list[int] = []
+        for chapter in part.get("chapters", []):
+            route = chapter.get("route", "")
+            match = re.match(r"^(\d{2})-", Path(route).name)
+            if not match:
+                errors.append(
+                    f"{rel(MANIFEST_PATH)}: {route} must start with a two-digit chapter number"
+                )
+                continue
+            numbers.append(int(match.group(1)))
+
+        duplicated = sorted({number for number in numbers if numbers.count(number) > 1})
+        if duplicated:
+            errors.append(
+                f"{rel(MANIFEST_PATH)}: part {part.get('number')} ({directory}) reuses chapter "
+                f"numbers {', '.join(f'{n:02d}' for n in duplicated)}"
+            )
+
+        gaps = tuple(number for number in range(1, max(numbers) + 1) if numbers.count(number) != 1)
+        legacy = LEGACY_NUMBER_GAPS.get(directory, ())
+        if gaps == legacy:
+            continue
+
+        label = f"{rel(MANIFEST_PATH)}: part {part.get('number')} ({directory})"
+        unexpected = [number for number in gaps if number not in legacy]
+        closed = [number for number in legacy if number not in gaps]
+        if unexpected:
+            errors.append(
+                f"{label}: chapter numbers skip {', '.join(f'{n:02d}' for n in unexpected)} "
+                "- renumber the part so the sequence is contiguous, then regenerate the README"
+            )
+        if closed:
+            errors.append(
+                f"{label}: chapter numbers no longer skip {', '.join(f'{n:02d}' for n in closed)} "
+                f"- remove that entry from LEGACY_NUMBER_GAPS in {rel(Path(__file__))}"
+            )
 
 
 def validate_readme_toc(errors: list[str], parts: list[dict[str, Any]]) -> None:

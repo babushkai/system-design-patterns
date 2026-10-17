@@ -1,10 +1,12 @@
 # Poison-Message Quarantine and Redrive
 
+## TL;DR
+
 A poison message is a delivery that cannot make progress under the current code, data, policy, or dependency state. Quarantine removes it from the hot delivery path while preserving enough evidence and identity to diagnose, repair, and replay it safely. A dead-letter queue is therefore an incident and repair subsystem, not a place to hide exhausted generic retries.
 
 A quarantine subsystem must define failure classification, quarantine state, retained evidence, bulk isolation, repair, and controlled redrive. Retry timing/idempotency/compensation belong to [Workflow Effect Protocols](../18-workflow-job-systems/06-retry-idempotency-compensation.md). Queue claims are in [Message Queue Architecture](01-message-queues.md), and end-to-end duplicate effects are in [Delivery Guarantees](04-delivery-guarantees.md).
 
-## Workload and contract
+## Workload and Contract
 
 Quarantine operations should be explicit:
 
@@ -32,7 +34,7 @@ Define:
 
 Moving a record to quarantine is a state transition with durable evidence. If the broker cannot atomically record quarantine and advance source progress, the operation may duplicate; stable identities make it reconcilable.
 
-## State and invariants
+## State and Invariants
 
 A quarantine record includes:
 
@@ -63,7 +65,7 @@ Enforce:
 
 **Retention preserves dependencies.** A quarantine envelope is not useful if its referenced payload, schema, encryption key, or source context expires first.
 
-## Failure classification
+## Failure Classification
 
 Classify before deciding to retry or quarantine:
 
@@ -83,7 +85,7 @@ Classification is a versioned decision function over typed error code, retryabil
 
 Consumers return structured failure outcomes. The queue/quarantine service applies central safety limits: maximum delivery age, attempts, cumulative execution, lease extensions, and unknown-error budget. Application teams can narrow but not bypass platform bounds.
 
-## Data plane and control plane
+## Data Plane and Control Plane
 
 The **data plane** receives structured failures, persists quarantine records/payload references, advances or records source disposition, serves bounded inspection, and executes rate-limited redrive. It supports high-volume batch quarantine without calling a human-review service per message.
 
@@ -93,7 +95,7 @@ Separate quarantine storage from the source queue so poison evidence survives so
 
 Human triage UI reads redacted metadata by default; privileged payload access is just-in-time and audited. Bulk APIs operate on stable query snapshots/manifests so a changing filter does not cause an unrepeatable redrive set.
 
-## Quarantine transition
+## Quarantine Transition
 
 For a broker with native dead-lettering, configure a dead-letter destination plus maximum delivery/classification policy. Still verify what is preserved: original topic, position, headers, delivery attempts, and payload. Broker-native redrive may assign a new transport position and may not retain source identity unless included in the envelope.
 
@@ -117,7 +119,7 @@ Strict ordered streams need special handling. Quarantining sequence 18 and apply
 
 Moving poison out of the queue does not remove ordering invariants.
 
-## Systemic failures and bulk isolation
+## Systemic Failures and Bulk Isolation
 
 A bad deployment or schema rollout can make most messages fail. Individually retrying and quarantining them floods storage, alerts, and operator interfaces. Detect correlated failure by normalized fingerprint, release, schema, partition, and time window.
 
@@ -134,7 +136,7 @@ Range quarantine is safe only when the source remains retained and immutable. If
 
 Protect healthy tenants/types through bulkheads. A global circuit should be the last resort; isolate by consumer, release, schema, tenant, and partition without letting unbounded label cardinality exhaust the controller.
 
-## Triage and repair workflow
+## Triage and Repair Workflow
 
 Quarantine states can be:
 
@@ -153,7 +155,7 @@ Source-data correction often should produce a new domain event rather than mutat
 
 Ambiguous external effects enter reconciliation, not automatic redrive. Query the downstream status using business/idempotency reference. Mark applied if it committed, retry with the same key if absent, or escalate if unknown cannot be resolved.
 
-## Controlled redrive
+## Controlled Redrive
 
 Redrive is a production deployment. Its manifest contains:
 
@@ -174,7 +176,7 @@ Preserve original `event_id` when the logical intent is unchanged; inbox duplica
 
 For ordered keys, replay missing items before suffixes and respect current source versions. An old state-replacement event may now be stale and should resolve as superseded rather than overwrite current state. Delta/financial events may still require exact application.
 
-## Retention and privacy
+## Retention and Privacy
 
 Retention derives from investigation time, source replay, legal/audit, privacy deletion, and repair value. Apply separate horizons by error/data class. Monitor records and bytes approaching expiry without resolution.
 
@@ -184,7 +186,7 @@ Store stack traces and raw exceptions separately with redaction; they may contai
 
 Discard is an explicit terminal outcome with reason, authority, affected business identity, and reconciliation. TTL expiry is not silent discard. Before expiry, notify owner and apply policy: archive, extend under approval, repair, or record irreversible loss.
 
-## Capacity and cost model
+## Capacity and Cost Model
 
 Illustrative platform:
 
@@ -203,13 +205,13 @@ At 8,000/s, redriving 25.2 million takes 52.5 minutes before retries. If each ef
 
 Operator capacity also matters. Fifteen unrelated poison messages/s is 1.3 million/day; manual per-message review is impossible. Group by fingerprint/entity and automate known-safe repair while measuring false grouping.
 
-## Concrete failure trace: unsafe bulk redrive
+## Concrete Failure Trace: Unsafe Bulk Redrive
 
 A schema bug quarantines two million payment events. After deploying a decoder fix, an operator selects “all payments” in a UI whose query is not snapshotted and redrives at unlimited speed with new event IDs. The selection grows while running, old events whose payments already committed bypass inbox dedup, and the payment provider is saturated by duplicates.
 
 Containment stops redrive and payment calls, then reconciles by payment intent. Repair records original IDs, restores downstream idempotency/status, and replays only proven absent effects. Prevention requires immutable selection manifests, original identity preservation, dry-run/canary, approvals, rate/downstream budgets, automatic stop thresholds, and a privileged API that cannot silently generate new logical IDs.
 
-## Operations and observability
+## Operations and Observability
 
 Track by source, consumer, release, schema, tenant, fingerprint, and state:
 
@@ -227,7 +229,7 @@ Alert on rate change and age, not merely “DLQ non-empty.” A nonempty quarant
 
 Runbooks cover schema poison, bad release cohort, external ambiguity, ordered-key blockage, missing payload/key, quarantine-store outage, privacy deletion, and runaway redrive.
 
-## Security and isolation
+## Security and Isolation
 
 Separate permissions to quarantine automatically, inspect metadata, reveal payload, upload repair transforms, approve redrive, change destination/rate, discard, and alter retention. Use least privilege and immutable audit.
 
@@ -235,7 +237,7 @@ Authenticate original source identity and bind event ID to tenant/payload digest
 
 Redrive can invoke high-value effects and is equivalent to production write access. Require short-lived authorization, change record, dual control for high-risk domains, and per-tenant/destination quotas. Cross-tenant selection or cache leakage is a critical incident.
 
-## Verification strategy
+## Verification Strategy
 
 - model-test quarantine state transitions, source disposition, and idempotent duplicate quarantine;
 - fault-inject local/remote quarantine dual-write boundaries;
@@ -246,7 +248,7 @@ Redrive can invoke high-value effects and is equivalent to production write acce
 - expire inbox/payload/schema/key independently and verify redrive is blocked or reconciled;
 - attempt unauthorized inspection, transformation, discard, and cross-tenant redrive.
 
-## Decision framework
+## Decision Framework
 
 Quarantine when a message cannot safely progress now but retaining it has repair/audit value. Drop only when loss is explicitly acceptable and observed. Pause/circuit-break a cohort instead of individually quarantining every event during a systemic consumer/dependency failure.
 
@@ -268,3 +270,12 @@ Before enabling a dead-letter path:
 - [Apache Kafka Connect: Error Handling and Dead Letter Queues](https://kafka.apache.org/documentation/#connectconfigs_errors.deadletterqueue.topic.name)
 - [CloudEvents Specification](https://github.com/cloudevents/spec)
 - [NIST SP 800-61 Rev. 3: Incident Response Recommendations and Considerations](https://csrc.nist.gov/pubs/sp/800/61/r3/final)
+
+---
+
+## Related Chapters
+
+- [Message Queue Architecture](01-message-queues.md): the queue these poison messages came from, and the retry policy that produced them
+- [Effect Commit Protocols for Workflows](../18-workflow-job-systems/06-retry-idempotency-compensation.md): redrive is a retry with human judgement attached, so it needs the same idempotency rules
+- [Background Jobs and Worker Pools](../18-workflow-job-systems/02-background-jobs-worker-pools.md): the worker that quarantines a message, and the lease that expires while it does
+- [Incident Command and Learning](../11-observability/07-incident-management.md): a growing quarantine is an incident with a queue name attached to it

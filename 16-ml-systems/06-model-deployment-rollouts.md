@@ -279,3 +279,12 @@ Rollback is a state transition plus an impact workflow. The controller latches t
 6. [SEC Order: Knight Capital Americas LLC (Aug 1, 2012 deployment incident)](https://www.sec.gov/litigation/admin/2013/34-70694.pdf)
 7. [Site Reliability Engineering: Canarying Releases](https://sre.google/workbook/canarying-releases/): Google SRE Workbook
 8. [Argo Rollouts Concepts](https://argo-rollouts.readthedocs.io/en/stable/concepts/): analysis runs, pauses, promotion, and abort semantics
+
+---
+
+## Related Chapters
+
+- [Feature-Flag Control Planes](../15-deployment/02-feature-flags.md): a model flag is a routing decision with an evaluation assignment behind it
+- [Online Experiments](08-online-experiments.md): the rollout able to attribute a metric change to the model rather than to luck
+- [Model Serving](03-model-serving.md): two versions in one process, which is a memory problem before it is a modeling one
+- [Model Monitoring](04-model-monitoring.md): a shadow rollout only produces signal if someone reads it and can stop the rollout

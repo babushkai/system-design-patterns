@@ -1,10 +1,12 @@
 # B-Trees
 
+## TL;DR
+
 A database B-tree is an ordered map engineered around fixed-size pages, a buffer pool, concurrent structural changes, and crash recovery. Its value is not the textbook `O(log n)` claim; many structures have that asymptotic cost. The value is high fanout: a handful of page accesses locates a key among billions, upper levels remain cached, and linked leaves turn an ordered range into mostly sequential work.
 
 A B+-tree implementation must account for page structure, search and mutation algorithms, latching, split recovery, and the physical cost model. [Secondary Indexes](../02-distributed-databases/06-secondary-indexes.md) owns distributed placement and consistency of alternate access paths. [Write-Ahead Logging](./04-write-ahead-logging.md) owns transaction recovery theory, while [LSM Trees](./02-lsm-trees.md) covers the write-buffered alternative.
 
-## Workload and storage contract
+## Workload and Storage Contract
 
 Characterize point lookups, bounded ranges, ordered scans, inserts, in-place updates, and deletes separately. Record key and payload width distributions, ordering and skew, buffer-pool budget, page size, concurrent readers and writers, durability mode, snapshot lifetime, and latency percentiles. A tree serving immutable 8-byte keys with 99% cache hits is a different system from one indexing variable-length URLs under random updates.
 
@@ -12,7 +14,7 @@ Define what the leaf value means. In a heap-organized table it is usually a stab
 
 The API contract should distinguish logical locks from physical latches. A transaction lock protects a key or predicate for isolation. A latch protects page bytes for microseconds while a thread reads or modifies them. Holding a page latch while waiting for network, user input, or a transaction lock is a convoy bug.
 
-## Page state and structural invariants
+## Page State and Structural Invariants
 
 Most database “B-trees” are B+-trees: internal pages contain separator keys and child page IDs; leaves contain all logical entries and form an ordered sibling chain. A slotted page supports variable-size records:
 
@@ -38,7 +40,7 @@ The tree’s persistent state includes a root page ID and generation, allocation
 
 Separator keys need not duplicate a complete user key. Prefix or suffix truncation can retain only the shortest value that distinguishes adjacent children, increasing fanout. The comparator and truncation rules are persistent-format semantics; upgrading them requires validation or rebuild.
 
-## Cost model: fanout, height, and cache
+## Cost Model: Fanout, Height, and Cache
 
 For page size `P`, header and slot overhead `H`, average internal separator bytes `K`, and child-pointer bytes `C`, approximate fanout is:
 
@@ -61,7 +63,7 @@ index bytes         ~= leaf_pages * P + internal_pages * P
 
 Once randomly touched leaves outgrow the buffer pool, `m_leaf` rises sharply and latency follows device IOPS. Adding CPU does not fix that phase change.
 
-## Read and write paths
+## Read and Write Paths
 
 A point read pins the current root, compares the search key with separators, follows child IDs, and searches the leaf slot array. With B-link-style pages, each page carries a high key and right-sibling pointer. If a concurrent split moved the desired key to the right, the reader follows the sibling rather than restarting or trusting a temporarily stale parent.
 
@@ -87,7 +89,7 @@ An update that leaves indexed columns unchanged may avoid the tree entirely or o
 
 Production engines rarely merge every underfull page as textbooks suggest. They mark entries dead, compact within a page, unlink wholly empty pages, and merge only when benefit exceeds latch and WAL cost. This avoids merge/split oscillation but permits bloat after mass deletes. Reclamation waits for the oldest reader and recovery/backup frontier; only then may the allocator reuse a page ID with a new generation.
 
-## Concurrency and recovery
+## Concurrency and Recovery
 
 Classical latch crabbing acquires a child before releasing its parent and retains ancestors only while a split could propagate through them. Modern fast paths descend optimistically with shared latches or version counters, acquire an exclusive leaf latch, validate that nothing relevant changed, and restart rarely. B-link high keys make structure changes observable without blocking readers on parent repair.
 
@@ -97,7 +99,7 @@ WAL makes dirty-page writeback safe only if the log describing a page change rea
 
 Copy-on-write B-trees take another route: write a new leaf and every changed ancestor, then atomically publish a new root. Readers pin immutable roots and need almost no page latching. The cost is path-copy write amplification, delayed garbage collection, and often restricted writer concurrency. This is attractive for read-heavy embedded stores and filesystem metadata, not an automatic OLTP replacement.
 
-## Specialized failure traces
+## Specialized Failure Traces
 
 ### Crash makes a split page unreachable
 
@@ -119,7 +121,7 @@ A monotonically increasing key sends every writer to one leaf. The pages are den
 
 Old pages were ordered with collation version X. New code compares with version Y, where two strings reverse order. A search follows the wrong separator and reports a missing row that is physically present. Persist comparator identity and rebuild into a new tree before activating new ordering semantics.
 
-## Operations, isolation, and migration
+## Operations, Isolation, and Migration
 
 Observe height, internal and leaf density, split rate by level, rightmost versus random splits, latch wait time by page role, buffer hits and physical reads, dirty-page age, WAL bytes per logical write, empty-page reclaim backlog, scan pages per returned row, and corruption/checksum errors. Relate them to key distribution and tenant, not only table totals. A hot tenant can monopolize a leaf range, cache, and latch even when aggregate load is normal.
 
@@ -129,13 +131,13 @@ Page-size, collation, key-encoding, and clustered-key changes generally require 
 
 Verification combines a structural checker with a reference ordered map. Randomized tests insert, update, delete, split, and scan variable-width keys while checking reachability, separator coverage, leaf order, and uniqueness. Concurrency tests pause threads at every latch transition. Crash tests cut power after each WAL and page-write boundary, including root splits and page reuse. Corruption tests flip sectors and checksums; upgrade tests open N-1 data and recover N-1 WAL with the new binary.
 
-## Decision framework
+## Decision Framework
 
 Choose a B+-tree when predictable point reads, ordered ranges, and repeated updates to a cacheable working set dominate. It is the natural general-purpose OLTP index. Choose an [LSM tree](./02-lsm-trees.md) when foreground random page modification is the ingest bottleneck and background rewrite capacity is available. Choose a hash index only when equality dominates and ordered operations truly have no value; choose specialized spatial, inverted, or vector structures for their corresponding predicates.
 
 The most consequential B-tree choices are often outside the algorithm: key width and order, clustered versus heap layout, number of maintained indexes, buffer-pool residency, and snapshot lifetime. Model those before tuning split thresholds.
 
-## Primary references
+## References
 
 - Bayer, R., and McCreight, E. [Organization and Maintenance of Large Ordered Indices](https://doi.org/10.1007/BF00288683). Acta Informatica, 1972.
 - Lehman, P. L., and Yao, S. B. [Efficient Locking for Concurrent Operations on B-Trees](https://doi.org/10.1145/319628.319663). ACM TODS, 1981.
@@ -143,3 +145,12 @@ The most consequential B-tree choices are often outside the algorithm: key width
 - Graefe, G. [Modern B-Tree Techniques](https://doi.org/10.1561/1900000028). Foundations and Trends in Databases, 2011.
 - PostgreSQL source documentation. [B-Tree implementation README](https://github.com/postgres/postgres/blob/master/src/backend/access/nbtree/README).
 - SQLite. [Database File Format: The B-Tree Pages](https://www.sqlite.org/fileformat.html#b_tree_pages).
+
+---
+
+## Related Chapters
+
+- [LSM Trees](02-lsm-trees.md): the opposing write path: update in place on every write, or defer the merge and pay later
+- [Write-Ahead Logging](04-write-ahead-logging.md): the log that makes an in-place page update atomic across a crash
+- [Secondary Indexes in Distributed Databases](../02-distributed-databases/06-secondary-indexes.md): the structure most secondary indexes are, right up to the write amplification
+- [FoundationDB](../09-whitepapers/13-foundationdb.md): the same ordered-key promise rebuilt as a distributed store with a different failure model

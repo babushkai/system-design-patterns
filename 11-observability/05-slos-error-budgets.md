@@ -587,3 +587,12 @@ Run game days that fail the measurement path separately from the service. An SLO
 - [Metrics Systems and Monitoring](./02-metrics-monitoring.md): counters, histograms, aggregation, gaps, and storage
 - [Alert Evaluation and Notification](./04-alerting.md): alert state, missing data, grouping, routing, and HA
 - [Incident Command and Learning](./07-incident-management.md): mitigation, communication, and evidence during budget-burning incidents
+
+---
+
+## Related Chapters
+
+- [Alert Evaluation and Notification](04-alerting.md): the budget decides when to page, and this is the negotiation that sets the threshold
+- [Metrics Systems and Monitoring](02-metrics-monitoring.md): an objective is only as trustworthy as the measurement window behind it
+- [Progressive Delivery and Deployment Strategies](../15-deployment/01-deployment-strategies.md): the release process that spends the budget instead of discovering it is gone
+- [Incident Command and Learning](07-incident-management.md): whoever holds the pager inherits whatever the objective failed to prevent

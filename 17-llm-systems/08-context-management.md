@@ -277,3 +277,12 @@ The correct context is the smallest authorized view that preserves the task's ob
 6. [Prompt Caching: Anthropic Documentation](https://platform.claude.com/docs/en/build-with-claude/prompt-caching): prefix semantics, TTLs, cache pricing
 7. [LLMLingua: Compressing Prompts for Accelerated Inference](https://arxiv.org/abs/2310.05736): Jiang et al., 2023
 8. [How Long Contexts Fail](https://www.dbreunig.com/2025/06/22/how-contexts-fail-and-how-to-fix-them.html): Breunig, 2025 (poisoning/distraction/confusion taxonomy)
+
+---
+
+## Related Chapters
+
+- [Retrieval-Augmented Generation Systems](04-rag-patterns.md): retrieval as one writer into a budget this chapter is trying to spend well
+- [Harness Engineering](09-harness-engineering.md): the harness decides what enters the window, and when it gets compacted away
+- [Backpressure](../06-scaling/07-backpressure.md): a context window is a bounded buffer with the same shedding decisions
+- [Repository Context and Policy Plane](../19-compound-engineering/03-agent-context-engineering.md): the repository-specific version: what to load from the codebase, and when

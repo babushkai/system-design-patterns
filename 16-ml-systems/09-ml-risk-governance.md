@@ -509,3 +509,12 @@ Finally, test the controls themselves. Exercise rollback and authorization revoc
 7. [Datasheets for Datasets](https://arxiv.org/abs/1803.09010): Gebru et al., 2018
 8. [Hidden Technical Debt in Machine Learning Systems](https://proceedings.neurips.cc/paper_files/paper/2015/file/86df7dcfd896fcaf2674f757a2463eba-Paper.pdf): Sculley et al., 2015
 9. [Uniform Guidelines on Employee Selection Procedures](https://www.ecfr.gov/current/title-29/subtitle-B/chapter-XIV/part-1607): official US text for the four-fifths heuristic's scope
+
+---
+
+## Related Chapters
+
+- [Model Registry and ML Metadata](13-model-registry-metadata.md): governance needs lineage, and lineage is a metadata problem first
+- [Label and Ground-Truth Systems](10-label-ground-truth-systems.md): labeling decisions embed policy, which makes annotation an audit surface
+- [Model Monitoring](04-model-monitoring.md): a control without instrumentation is a checkbox with no evidence behind it
+- [LLM Evaluation and Observability](../17-llm-systems/10-llm-evaluation.md): governance for models whose failures are open-ended rather than enumerable

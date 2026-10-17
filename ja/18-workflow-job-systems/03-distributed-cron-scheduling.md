@@ -2,6 +2,8 @@
 
 > この記事は英語版から翻訳されました。最新版は[英語版](/18-workflow-job-systems/03-distributed-cron-scheduling)をご覧ください。
 
+## TL;DR
+
 分散cronは、クラスタ全体で「時刻」を作業に変換します。単純に見えますが、時計ずれ、スケジューラ再起動、夏時間、長時間実行、複数リージョンの二重所有があると難しくなります。本番のスケジューラには、永続スケジュール、リース、missed-run policy、jitter、backpressure、重複tickの意味定義が必要です。
 
 ## モデル

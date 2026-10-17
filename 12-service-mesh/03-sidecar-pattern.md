@@ -751,3 +751,12 @@ Use sidecars where per-workload L7 isolation is essential, shared/node layers wh
 - [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md): deadline and retry-budget design
 - [Distributed Tracing and Telemetry Pipelines](../11-observability/01-distributed-tracing.md): trace propagation and cross-service causality
 - [Backpressure](../06-scaling/07-backpressure.md): bounded queues, flow control, and overload behavior
+
+---
+
+## Related Chapters
+
+- [Service Discovery and Control-Plane State](01-service-discovery.md): the control-plane state this proxy enforces, usually a few seconds behind reality
+- [Circuit Breakers](../06-scaling/06-circuit-breakers.md): resilience policy as configuration that somebody else applies to your traffic
+- [Distributed Tracing and Telemetry Pipelines](../11-observability/01-distributed-tracing.md): spans you did not instrument for, paid for with latency on each hop
+- [Zero-Trust Service and Workload Architecture](../10-security/05-zero-trust-architecture.md): identity per service call, the reason most teams actually deploy a mesh

@@ -1,5 +1,7 @@
 # Discord: Hot-Key Isolation for Text, Presence, and Voice
 
+## TL;DR
+
 Discord combines workloads with incompatible physics. Text history is durable and read-heavy around recent channel partitions. Gateway sessions are long-lived, stateful connections with bursty fanout. Presence is ephemeral and high-churn. Voice and video are latency-sensitive UDP media flows. A useful design does not force all four through one scaling primitive.
 
 Claims use three evidence labels:
@@ -8,7 +10,7 @@ Claims use three evidence labels:
 - **Inference**: a conclusion drawn from those facts or product constraints, not a statement about undisclosed production internals.
 - **Reference design**: a concrete architecture for a Discord-like service where public evidence is incomplete.
 
-## Workload and service contract
+## Workload and Service Contract
 
 **Documented, 2023 storage snapshot.** Discord reported a message dataset in the trillions. At the beginning of 2022, its Cassandra message cluster had 177 nodes; Discord completed its message-store switch to ScyllaDB in May 2022 and later reported 72 ScyllaDB nodes for that workload. These are dated migration figures, not current fleet size or message rate. [Discord, How Discord Stores Trillions of Messages](https://discord.com/blog/how-discord-stores-trillions-of-messages)
 
@@ -28,7 +30,7 @@ The core guarantees differ by plane:
 
 The danger is applying the strongest guarantee everywhere. Persisting every presence transition like a message is expensive and not useful; treating messages like presence loses user history.
 
-## State, authority, and invariants
+## State, Authority, and Invariants
 
 **Reference design.** Define ownership before choosing databases:
 
@@ -61,7 +63,7 @@ A session event has sequence `s`. A client acknowledges the largest contiguous a
 
 Every connection, channel actor, database partition, and SFU subscriber has a byte- or work-bounded queue. When a consumer falls behind, the system coalesces replaceable state, sheds low-value events, or disconnects it. An unbounded mailbox converts a slow client into a process-wide outage. The canonical mechanisms are in [backpressure](../06-scaling/07-backpressure.md).
 
-## Publicly documented architecture fragments
+## Publicly Documented Architecture Fragments
 
 ### Gateway and guild sharding
 
@@ -83,7 +85,7 @@ Every connection, channel actor, database partition, and SFU subscriber has a by
 
 **Documented, 2026 evolution.** Discord reported moving more than 80% of voice/video traffic to Cloudflare's edge at publication, described a newer Rust SFU, and explicitly separated stateful call control from the packet-forwarding media plane. It also described an incident where peak-period latency required packet-level probes and traffic rollback. This is a June 2026 snapshot. [Discord, moving voice to the edge](https://discord.com/blog/how-we-moved-discord-voice-to-the-edge)
 
-## Reference architecture
+## Reference Architecture
 
 **Reference design.** The published fragments support this logical separation, but the diagram is not claimed as Discord's complete production topology:
 
@@ -109,7 +111,7 @@ flowchart TB
 
 The message command path is the durable data plane. Gateway fanout is a derived delivery plane. Voice signaling is stateful control for a call; UDP forwarding is its high-rate media data plane. Fleet placement, shard maps, rollout policy, and session-start budgets belong to a separate control plane whose last known-good snapshot remains locally usable.
 
-## Text-message flow
+## Text-Message Flow
 
 **Reference design.** A message send should follow this sequence:
 
@@ -125,7 +127,7 @@ The message command path is the durable data plane. Gateway fanout is a derived 
 
 Fanout-on-write to every user inbox is poor for large guild channels: one message creates work proportional to membership even though many members are offline or not viewing the channel. Channel-log storage plus fanout to currently subscribed sessions bounds foreground work by active interest; push notification policy can run separately.
 
-## Hot-key containment
+## Hot-Key Containment
 
 One celebrity channel can dominate history reads immediately after an announcement. Adding database replicas does not remove a single-partition concurrency spike.
 
@@ -143,7 +145,7 @@ One celebrity channel can dominate history reads immediately after an announceme
 
 Time buckets trade write simplicity for boundary reads. A history request that crosses buckets issues a bounded parallel query and merges by message ID. Bucket width should follow bytes and access skew, not an arbitrary number of days.
 
-## Voice and video flow
+## Voice and Video Flow
 
 **Reference design.** A client joins a room through authenticated signaling. The room authority selects an SFU region/host, establishes a call epoch, and returns short-lived media credentials. Publishers send one encoded stream per selected simulcast/SVC layer set. The SFU forwards appropriate layers to subscribers based on bandwidth feedback and active-speaker policy; it does not decode and re-encode every stream.
 
@@ -155,7 +157,7 @@ $$
 
 Media queues must be latency-bounded. When congestion rises, drop expired video frames, choose a lower layer, or suppress video; do not build seconds of media backlog. Audio typically receives priority because delayed audio is more harmful and consumes less bandwidth.
 
-## Capacity model
+## Capacity Model
 
 ### Gateway memory: illustrative assumptions
 
@@ -197,7 +199,7 @@ $$
 
 before protocol overhead and retransmission. Capacity allocation must use measured regional egress, packet rate, CPU, NIC interrupts, and loss, not participant count alone.
 
-## Concrete failure trace: announcement hotspot
+## Concrete Failure Trace: Announcement Hotspot
 
 **Reference-design trace.** A large guild posts an announcement mentioning all members:
 
@@ -211,7 +213,7 @@ before protocol overhead and retransmission. Capacity allocation must use measur
 
 Without coalescing, the database sees a cache stampede. Without per-key concurrency, one channel raises cluster-wide latency. Without reconnect admission, a host failure becomes a fleet-wide failure.
 
-## Multi-region and failure authority
+## Multi-Region and Failure Authority
 
 **Inference.** Gateway sessions and media should terminate near users, but low latency does not grant every edge location authority to mutate durable guild/message state. Edge placement and write authority are separate decisions.
 
@@ -219,7 +221,7 @@ Without coalescing, the database sees a cache stampede. Without per-key concurre
 
 Provision static regional headroom for reconnect and call replacement. Autoscaling that completes after all sessions reconnect is not a recovery plan. See [multi-region architecture](../06-scaling/09-multi-region-architecture.md), [cell-based architecture](../06-scaling/11-cell-based-architecture.md), and [DNS and connection management](../06-scaling/13-dns-and-connection-management.md).
 
-## Security, privacy, and abuse
+## Security, Privacy, and Abuse
 
 **Reference design.** Authenticate HTTP, Gateway, and voice-media credentials separately; bind each short-lived token to user, session, guild/room, permissions, and epoch. Check attachment references so knowing an object URL is not sufficient authorization. Rate-limit high-amplification operations (mentions, member enumeration, presence subscription, and history scans) by cost rather than request count alone.
 
@@ -227,7 +229,7 @@ Moderation and abuse systems need access to authorized content, but access shoul
 
 **Documented, 2026.** Discord reported completing end-to-end encryption for voice and video calls outside stage channels in March 2026. That security property is newer than the 2018 media article and should not be back-projected onto the old design. [Discord, voice and video E2EE](https://discord.com/blog/every-voice-and-video-call-on-discord-is-now-end-to-end-encrypted)
 
-## Observability and verification
+## Observability and Verification
 
 **Reference design.** Measure each plane on its own success criteria:
 
@@ -242,7 +244,7 @@ Moderation and abuse systems need access to authorized content, but access shoul
 
 Verification should replay duplicate and reordered message commands, disconnect gateways mid-event, expire resume buffers, inject a hot channel, remove a database replica during quorum reads, and impair one voice region. Assert bounded queues, per-channel ordering, no unauthorized delivery, convergence after resume, and no cross-cell stale writes.
 
-## Evolution and migration
+## Evolution and Migration
 
 **Documented, 2023.** Discord did not treat its Cassandra-to-ScyllaDB migration as an engine swap. It first introduced data services, validated ScyllaDB behavior including reverse queries, performed dual writes, used a data migrator and validator, shadowed traffic, then cut reads over. This reduced migration risk and left a stable query boundary for future storage changes. [Discord, trillions of messages](https://discord.com/blog/how-discord-stores-trillions-of-messages)
 
@@ -250,7 +252,7 @@ Verification should replay duplicate and reordered message commands, disconnect 
 
 The reusable migration pattern is: create a narrow stable boundary, shadow real traffic, compare semantic results, canary by isolation domain, preserve rapid routing rollback, and remove the old path only after long-tail clients and background work have drained.
 
-## Transferable lessons
+## Transferable Lessons
 
 1. Partition guarantees by workload: durable log, session stream, soft state, and media packets are not the same data type.
 2. Route identical hot-key work to one coalescing owner before the database.
@@ -260,7 +262,7 @@ The reusable migration pattern is: create a narrow stable boundary, shadow real 
 6. Make resume a retained-prefix contract with an explicit fallback to full sync.
 7. Put stable service boundaries around storage so migrations can be shadowed and reversed.
 
-## Primary sources
+## References
 
 - [Discord Gateway documentation](https://docs.discord.com/developers/events/gateway)
 - [Discord: How Discord Stores Trillions of Messages, 2023](https://discord.com/blog/how-discord-stores-trillions-of-messages)
@@ -268,3 +270,12 @@ The reusable migration pattern is: create a narrow stable boundary, shadow real 
 - [Discord: reducing WebSocket traffic, 2024](https://discord.com/blog/how-discord-reduced-websocket-traffic-by-40-percent)
 - [Discord: moving voice to the edge, 2026](https://discord.com/blog/how-we-moved-discord-voice-to-the-edge)
 - [Discord: voice and video E2EE, 2026](https://discord.com/blog/every-voice-and-video-call-on-discord-is-now-end-to-end-encrypted)
+
+---
+
+## Related Chapters
+
+- [Partitioning Strategies](../02-distributed-databases/05-partitioning-strategies.md): the hot guild problem, where a key distribution choice becomes an incident
+- [LSM Trees](../03-storage-engines/02-lsm-trees.md): a write-heavy message store whose compaction had to stop stealing read latency
+- [Presence as Derived Multi-Session State](../07-real-time/06-presence.md): high-cardinality state that may be wrong anyway, and must be cheap to be useful
+- [Cell-Based Architecture and Shuffle Sharding](../06-scaling/11-cell-based-architecture.md): moving one guild into its own cell, which turns an outage into a partition

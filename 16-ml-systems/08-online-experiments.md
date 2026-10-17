@@ -351,3 +351,12 @@ Finally, bind operations to inference. Safety guardrails may stop at any time. A
 7. [Detecting Network Effects: Randomizing Over Randomized Experiments](https://www.kdd.org/kdd2017/papers/view/detecting-network-effects-randomizing-over-randomized-experiments): Saint-Jacques et al., LinkedIn, KDD 2017
 8. [It's All A/Bout Testing: The Netflix Experimentation Platform](https://netflixtechblog.com/its-all-a-bout-testing-the-netflix-experimentation-platform-4e1ca458c15): Netflix, 2016
 9. [Experiments at Airbnb](https://medium.com/airbnb-engineering/experiments-at-airbnb-e2db3abf39e7): Airbnb Engineering
+
+---
+
+## Related Chapters
+
+- [Offline Evaluation and Metric Design](12-offline-evaluation-metrics.md): offline gains that fail to survive a live experiment, and the tests that predict it
+- [Feature-Flag Control Planes](../15-deployment/02-feature-flags.md): assignment infrastructure shared with product changes, which is how both get corrupted
+- [ML Risk and Governance](09-ml-risk-governance.md): an experiment is a controlled change, so it inherits the governance of one
+- [Label and Ground-Truth Systems](10-label-ground-truth-systems.md): ground truth as the denominator behind every metric an experiment reports

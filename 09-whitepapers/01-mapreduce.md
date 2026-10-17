@@ -1,8 +1,10 @@
 # MapReduce (OSDI 2004): Evidence-First Paper Analysis
 
+## TL;DR
+
 MapReduce's lasting contribution is not the word-count example. It places the distributed-systems boundary around two programmer-supplied transformations; the runtime owns task placement, shuffle, retry, straggler mitigation, and output publication. That contract makes a large class of batch computations safely replayable.
 
-## Publication identity and scope
+## Publication Identity and Scope
 
 - **Paper:** *MapReduce: Simplified Data Processing on Large Clusters*
 - **Authors:** Jeffrey Dean and Sanjay Ghemawat, Google
@@ -13,7 +15,7 @@ Every number below belongs to that implementation and the paper's test cluster. 
 
 This chapter evaluates what the 2004 paper establishes; [Batch Processing](../13-data-pipelines/01-batch-processing.md) covers the general design space.
 
-## Workload and problem boundary
+## Workload and Problem Boundary
 
 Google repeatedly needed to transform very large collections: construct inverted indexes, aggregate URL access counts, reverse link graphs, sort records, and run graph computations. The per-record logic was usually simple; the hard, repeated work was distributing it across unreliable machines.
 
@@ -26,7 +28,7 @@ The paper narrows that problem deliberately:
 
 This form gives the runtime a useful independence property: different map invocations can run in any order, and different reduce partitions can run independently after their inputs are available. It does **not** mean every algorithm naturally fits one MapReduce. Multi-stage jobs are possible, but their orchestration and repeated materialization remain visible costs.
 
-## State model and correctness contract
+## State Model and Correctness Contract
 
 The important state is spread across three durability classes.
 
@@ -42,7 +44,7 @@ With nondeterministic user functions, the guarantee is weaker. Each reduce parti
 
 The paper's contract also stops at managed files. A mapper that charges a card, mutates a remote database, or sends an email can repeat that side effect after a retry. Such work needs an idempotency protocol; see [Idempotency](../01-foundations/08-idempotency.md).
 
-## Execution protocol
+## Execution Protocol
 
 Section 3 and Figure 1 describe six steps.
 
@@ -69,7 +71,7 @@ The default partitioner hashes the intermediate key, ensuring all values for a k
 
 A combiner performs local partial aggregation before shuffle. It is valid only when that partial operation preserves the reducer's meaning. The paper's word-count sum works; an arbitrary reducer is not automatically a legal combiner.
 
-## Failure and recovery reasoning
+## Failure and Recovery Reasoning
 
 The master pings workers. When a worker stops responding:
 
@@ -83,7 +85,7 @@ The published implementation does **not** replicate the master. Section 3.3 says
 
 Section 3.6 addresses slow rather than dead workers. Near completion, the master launches backup copies of remaining tasks; the first successful attempt wins. The paper notes that a faulty machine can make a task deterministically fail, so the system also records failures and can skip a bad input record when the user enables that escape hatch. Skipping is an availability policy that changes the result, not a correctness-preserving retry.
 
-## Quantitative evidence, with methodology
+## Quantitative Evidence, With Methodology
 
 The evaluation in Section 5 used a cluster of roughly 1,800 machines. Each had two 2 GHz Intel Xeon processors, 4 GB of memory, two 160 GB IDE disks, and gigabit Ethernet. The measured network bisection bandwidth was approximately 100–200 Gbit/s. Programs ran on a weekend afternoon when CPUs, disks, and network were mostly idle. Those details are part of every result.
 
@@ -94,7 +96,7 @@ The evaluation in Section 5 used a cluster of roughly 1,800 machines. Each had t
 
 The evaluation demonstrates feasibility, failure recovery, and the value of locality and speculative execution. It does not compare cost, energy, multi-tenant interference, small-job latency, or alternative batch engines under matched durability semantics.
 
-## Assumptions and limits
+## Assumptions and Limits
 
 - The abstraction favors associative grouping over arbitrary communication. Iterative algorithms repeatedly materialize and reread state.
 - A single hot key is owned by one reduce partition unless the application changes the keying strategy.
@@ -105,13 +107,13 @@ The evaluation demonstrates feasibility, failure recovery, and the value of loca
 
 These are design choices, not historical defects. They make a narrow, common workload unusually operable.
 
-## What later systems retained and changed
+## What Later Systems Retained and Changed
 
 Google's 2010 FlumeJava paper retained data-parallel operators but replaced hand-wired chains of MapReduce jobs with immutable parallel collections, deferred execution, and whole-pipeline optimization. The 2015 Dataflow model retained partitioned data-parallel execution while adding explicit event-time windows, triggers, and correctness/latency/cost choices for unbounded data. Neither result means MapReduce secretly had those semantics; they identify the next boundaries the original model did not cover.
 
 Modern engines also often retain intermediates in memory, build DAGs rather than a fixed map/shuffle/reduce shape, and use distributed schedulers with replicated control state. The durable lesson remains: define a replayable unit, make publication atomic, keep enough lineage to reconstruct lost derived state, and design straggler handling as part of the completion protocol.
 
-## Design review questions
+## Design Review Questions
 
 Use the paper as a reasoning framework, not a product prescription:
 
@@ -123,9 +125,17 @@ Use the paper as a reasoning framework, not a product prescription:
 6. How is slow progress distinguished from failure, and what is the resource cost of duplicate attempts?
 7. Does the workload require bounded batch semantics, or event-time and continuously updated state?
 
-## Primary sources
+## References
 
 - [Dean and Ghemawat, *MapReduce: Simplified Data Processing on Large Clusters* (OSDI 2004), official Google Research PDF](https://storage.googleapis.com/gweb-research2023-media/pubtools/4449.pdf)
 - [Google Research publication record for MapReduce](https://research.google/pubs/mapreduce-simplified-data-processing-on-large-clusters/)
 - [Chambers et al., *FlumeJava: Easy, Efficient Data-Parallel Pipelines* (PLDI 2010)](https://research.google/pubs/flumejava-easy-efficient-data-parallel-pipelines/)
 - [Akidau et al., *The Dataflow Model* (VLDB 2015)](https://research.google/pubs/the-dataflow-model-a-practical-approach-to-balancing-correctness-latency-and-cost-in-massive-scale-unbounded-out-of-order-data-processing/)
+
+---
+
+## Related Chapters
+
+- [Batch Execution](../13-data-pipelines/01-batch-processing.md): the execution model that kept placement, retry, and output publication in the runtime
+- [DAG Orchestration](../18-workflow-job-systems/05-dag-orchestration.md): one job becomes a dependency graph with rerun boundaries and partial failure
+- [Lakehouse Table Formats](../13-data-pipelines/05-lakehouse-table-formats.md): the table contract batch jobs publish into instead of a scratch directory

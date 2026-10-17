@@ -317,3 +317,12 @@ Begin with canonical session state and task-level measurement. Add affinity only
 - [Context Management](./08-context-management.md): context construction, compaction, and token economics
 - [GPU Inference Internals](./11-gpu-inference-internals.md): phase rooflines, KV footprint, kernels, and parallelism
 - [LLM Infrastructure](./05-llm-infrastructure.md): admission, routing, streaming, rollout, and regional serving architecture
+
+---
+
+## Related Chapters
+
+- [GPU Inference Internals](11-gpu-inference-internals.md): the scheduler-level detail this workload has to be designed around
+- [Context Management](08-context-management.md): a session is a context budget, and its history is what you are caching
+- [LLM Infrastructure](05-llm-infrastructure.md): the platform boundary where sessions, retries, and tenant fairness live
+- [Model Serving](../16-ml-systems/03-model-serving.md): single-request serving, still the right baseline to compare against

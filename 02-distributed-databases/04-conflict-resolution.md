@@ -1,10 +1,12 @@
 # Conflict Resolution
 
+## TL;DR
+
 Conflict resolution is the policy that turns **independently accepted, causally concurrent updates** into one convergent state. It cannot recover an intention the system never recorded. A merge can preserve both shopping-cart additions, for example, but it cannot decide whether two users who independently claimed the same username should share it. The data type and business invariant must define that answer.
 
 Conflict resolution must define detection, representation, merge semantics, deletion knowledge, and repair for conflicting versions. [Multi-Leader Replication](./02-multi-leader-replication.md) and [Leaderless Replication](./03-leaderless-replication.md) own the replica protocols that create and exchange those versions. [Distributed Transactions](./07-distributed-transactions.md) owns coordination when an invariant cannot be merged safely.
 
-## Start with the contract, not the merge function
+## Start With the Contract, Not the Merge Function
 
 Four properties are often collapsed into “eventual consistency,” but they are different:
 
@@ -27,7 +29,7 @@ Before choosing a strategy, write the semantic table for each operation:
 
 The table is the contract. “Use last writer wins” is an implementation choice only after the first row has explicitly accepted data loss.
 
-## State required for correct reconciliation
+## State Required for Correct Reconciliation
 
 A conflict-aware record is more than a value and a timestamp. Depending on the strategy, durable state includes:
 
@@ -59,7 +61,7 @@ A **dotted version vector** separates the new event's dot from the causal contex
 
 Vectors have a membership cost. A dense vector is `O(r)` metadata for `r` actors, and actor churn can grow it indefinitely. Practical systems use stable actors, sparse maps, dotted contexts, interval compression, or deliberately lossy truncation. Dynamo's timestamp-based vector-clock truncation is explicit about the trade: bounded metadata can forget ancestry and create siblings that a complete clock would have eliminated.
 
-## Resolution families
+## Resolution Families
 
 ### Serialize the operation when one answer is mandatory
 
@@ -117,7 +119,7 @@ Some domains merge intentions more safely than values. Recording `add 5` and `su
 
 Operation logs require bounded retention, deterministic replay, idempotency, and a snapshot/compaction rule. An operation that calls an external service is not made safe merely by putting it in a mergeable log; see [Idempotency](../01-foundations/08-idempotency.md).
 
-## Concrete failure traces
+## Concrete Failure Traces
 
 ### Equal timestamps without a stable tie-breaker
 
@@ -154,7 +156,7 @@ Per-actor components and component-wise max turn retransmission into an idempote
 
 The conflict is not merely which row remains. The API promised something it could not preserve without coordination, escrowed ownership, or a later explicit revocation workflow.
 
-## Capacity and cost model
+## Capacity and Cost Model
 
 Conflict resolution moves cost from the write path into metadata, reads, repair, and garbage collection.
 
@@ -171,7 +173,7 @@ Full-state CRDTs make `transferred_state_per_key` grow with accumulated history.
 
 Tombstones and causal context are compaction debt. Track bytes and count by age, but never turn an age metric directly into a deletion rule. The safe-removal frontier must come from replica progress or an explicit membership decision. Repair bandwidth must also be capacity-reserved; foreground success during a partition can create a backlog whose reconciliation later saturates CPU, disk, or network.
 
-## Production operation and migration
+## Production Operation and Migration
 
 ### Make merge policy versioned data
 
@@ -193,7 +195,7 @@ Useful signals include unresolved siblings per key and percentile, causal-contex
 
 Property tests should randomly permute, duplicate, batch, and replay updates and then assert merge commutativity, associativity, and idempotence where promised. Generate concurrent operation histories and verify domain invariants, not only equal final bytes. Fault tests must include partitions, process pauses, lost acknowledgements, actor restart from backup, schema-version skew, and a replica returning after removal compaction.
 
-## Decision framework
+## Decision Framework
 
 1. What concurrent operation pairs can occur, including delete/update and retry/retry?
 2. Must both intentions survive, or may one deterministic value be discarded?
@@ -204,7 +206,7 @@ Property tests should randomly permute, duplicate, batch, and replay updates and
 7. What repair capacity drains divergence after the longest supported partition?
 8. If coordination is required, should the API reject immediately rather than acknowledge a promise it may later revoke?
 
-## Primary references
+## References
 
 - [DeCandia et al., *Dynamo: Amazon's Highly Available Key-value Store* (SOSP 2007)](https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf)
 - [Terry et al., *Managing Update Conflicts in Bayou, a Weakly Connected Replicated Storage System* (SOSP 1995)](https://doi.org/10.1145/224056.224070)
@@ -212,3 +214,12 @@ Property tests should randomly permute, duplicate, batch, and replay updates and
 - [Almeida, Baquero, and Fonte, *Interval Tree Clocks: A Logical Clock for Dynamic Systems* (OPODIS 2008)](https://gsd.di.uminho.pt/members/cbm/ps/itc2008.pdf)
 - [Almeida, Baquero, and Fonte, *Dotted Version Vectors: Logical Clocks for Optimistic Replication* (2010)](https://arxiv.org/abs/1011.5808)
 - [Kleppmann and Beresford, *A Conflict-Free Replicated JSON Datatype* (IEEE TPDS 2017)](https://arxiv.org/abs/1608.03960)
+
+---
+
+## Related Chapters
+
+- [Collaborative Document Replication and CRDT Sync Engines](../07-real-time/07-crdts-collaborative-editing.md): merge functions promoted into data types, with convergence as a property instead of a practice
+- [Distributed Time](../01-foundations/05-distributed-time.md): timestamps are the usual tiebreaker, and clocks are the reason the tiebreaker fails
+- [Multi-Leader Replication](02-multi-leader-replication.md): the topology that generates the conflicts this chapter has to reconcile
+- [Figma System Design](../08-case-studies/11-figma.md): a product where the merge is collaborative editing rather than a background repair job

@@ -1,5 +1,7 @@
 # CAP Theorem
 
+## TL;DR
+
 The CAP theorem is commonly summarized this way: a distributed system can provide at most two of three guarantees: **Consistency, Availability, and Partition tolerance**. But this framing is misleading. Partitions are not optional; they are a fact of distributed systems. The real engineering question is what each operation does **during** a partition: preserve consistency or remain available. The choice belongs to an operation and data boundary, not permanently to a database product. When communication is healthy, PACELC adds another tradeoff: latency versus consistency. A system can make different choices for different operations and failure states; it is not permanently “CP” or “AP.”
 
 | Property | Precise CAP meaning |
@@ -10,7 +12,7 @@ The CAP theorem is commonly summarized this way: a distributed system can provid
 
 CAP is therefore an impossibility result about a specific execution. It is not a permanent classification, a normal-latency model, or a statement that every distributed operation makes the same tradeoff.
 
-## Formal model
+## Formal Model
 
 Gilbert and Lynch model an asynchronous message-passing service with at least two nodes and a read/write object. Messages can be delayed or lost indefinitely, and an algorithm cannot infer from silence whether a peer is slow, unreachable, or failed.
 
@@ -20,7 +22,7 @@ CAP availability is also narrower than everyday uptime. Every request delivered 
 
 Partition tolerance quantifies over message loss. Calling a distributed service “CA” assumes away the execution CAP analyzes. It does not explain how the service behaves when communication actually fails.
 
-## Why consistency and availability conflict
+## Why Consistency and Availability Conflict
 
 Consider replicas L and R storing `x = 0`.
 
@@ -46,7 +48,7 @@ In `E0`, a legal register read returns `0`. If R makes the same decision in `E1`
 
 More replicas do not remove the construction. A partition can still separate reachable groups. Quorums decide which group may retain authority; they do not make every isolated live node both current and responsive.
 
-## Production partitions are not clean cable cuts
+## Production Partitions Are Not Clean Cable Cuts
 
 The proof needs only missing communication, not a symmetric network split. Production protocols face several forms:
 
@@ -59,7 +61,7 @@ The proof needs only missing communication, not a symmetric network split. Produ
 
 Diagnosis and repair differ across these failures. The operational question is whether the operation can obtain the evidence required by its contract before its deadline; the formal CAP question also covers executions in which required communication may never arrive. A green process health check is not evidence of current authority.
 
-## What CAP does and does not say
+## What CAP Does and Does Not Say
 
 CAP applies at the operation and data scope affected by missing communication:
 
@@ -72,13 +74,13 @@ CAP says nothing by itself about durability, multi-object atomicity, transaction
 
 The familiar condition `W + R > N` proves only that a read set and write set intersect under a particular membership. It does not by itself prove linearizability. The protocol must also keep membership and epochs coherent, define when a write is complete, durably retain acknowledged versions, order concurrent writes without trusting unsafe clocks, make reads select a version at least as new as the latest completed write, and handle retries, repair, and reconfiguration without exposing an older history. Sloppy quorums or changing replica sets can satisfy a cardinality formula while the actual sets containing an acknowledged value do not intersect. Quorum arithmetic is one lemma inside a protocol, not the protocol’s correctness proof. [Leaderless Replication](../02-distributed-databases/03-leaderless-replication.md) develops those missing conditions.
 
-## CAP, consensus, and FLP
+## CAP, Consensus, and FLP
 
 CAP and consensus answer related but different questions. CAP shows that a partitioned read/write service cannot guarantee both linearizability and a valid response from every non-failing request recipient. Consensus asks participants to agree on one value or ordered log while preserving agreement and validity. A consensus-backed service commonly preserves safety by allowing only a quorum side to make progress, which deliberately gives up availability on the other side.
 
 The FLP result adds a liveness boundary: in a fully asynchronous system, no deterministic consensus algorithm can guarantee termination in every execution if even one process may crash. FLP does not say consensus can never complete. Production protocols preserve safety and obtain practical liveness by adding assumptions such as eventual timing bounds, randomized choices, failure detectors, stable leaders, or operator intervention. CAP is not a substitute for FLP, and FLP is not a proof that a stale read is acceptable. Both force the design to state which safety property survives uncertainty and under which assumptions progress resumes.
 
-## Failure detection and client outcomes
+## Failure Detection and Client Outcomes
 
 Silence cannot distinguish a crashed peer from delayed messages, a paused runtime, overloaded storage, asymmetric filtering, or expired credentials. A timeout creates suspicion, not proof. Making it longer changes false-suspicion frequency and recovery speed; it does not turn silence into knowledge.
 
@@ -95,7 +97,7 @@ For each operation, define a product deadline and an externally meaningful outco
 
 Do not collapse `pending`, `unknown`, and `succeeded` into a generic success or failure response. For mutations, stable operation identity and outcome lookup are part of the partition contract, not an optional retry convenience.
 
-## Partition policies
+## Partition Policies
 
 When authority or freshness cannot be proved, an operation has three defensible behaviors.
 
@@ -123,7 +125,7 @@ Choose per operation:
 
 Never change an endpoint’s success semantics implicitly during an incident. Switching inventory writes from quorum-conditional updates to local acceptance may restore responses by allowing both sides to sell the final unit. A weaker mode can be legitimate, but it needs a separate contract, authorization, response type, and audit trail.
 
-## Recovery and reactivation
+## Recovery and Reactivation
 
 A useful control state is `NORMAL → AUTHORITY_UNPROVEN → RECOVERING → NORMAL`. Entering the restricted state can be conservative and based on suspicion. Leaving it requires stronger evidence.
 
@@ -149,7 +151,7 @@ For example, if three durable acknowledgements in a measured topology arrive aft
 
 PACELC does not decide transaction isolation, durability scope, freshness bounds, merge semantics, recovery cost, capacity under failover, or dollar cost. Those remain separate design obligations.
 
-## Illustrative availability math
+## Illustrative Availability Math
 
 Suppose three replicas are independently unreachable with probability `p`, and a majority of two is sufficient. Majority unavailability is:
 
@@ -159,7 +161,7 @@ $$
 
 At `p = 0.01`, the result is `0.000298`, or about `0.0298%`. This is an illustration of quorum arithmetic, not a production availability forecast. Zone loss, network policy, identity, configuration rollout, software bugs, dependencies, and overload create correlated failures. Client and coordinator placement also determine which replicas are reachable. Treating those events as independent can overstate resilience by orders of magnitude.
 
-## Observability and verification
+## Observability and Verification
 
 Record decisions at the semantic boundary: operation class, requested consistency mode, authority epoch and evidence, contacted replicas, commit frontier, deadline, stable request ID, and outcome category. Alert on quorum loss, one-way reachability, mode changes, fenced-write rejection, ambiguous retries, pending-intent age, divergence backlog, reconciliation failures, and recovery activation frontier. Aggregate uptime cannot show which promise was served.
 
@@ -174,7 +176,7 @@ Test safety and liveness as separate claims:
 
 A passing chaos run demonstrates behavior only for the implementation, executions, checker, workload, and assumptions tested. It is evidence, not a proof of arbitrary partition tolerance. A model proof is also bounded by its model; omitted storage, routing, retry, and side-effect behavior can still invalidate the production contract.
 
-## Design decision
+## Design Decision
 
 For every operation, specify:
 
@@ -187,7 +189,7 @@ For every operation, specify:
 
 The useful CAP question is: **when required participants cannot communicate, which operations stop, which return a weaker result, which remain unresolved, and which may diverge?**
 
-## Primary references
+## References
 
 - Gilbert, S., and Lynch, N. [Brewer’s Conjecture and the Feasibility of Consistent, Available, Partition-Tolerant Web Services](https://doi.org/10.1145/564585.564601). SIGACT News, 2002.
 - Brewer, E. [CAP Twelve Years Later: How the “Rules” Have Changed](https://doi.org/10.1109/MC.2012.37). IEEE Computer, 2012.
@@ -195,3 +197,12 @@ The useful CAP question is: **when required participants cannot communicate, whi
 - Chandra, T. D., and Toueg, S. [Unreliable Failure Detectors for Reliable Distributed Systems](https://hdl.handle.net/1813/7192). Journal of the ACM, 1996.
 - Herlihy, M. P., and Wing, J. M. [Linearizability: A Correctness Condition for Concurrent Objects](https://doi.org/10.1145/78969.78972). ACM TOPLAS, 1990.
 - Fischer, M. J., Lynch, N. A., and Paterson, M. S. [Impossibility of Distributed Consensus with One Faulty Process](https://doi.org/10.1145/3149.214121). Journal of the ACM, 1985.
+
+---
+
+## Related Chapters
+
+- [Consistency Models](04-consistency-models.md): what consistency means once you leave the linearizable end of the spectrum
+- [Failure Semantics, Detection, and Recovery Boundaries](06-failure-modes.md): a partition is one failure mode among many, and detection quality decides the rest
+- [Consensus Algorithms](../02-distributed-databases/08-consensus-algorithms.md): the escape from FLP: partial synchrony, timeouts, and epochs
+- [Multi-Region Architecture](../06-scaling/09-multi-region-architecture.md): where a per-operation trade-off hardens into a standing regional policy

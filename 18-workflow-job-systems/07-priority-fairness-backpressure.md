@@ -409,3 +409,12 @@ Before production, answer:
 - Kay Ousterhout et al., [*Sparrow: Distributed, Low Latency Scheduling*](https://people.eecs.berkeley.edu/~matei/papers/2013/sosp_sparrow.pdf), SOSP, 2013.
 - John D. C. Little, [*A Proof for the Queuing Formula: L = λW*](https://doi.org/10.1287/opre.9.3.383), Operations Research, 1961.
 - Jeff Dean and Luiz André Barroso, [*The Tail at Scale*](https://research.google/pubs/the-tail-at-scale/), Communications of the ACM, 2013.
+
+---
+
+## Related Chapters
+
+- [Rate Limiting](../06-scaling/05-rate-limiting.md): admission control upstream of a queue is cheaper than scheduling inside it
+- [Multi-Tenant Isolation and Tenant Lifecycle Architecture](../06-scaling/12-multi-tenancy.md): fairness is what tenancy is called when the tenants submit jobs
+- [Background Jobs and Worker Pools](02-background-jobs-worker-pools.md): the pool where a priority decision becomes somebody else real delay
+- [Training Pipelines](../16-ml-systems/05-training-pipelines.md): long jobs defeat short-window fairness, which is why quotas alone fail

@@ -1,5 +1,7 @@
 # DNS and Connection Management
 
+## TL;DR
+
 DNS publishes names; resolvers turn those names into time-bounded answers; connection pools turn one answer into routing state that can outlive every DNS cache involved. Production cutovers fail when teams reason about only the authoritative record. The operational unit is the entire chain: authoritative publication, recursive and client caches, address-family selection, connection creation, pool lifetime, and endpoint drain.
 
 A production DNS and connection contract must define **DNS delegation and cache semantics, positive and negative TTLs, stale-answer policy, client resolution, dual-stack connection racing, pool and address lifecycle, DNS cutovers, and connection draining**. [Service Discovery](../12-service-mesh/01-service-discovery.md) owns endpoint authority, registration, health, watch streams, and control-plane state. [Load Balancing](./01-load-balancing.md) owns how a ready endpoint is selected and weighted. [Network Transport Internals](./14-network-transport-internals.md) owns TCP, TLS, QUIC, congestion control, and packet-level failure mechanics. [Multi-Region Architecture](./09-multi-region-architecture.md) owns regional authority and failover policy.
@@ -15,7 +17,7 @@ A production DNS and connection contract must define **DNS delegation and cache 
 | RFC 9460 (2023) | SVCB and HTTPS records can publish alternative endpoints and connection parameters with defined alias/service modes | Clients that do not implement the records continue through their legacy path |
 | Meta engineering report, October 2021 | Backbone loss and withdrawn DNS advertisements made an otherwise global name system a shared-fate dependency | One documented incident, not a universal DNS architecture |
 
-## Resolution and connection contract
+## Resolution and Connection Contract
 
 Before choosing a TTL or pool size, define:
 
@@ -34,7 +36,7 @@ Before choosing a TTL or pool size, define:
 
 “TTL 60” does not answer this contract. It says how long a normally behaving cache may treat one received RRset as fresh. It does not close a socket, bound an explicitly configured stale-answer window, ensure all authoritative replicas have the update, or force an application runtime to ask again.
 
-## The end-to-end state machine
+## The End-to-End State Machine
 
 DNS has a publication control path and a resolution data path. Connection reuse creates a second data path after resolution.
 
@@ -67,7 +69,7 @@ flowchart LR
 
 The normal data path should continue using valid cached answers and established healthy connections if the DNS publication API is unavailable. That separation is valuable only while revocation and drain remain bounded: a permanent client cache or unbounded connection age silently converts a transient control-plane outage into inability to move traffic.
 
-## State, authority, and invariants
+## State, Authority, and Invariants
 
 The relevant state spans several owners.
 
@@ -116,7 +118,7 @@ endpoint and certificate identity evidence
 8. DNSSEC signing and delegation state never expose an interval in which validating clients see an unverifiable chain unless an explicit, tested insecure transition is the policy.
 9. Rollback preserves the old endpoint, credentials, data compatibility, and capacity until the rollback horizon closes.
 
-## DNS resolution mechanics
+## DNS Resolution Mechanics
 
 ### Delegation, referrals, and glue
 
@@ -173,7 +175,7 @@ DNS commonly starts over UDP, but larger answers may be truncated and retried ov
 
 Encrypted resolver transports such as DNS-over-TLS and DNS-over-HTTPS change the path, certificate dependency, connection reuse, and observability boundary; they do not change authoritative TTL semantics. Inventory which resolver is actually used in containers, browsers, service meshes, VPNs, and host runtimes before diagnosing “DNS.”
 
-## Cache hierarchy and convergence model
+## Cache Hierarchy and Convergence Model
 
 There may be caches in the recursive resolver, node-local daemon, OS, runtime, HTTP proxy, and application. Some APIs return only addresses and hide TTLs, so a runtime may apply its own fixed cache policy. Measure behavior for the exact runtime version; do not infer it from the zone setting.
 
@@ -206,7 +208,7 @@ $$
 
 Low TTL increases dependency on resolver and authoritative availability. Cache flush, restart, popular-name expiry, or reconnect storms make refreshes bursty, so capacity-test misses, DNSSEC responses, TCP fallback, and provider/API failure independently of average QPS.
 
-## Address-family selection and connection establishment
+## Address-Family Selection and Connection Establishment
 
 A client can receive several IPv6 and IPv4 candidates with no reliable signal that every path works. Serially attempting all IPv6 addresses before IPv4 can turn one broken family into seconds of delay. RFC 8305's Happy Eyeballs v2 guidance builds an ordered candidate list and starts later alternatives after a short, adaptive delay so a working family can win without permanently preferring IPv4.
 
@@ -214,7 +216,7 @@ The winner is connection-local evidence, not a global declaration that one addre
 
 Resolution success and connection success are separate telemetry events. An address can resolve correctly while routing, firewall, TLS identity, protocol negotiation, or application readiness fails.
 
-## Connection pools are routing caches
+## Connection Pools Are Routing Caches
 
 Once a connection is established, DNS is usually no longer consulted for requests on that connection. HTTP/2 and HTTP/3 can carry many concurrent streams; databases and other protocols may hold sessions for hours. A DNS migration therefore has two independent convergence questions:
 
@@ -277,7 +279,7 @@ These controls solve different problems:
 
 Validating a connection only before borrowing it cannot prove that it remains alive for the next write. Protocols must handle close/reset at every operation boundary and distinguish safe replay from ambiguous completion.
 
-## DNS and endpoint cutover protocol
+## DNS and Endpoint Cutover Protocol
 
 Treat a DNS change as a rollout with compatibility and rollback state.
 
@@ -317,7 +319,7 @@ The terms can overlap for many clients, but the sum covers the client that obtai
 
 Rollback is asymmetric after old data, certificates, routes, or capacity are removed. Keep the old path write-compatible and provisioned until the rollback horizon closes; “put the record back” is not a rollback plan if resolvers cache both directions and clients retain new connections.
 
-## Specialized failure traces
+## Specialized Failure Traces
 
 ### DNS changed; old endpoint still receives writes
 
@@ -384,7 +386,7 @@ Define an application-level reconnect/migration signal, stagger drain, budget de
 
 Use the RFC-prescribed overlap/rollover sequence, query every authoritative server and validating vantage point, and stop the rollout on inconsistent chains. Disabling validation in clients hides the safety failure and creates a different incident.
 
-## Security and abuse resistance
+## Security and Abuse Resistance
 
 DNSSEC authenticates DNS data origin and denial-of-existence through a chain of trust; it does not encrypt names, prove endpoint health, or replace TLS/application authentication. A validating failure must remain distinguishable from NXDOMAIN and ordinary timeout. Protect key rollovers, registrar accounts, delegation changes, and emergency access with separation of duties, strong authentication, audit logs, and out-of-band recovery.
 
@@ -398,7 +400,7 @@ Additional controls:
 - Bind TLS identity and application authorization to the intended hostname/service, not merely to an IP returned by DNS.
 - Rate-limit change APIs, require idempotent revisions, and make emergency override explicit. A compromised DNS account is a global traffic and certificate-validation capability.
 
-## Observability and operational evidence
+## Observability and Operational Evidence
 
 Observe each layer separately and correlate by name, RR type, resolver class, address, endpoint generation, and change revision.
 
@@ -427,7 +429,7 @@ Observe each layer separately and correlate by name, RR type, resolver class, ad
 
 Fleet aggregates can hide the exact population still using an old answer. Cutover dashboards need a denominator: percentage of known resolver populations converged, percentage of new connections on the new generation, and count/age of remaining old-generation connections.
 
-## Verification strategy
+## Verification Strategy
 
 ### Deterministic component tests
 
@@ -458,7 +460,7 @@ At production-like load:
 
 The rollback drill is complete only when traffic, connections, identity, and data all return, not when one resolver shows the old address again.
 
-## Decision framework
+## Decision Framework
 
 1. Which names are human-stable identities, coarse traffic controls, discovery records, or security/validation records?
 2. Where are the parent, authoritative, recursive, node, runtime, proxy, and application caches, and what are their measured positive, negative, and stale bounds?
@@ -471,7 +473,7 @@ The rollback drill is complete only when traffic, connections, identity, and dat
 9. Are DNS, routing, control access, credentials, and recovery tooling independent enough to survive the named failure?
 10. Can operators roll forward and backward across delegation, DNSSEC, DNS answers, connections, and data compatibility without an unverifiable interval?
 
-## Primary references
+## References
 
 - [RFC 1034, *Domain Names: Concepts and Facilities*](https://www.rfc-editor.org/rfc/rfc1034)
 - [RFC 1035, *Domain Names: Implementation and Specification*](https://www.rfc-editor.org/rfc/rfc1035)
@@ -485,3 +487,11 @@ The rollback drill is complete only when traffic, connections, identity, and dat
 - [RFC 9460, *Service Binding and Parameter Specification via the DNS*](https://www.rfc-editor.org/rfc/rfc9460)
 - [Google SRE, *Load Balancing at the Frontend*](https://sre.google/sre-book/load-balancing-frontend/)
 - [Meta Engineering, *More details about the October 4 outage* (October 2021)](https://engineering.fb.com/2021/10/05/networking-traffic/outage-details/)
+---
+
+## Related Chapters
+
+- [Cloudflare System Design](../08-case-studies/12-cloudflare.md): the provider-side view of delegation, anycast, and pool lifetime at internet scale
+- [Load Balancing](01-load-balancing.md): the pool behind the address, and what happens when its lifetime outlives a deploy
+- [Network Transport Internals](14-network-transport-internals.md): resolvers hide retries, happy eyeballs, and connection migration from your metrics
+- [Multi-Region Architecture](09-multi-region-architecture.md): reachability is not authority: routing can only send traffic to a writer

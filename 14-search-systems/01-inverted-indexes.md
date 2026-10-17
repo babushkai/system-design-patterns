@@ -1,10 +1,12 @@
 # Search Index Architecture and Internals
 
+## TL;DR
+
 A search index is a derived, query-optimized projection of an authoritative data source. It must publish coherent generations, survive process and machine failures, bound freshness, and serve a known logical snapshot while indexing and segment maintenance continue.
 
 The physical index lifecycle covers document ingestion, immutable segments, commit points, deletion state, merges, shard placement, replication, recovery, and distributed fan-out. See [Lexical Query Execution](02-full-text-search.md) for analyzers, postings traversal, BM25, filters, aggregations, and top-k execution; see [Ranking and Evaluation](04-ranking-algorithms.md) for learned ranking and relevance measurement.
 
-## Workload and service contract
+## Workload and Service Contract
 
 Start with the operations the index must support:
 
@@ -24,7 +26,7 @@ The product contract must make four different clocks explicit:
 
 Calling all four “indexing latency” hides the failures operators need to reason about. A system may acknowledge into a replicated write-ahead log in 20 ms, refresh searchers every second, commit segments every 30 seconds, and allow replicas to trail for several seconds. Those are four different guarantees.
 
-## State and invariants
+## State and Invariants
 
 An index shard commonly contains these state classes:
 
@@ -51,7 +53,7 @@ The design should enforce these invariants:
 
 **The index remains rebuildable.** Search storage is not the only copy of business data. Every indexed document is derivable from an authoritative log, table snapshot plus change stream, or equivalent replayable source.
 
-## Data plane and control plane
+## Data Plane and Control Plane
 
 Separating the planes prevents an indexing outage from turning into metadata corruption.
 
@@ -75,7 +77,7 @@ source transaction
 
 Idempotency lives at the projection boundary. The shard records the greatest accepted source version per document, or uses a monotonic source sequence whose replay position is committed with the segment generation. Transport-level duplicate suppression alone is insufficient: a rebuild, retry, or failover can deliver the same event through a different transport session.
 
-## Inside an immutable segment
+## Inside an Immutable Segment
 
 An inverted index maps each analyzed term to a sorted postings list. A production posting can include:
 
@@ -91,7 +93,7 @@ Local document ordinals are segment-private. A stable external ID therefore need
 
 Compression is part of the performance model, not an afterthought. Sorted document ordinals become small gaps; block encodings compress those gaps while allowing vectorized decoding and skipping. The right objective is query work per byte read, not the smallest possible file. A denser encoding that costs excessive branchy CPU can lose at high query rates.
 
-## Flush, refresh, commit, and merge
+## Flush, Refresh, Commit, and Merge
 
 Indexing accumulates analyzed structures in memory. A **flush** writes a new immutable segment. A **refresh** opens a new reader generation so searches can see it. A **commit** publishes a durable manifest after referenced files satisfy the durability contract. These events may coincide, but they do not mean the same thing.
 
@@ -107,7 +109,7 @@ Size-tiered policies merge similarly sized segments and favor write throughput, 
 
 Merge output is published like any other generation. The safe sequence is: write all new files under a new generation; verify lengths and checksums; make files durable as required; atomically publish a manifest; wait until no reader pins the old generation; then reclaim old files. Deleting inputs before publication turns a routine crash into shard loss.
 
-## Durability and recovery protocol
+## Durability and Recovery Protocol
 
 A recoverable shard needs an ordering relation between accepted operations and committed index state. One pattern is:
 
@@ -122,7 +124,7 @@ On restart, validate the latest complete manifest, open its segments, and replay
 
 Recovery time is bounded by both log length and file transfer. A replica that is far behind may be faster and safer to seed from a committed shard snapshot and then replay the suffix than to retain an unbounded operation history. Snapshot metadata must include index identity, schema/analyzer version, commit generation, shard term, and source checkpoint; a directory of files without this provenance is not a recovery artifact.
 
-## Sharding, replication, and distributed search
+## Sharding, Replication, and Distributed Search
 
 Choose the shard key from write locality, query fan-out, tenant isolation, and resharding needs. Hashing document IDs balances bytes but causes corpus-wide fan-out for unconstrained queries. Tenant or time partitioning can route queries narrowly, but hot tenants and skewed periods require subshards. A routing key that improves one query class can make another pathological, so record the expected fan-out distribution, not only average shard size.
 
@@ -132,7 +134,7 @@ Distributed top-k is exact only if every relevant shard participates and returns
 
 Replica selection should consider queue time and generation freshness, not just network distance. Hedging can reduce tail latency but multiplies work during overload; send a hedge only after a delay, cancel losers, and debit it against an overload budget. A retry to an already saturated replica set is amplification.
 
-## Capacity and cost model
+## Capacity and Cost Model
 
 Use measured corpus properties. Consider an explicitly illustrative workload:
 
@@ -150,7 +152,7 @@ Fan-out produces `8,000 * 12 = 96,000` shard searches/s before retries or hedges
 
 Indexing bandwidth must include merge amplification. At `4,000 * 0.9 KiB`, logical index production is only 3.5 MiB/s. If measured merge write amplification is 8, the device writes roughly 28 MiB/s before WAL and replication. More importantly, merges arrive in bursts. Admission control should use queued merge bytes and device saturation, not just average ingress.
 
-## Schema and analyzer evolution
+## Schema and Analyzer Evolution
 
 An index schema changes interpretation, so a field mapping or analyzer update is a data migration. Some additive fields can begin on new documents, but tokenization, normalization, similarity, vector dimensions, and type changes usually require reindexing.
 
@@ -166,7 +168,7 @@ Use versioned physical indexes behind a stable logical alias:
 
 Blind application dual writes are dangerous because a request can update one index and fail on the other. Prefer a durable source change stream with independent checkpoints. During cutover, never compare only document counts: duplicates can hide omissions. Reconcile source versions, sampled field values, per-partition counts, deletion counts, and a deterministic digest over IDs/version tuples.
 
-## Concrete failure trace: stale primary resurrects a document
+## Concrete Failure Trace: Stale Primary Resurrects a Document
 
 Suppose shard term 17 runs on node A. A network partition isolates A from the control plane but not from one producer. The control plane promotes node B in term 18. A receives `delete(id=9, version=52)` and acknowledges it locally; B receives `upsert(id=9, version=51)` from a delayed replay. Without fencing and source-version checks, both operations can be accepted, and replica recovery can later make version 51 visible again.
 
@@ -177,7 +179,7 @@ The safe design applies two independent guards:
 
 Detection requires more than a healthy-node count. Alert on rejected stale-term operations, decreasing source checkpoints, replica generation divergence, and sampled source-to-index version mismatches. Repair rebuilds the affected logical shard from an authoritative checkpoint; copying A’s latest files would preserve the ambiguity.
 
-## Overload, operations, and observability
+## Overload, Operations, and Observability
 
 Search nodes share CPU, memory, filesystem cache, and device bandwidth among queries, indexing, recovery, and merges. Static thread pools do not provide isolation if every pool drives the same saturated device. Define admission budgets for foreground queries, background indexing, recovery transfer, and merge I/O. When pressure rises, slow indexing, pause optional merges, reject expensive query shapes, or shed low-priority traffic before the node begins timing out everything.
 
@@ -194,7 +196,7 @@ Observe distributions and backlog age, partitioned by index, shard, replica role
 
 Runbooks should cover a full disk during merge, lost primary, corrupt segment, stuck allocation, runaway expensive query, lagging projection, and rebuild/cutover. Practice them with production-sized snapshots; a recovery procedure tested only on tiny indexes says little about restore time.
 
-## Security and isolation
+## Security and Isolation
 
 Indexing is a write capability over a derived data product. Authenticate producers and bind them to specific index/schema versions. Validate document size, field count, nesting, token count, and malformed Unicode before resource-intensive analysis; otherwise one document can become a CPU or memory denial of service.
 
@@ -202,7 +204,7 @@ Search authorization has two safe shapes: route a request only to an index or pa
 
 Control-plane changes need authenticated authorship, review, an immutable audit trail, and staged rollout. A malicious analyzer, synonym set, or schema expansion can exfiltrate data or exhaust a fleet even without executable code.
 
-## Verification strategy
+## Verification Strategy
 
 Test invariants at several layers:
 
@@ -216,7 +218,7 @@ Test invariants at several layers:
 
 A green query test is not enough. The hard bugs live at lifecycle boundaries: acknowledgement versus durability, refresh versus commit, failover versus fencing, and publication versus reclamation.
 
-## Decision framework
+## Decision Framework
 
 Use a database secondary index when queries are narrow, transactionally coupled to the write, and supported by the database’s index types. Use a dedicated search projection when the workload needs linguistic analysis, broad retrieval, independent scaling, relevance ranking, or rebuildable denormalized documents.
 
@@ -242,3 +244,11 @@ The index data structure matters, but production correctness comes from the stat
 - [Jeffrey Dean and Sanjay Ghemawat: MapReduce: Simplified Data Processing on Large Clusters](https://research.google/pubs/mapreduce-simplified-data-processing-on-large-clusters/)
 - [Elasticsearch: Reading and Writing Documents](https://www.elastic.co/guide/en/elasticsearch/reference/current/docs-replication.html)
 - [Elasticsearch: Index and Shard Recovery](https://www.elastic.co/guide/en/elasticsearch/reference/current/recovery.html)
+
+---
+
+## Related Chapters
+
+- [Lexical Query Execution](02-full-text-search.md): the query plane that reads the segments this chapter maintains
+- [SSTables and Compaction](../03-storage-engines/03-sstables-compaction.md): immutable segments and merges are a compaction argument with a scorer attached
+- [Change Data Capture](../13-data-pipelines/04-change-data-capture.md): the feed that keeps a derived index in step with its authoritative table

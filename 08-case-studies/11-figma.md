@@ -1,5 +1,11 @@
 # Figma System Design
 
+## TL;DR
+
+Figma's documented architecture gets its simple merge algebra from a fenced central authority rather than a decentralized CRDT: one writer owns a document at a time, so concurrent edits converge property by property instead of every client reconciling against every other.
+
+Durability is a checkpoint plus an ordered journal whose snapshot declares its exact log boundary. That same single-writer key sets a per-document capacity ceiling, which is why this chapter separates documented facts from inference and labels its end-to-end topology a reference design.
+
 ## Scope and Evidence Contract
 
 Claims use three evidence labels:
@@ -116,7 +122,7 @@ The public design introduced:
 
 The proxy is not magic cross-shard SQL. A request that lacks a usable routing key may fan out, and a write requiring atomicity across shard homes is outside the simple model. See [Database Sharding](../06-scaling/03-database-sharding.md) and [Database Migrations](../15-deployment/03-database-migrations.md) for the reusable mechanics.
 
-## Reference Design: an Evidence-Bounded Synthesis
+## Reference Design: An Evidence-Bounded Synthesis
 
 The following is a **reference design**, not a documented current Figma topology:
 
@@ -219,7 +225,7 @@ The single-writer choice removes distributed write-write reconciliation for an o
 5. Sharding succeeds when transaction boundaries become routing boundaries; a proxy cannot manufacture cross-shard atomicity.
 6. Dated architecture is more useful than a timeless diagram: the sequence of bottlenecks explains why each mechanism existed.
 
-## Primary References
+## References
 
 - [WebAssembly cut Figma's load time by 3x (2017)](https://www.figma.com/blog/webassembly-cut-figmas-load-time-by-3x/)
 - [Rust in production at Figma (2018)](https://www.figma.com/blog/rust-in-production-at-figma/)
@@ -229,11 +235,12 @@ The single-writer choice removes distributed write-write reconciliation for an o
 - [How Figma scaled to multiple databases (2023)](https://www.figma.com/blog/how-figma-scaled-to-multiple-databases/)
 - [How Figma's databases team lived to tell the scale (2024)](https://www.figma.com/blog/how-figmas-databases-team-lived-to-tell-the-scale/)
 - [Figma rendering powered by WebGPU (2025, later evolution)](https://www.figma.com/blog/figma-rendering-powered-by-webgpu/)
+---
 
 ## Related Chapters
 
-- [Conflict Resolution](../02-distributed-databases/04-conflict-resolution.md)
-- [CRDTs and Collaborative Editing](../07-real-time/07-crdts-collaborative-editing.md)
-- [Database Sharding](../06-scaling/03-database-sharding.md)
-- [Cell-Based Architecture](../06-scaling/11-cell-based-architecture.md)
-- [Write-Ahead Logging](../03-storage-engines/04-write-ahead-logging.md)
+- [Conflict Resolution](../02-distributed-databases/04-conflict-resolution.md): the merge algebra differs because the authority model does, which is the whole comparison
+- [Collaborative Document Replication and CRDT Sync Engines](../07-real-time/07-crdts-collaborative-editing.md): the decentralized design Figma declined, and what a fenced authority buys back in exchange
+- [Database Sharding](../06-scaling/03-database-sharding.md): document-scoped routing is a sharding scheme whose hot key is one popular file
+- [Cell-Based Architecture and Shuffle Sharding](../06-scaling/11-cell-based-architecture.md): one writer per document composes with celling to keep a large file inside a single blast radius
+- [Write-Ahead Logging](../03-storage-engines/04-write-ahead-logging.md): operations append before apply, so crash recovery becomes log replay rather than state repair

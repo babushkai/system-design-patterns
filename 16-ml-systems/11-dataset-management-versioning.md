@@ -455,3 +455,12 @@ If the answer to any of these is no, model metrics may still exist, but they are
 6. [DVC Documentation](https://dvc.org/doc): data and model versioning concepts
 7. [Lakehouse and Open Table Formats](../13-data-pipelines/05-lakehouse-table-formats.md)
 8. [Apache Iceberg Snapshot Retention](https://iceberg.apache.org/docs/latest/maintenance/): expiration and reachability of snapshot files
+
+---
+
+## Related Chapters
+
+- [Lakehouse Table Formats](../13-data-pipelines/05-lakehouse-table-formats.md): snapshots, time travel, and rollback, which is what a dataset version needs anyway
+- [Offline Evaluation and Metric Design](12-offline-evaluation-metrics.md): an evaluation over an unversioned dataset is a story you cannot repeat
+- [Distributed Training Internals](15-distributed-training-internals.md): the input pipeline that must stream the same bytes twice, in order, quickly
+- [Object Storage Architecture and Commit Protocols](../03-storage-engines/08-object-storage.md): immutable objects plus manifests, which is where dataset versions physically live

@@ -1,12 +1,14 @@
 # Database Sharding
 
+## TL;DR
+
 Sharding is an application and operational contract, not the expression `hash(key) % N`. Once data lives on multiple independently operated database groups, every request needs authoritative placement, every cross-shard operation needs explicit semantics, and every capacity change becomes an online data migration.
 
 Sharding operations span directory and request routing, isolation, resharding, tenant moves, and safe cutover. [Partitioning Strategies](../02-distributed-databases/05-partitioning-strategies.md) covers range, hash, and consistent-hash mechanics; [Single-Leader Replication](../02-distributed-databases/01-single-leader-replication.md) covers replication within a shard.
 
 Evidence labels distinguish **Documented** claims backed by dated primary or official sources, **Inference** derived without asserting a private implementation, and unmarked **Reference design** guidance that is reusable rather than provider-attributed.
 
-## When sharding is justified
+## When Sharding Is Justified
 
 **Reference design.** Start with a workload envelope, not a shard count:
 
@@ -22,7 +24,7 @@ Shard only after a single replicated database group can no longer meet the envel
 
 **Documented, MongoDB 8.0 guidance.** MongoDB's sharding FAQ advises beginning unsharded when the dataset fits on one server. Its operational guidance also warns that adding a shard starts balancing work and that the existing cluster needs enough capacity for migration without harming production traffic. These are product-specific statements, but the capacity lesson generalizes. [MongoDB sharding FAQ](https://www.mongodb.com/docs/manual/faq/sharding/), [adding shards](https://www.mongodb.com/docs/manual/tutorial/add-shards-to-shard-cluster/)
 
-## Contract and invariants
+## Contract and Invariants
 
 **Reference design.** Define these objects independently:
 
@@ -69,7 +71,7 @@ Validation must cover record identity, values, tombstones, schema transformation
 
 Placement never bypasses authorization, quota, encryption, or residency policy. Moving a tenant changes location, not its security identity.
 
-## Data plane and control plane
+## Data Plane and Control Plane
 
 **Reference design.** Keep placement decisions off the normal database path while enforcing their result on that path:
 
@@ -93,7 +95,7 @@ The **data plane** resolves a routing unit, sends the request to its shard, supp
 
 **Documented, Stripe snapshot, June 2024.** Stripe described database proxies that route through a chunk metadata service, plus a Data Movement Platform for online shard splitting, consolidation, and engine/tenancy migration. At publication its DocDB platform served more than five million queries/s over 2,000+ shards. Those numbers are a dated system snapshot, not generic shard targets. [Stripe, DocDB Data Movement Platform](https://stripe.dev/blog/how-stripes-document-databases-supported-99.999-uptime-with-zero-downtime-data-migrations)
 
-## Placement directory and routing
+## Placement Directory and Routing
 
 **Reference design.** A placement record contains:
 
@@ -127,7 +129,7 @@ Fanout therefore worsens tail latency and multiplies work. Bound concurrency, de
 
 Global secondary indexes introduce their own authority and consistency contract; see [secondary indexes](../02-distributed-databases/06-secondary-indexes.md). Cross-shard atomicity belongs to [distributed transactions](../02-distributed-databases/07-distributed-transactions.md).
 
-## Choosing the routing unit
+## Choosing the Routing Unit
 
 The routing unit is more consequential than the hash function.
 
@@ -145,7 +147,7 @@ A typical logical key is `(tenant_id, entity_id)`: the tenant anchors locality a
 
 The mechanics of key distribution are intentionally not repeated here; use [partitioning strategies](../02-distributed-databases/05-partitioning-strategies.md).
 
-## Online resharding protocol
+## Online Resharding Protocol
 
 **Reference design.** Model resharding as a persisted, resumable state machine:
 
@@ -179,7 +181,7 @@ stateDiagram-v2
 
 **Documented, Vitess 25.0.** Vitess VReplication documents online, reversible `Reshard` and `MoveTables` workflows with traffic switching, reverse traffic, validation, and completion. Its cutover documentation refuses a switch when participating tablets cannot refresh topology state. This is one production-grade implementation of the state machine, not a mandatory product choice. [Vitess VReplication overview](https://vitess.io/docs/25.0/reference/vreplication/vreplication/), [Vitess cutover internals](https://vitess.io/docs/23.0/reference/vreplication/internal/cutover/)
 
-## Tenant moves and isolation changes
+## Tenant Moves and Isolation Changes
 
 **Reference design.** A tenant move is a resharding workflow whose routing unit is the tenant and whose policy may also change:
 
@@ -192,7 +194,7 @@ The directory record must bind tenant, location, encryption-key domain, residenc
 
 Large tenants may have external side effects (object blobs, search indexes, queues, analytics) that are not transactionally moved with the primary database. Treat them as derived systems with independent convergence and rollback plans. Do not switch the primary and assume every projection follows automatically.
 
-## Capacity and cost model
+## Capacity and Cost Model
 
 ### Shard count: illustrative assumptions
 
@@ -232,7 +234,7 @@ A 9 TiB unit copied at an effective 180 MiB/s with `a=0.15` and `d=0.7` needs at
 
 Migration cost includes source reads, target writes, WAL retention, replication, validation reads, network egress, temporary duplicate storage, and operator attention. Budget and rate-limit it separately from foreground traffic.
 
-## Specialized failure traces
+## Specialized Failure Traces
 
 ### Stale router during cutover
 
@@ -257,7 +259,7 @@ The safe design verifies source and target at the final watermark, retains the i
 
 A hot tenant is copied while foreground writes continue. Copy scans evict source cache; target apply lag grows; application retries amplify both. Per-migration I/O and concurrency budgets yield to foreground SLOs, and the controller pauses before either shard crosses its safe envelope. Resharding is subject to [backpressure](07-backpressure.md) and [retry budgets](10-retries-timeouts-hedging.md), not exempt maintenance traffic.
 
-## Overload and failure policy
+## Overload and Failure Policy
 
 Routers enforce per-tenant and per-shard admission. A saturated shard should reject early with retry metadata rather than allow connection pools and queues to exhaust across the fleet. Scatter/gather has a stricter cost budget than point routing. Migration workers use separate queues and cannot consume the last replica, I/O, or WAL headroom.
 
@@ -270,13 +272,13 @@ Directory failure modes are explicit:
 - **target unhealthy after switch:** forward-fix or reverse only with proven source currency;
 - **source loss during copy:** recover source replica or restart from a new consistent snapshot.
 
-## Multi-region sharding
+## Multi-Region Sharding
 
 **Reference design.** Separate placement from replication. A routing unit has one write home/epoch even if it has read replicas in several regions. Moving the home is a failover or tenant-mobility protocol requiring fencing and replication evidence, not a DNS update.
 
 The directory itself is globally replicated, but routers use regional snapshots. Do not require a cross-ocean consensus read for every database request. Regional capacity must satisfy evacuation scenarios, and residency constraints can restrict eligible targets. See [multi-region architecture](09-multi-region-architecture.md) and [cell-based architecture](11-cell-based-architecture.md).
 
-## Security and abuse boundaries
+## Security and Abuse Boundaries
 
 The routing key is untrusted input. Authenticate tenant identity independently and verify that request credentials are authorized for the resolved routing unit. Never accept a caller-supplied shard hostname. Routers use mutually authenticated connections to an allowlisted shard inventory and sign or integrity-check directory snapshots.
 
@@ -284,7 +286,7 @@ The directory reveals tenant placement and can become a high-value enumeration t
 
 During moves, temporary copies and change streams inherit the original classification, encryption, retention, and deletion obligations. Verify cryptographic erasure or physical cleanup after completion. See [multi-tenancy](12-multi-tenancy.md), [zero trust](../10-security/05-zero-trust-architecture.md), and [encryption](../10-security/06-encryption.md).
 
-## Observability and verification
+## Observability and Verification
 
 Operate the lifecycle, not only shard CPU:
 
@@ -303,7 +305,7 @@ Verification includes property tests that every key maps exactly once, router/sh
 
 The migration controller should be model-checked or systematically fault-injected around the fencing/switch states. “Happy-path copy completed” gives little confidence in the only seconds where two locations can contend for authority.
 
-## Migration from an unsharded database
+## Migration from an Unsharded Database
 
 **Reference design.** Introduce sharding without a flag day:
 
@@ -320,7 +322,7 @@ The migration controller should be model-checked or systematically fault-injecte
 
 This is an online [migration strategy](../15-deployment/06-migration-strategies.md), not merely a schema migration.
 
-## Design review questions
+## Design Review Questions
 
 1. Which measured single-shard limit requires sharding now?
 2. What is the routing unit, and can the largest unit move within the safety window?
@@ -333,7 +335,7 @@ This is an online [migration strategy](../15-deployment/06-migration-strategies.
 9. How are scatter queries and global indexes bounded?
 10. How do residency, encryption, retention, and deletion follow a tenant move?
 
-## Primary sources
+## References
 
 - [Adya et al., “Slicer: Auto-Sharding for Datacenter Applications,” OSDI 2016](https://www.usenix.org/system/files/conference/osdi16/osdi16-adya.pdf)
 - [Stripe Engineering, “How Stripe's document databases supported 99.999% uptime with zero-downtime data migrations,” 2024](https://stripe.dev/blog/how-stripes-document-databases-supported-99.999-uptime-with-zero-downtime-data-migrations)
@@ -341,3 +343,12 @@ This is an online [migration strategy](../15-deployment/06-migration-strategies.
 - [Vitess documentation, traffic cutover internals](https://vitess.io/docs/23.0/reference/vreplication/internal/cutover/)
 - [MongoDB 8.0 documentation, resharding a collection](https://www.mongodb.com/docs/v8.0/core/sharding-reshard-a-collection/)
 - [MongoDB documentation, adding shards and capacity considerations](https://www.mongodb.com/docs/manual/tutorial/add-shards-to-shard-cluster/)
+
+---
+
+## Related Chapters
+
+- [Partitioning Strategies](../02-distributed-databases/05-partitioning-strategies.md): the key space design that this operational playbook runs on top of
+- [Service and Platform Migration](../15-deployment/06-migration-strategies.md): resharding is a migration you cannot abort, with dual writes as the fallback
+- [Multi-Tenant Isolation and Tenant Lifecycle Architecture](12-multi-tenancy.md): a shard becomes a tenant boundary whether you planned it or inherited one
+- [Distributed Transactions](../02-distributed-databases/07-distributed-transactions.md): the queries that discover a join crossed a shard, usually one release too late

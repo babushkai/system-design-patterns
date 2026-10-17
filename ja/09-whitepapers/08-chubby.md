@@ -2,13 +2,6 @@
 
 > **注:** この記事は英語の原文を日本語に翻訳したものです。コードブロック、Mermaidダイアグラム、論文タイトル、システム名、技術用語は原文のまま保持しています。
 
-## 論文概要
-
-- **タイトル**: The Chubby Lock Service for Loosely-Coupled Distributed Systems
-- **著者**: Mike Burrows (Google)
-- **発表**: OSDI 2006
-- **背景**: Googleは信頼性の高い分散ロッキングと設定ストレージを必要としていました
-
 ## TL;DR
 
 Chubbyは分散ロックサービスで、以下を提供します：
@@ -16,6 +9,13 @@ Chubbyは分散ロックサービスで、以下を提供します：
 - 小さな設定ファイルのための**信頼性の高いストレージ**
 - Leader選択のための**プライマリ選出**サポート
 - Paxosレプリケーションによる**強い整合性**
+
+## 論文概要
+
+- **タイトル**: The Chubby Lock Service for Loosely-Coupled Distributed Systems
+- **著者**: Mike Burrows (Google)
+- **発表**: OSDI 2006
+- **背景**: Googleは信頼性の高い分散ロッキングと設定ストレージを必要としていました
 
 ## 課題
 
@@ -408,7 +408,6 @@ class LockManager:
 
         return seq.generation == lock.generation
 
-
 class Lock:
     """Lock state."""
 
@@ -519,7 +518,6 @@ class SessionManager:
 
         # Remove session
         del self.sessions[session.id]
-
 
 class GracePeriod:
     """
@@ -660,7 +658,6 @@ class ChubbyCache:
         for cached in self.cache.values():
             cached.valid = False
 
-
 class CacheConsistency:
     """
     Cache consistency via invalidation.
@@ -773,7 +770,6 @@ class PrimaryElection:
         )
 
         self.chubby.register_callback(handle, on_event)
-
 
 class ServiceRegistry:
     """

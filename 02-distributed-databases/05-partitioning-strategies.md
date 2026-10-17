@@ -1,10 +1,12 @@
 # Partitioning Strategies
 
+## TL;DR
+
 Partitioning maps one logical key space onto independently placeable units. The choice determines which requests are single-partition, which become distributed operations, where hot spots form, and how much state must move when capacity changes. A good partition function is therefore part of the data model and query contract, not a storage detail added after launch.
 
 Partitioning starts by defining **logical partition boundaries, key-to-partition routing, and replica-placement primitives**. [Database Sharding](../06-scaling/03-database-sharding.md) owns the application and operational workflow for introducing shards, moving live data, cutover, rollback, and organizational ownership. [Secondary Indexes](./06-secondary-indexes.md) owns index placement, while [Distributed Transactions](./07-distributed-transactions.md) owns atomic work that crosses the resulting boundaries.
 
-## Workload contract
+## Workload Contract
 
 Start with the operations, not with hash versus range. For every high-volume request, identify:
 
@@ -20,7 +22,7 @@ A partition key is successful when the important operations can name a small, bo
 
 The contract should state a fan-out budget. “Most requests are single-partition; reporting may scan all partitions” is actionable. “The database is sharded” says nothing about cost.
 
-## State and invariants
+## State and Invariants
 
 A production partitioned system needs more state than `hash(key) mod N`:
 
@@ -42,7 +44,7 @@ The central invariants are:
 
 Stable logical partitions separate two decisions: `key -> partition` and `partition -> machine`. This two-stage mapping lets operators move a bounded unit without changing every key's hash function and lets routing metadata name partitions rather than individual records.
 
-## Partitioning primitives
+## Partitioning Primitives
 
 ### Hash partitioning into fixed logical buckets
 
@@ -93,7 +95,7 @@ Many systems compose primitives:
 
 The first key components choose placement; later components choose order within the partition. A write stripe relieves one aggregate hot spot only by making reads fan out across the stripes. That is a deliberate exchange, not a free salting trick.
 
-## Routing and ownership changes
+## Routing and Ownership Changes
 
 ### Versioned routing
 
@@ -125,7 +127,7 @@ Partitioning determines the unit; placement chooses its replicas. A policy such 
 
 Placement also determines latency. Put the write authority near writers while ensuring the required acknowledgement set fits the durability policy. Moving a lease or leader without moving replicas changes latency but not storage placement; moving a replica changes data risk and network cost.
 
-## Failure traces
+## Failure Traces
 
 ### Stale router during a split
 
@@ -161,7 +163,7 @@ Placement validation must reason about shared risk, not host identity alone.
 
 If one branch latency has CDF `F(t)` and branches were independent, all 40 finish by `t` with probability `F(t)^40`. Real branches often share network and storage, making correlation worse than this model. Fan-out turns rare local tails into common request tails.
 
-## Capacity and cost model
+## Capacity and Cost Model
 
 Let `D` be logical data bytes, `Q` request rate, `P` logical partitions, and `N` machines. `D/P` and `Q/P` are only means. Capacity planning must use high-percentile and maximum partition bytes/QPS, plus the hottest individual key.
 
@@ -192,7 +194,7 @@ Choose `P` by balancing:
 
 There is no universal bucket count. Model the per-partition fixed cost from the actual engine and test the largest planned map.
 
-## Operations, migration, and testing
+## Operations, Migration, and Testing
 
 Monitor bytes, reads, writes, CPU, queue time, compaction/recovery work, and replica lag **per partition**, with maxima and skew coefficients, not only node averages. Also track routing-epoch misses, redirects, split duration, copy backlog, unavailable placement constraints, and time to restore the desired replica set.
 
@@ -200,7 +202,7 @@ Before changing a partition function, build an offline mapping diff: how many ke
 
 Property tests should prove range coverage with no gaps/overlaps, deterministic hash/rendezvous results across language implementations, replica diversity, and monotonic metadata epochs. Fault tests should pause old owners during cutover, lose map invalidations, duplicate copy-log entries, crash after metadata publication, and restore from every state-machine phase. Load tests need Zipfian keys and a single extreme hot key; uniform random traffic hides the failures partitioning is meant to manage.
 
-## Decision framework
+## Decision Framework
 
 1. Which request fields are known before routing, and how many partitions does each critical operation touch?
 2. Does order/range locality matter more than uniform placement?
@@ -211,7 +213,7 @@ Property tests should prove range coverage with no gaps/overlaps, deterministic 
 7. Do replica placements survive the named correlated failure while retaining quorum?
 8. Is operational online resharding mature enough for this logical scheme?
 
-## Primary references
+## References
 
 - [Karger et al., *Consistent Hashing and Random Trees* (STOC 1997)](https://www.akamai.com/site/en/documents/research-paper/consistent-hashing-and-random-trees-distributed-caching-protocols-for-relieving-hot-spots-on-the-world-wide-web.pdf)
 - [DeCandia et al., *Dynamo: Amazon's Highly Available Key-value Store* (SOSP 2007)](https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf)
@@ -219,3 +221,12 @@ Property tests should prove range coverage with no gaps/overlaps, deterministic 
 - [Curino et al., *Schism: a Workload-Driven Approach to Database Replication and Partitioning* (VLDB 2010)](https://www.vldb.org/pvldb/vol3/R76.pdf)
 - [Adya et al., *Slicer: Auto-Sharding for Datacenter Applications* (OSDI 2016)](https://www.usenix.org/system/files/conference/osdi16/osdi16-adya.pdf)
 - [Taft et al., *CockroachDB: The Resilient Geo-Distributed SQL Database* (SIGMOD 2020)](https://www.cockroachlabs.com/pdf/cockroachdb-the-resilient-geo-distributed-sql-database-sigmod-2020.pdf)
+---
+
+## Related Chapters
+
+- [Discord](../08-case-studies/08-discord.md): an announcement hotspot: one key whose write rate exceeds one partition's budget
+- [Google Maps](../08-case-studies/09-google-maps.md): partitioning by geography, where locality is both the optimization and the skew source
+- [Database Sharding](../06-scaling/03-database-sharding.md): the operational half: rebalancing, hot shards, and the migration you cannot abort
+- [Secondary Indexes in Distributed Databases](06-secondary-indexes.md): every secondary index is another partitioned dataset to keep in step with the first
+- [Capacity Planning and Back-of-the-Envelope Estimation](../01-foundations/10-capacity-planning.md): the arithmetic that says whether this key space can be split usefully at all

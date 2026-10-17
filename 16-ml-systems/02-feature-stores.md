@@ -425,3 +425,12 @@ The minimum health model spans the whole projection path: source-watermark lag, 
 4. [Tecton: What Is a Feature Store?](https://www.tecton.ai/blog/what-is-a-feature-store/): managed feature platform and materialization model
 5. [Hidden Technical Debt in Machine Learning Systems](https://proceedings.neurips.cc/paper_files/paper/2015/file/86df7dcfd896fcaf2674f757a2463eba-Paper.pdf): Sculley et al., 2015
 6. [Data Validation for Machine Learning](https://mlsys.org/Conferences/2019/doc/2019/167.pdf): Breck et al., 2019
+
+---
+
+## Related Chapters
+
+- [Change Data Capture](../13-data-pipelines/04-change-data-capture.md): the feed that keeps online features current, carrying its own lag budget
+- [Training Pipelines](05-training-pipelines.md): point-in-time correctness, where training data and serving silently diverge
+- [Model Serving](03-model-serving.md): the synchronous read path that turns a feature store into a latency dependency
+- [SLOs and Error-Budget Control](../11-observability/05-slos-error-budgets.md): a feature timeout is an availability decision disguised as a config value

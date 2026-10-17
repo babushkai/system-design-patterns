@@ -1,5 +1,11 @@
 # Attention Is All You Need: The Transformer
 
+## TL;DR
+
+Attention Is All You Need replaces recurrent state with self-attention, so every position in a sequence is reachable within a fixed number of hops and training parallelizes across the sequence. The price is quadratic attention work in sequence length.
+
+The analysis stays inside the 2017 evidence boundary of encoder-decoder machine translation at 41.0 BLEU for the large English-French model, and separates later assumptions such as decoder-only language models, KV-cache serving, and FlashAttention from what the paper claims.
+
 ## Publication Boundary
 
 - **Paper:** *Attention Is All You Need*
@@ -251,14 +257,15 @@ These systems consequences are covered in [LLM Inference Platforms](../08-case-s
 5. A successful primitive creates new systems bottlenecks; quadratic attention and later KV state became an infrastructure workload.
 6. Separate the original evidence from later influence to avoid rewriting history through today's architecture.
 
-## Primary Reference
+## References
 
 - [Attention Is All You Need (NIPS 2017 proceedings PDF)](https://papers.neurips.cc/paper/2017/file/3f5ee243547dee91fbd053c1c4a845aa-Paper.pdf)
+---
 
 ## Related Chapters
 
-- [LLM Inference Platforms](../08-case-studies/13-llm-inference-platforms.md)
-- [LLM Infrastructure](../17-llm-systems/05-llm-infrastructure.md)
-- [Context Management](../17-llm-systems/08-context-management.md)
-- [GPU Inference Internals](../17-llm-systems/11-gpu-inference-internals.md)
-- [FinOps and Cost Engineering](../11-observability/06-finops-cost-engineering.md)
+- [LLM Inference Platforms](../08-case-studies/13-llm-inference-platforms.md): the quadratic cost this paper accepts is what serving platforms spend their design budget avoiding
+- [LLM Infrastructure](../17-llm-systems/05-llm-infrastructure.md): what a fleet of these models needs operationally once the arithmetic becomes a capacity plan
+- [Context Management](../17-llm-systems/08-context-management.md): context length is this paper quadratic term returning as a product constraint and an invoice
+- [GPU Inference Internals](../17-llm-systems/11-gpu-inference-internals.md): attention memory traffic is why inference is bandwidth-bound rather than FLOP-bound in practice
+- [FinOps and Cost Engineering](../11-observability/06-finops-cost-engineering.md): quadratic scaling reappears as a cost curve that someone must defend in a design review

@@ -937,7 +937,7 @@ Attempt 3: Opus → deep analysis, high-confidence solution
 
 ---
 
-## References
+## 参考文献
 
 1. [Every.to - Compound Engineering: How Every Codes With Agents](https://every.to/chain-of-thought/compound-engineering-how-every-codes-with-agents), 2026
 2. [Anthropic - Effective Harnesses for Long-Running Agents](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents), 2026

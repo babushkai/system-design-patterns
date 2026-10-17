@@ -637,3 +637,12 @@ A plan that cannot answer these is not capacity planning; it is hoping the cloud
 7. [Distributed Training Internals](./15-distributed-training-internals.md)
 8. [Roofline: An Insightful Visual Performance Model for Multicore Architectures](https://dl.acm.org/doi/10.1145/1498765.1498785): Williams, Waterman & Patterson, 2009
 9. [Autopilot: Workload Autoscaling at Google](https://research.google/pubs/autopilot-workload-autoscaling-at-google/): Rzadca et al., 2020
+
+---
+
+## Related Chapters
+
+- [Capacity Planning and Back-of-the-Envelope Estimation](../01-foundations/10-capacity-planning.md): the general method with accelerator economics replacing CPU arithmetic
+- [Model Serving](03-model-serving.md): batch size and replica count are one decision taken in two places
+- [Distributed Training Internals](15-distributed-training-internals.md): training capacity is a job queue of rare hardware with long restarts
+- [FinOps and Cost Engineering](../11-observability/06-finops-cost-engineering.md): allocating shared accelerators, where utilization is real but not attributable

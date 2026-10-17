@@ -2,7 +2,7 @@
 
 > この記事は英語版から翻訳されました。最新版は[英語版](/01-foundations/03-cap-theorem)をご覧ください。
 
-## 要約（TL;DR）
+## TL;DR
 
 CAP定理は、分散システムが同時に保証できるのは整合性（Consistency）、可用性（Availability）、分断耐性（Partition tolerance）の3つのうち最大2つまでであると述べています。しかし、この表現は誤解を招きます。ネットワーク分断は選択肢ではなく、分散システムにおける事実です。真のエンジニアリング上の問題は、分断が**発生している間**にシステムがどう振る舞うか（CとAのどちらを優先するか）と、**正常時**にどのようなトレードオフを行うか（PACELC：レイテンシ vs 整合性）です。すべてのシステムはスペクトラム上に位置しており、バケットに入るものではありません。
 
@@ -698,7 +698,7 @@ SpannerのTrueTimeは、すべてのデータセンターにGPS +原子時計ハ
 
 ---
 
-## さらなる読み物
+## 参考文献
 
 - Gilbert & Lynch, "Brewer's Conjecture and the Feasibility of Consistent, Available, Partition-Tolerant Web Services" (2002) ── 形式的証明。
 - Brewer, "CAP Twelve Years Later: How the 'Rules' Have Changed" (2012) ── 「2つ選べ」の誤解を正すBrewer自身の回顧。

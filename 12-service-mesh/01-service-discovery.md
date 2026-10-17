@@ -550,3 +550,12 @@ Ask in this order:
 - [DNS and Connection Management](../06-scaling/13-dns-and-connection-management.md): DNS cache layers, rebinding, and connection lifetime
 - [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md): retry budgets and deadline propagation
 - [Multi-Region Architecture](../06-scaling/09-multi-region-architecture.md): regional routing, data placement, and failover
+
+---
+
+## Related Chapters
+
+- [Load Balancing](../06-scaling/01-load-balancing.md): a registry only matters once something selects from it and learns when to stop
+- [Service Mesh Data and Control Planes](03-sidecar-pattern.md): the consumer half of this control plane, resolving names in another process
+- [DNS and Connection Management](../06-scaling/13-dns-and-connection-management.md): discovery through the one client that refuses configuration: a long-lived resolver
+- [Cell-Based Architecture and Shuffle Sharding](../06-scaling/11-cell-based-architecture.md): routing has to respect the cell, which makes discovery a correctness dependency

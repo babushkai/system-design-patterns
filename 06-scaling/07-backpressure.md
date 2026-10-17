@@ -425,7 +425,7 @@ If the producer cannot slow, work cannot be rejected, loss is forbidden, and sto
 
 ---
 
-## Primary References
+## References
 
 - Reactive Streams, [Specification](https://www.reactive-streams.org/).
 - IETF, [RFC 9293: Transmission Control Protocol](https://www.rfc-editor.org/rfc/rfc9293.html), including receive-window flow control.
@@ -434,3 +434,12 @@ If the producer cannot slow, work cannot be rejected, loss is forbidden, and sto
 - Google SRE, [Addressing Cascading Failures](https://sre.google/sre-book/addressing-cascading-failures/).
 - Apache Kafka, [Consumer Configuration](https://kafka.apache.org/documentation/#consumerconfigs) and [Design](https://kafka.apache.org/documentation/#design).
 - Apache Flink, [Monitoring Back Pressure](https://nightlies.apache.org/flink/flink-docs-stable/docs/ops/monitoring/back_pressure/).
+
+---
+
+## Related Chapters
+
+- [Message Queue Architecture](../05-messaging/01-message-queues.md): a queue is a buffer with an opinion, and this is what happens when it fills
+- [Rate Limiting](05-rate-limiting.md): the same decision moved to the edge, where a client can be told to slow down
+- [Network Transport Internals](14-network-transport-internals.md): flow control with a standard attached: windows, congestion control, and head-of-line blocking
+- [Stream Execution](../13-data-pipelines/02-stream-processing.md): backpressure in a pipeline that also has to be correct across restarts

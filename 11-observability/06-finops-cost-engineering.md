@@ -635,3 +635,12 @@ Use double-entry-style reconciliation properties: every published allocated amou
 - [Multi-Tenancy](../06-scaling/12-multi-tenancy.md): tenant isolation, metering, quotas, and noisy-neighbor boundaries
 - [SLOs and Error-Budget Control](./05-slos-error-budgets.md): reliability constraints and policy
 - [ML Capacity and Cost Planning](../16-ml-systems/14-ml-capacity-cost-planning.md): accelerator-specific capacity and model-serving unit economics
+
+---
+
+## Related Chapters
+
+- [Capacity Planning and Back-of-the-Envelope Estimation](../01-foundations/10-capacity-planning.md): the same arithmetic reviewed monthly instead of once a quarter, with an owner attached
+- [Metrics Systems and Monitoring](02-metrics-monitoring.md): the metric that makes a cost spike visible before the invoice does
+- [Multi-Tenant Isolation and Tenant Lifecycle Architecture](../06-scaling/12-multi-tenancy.md): cost allocation is a tenancy feature, and without it every tenant blames the platform
+- [ML Capacity and Cost Planning](../16-ml-systems/14-ml-capacity-cost-planning.md): accelerators bend the cost curve, where idle capacity is brutal and memory caps utilization

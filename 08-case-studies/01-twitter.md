@@ -1,5 +1,7 @@
 # Twitter/X Timelines: Evidence, Inference, and Reference Design
 
+## TL;DR
+
 A small durable Tweet can trigger graph expansion, indexing, ranking, notification, and analytics work. To keep that lesson from becoming folklore, claims use three labels:
 
 - **Documented** means a dated Twitter/X engineering source or paper states the behavior.
@@ -311,7 +313,7 @@ Test these with skewed follower graphs and viral bursts, not uniform random traf
 6. Keep control-plane failure from invalidating known-good data-plane routing.
 7. Cite dated public architecture as evidence and label the remainder as inference or reference design.
 
-## Primary Sources
+## References
 
 - Twitter Engineering, [“Announcing Snowflake”](https://blog.x.com/engineering/en_us/a/2010/announcing-snowflake.html), June 2010.
 - Busch et al., Twitter, [“Earlybird: Real-Time Search at Twitter”](https://cs.uwaterloo.ca/~jimmylin/publications/Busch_etal_ICDE2012.pdf), ICDE 2012.
@@ -320,3 +322,12 @@ Test these with skewed follower graphs and viral bursts, not uniform random traf
 - Twitter Engineering, [“Processing billions of events in real time at Twitter”](https://blog.x.com/engineering/en_us/topics/infrastructure/2021/processing-billions-of-events-in-real-time-at-twitter-), October 2021.
 - Twitter Engineering, [“Adopting RocksDB within Manhattan”](https://blog.x.com/engineering/en_us/topics/infrastructure/2021/adopting-rocksdb-within-manhattan), April 2021.
 - Twitter, [Home Mixer README in the public recommendation repository](https://github.com/twitter/the-algorithm/blob/main/home-mixer/README.md), public repository released in 2023.
+
+---
+
+## Related Chapters
+
+- [Partitioning Strategies](../02-distributed-databases/05-partitioning-strategies.md): fan-out on write is a partitioning decision wearing a product name
+- [Backpressure](../06-scaling/07-backpressure.md): a viral account is a hot key, and fan-out is where it surfaces first
+- [Transactional Outbox, Inbox, and CDC Publication](../05-messaging/07-outbox-pattern.md): the delivery promise behind everyone-who-follows-you-sees-this
+- [Online Experiments](../16-ml-systems/08-online-experiments.md): how a ranking change gets judged at this scale, which is where most of the risk sits

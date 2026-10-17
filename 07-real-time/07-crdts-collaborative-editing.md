@@ -517,3 +517,11 @@ Choose the least complex protocol that meets the offline and conflict contract. 
 - [Yjs documentation](https://docs.yjs.dev/) and [Automerge documentation](https://automerge.org/docs/): production sequence/document CRDT libraries and sync formats
 - [How Figma's multiplayer technology works](https://www.figma.com/blog/how-figmas-multiplayer-technology-works/): documented server-authoritative property synchronization trade-off
 - [Local-first software: You own your data, in spite of the cloud](https://www.inkandswitch.com/local-first/): local-first product and architecture principles
+---
+
+## Related Chapters
+
+- [Figma System Design](../08-case-studies/11-figma.md): multiplayer editing where the document is a scene graph and cursors are part of the state
+- [Message Ordering](../05-messaging/03-message-ordering.md): the ordering guarantee you did or did not get, and what convergence does about it
+- [Conflict Resolution](../02-distributed-databases/04-conflict-resolution.md): the same problem stated as convergence over a shared log
+- [Client Delivery Transports](01-polling.md): the transport carrying the deltas, with its reconnect and gap semantics

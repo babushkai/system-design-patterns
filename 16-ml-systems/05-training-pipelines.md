@@ -523,3 +523,12 @@ Finally prove recovery with fault injection: kill a worker during output upload,
 7. [Metaflow: A Human-Centric Framework for Data Science](https://netflixtechblog.com/open-sourcing-metaflow-a-human-centric-framework-for-data-science-fa72e04a5d9): Netflix, 2019
 8. [ML Metadata: A Standard for ML Artifact Lineage](https://www.tensorflow.org/tfx/guide/mlmd)
 9. [Kubeflow Pipelines v2 Documentation](https://www.kubeflow.org/docs/components/pipelines/v2/)
+
+---
+
+## Related Chapters
+
+- [DAG Orchestration](../18-workflow-job-systems/05-dag-orchestration.md): a training run is a DAG whose steps are expensive and only partly durable
+- [Dataset Management and Versioning](11-dataset-management-versioning.md): reproducibility starts with an immutable dataset version, not with a seed
+- [Model Registry and ML Metadata](13-model-registry-metadata.md): the lineage record that makes a promoted model auditable months later
+- [Idempotency and Operation Identity](../01-foundations/08-idempotency.md): a retried stage has to produce the same artifact, which rules out implicit state

@@ -420,3 +420,12 @@ For each deployment, write down:
 - Diego Ongaro and John Ousterhout, [*In Search of an Understandable Consensus Algorithm*](https://raft.github.io/raft.pdf), USENIX ATC, 2014.
 - Barbara Liskov and James Cowling, [*Viewstamped Replication Revisited*](https://pmg.csail.mit.edu/papers/vr-revisited.pdf), 2012.
 - M. R. Eltabakh et al., [*Zephyr: Live Migration in Shared Nothing Databases for Elastic Cloud Platforms*](https://www.cs.purdue.edu/homes/csjgwang/pubs/SIGMOD2011_Zephyr.pdf), SIGMOD, 2011.
+
+---
+
+## Related Chapters
+
+- [Multi-Leader Replication](02-multi-leader-replication.md): what breaks when a second write authority is a feature rather than an accident
+- [Consensus Algorithms](08-consensus-algorithms.md): the protocol that decides which single leader is the real one
+- [Write-Ahead Logging](../03-storage-engines/04-write-ahead-logging.md): the log being replicated, and what it means for a replica to be caught up
+- [Database Sharding](../06-scaling/03-database-sharding.md): the other axis of scale: many leaders over disjoint keys instead of one over all

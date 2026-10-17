@@ -1,8 +1,10 @@
 # Chubby (OSDI 2006): Evidence-First Paper Analysis
 
+## TL;DR
+
 Chubby is a paper about packaging consensus into an operable coordination service. Google chose a file-and-lock interface, coarse-grained advisory locks, sessions, caching, and sequencers so application teams did not each need to implement Paxos. Its surprise was that reliable naming and configuration became more popular than locks.
 
-## Publication identity and scope
+## Publication Identity and Scope
 
 - **Paper:** *The Chubby Lock Service for Loosely-Coupled Distributed Systems*
 - **Author:** Mike Burrows, Google
@@ -13,7 +15,7 @@ The paper does not fully publish Google's Paxos implementation, and Chubby is no
 
 This chapter examines the paper's lease, cache, and fencing behavior; [Distributed Locks](../01-foundations/09-distributed-locks.md) and [Leader Election](../02-distributed-databases/09-leader-election.md) cover the general patterns.
 
-## Why a lock service instead of a consensus library
+## Why a Lock Service Instead of a Consensus Library
 
 Google systems repeatedly needed to elect a primary, advertise its location, and store small authoritative metadata. A correct consensus library would still force every application to design replicated state, membership, recovery, and an API. Chubby centralizes that expertise.
 
@@ -21,7 +23,7 @@ The service chooses familiar file-system-like names because they are easy to ins
 
 The intended lock duration is minutes or hours, not milliseconds. Clients cache file data and handles; high-frequency data operations stay in the application system. This workload boundary is what lets one master serve many thousands of processes.
 
-## Cell architecture and replicated state
+## Cell Architecture and Replicated State
 
 A typical Chubby **cell** contains five replicas. They use Paxos to elect one master and replicate a database log. The master serves reads and writes; other replicas can become master after failure. A majority must remain available for the cell to process operations safely.
 
@@ -37,7 +39,7 @@ Key replicated state includes:
 
 The paper's interface deliberately omits many file-system semantics. There are no hard links, and operations are shaped around coordination rather than bulk file manipulation.
 
-## Sessions, leases, and cache coherence
+## Sessions, Leases, and Cache Coherence
 
 A client establishes a session with the master and maintains it using KeepAlive RPCs. The master promises the session remains valid for a lease interval; the client extends its local view using replies that arrive before its own conservative deadline. If communication is lost long enough, both sides eventually treat the session as expired, releasing ephemeral nodes and locks.
 
@@ -49,7 +51,7 @@ Clients cache file contents, metadata, open handles, and negative lookups. Cache
 
 Caching explains both scale and semantics: a stable configuration file can be read locally thousands of times while one KeepAlive stream maintains validity. The master load depends more on sessions and changes than on application read frequency.
 
-## Lock and naming workflows
+## Lock and Naming Workflows
 
 A primary-election pattern uses one well-known Chubby name:
 
@@ -63,7 +65,7 @@ The lock serializes primary identity; it does not replicate the application's da
 
 The paper found naming to be Chubby's most popular use. DNS time-to-live creates a tension between quick failover and query volume. Chubby's explicit invalidations let unchanged names remain cached without polling each name. A protocol-conversion service could expose Chubby-backed names through simpler interfaces.
 
-## Failure and recovery reasoning
+## Failure and Recovery Reasoning
 
 - **Master failure:** remaining replicas use Paxos to elect a new master. Clients discover the change during KeepAlive and rebuild master-specific session state.
 - **Minority replica failure:** a quorum continues; failed replicas are repaired or replaced.
@@ -74,7 +76,7 @@ The paper found naming to be Chubby's most popular use. DNS time-to-live creates
 
 Replica replacement is deliberately conservative. Chubby's configuration changes through a special mechanism because replacing several replicas too quickly can destroy the majority intersection on which safety depends.
 
-## Production evidence with units and caveats
+## Production Evidence With Units and Caveats
 
 Section 4 mixes a typical-cell snapshot with outage history. It is unusually useful because it reports uncomfortable results as well as scale.
 
@@ -98,7 +100,7 @@ Server mean request latency stayed well below 1 ms until overload. Client-observ
 
 The authors conclude that reducing master communication mattered more than micro-optimizing request handling. Proxies can aggregate KeepAlives by the number of clients behind them; cache sharing reduces reads less dramatically. Partitioning the namespace was designed but not then used in production. Planned mechanisms are not evaluation evidence.
 
-## Design errors and operational lessons
+## Design Errors and Operational Lessons
 
 The paper calls out several surprises:
 
@@ -110,7 +112,7 @@ The paper calls out several surprises:
 
 This is the paper's deeper lesson: a coordination protocol is only as reliable as its client library, overload behavior, operations, and fencing integration.
 
-## Assumptions and limitations
+## Assumptions and Limitations
 
 - A majority of replicas is required; Chubby favors consistency over partition-side availability.
 - One master per cell bounds write and session-processing capacity.
@@ -120,13 +122,13 @@ This is the paper's deeper lesson: a coordination protocol is only as reliable a
 - Paxos internals and complete proofs are not published in this paper.
 - Crash-fault replication does not protect against all software, operator, or correlated errors.
 
-## Later systems retained and changed
+## Later Systems Retained and Changed
 
 ZooKeeper later retained a small hierarchical namespace, sessions, ephemeral nodes, and notifications while exposing a different ordering and API model through the Zab protocol. Other coordination services use key/value revisions, watch streams, and lease-attached keys rather than Chubby's file handles and locks. The family resemblance is useful, but their fencing, read consistency, membership, and watch guarantees differ.
 
 The part worth carrying forward is not the pathname syntax. It is the separation between a small, strongly coordinated control plane and a large application data plane, plus explicit session and fencing semantics.
 
-## Design review questions
+## Design Review Questions
 
 1. Is the protected operation coarse enough that a coordination-service round trip is appropriate?
 2. What resource validates a monotonically increasing fencing token?
@@ -136,8 +138,16 @@ The part worth carrying forward is not the pathname syntax. It is the separation
 6. How are membership changes sequenced without losing quorum intersection?
 7. Do tests cover restoration, corruption detection, client-library behavior, and operator-error scenarios in addition to replica crashes?
 
-## Primary sources
+## References
 
 - [Burrows, *The Chubby Lock Service for Loosely-Coupled Distributed Systems* (OSDI 2006), official Google PDF](https://research.google.com/archive/chubby-osdi06.pdf)
 - [Google Research publication record and HTML paper](https://research.google/pubs/the-chubby-lock-service-for-loosely-coupled-distributed-systems/)
 - [Hunt et al., *ZooKeeper: Wait-free coordination for Internet-scale systems* (USENIX ATC 2010)](https://www.usenix.org/legacy/event/atc10/tech/full_papers/Hunt.pdf)
+
+---
+
+## Related Chapters
+
+- [Distributed Locks and Leases](../01-foundations/09-distributed-locks.md): the lock and lease semantics later designs still compare themselves against
+- [Leases, Heartbeats, and Recovery](../18-workflow-job-systems/08-leases-heartbeats-recovery.md): sessions, leases, and stale-owner rejection in a workflow runtime
+- [Raft](07-raft.md): the consensus paper that arrived later with implementability as the goal

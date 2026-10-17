@@ -356,7 +356,7 @@ Select the weakest coordination that still satisfies the entitlement and error c
 
 ---
 
-## Primary References
+## References
 
 - IETF, [RFC 1363: A Proposed Flow Specification](https://www.rfc-editor.org/rfc/rfc1363.html), for the token-bucket interval bound.
 - IETF, [RFC 2697: A Single Rate Three Color Marker](https://www.rfc-editor.org/rfc/rfc2697.html).
@@ -365,3 +365,12 @@ Select the weakest coordination that still satisfies the entitlement and error c
 - Envoy, [Local Rate Limiting](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/other_features/local_rate_limiting).
 - Google SRE, [Handling Overload](https://sre.google/sre-book/handling-overload/).
 - Google SRE, [Addressing Cascading Failures](https://sre.google/sre-book/addressing-cascading-failures/).
+
+---
+
+## Related Chapters
+
+- [Backpressure](07-backpressure.md): admission at the edge and flow control inside the system are the same argument twice
+- [Edge Gateway and API Mediation](../12-service-mesh/02-api-gateway.md): where the limit actually gets enforced, and who pays for the state it needs
+- [Priority, Fairness, and Backpressure](../18-workflow-job-systems/07-priority-fairness-backpressure.md): the same budgets applied to work that is already queued instead of still arriving
+- [API Threat Boundaries and Abuse Resistance](../10-security/04-api-security.md): a limit is also an authorization question: whose traffic, counted against which identity

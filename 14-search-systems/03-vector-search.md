@@ -1,10 +1,12 @@
 # Vector Retrieval Systems
 
+## TL;DR
+
 Vector retrieval searches a learned geometric representation rather than a term vocabulary. The embedding model, preprocessing, distance function, index build, metadata snapshot, deletion state, and query path jointly define the neighborhood; changing any one can change results without changing the API.
 
 Dense retrieval covers vector generation, approximate-nearest-neighbor (ANN) structures, filtered ANN, sharding, recall/latency/cost trade-offs, and embedding/index migration. [Lexical Query Execution](02-full-text-search.md) covers lexical retrieval; [Ranking and Evaluation](04-ranking-algorithms.md) covers candidate fusion, learned reranking, and product-quality evaluation.
 
-## Workload and service contract
+## Workload and Service Contract
 
 Define the retrieval operation in terms a caller can verify:
 
@@ -35,7 +37,7 @@ Specify separate service objectives for query embedding latency, ANN search late
 
 The caller also needs exact semantics for filters and failure. Does `top_k=20` mean 20 authorized matches if they exist, or up to 20 after an approximate search? Is a timed-out shard omitted, retried, or fatal? Does a deleted object disappear immediately from retrieval, or within a freshness bound? These are API decisions.
 
-## State and invariants
+## State and Invariants
 
 A vector collection contains more than vectors:
 
@@ -61,7 +63,7 @@ Enforce these invariants:
 
 **Reproducible build.** The manifest records enough input checkpoints, artifact digests, seeds, and parameters to explain and rebuild an index. Approximate structures may differ physically under concurrency, but their lineage must not be mysterious.
 
-## Data plane and control plane
+## Data Plane and Control Plane
 
 The **data plane** consumes versioned source objects, batches inference, stores embeddings, updates or rebuilds ANN structures, applies tombstones, executes filtered searches, and returns candidates. Online query embedding is part of this path when callers send raw objects.
 
@@ -81,7 +83,7 @@ source commit
 
 Inference and indexing have independent retry semantics. Record a deterministic work identity such as `(space, object_id, source_version)`. A retry may recompute the vector, but only the greatest valid source version becomes live.
 
-## Exact search as oracle and fallback
+## Exact Search as Oracle and Fallback
 
 For `N` vectors of dimension `D`, exact dense search computes every distance, roughly proportional to `N * D`. It is simple, supports arbitrary post-hoc filters if the filtered set is known, and provides the ground truth used to measure ANN candidate recall. SIMD, accelerators, and batching can make exact search competitive for small collections or large offline batches.
 
@@ -89,7 +91,7 @@ Maintain an exact evaluation path over a representative sample even when product
 
 Distance choice is part of model training and serving. Cosine similarity on normalized vectors is equivalent in ordering to dot product; Euclidean distance is not interchangeable with either for arbitrary vectors. Normalize consistently and test it. An accidental query-only normalization changes neighborhoods while every request remains syntactically valid.
 
-## ANN index families
+## ANN Index Families
 
 ### Navigable proximity graphs
 
@@ -115,7 +117,7 @@ Disk-oriented graph designs keep a compact navigation representation in memory a
 
 Choose an ANN family from measured batch size, update rate, filter distribution, vector count and dimension, memory budget, local storage, target recall, and rebuild window. Corpus size alone is not a decision rule.
 
-## Filtered ANN is a query-planning problem
+## Filtered ANN Is a Query-Planning Problem
 
 A metadata filter can be applied in several places:
 
@@ -131,7 +133,7 @@ Estimate selectivity before choosing a path. Use filter-index cardinalities, per
 
 Authorization is not an ordinary optional filter. A system may traverse forbidden nodes internally if its isolation model allows it, but it must not expose their payloads, IDs, distances, counts, cache entries, or trace attributes. For strict tenant boundaries, physically separate indexes and encryption domains may be simpler to audit.
 
-## Sharding and distributed top-k
+## Sharding and Distributed Top-k
 
 Hash sharding balances vector counts and broadcasts each unconstrained query. Semantic partitioning routes to a subset of clusters but risks routing error: the true neighbor may live in a cell the router does not probe. Tenant partitioning narrows authorization and blast radius but inherits tenant skew. Time partitioning helps retention and freshness but makes historical queries fan out.
 
@@ -147,7 +149,7 @@ Distributed ANN compounds approximation:
 
 Measure recall at each boundary. A single end-to-end metric diagnoses little.
 
-## Embedding and index migration
+## Embedding and Index Migration
 
 An embedding-model update is a full data migration even when the output dimension stays constant. Use distinct immutable spaces, such as `catalog_title@7` and `catalog_title@8`:
 
@@ -164,7 +166,7 @@ Do not update vectors in place while serving the old model. A half-migrated spac
 
 Deletion must cover every active and rollback space. Privacy erasure workflows need a registry of derived locations plus proof of completion; retiring `v7` later cannot be the first time its forgotten vector is discovered.
 
-## Capacity and cost model
+## Capacity and Cost Model
 
 Use measurements from the actual vector and filter distributions. Consider an illustrative collection:
 
@@ -183,13 +185,13 @@ Broadcast traffic is `15,000 * 12 = 180,000` shard searches/s. At 1.1 ms mean me
 
 Embedding throughput must exceed updates plus backfill. If one inference worker sustains a measured 320 objects/s at the chosen batch/shape, steady updates need at least 10 fully utilized workers. At a safer 60% target utilization they need 16. A 120-million-object migration completed in seven days requires an additional average `120M / 604,800`, about 199 objects/s, plus retry and skew margin. The model shows whether migration is compute- or index-build-bound; benchmark both.
 
-## Concrete failure trace: mixed embedding spaces
+## Concrete Failure Trace: Mixed Embedding Spaces
 
 A team deploys model `v8`, which happens to emit the same 768 dimensions as `v7`. The online query service switches first, while 70% of stored vectors remain `v7`. The ANN API validates only dimension, so it accepts `v8` queries against a geometrically mixed graph. Latency and health checks remain green, but relevant-item recall collapses and differs by shard according to backfill progress.
 
 The containment action is to route queries back to the complete `v7` manifest. Repair builds `v8` as a separate physical generation, rejects cross-space writes at the storage boundary, and activates it only after reconciliation proves source-version coverage. Telemetry must attach embedding space to query, vector record, index generation, cache key, and trace; otherwise the incident looks like an unexplained relevance shift.
 
-## Operations, observability, and repair
+## Operations, Observability, and Repair
 
 Observe each embedding space and filter class separately:
 
@@ -207,7 +209,7 @@ Repair APIs should be first-class: re-embed one object/version, reconcile a part
 
 Autoscaling solely on QPS is weak because work varies with exploration parameters, filter selectivity, batch size, and cache state. Scale or admit from queue time, visited-node/page distributions, device and CPU saturation, and freshness backlog. Recovery and rebuild need explicit bandwidth budgets so they do not erase query headroom.
 
-## Security and privacy
+## Security and Privacy
 
 Embeddings can retain sensitive attributes and support inference or membership attacks; they are not anonymous merely because humans cannot read them directly. Apply source-equivalent access control, encryption, retention, residency, backup, and deletion policy. Minimize payloads used for embedding and record their provenance.
 
@@ -215,7 +217,7 @@ Authenticate model and codebook publication. Verify artifact digests and restric
 
 Cache keys include tenant, embedding-space version, normalized request/input digest, filter policy, and index generation where consistency requires it. A shared cache keyed only by query text is both semantically wrong and a data-isolation risk.
 
-## Verification strategy
+## Verification Strategy
 
 - **Contract tests** reject dimension-compatible but space-incompatible vectors and stale source versions.
 - **Oracle tests** compare ANN with exact search on stratified query sets, reporting recall by locale, tenant, filter selectivity, and freshness.
@@ -228,7 +230,7 @@ Cache keys include tenant, embedding-space version, normalized request/input dig
 
 The benchmark artifact must include the dataset/checkpoint, query sample, filter distribution, hardware, concurrency, build and search parameters, and exact oracle definition. A recall/latency point without those details is not portable evidence.
 
-## Decision framework
+## Decision Framework
 
 Use vector retrieval when semantic or multimodal similarity adds measurable candidate coverage that lexical and structured retrieval cannot provide. Do not add it solely because embeddings are available.
 
@@ -255,3 +257,11 @@ Approximation is safe when its error is measured, scoped, and reversible. Unvers
 - [FAISS Documentation](https://faiss.ai/)
 - [Apache Lucene: Vector Search](https://lucene.apache.org/core/10_1_0/core/org/apache/lucene/search/knn/package-summary.html)
 - [NIST AI Risk Management Framework](https://www.nist.gov/itl/ai-risk-management-framework)
+
+---
+
+## Related Chapters
+
+- [Retrieval-Augmented Generation Systems](../17-llm-systems/04-rag-patterns.md): retrieval quality is a property of the chunking and prompting around this index
+- [Ranking and Evaluation Systems](04-ranking-algorithms.md): candidates still need a ranking stage, an evaluation set, and a recall target
+- [Bloom Filters](../03-storage-engines/05-bloom-filters.md): the same trade: approximate answers bounded by memory instead of exactness

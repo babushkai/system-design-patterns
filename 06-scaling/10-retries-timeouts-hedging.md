@@ -116,7 +116,7 @@ Connection establishment often deserves a separate bound because failure and rem
 
 ---
 
-## 4. Timeout Does Not Mean Failure before Commit
+## 4. Timeout Does Not Mean Failure Before Commit
 
 Trace:
 
@@ -469,7 +469,7 @@ Retries buy another sample from the failure distribution. Hedge only when a seco
 
 ---
 
-## Primary References
+## References
 
 - Jeffrey Dean and Luiz André Barroso, [The Tail at Scale](https://research.google/pubs/the-tail-at-scale/).
 - AWS Builders’ Library, [Timeouts, Retries, and Backoff with Jitter](https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/).
@@ -477,3 +477,12 @@ Retries buy another sample from the failure distribution. Hedge only when a seco
 - gRPC, [A6: Client Retries](https://github.com/grpc/proposal/blob/master/A6-client-retries.md), including hedging, retry throttling, and server pushback.
 - Google SRE, [Addressing Cascading Failures](https://sre.google/sre-book/addressing-cascading-failures/).
 - Nathan Bronson et al., [Metastable Failures in Distributed Systems](https://sigops.org/s/conferences/hotos/2021/papers/hotos21-s11-bronson.pdf).
+
+---
+
+## Related Chapters
+
+- [Circuit Breakers](06-circuit-breakers.md): a retry budget is the difference between recovery pressure and a self-inflicted outage
+- [Idempotency and Operation Identity](../01-foundations/08-idempotency.md): retries and hedging are safe only when the effect can be recognized a second time
+- [Failure Semantics, Detection, and Recovery Boundaries](../01-foundations/06-failure-modes.md): a timeout turns an ambiguous outcome into load, which is why detection needs budgets
+- [Load Balancing](01-load-balancing.md): the retry picks a host, and a naive pick turns one bad host into an outage

@@ -1,10 +1,12 @@
 # Leader Election
 
+## TL;DR
+
 Leader election assigns temporary authority over a resource. The safety problem is not preventing two processes from ever *believing* they are leader: pauses and partitions make that impossible to guarantee from local state. The safety problem is ensuring that only the current generation can make accepted changes to the protected system.
 
 Safe leader election requires explicit **terms and leadership epochs, failure detection, leases, activation barriers, fencing tokens, failover, and operational handoff**. [Consensus Algorithms](./08-consensus-algorithms.md) owns replicated-log agreement and quorum safety. [Distributed Locks](../01-foundations/09-distributed-locks.md) owns the broader lock API and critical-section semantics. A consensus protocol may contain an election, but external work still needs the authority and fencing reasoning developed here.
 
-## Define the leadership contract
+## Define the Leadership Contract
 
 Leadership is always scoped:
 
@@ -28,7 +30,7 @@ For each resource, specify:
 
 “Only one pod runs the cron job” is not a safety contract. If the old pod pauses after charging a card and the new pod retries, the external effect needs its own idempotency or fencing boundary.
 
-## State and invariants
+## State and Invariants
 
 A robust election carries these durable or replicated fields:
 
@@ -51,7 +53,7 @@ The key invariants are:
 
 An epoch orders leadership, not application operations by itself. The storage engine, queue, or downstream service must compare it on the operation that matters.
 
-## Election mechanisms
+## Election Mechanisms
 
 ### Consensus-integrated election
 
@@ -83,7 +85,7 @@ Chubby combines sessions, leases, and **sequencers** so a protected service can 
 
 Bully and ring algorithms can choose a deterministic candidate in a reliable, fully connected environment. Without quorum or an external fencing authority, two network components can each choose a winner. They are membership/discovery algorithms, not a safe basis for correctness-critical leadership under partitions.
 
-## Fencing the old leader
+## Fencing the Old Leader
 
 Consider a lease grant returning generation 100 to A and the next grant returning 101 to B. Every state-changing request includes the generation:
 
@@ -110,7 +112,7 @@ If a third-party API cannot validate generations, alternatives are weaker or mor
 
 Killing the old process is an operational fence only if the kill authority and network isolation are themselves reliable. “The old leader should notice” is never a fence.
 
-## Activation, service, and handoff protocol
+## Activation, Service, and Handoff Protocol
 
 Election victory should begin a transition, not immediately enable writes.
 
@@ -132,7 +134,7 @@ On failed renewal, observed higher term, quorum loss, or explicit transfer, stop
 
 For maintenance, catch the target up first, stop or bound new work, transfer/elect a higher generation, establish its barrier, and only then demote the old leader. A transfer protocol can reduce downtime, but “zero gap” and “zero overlap” are different goals. Fencing makes a brief physical overlap safe; clients retry through a brief service gap.
 
-## Concrete failure traces
+## Concrete Failure Traces
 
 ### Process pause outlives its lease
 
@@ -176,7 +178,7 @@ Failure detection should be tuned from end-to-end heartbeat processing tails, no
 
 Predecessor watches, randomized campaign backoff, sharded election scopes, and admission control bound this control-plane burst.
 
-## Failover and capacity model
+## Failover and Capacity Model
 
 Failover time has separable components:
 
@@ -197,7 +199,7 @@ If a successor lags by `L` log bytes and effective catch-up bandwidth is `B`, ac
 
 Election timeouts must exceed normal end-to-end heartbeat delay, including leader scheduling, durable-log stalls if they share the event loop, follower scheduling, and network tails. Randomization should be wide enough to separate contenders under the measured distribution. Larger values improve stability and worsen detection latency; there is no topology-independent constant.
 
-## Production operation and migration
+## Production Operation and Migration
 
 Observe current leader and generation per resource, leadership duration, renewal margin, campaign attempts, vote rejection reasons, changes per hour, activation-stage duration, log/checkpoint lag at election, stale-token rejections, unfenced external calls, watch backlog, and client reroute time. Frequent successful elections are still an availability problem.
 
@@ -207,7 +209,7 @@ To add fencing to an existing service, first deploy resource-side token storage 
 
 Test process pauses longer than leases, clock steps and monotonic-clock behavior, asymmetric partitions, lost renew replies, duplicate grants after restore, old packets released after new activation, coordination-service overload, successor catch-up failure, and fencing at every external resource. Assert history properties: no accepted lower-generation operation after a higher generation at that resource.
 
-## Decision framework
+## Decision Framework
 
 1. What exact resource does one election govern, and can leadership be partitioned more finely?
 2. Which service serializes generations, and what failure model protects it?
@@ -218,10 +220,19 @@ Test process pauses longer than leases, clock steps and monotonic-clock behavior
 7. Can renewal/watch load survive a leader-loss herd without expiring healthy leases?
 8. How does restore or rolling upgrade preserve monotonic generations and identity?
 
-## Primary references
+## References
 
 - [Gray and Cheriton, *Leases: an Efficient Fault-Tolerant Mechanism for Distributed File Cache Consistency* (SOSP 1989)](https://web.stanford.edu/class/cs240/readings/leases.pdf)
 - [Chandra and Toueg, *Unreliable Failure Detectors for Reliable Distributed Systems* (JACM 1996)](https://www.cs.cornell.edu/courses/cs734/2000FA/cached%20papers/ct96.pdf)
 - [Burrows, *The Chubby Lock Service for Loosely-Coupled Distributed Systems* (OSDI 2006)](https://research.google.com/archive/chubby-osdi06.pdf)
 - [Hunt et al., *ZooKeeper: Wait-free Coordination for Internet-scale Systems* (USENIX ATC 2010)](https://www.usenix.org/legacy/event/atc10/tech/full_papers/Hunt.pdf)
 - [Ongaro and Ousterhout, *In Search of an Understandable Consensus Algorithm* (USENIX ATC 2014)](https://www.usenix.org/system/files/conference/atc14/atc14-paper-ongaro.pdf)
+
+---
+
+## Related Chapters
+
+- [Distributed Locks and Leases](../01-foundations/09-distributed-locks.md): one holder negotiated per operation instead of one holder elected once per term
+- [Raft](../09-whitepapers/07-raft.md): the election specified to be implementable, terms and quorums included
+- [Distributed Time](../01-foundations/05-distributed-time.md): timeouts and clock drift are most of the difficulty in deciding a leader is gone
+- [Leases, Heartbeats, and Recovery](../18-workflow-job-systems/08-leases-heartbeats-recovery.md): the same fencing problem from the side of the process that has to notice

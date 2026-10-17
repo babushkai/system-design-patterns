@@ -1,5 +1,11 @@
 # Workflow Observability and Replay
 
+## TL;DR
+
+Workflow operations must answer questions that request telemetry cannot: which facts are authoritative for a run, how fresh the derived view is, and whether history can still be reconstructed by the code version that produced it.
+
+The chapter separates canonical history from its projections, names six different operations sold as replay, and treats stuck detection, lineage, redaction, and history cardinality as one capacity and integrity problem.
+
 ## Operational Questions and Scope
 
 Workflow operations must answer questions that request telemetry cannot:
@@ -407,7 +413,7 @@ A workflow platform is operationally mature when an operator can explain one run
 
 ---
 
-## Primary Sources
+## References
 
 1. [Temporal History Service architecture](https://github.com/temporalio/temporal/blob/main/docs/architecture/history-service.md): official description of event history, mutable state, tasks, and reset branching.
 2. [Temporal Python SDK: Workflow Replay](https://github.com/temporalio/sdk-python#workflow-replay): official replay API and determinism guidance.
@@ -417,16 +423,12 @@ A workflow platform is operationally mature when an operator can explain one run
 
 ---
 
-## Related Patterns
+## Related Chapters
 
-- [Durable Execution and Workflow Engines](./04-durable-execution-workflow-engines.md)
-- [DAG Orchestration](./05-dag-orchestration.md)
-- [Retry, Idempotency, and Compensation](./06-retry-idempotency-compensation.md)
-- [Leases, Heartbeats, and Recovery](./08-leases-heartbeats-recovery.md)
-- [Background Jobs and Worker Pools](./02-background-jobs-worker-pools.md)
-- [Distributed Tracing and Telemetry Pipelines](../11-observability/01-distributed-tracing.md)
-- [Metrics and Monitoring](../11-observability/02-metrics-monitoring.md)
-- [Production Logging Architecture](../11-observability/03-logging.md)
-- [Alert Evaluation and Notification](../11-observability/04-alerting.md)
-- [Incident Command and Learning](../11-observability/07-incident-management.md)
-- [Disaster Recovery](../15-deployment/05-disaster-recovery.md)
+- [Durable Execution and Workflow Engines](04-durable-execution-workflow-engines.md): replay is only as good as the event history the engine promises to keep immutable and interpretable
+- [Effect Commit Protocols for Workflows](06-retry-idempotency-compensation.md): replaying a run re-opens the question of which steps are safe to execute twice
+- [Leases, Heartbeats, and Recovery](08-leases-heartbeats-recovery.md): a run that looks stuck is often an expired lease, so state and epoch belong in the same view
+- [Distributed Tracing and Telemetry Pipelines](../11-observability/01-distributed-tracing.md): run and step identifiers are trace identifiers, except history must outlive span retention
+- [Metrics Systems and Monitoring](../11-observability/02-metrics-monitoring.md): fleet freshness and lag look like queue metrics until the age of one run becomes the alert
+- [Incident Command and Learning](../11-observability/07-incident-management.md): replay is how a review proves what a run did instead of what the current code would do
+- [Disaster Recovery and Data Reconstruction](../15-deployment/05-disaster-recovery.md): restoring history helps only if the code version that interpreted it still exists

@@ -676,9 +676,19 @@ A useful alert detects cache miss growth **and** protected-origin stress, or a r
 - [ ] Readiness uses weighted valid coverage and projected origin work.
 - [ ] Deploy, reshard, flush, and region failover are exercised under load.
 
+## Key Takeaways
+
+1. **A stampede is a discovery race, not a load spike.** Many requests find the same missing or unusable entry before one protected refill completes, and a cold start is that race across many keys at once.
+2. **Bound recomputation per key against a measured budget.** The objective is live origin work below a safe rate with deadlines and fairness intact, which is why “restore hit rate quickly” is the wrong target.
+3. **Coalescing must be bounded end to end.** A lock that turns 10,000 duplicate queries into 10,000 synchronized polling requests only relocates the stampede, and local coalescing across 200 processes still elects 200 leaders per key, so a service-wide origin budget stays necessary.
+4. **Refills need version discipline.** Conditional fill by source version rejects an older rebuild such as version 11, and token-checked release stops a stale lease holder from deleting the refill that replaced it.
+5. **Serve stale inside two explicit deadlines.** Fresh before fresh_until, one leader refreshing while others read stale between fresh_until and stale_until, forbidden afterward, with generation times preserved across CDN, proxy, L2, and L1.
+6. **Spread election over time.** Probabilistic early recomputation uses the previous recomputation duration and a random factor so concurrent requests do not cross one fixed threshold together.
+7. **Warm with feedback and weight.** A fixed-rate warmer keeps issuing 5,000 queries per second through a traffic spike, and readiness is request-weighted valid coverage rather than keys present divided by keys planned, because a once-a-day object is not a 10,000 QPS object.
+
 ---
 
-## Primary References
+## References
 
 - [Optimal Probabilistic Cache Stampede Prevention, Vattani et al., PVLDB 2015](https://www.vldb.org/pvldb/vol8/p886-vattani.pdf)
 - [RFC 5861: stale-while-revalidate and stale-if-error](https://www.rfc-editor.org/rfc/rfc5861.html)
@@ -686,3 +696,12 @@ A useful alert detects cache miss growth **and** protected-origin stress, or a r
 - [Memcached Meta Text Protocol: serve stale and recache tokens](https://docs.memcached.org/protocols/meta/)
 - [Scaling Memcache at Facebook, NSDI 2013](https://www.usenix.org/conference/nsdi13/technical-sessions/presentation/nishtala)
 - [Redis pipelining](https://redis.io/docs/latest/develop/using-commands/pipelining/)
+---
+
+## Related Chapters
+
+- [Instagram](../08-case-studies/02-instagram.md): a cold rendition after viral media, where warming is a capacity event
+- [Rate Limiting](../06-scaling/05-rate-limiting.md): the same overload question seen from the client instead of the cache
+- [Cache Semantics and Economics](01-cache-strategies.md): the serving semantics that decide whether a miss is allowed to block
+- [Distributed Cache Internals](03-distributed-caching.md): where the dogpile actually forms: shared pools, key distribution, and eviction
+- [Backpressure](../06-scaling/07-backpressure.md): the same overload question with the cache as the bounded resource

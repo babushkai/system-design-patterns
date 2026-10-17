@@ -12,7 +12,7 @@ The Search section covers [index architecture](../14-search-systems/01-inverted-
 
 ---
 
-## Start with the Knowledge Contract
+## Start With the Knowledge Contract
 
 Before choosing an embedding model or database, specify what “knowledge” means for the product:
 
@@ -421,3 +421,12 @@ Do not select an embedding model from a generic leaderboard before building a re
 - [ColBERT: Efficient and Effective Passage Search via Contextualized Late Interaction](https://arxiv.org/abs/2004.12832): late-interaction retrieval
 - [Vector Retrieval Systems](../14-search-systems/03-vector-search.md) and [Ranking and Evaluation Systems](../14-search-systems/04-ranking-algorithms.md): canonical retrieval-engine internals and evaluation boundaries
 - [OWASP: LLM Prompt Injection Prevention Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/LLM_Prompt_Injection_Prevention_Cheat_Sheet.html): injection threats and structural mitigations
+
+---
+
+## Related Chapters
+
+- [Fine-Tuning Patterns](07-fine-tuning-patterns.md): mutable and permissioned facts belong in retrieval, not in weights
+- [Vector Retrieval Systems](../14-search-systems/03-vector-search.md): the retrieval side: ANN recall, filtered search, and embedding migration
+- [Context Management](08-context-management.md): retrieved chunks compete with history and tools for one bounded window
+- [Authorization at Scale](../10-security/07-authorization-patterns.md): a document that is invisible to a user must stay invisible to the model

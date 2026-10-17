@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import os
 import re
 import sys
 from pathlib import Path
@@ -65,6 +66,63 @@ DEEP_SYSTEM_REQUIRED_HEADINGS = [
     re.compile(r"^## Key Takeaways$", re.MULTILINE),
     re.compile(r"^## References$", re.MULTILINE),
 ]
+
+# Every chapter opens with the same scannable summary so readers (and the site's
+# excerpt/OG pipeline) can rely on the first section being the verdict, not a preamble.
+LEAD_SUMMARY_HEADING = "TL;DR"
+CANONICAL_REFERENCES_HEADINGS = {"references": "## References", "参考文献": "## 参考文献"}
+# Renamed variants kept the book reader-facing for a while; each of these once appeared
+# in published chapters, so they are rejected by name to stop the old spellings returning.
+STALE_REFERENCES_HEADINGS = {
+    "primary reference": "## References",
+    "primary references": "## References",
+    "primary source": "## References",
+    "primary sources": "## References",
+    "further reading": "## References",
+    "参考文献": "## 参考文献",
+    "参考資料": "## 参考文献",
+    "さらなる読み物": "## 参考文献",
+}
+EM_DASH = "\u2014"
+RELATED_CHAPTERS_HEADING = "## Related Chapters"
+# A chapter read in isolation is a dead end: the book is used as a reference, so every
+# page has to be both reachable from the rest of the book and able to send the reader
+# somewhere. Three outbound links is the smallest number that offers a real choice, and
+# one inbound edge is the smallest proof that a chapter was placed into the book rather
+# than appended to it.
+MIN_CHAPTER_OUTLINKS = 3
+# The closing section is a chapter's own contribution to that graph, so it is checked as
+# a contract instead of left to taste. Three is the smallest list that offers a real
+# choice; eight is where "read this next" turns into an index nobody finishes. Every
+# bullet carries the reason the edge exists: a bare link leaves the reader to guess which
+# of four neighboring chapters answers their question, which is how reading paths die.
+MAX_RELATED_LINKS = 8
+RELATED_BULLET_RE = re.compile(r"^- \[([^\]]+)\]\(([^)\s]+\.md)(?:#[^)]*)?\): (\S.+)$")
+RELATED_RATIONALE_CHARS = (20, 150)
+# A chapter is read for its mechanisms and remembered for its judgment, so the section a
+# reader reaches last has to convert the mechanisms into something they can carry into
+# their own design review. The role is checked rather than one exact name: a chapter about
+# migrations closes on choosing a strategy and a paper analysis closes on lessons that
+# transfer, and flattening both to "Key Takeaways" would lose the difference.
+SYNTHESIS_SECTION_ROLES = ("takeaway", "decision", "review", "lesson", "transfer", "choos")
+# A heading with no blank line after it renders as a heading in CommonMark but not in
+# every tool that consumes the book build, and it is what a careless heading rewrite
+# leaves behind.
+HEADING_RE = re.compile(r"^#{1,6} ")
+# Every chapter is read out of order, so the page outline is the reader's only map of a
+# chapter. Section names are therefore title case with minor words lowercase, and one name is
+# spelled one way across the book: two spellings of "Capacity and cost model" read as two
+# different sections in an outline and in site search. The rule only ever adds capitalisation,
+# so a deliberate lowercase word (a variable such as top-k, an acronym such as mTLS, a call
+# name such as fsync) still passes. English only: the Japanese mirror keeps its own headings.
+SECTION_CASE_MINOR_WORDS = frozenset(
+    "a an and as at but by for from in into nor of on or the to under up via versus vs plus per".split()
+)
+SECTION_CASE_ALWAYS_LOWER = frozenset({"fsync", "fdatasync", "etcd"})
+SECTION_CASE_CHUNK_RE = re.compile(r"[A-Za-z0-9'\u2019]+|[^\sA-Za-z0-9'\u2019]+|\s+")
+SECTION_CASE_WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9'\u2019]*")
+SECTION_CASE_BOUNDARY_RE = re.compile(r"[:\u2014\u2013]")
+SECTION_CASE_NUMBERING_RE = re.compile(r"^\d+\.\s*")
 
 
 def rel(path: Path) -> str:
@@ -305,6 +363,416 @@ def validate_unique_chapter_titles(errors: list[str]) -> None:
                 seen[title] = path
 
 
+def h2_headings(text: str) -> list[tuple[int, str]]:
+    """Return (lineno, heading text) for every H2 outside fenced code."""
+
+    headings: list[tuple[int, str]] = []
+    for lineno, line in enumerate(strip_fenced_code(text).splitlines(), start=1):
+        match = re.match(r"^##\s+(.+?)\s*$", line)
+        if match:
+            headings.append((lineno, match.group(1)))
+    return headings
+
+
+def validate_chapter_contract(errors: list[str]) -> None:
+    """Enforce the shared reader contract for every chapter in both languages.
+
+    Chapters are read out of order: most readers arrive from a search engine or an
+    internal link rather than from the previous page. Three properties make that
+    survivable, and each one used to be held together by convention alone. The first
+    section is the verdict so a reader can stop reading in ten seconds; references sit
+    under one predictable heading so evidence is always in the same place; and English
+    prose keeps one dash discipline so the book reads as a single author.
+
+    Japanese chapters are held to the lead-summary and heading-spelling rules but not
+    yet to having a references section, because parts of the mirror still predate the
+    English reference lists. Tighten that once the affected articles are re-translated.
+    """
+
+    for prefix in ("", "ja"):
+        canonical_key = "参考文献" if prefix else "references"
+        canonical = CANONICAL_REFERENCES_HEADINGS[canonical_key]
+
+        for relative in sorted(article_paths(prefix)):
+            path = ROOT / prefix / relative
+            headings = h2_headings(path.read_text(encoding="utf-8"))
+            if not headings:
+                errors.append(f"{rel(path)}: chapter has no H2 sections")
+                continue
+
+            first_lineno, first = headings[0]
+            if normalize_heading(first) != LEAD_SUMMARY_HEADING.casefold():
+                errors.append(
+                    f"{rel(path)}:{first_lineno}: the first H2 must be "
+                    + f"'## {LEAD_SUMMARY_HEADING}', found '## {first}'"
+                )
+
+            references: list[int] = []
+            for lineno, heading in headings:
+                key = normalize_heading(heading)
+                if key == canonical_key:
+                    references.append(lineno)
+                elif key in CANONICAL_REFERENCES_HEADINGS or (
+                    key in STALE_REFERENCES_HEADINGS
+                ):
+                    errors.append(
+                        f"{rel(path)}:{lineno}: references heading must be "
+                        + f"'{canonical}', found '## {heading}'"
+                    )
+
+            if len(references) > 1:
+                errors.append(
+                    f"{rel(path)}:{references[-1]}: duplicate '{canonical}' section "
+                    + f"(first at line {references[0]})"
+                )
+            elif not references and not prefix:
+                errors.append(f"{rel(path)}: missing '{canonical}' section")
+
+            # End matter has a fixed shape: evidence first, then the pointer to the next
+            # chapter. Reversed order makes readers scroll past navigation to reach the
+            # sources they came to check, and it breaks the "last section is a link out"
+            # affordance that the reading tracks in the README rely on.
+            related = [
+                lineno for lineno, heading in headings
+                if normalize_heading(heading) == "related chapters"
+            ]
+            if len(related) > 1:
+                errors.append(
+                    f"{rel(path)}:{related[-1]}: duplicate '{RELATED_CHAPTERS_HEADING}' "
+                    + f"section (first at line {related[0]})"
+                )
+            if references and related and min(related) < max(references):
+                errors.append(
+                    f"{rel(path)}:{min(related)}: '{RELATED_CHAPTERS_HEADING}' must come "
+                    + f"after '{canonical}'"
+                )
+
+
+def chapter_link_title(path: Path) -> str:
+    """Return the title that a link to this chapter should display.
+
+    Chapter H1s carry qualifiers after a colon, pipe, or parenthesis ("Spanner (OSDI
+    2012): Evidence-First Paper Analysis"), and those qualifiers belong on the page rather
+    than in every link pointing at it. Link text repeats the part before the qualifier so
+    it still matches the heading the reader lands on.
+    """
+
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("# "):
+            return re.split(r"\s*[:|(]", line[2:].strip(), maxsplit=1)[0].strip()
+    return ""
+
+
+def validate_related_chapters(errors: list[str]) -> None:
+    """Require every English chapter to end by handing the reader on with a reason.
+
+    Readers reach a chapter from a search result or one internal link and then choose what
+    to read next with only that page in front of them. The closing section is where the
+    choice gets made, so it has to say why a neighboring chapter is worth the next twenty
+    minutes: three edges with reasons beat an index of everything adjacent, and a rationale
+    is the only thing that separates a designed reading path from a keyword match. Keeping
+    the list short, deduplicated, and pointed at chapters rather than anchors is what makes
+    it readable instead of merely dense. At least one edge also has to leave the part: a
+    chapter whose every pointer lands next door teaches the reader that the book stops at
+    the directory boundary, which is exactly how a 160-chapter reference turns into 19
+    small ones.
+
+    Japanese chapters are exempt because the mirror has no Related Chapters sections yet.
+    That gap is a translation backlog, not a standard to hold new writing to, so remove
+    this exemption once the mirror carries the section.
+    """
+
+    chapters = {str(relative) for relative in article_paths()}
+    for relative in sorted(article_paths()):
+        path = ROOT / relative
+        text = strip_fenced_code(path.read_text(encoding="utf-8"))
+        lines = text.splitlines()
+        headings = h2_headings(text)
+        related = [
+            lineno
+            for lineno, title in headings
+            if normalize_heading(title) == "related chapters"
+        ]
+        if not related:
+            errors.append(f"{rel(path)}: missing '{RELATED_CHAPTERS_HEADING}' section")
+            continue
+
+        heading_lineno = related[0]
+        if headings[-1][0] != heading_lineno:
+            errors.append(
+                f"{rel(path)}:{heading_lineno}: '{RELATED_CHAPTERS_HEADING}' must be the "
+                + "last section, so the next chapter is what a reader reaches last"
+            )
+        separator = next(
+            (i for i in range(heading_lineno - 2, -1, -1) if lines[i].strip()), None
+        )
+        if separator is None or lines[separator].strip() != "---":
+            errors.append(
+                f"{rel(path)}:{heading_lineno}: '{RELATED_CHAPTERS_HEADING}' must be "
+                + "separated from the references by '---'"
+            )
+
+        end = next(
+            (i for i in range(heading_lineno, len(lines)) if HEADING_RE.match(lines[i])),
+            len(lines),
+        )
+        bullets = [line for line in lines[heading_lineno:end] if line.startswith("- ")]
+        if not MIN_CHAPTER_OUTLINKS <= len(bullets) <= MAX_RELATED_LINKS:
+            errors.append(
+                f"{rel(path)}:{heading_lineno}: '{RELATED_CHAPTERS_HEADING}' needs "
+                + f"{MIN_CHAPTER_OUTLINKS} to {MAX_RELATED_LINKS} links, found "
+                + f"{len(bullets)}"
+            )
+
+        seen: set[str] = set()
+        for offset, bullet in enumerate(bullets, start=1):
+            match = RELATED_BULLET_RE.match(bullet)
+            if not match:
+                errors.append(
+                    f"{rel(path)}:{heading_lineno}: related link must read "
+                    + "'- [Chapter title](path.md): why to read it', found "
+                    + f"'{bullet[:60]}'"
+                )
+                continue
+
+            title, target, rationale = match.groups()
+            resolved = os.path.relpath(
+                os.path.normpath(os.path.join(str(path.parent), unquote(target.split("#", 1)[0]))),
+                ROOT,
+            )
+            if resolved == str(relative):
+                errors.append(f"{rel(path)}: related link points at the chapter itself")
+            elif resolved in seen:
+                errors.append(f"{rel(path)}: duplicate related link to {resolved}")
+            elif resolved not in chapters:
+                errors.append(
+                    f"{rel(path)}: related link must target another chapter, found {target}"
+                )
+            else:
+                seen.add(resolved)
+                expected = chapter_link_title(ROOT / resolved)
+                if title != expected:
+                    errors.append(
+                        f"{rel(path)}:{heading_lineno}: related link text must match the "
+                        + f"target title, found '{title}' for {resolved}"
+                    )
+
+            low, high = RELATED_RATIONALE_CHARS
+            if not low <= len(rationale) <= high:
+                errors.append(
+                    f"{rel(path)}:{heading_lineno}: related link rationale must be "
+                    + f"{low} to {high} characters, found {len(rationale)} for {target}"
+                )
+            elif len(rationale.split()) < 3 or rationale.endswith("."):
+                errors.append(
+                    f"{rel(path)}:{heading_lineno}: related link rationale must state a "
+                    + f"relationship in a sentence fragment, found '{rationale[:60]}'"
+                )
+
+        own_part = str(relative).split(os.sep)[0]
+        if seen and all(resolved.split(os.sep)[0] == own_part for resolved in seen):
+            errors.append(
+                f"{rel(path)}:{heading_lineno}: every related link stays inside part "
+                + f"{own_part}; at least one edge should cross into another part, because a "
+                + "reader finished with this chapter is not finished with the book"
+            )
+
+
+def validate_chapter_synthesis_section(errors: list[str]) -> None:
+    """Require every English chapter to close its content on a synthesis section.
+
+    A chapter that ends on a mechanism leaves the reader holding parts with no instruction
+    on when to use them, and that is the difference between reference material and a book
+    someone prepares with. The closing section is where trade-offs get resolved into a
+    position: which option wins under which constraint, which question to ask about a system
+    the reader did not build, which lesson survives contact with another domain. Making it
+    the last thing before the sources means the judgment is what stays in memory, and it
+    gives an editor an obvious place to check that the chapter actually concluded something.
+
+    Japanese chapters are exempt for now because the mirror still carries sections whose
+    names predate this convention.
+    """
+
+    for relative in sorted(article_paths("")):
+        path = ROOT / relative
+        headings = h2_headings(strip_fenced_code(path.read_text(encoding="utf-8")))
+        references = [
+            index
+            for index, (_, heading) in enumerate(headings)
+            if normalize_heading(heading) == "references"
+        ]
+        if not references or len(headings[: references[0]]) < 2:
+            # Missing or misordered end matter is reported by validate_chapter_contract.
+            continue
+
+        lineno, heading = headings[references[0] - 1]
+        role = SECTION_CASE_NUMBERING_RE.sub("", normalize_heading(heading))
+        if not any(marker in role for marker in SYNTHESIS_SECTION_ROLES):
+            errors.append(
+                f"{rel(path)}:{lineno}: the section before '## References' must be a closing "
+                + "synthesis (takeaways, a decision framework, review questions, or lessons), "
+                + f"not the mechanism section '{heading}'"
+            )
+
+
+def validate_english_dash_style(errors: list[str]) -> None:
+    """Keep English prose on the en-dash-only style the book was written in.
+
+    The book has never used an em dash in English copy; ranges such as 1998-2004 use a
+    hyphen or an en dash instead. Enforcing it keeps newly written chapters consistent
+    rather than leaving the rule buried in contributor expectations.
+    """
+
+    for path in iter_markdown_files():
+        relative = path.relative_to(ROOT)
+        if relative.parts[0] == "ja":
+            continue
+        prose = strip_fenced_code(path.read_text(encoding="utf-8"))
+        for lineno, line in enumerate(prose.splitlines(), start=1):
+            if EM_DASH in line:
+                errors.append(
+                    f"{rel(path)}:{lineno}: English Markdown must not use an em dash; "
+                    + "rewrite with a comma, colon, or parentheses"
+                )
+
+
+def canonical_section_heading(value: str) -> str:
+    """Return the book casing for one English section heading.
+
+    Words are only ever raised to title case, never lowered, and a word that already carries
+    an internal capital is left alone. That keeps acronyms (BM25, mTLS), camel-case names
+    (FlashAttention), and single-letter variables (top-k) intact without a vocabulary.
+    """
+
+    parts: list[str] = []
+    force_capital = True
+    for chunk in SECTION_CASE_CHUNK_RE.finditer(value):
+        token = chunk.group(0)
+        if SECTION_CASE_WORD_RE.fullmatch(token):
+            lowered = token.lower()
+            keeps_case = (
+                not token[0].islower()
+                or any(character.isupper() for character in token[1:])
+                or len(token) == 1
+                or lowered in SECTION_CASE_ALWAYS_LOWER
+                or (not force_capital and lowered in SECTION_CASE_MINOR_WORDS)
+            )
+            parts.append(token if keeps_case else token[0].upper() + token[1:])
+            force_capital = False
+        else:
+            parts.append(token)
+            if SECTION_CASE_BOUNDARY_RE.search(token):
+                force_capital = True
+    return "".join(parts).strip()
+
+
+def validate_english_section_casing(errors: list[str]) -> None:
+    """Keep English section names on the one casing convention the book publishes.
+
+    Section headings are the outline readers scan when a chapter is longer than a screen,
+    which is most of them. When the same section name appears twice in the book under two
+    spellings, an outline that promises "Verification strategy" in one chapter and
+    "Verification Strategy" in another stops being a reliable index of what the book covers,
+    and neither spelling can be recommended to whoever writes the next chapter.
+    """
+
+    for path in iter_markdown_files():
+        if path.relative_to(ROOT).parts[0] == "ja":
+            continue
+        for lineno, heading in h2_headings(strip_fenced_code(path.read_text(encoding="utf-8"))):
+            body = SECTION_CASE_NUMBERING_RE.sub("", heading)
+            numbering = heading[: len(heading) - len(body)]
+            canonical = canonical_section_heading(body)
+            if canonical != body:
+                errors.append(
+                    f'{rel(path)}:{lineno}: section heading must read "{numbering}{canonical}", '
+                    + f'not "{heading}"'
+                )
+
+
+def validate_markdown_layout(errors: list[str]) -> None:
+    """Keep the Markdown layout and section names the book build depends on.
+
+    A heading needs a blank line under it: CommonMark tolerates its absence, Pandoc and
+    some editors do not, and a heading rewrite that deletes the line is otherwise
+    invisible in a diff. The related-chapters section is named in one place so readers
+    learn where to look for the next chapter instead of learning three synonyms. Only
+    chapters are in scope: the README contents block is generated, and its compact
+    part headings are deliberate.
+    """
+
+    for prefix in ("", "ja"):
+        for relative in sorted(article_paths(prefix)):
+            path = ROOT / prefix / relative
+            prose = strip_fenced_code(path.read_text(encoding="utf-8"))
+            lines = prose.splitlines()
+            for lineno, line in enumerate(lines, start=1):
+                if not HEADING_RE.match(line):
+                    continue
+                following = lines[lineno] if lineno < len(lines) else ""
+                if following.strip():
+                    errors.append(
+                        f"{rel(path)}:{lineno}: heading must be followed by a blank line"
+                    )
+                if line.startswith("## Related") and line.strip() != RELATED_CHAPTERS_HEADING:
+                    errors.append(
+                        f"{rel(path)}:{lineno}: related-reading section must be named "
+                        + f"'{RELATED_CHAPTERS_HEADING}', found '{line.strip()}'"
+                    )
+
+
+def chapter_link_graph() -> tuple[dict[str, set[str]], dict[str, set[str]]]:
+    """Return (outbound, inbound) chapter-to-chapter links keyed by part/file.md.
+
+    Only English chapters count, and only links that resolve to another chapter: the
+    graph is about the reading path through the book, so a citation to a paper or a link
+    into the README is not an edge. Image links are excluded for the same reason.
+    """
+
+    chapters = {}
+    for relative in sorted(article_paths()):
+        chapters[str(relative)] = ROOT / relative
+
+    outbound = {key: set() for key in chapters}
+    inbound = {key: set() for key in chapters}
+    for key, path in chapters.items():
+        for target in MARKDOWN_LINK_RE.findall(path.read_text(encoding="utf-8")):
+            target = unquote(target.split("#", 1)[0].split("?", 1)[0])
+            if not target.endswith(".md") or SCHEME_RE.match(target) or target.startswith("/"):
+                continue
+            resolved = os.path.relpath(
+                os.path.normpath(os.path.join(str(path.parent), target)), ROOT
+            )
+            if resolved in chapters and resolved != key:
+                outbound[key].add(resolved)
+                inbound[resolved].add(key)
+    return outbound, inbound
+
+
+def validate_reading_graph(errors: list[str]) -> None:
+    """Keep every chapter reachable, and keep every chapter able to continue the reading.
+
+    A chapter with no inbound edge is invisible in a book that is mostly read by
+    following links from a nearby topic, and one with almost no outbound edges strands a
+    reader who has finished it. Both states arrive the same way: a chapter is written as
+    a strong standalone piece and nobody wires it into its neighbours afterwards.
+    """
+
+    outbound, inbound = chapter_link_graph()
+    for key in sorted(outbound):
+        if len(outbound[key]) < MIN_CHAPTER_OUTLINKS:
+            errors.append(
+                f"{key}: links to {len(outbound[key])} other chapters; a chapter must "
+                + f"offer at least {MIN_CHAPTER_OUTLINKS}, normally in a "
+                + f"'{RELATED_CHAPTERS_HEADING}' section"
+            )
+        if not inbound[key]:
+            errors.append(
+                f"{key}: no other chapter links to it; add it to the nearest chapters' "
+                + f"'{RELATED_CHAPTERS_HEADING}' sections"
+            )
+
+
 def normalize_substantial_prose(value: str) -> str:
     """Normalize prose while preserving enough wording to avoid false matches."""
 
@@ -523,6 +991,13 @@ def main() -> int:
     validate_deep_system_chapters(errors)
     validate_unique_chapter_titles(errors)
     validate_unique_h2_headings(errors)
+    validate_english_section_casing(errors)
+    validate_chapter_contract(errors)
+    validate_related_chapters(errors)
+    validate_chapter_synthesis_section(errors)
+    validate_markdown_layout(errors)
+    validate_reading_graph(errors)
+    validate_english_dash_style(errors)
     validate_unique_substantial_prose(errors)
     validate_portable_math_delimiters(errors)
     validate_dollar_math_delimiters(errors)

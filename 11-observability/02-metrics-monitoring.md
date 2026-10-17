@@ -522,3 +522,12 @@ Use a synthetic canary that emits known counter, gauge, and histogram patterns w
 - [Distributed Tracing and Telemetry Pipelines](./01-distributed-tracing.md): shared collection/control plane and trace exemplars
 - [Alert Evaluation and Notification](./04-alerting.md): rule state, routing, and missing-data behavior
 - [SLOs and Error-Budget Control](./05-slos-error-budgets.md): SLI aggregation and burn-rate interpretation
+---
+
+## Related Chapters
+
+- [Monarch](../09-whitepapers/12-monarch.md): the plane design behind a planet-scale metrics and tracing service
+- [Netflix](../08-case-studies/04-netflix.md): dashboards that stay green while playback fails, and the case for customer-signal telemetry
+- [SLOs and Error-Budget Control](05-slos-error-budgets.md): the aggregation that decides whether an objective was met and who gets paged
+- [Alert Evaluation and Notification](04-alerting.md): a metric becomes an alert when someone picks a threshold and an owner
+- [FinOps and Cost Engineering](06-finops-cost-engineering.md): cardinality is a bill before it is a query plan

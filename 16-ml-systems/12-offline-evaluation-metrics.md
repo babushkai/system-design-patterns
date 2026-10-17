@@ -545,3 +545,12 @@ Offline evaluation that answers these well is a trustworthy gate. Offline evalua
 8. [Counterfactual Risk Minimization: Learning from Logged Bandit Feedback](https://proceedings.mlr.press/v37/swaminathan15.html): Swaminathan & Joachims, 2015
 9. [Unbiased Learning-to-Rank with Biased Feedback](https://doi.org/10.1145/3018661.3018699): Joachims, Swaminathan & Schnabel, 2017
 10. [Online Experiments](./08-online-experiments.md)
+
+---
+
+## Related Chapters
+
+- [Online Experiments](08-online-experiments.md): the offline number that predicts nothing online, and how to catch it early
+- [Dataset Management and Versioning](11-dataset-management-versioning.md): a metric without a frozen dataset version is not reproducible
+- [Ranking and Evaluation Systems](../14-search-systems/04-ranking-algorithms.md): ranking metrics with a business objective attached instead of a benchmark
+- [LLM Evaluation and Observability](../17-llm-systems/10-llm-evaluation.md): the same problem when the output space is free-form text

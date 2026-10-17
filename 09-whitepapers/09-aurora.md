@@ -1,8 +1,10 @@
 # Amazon Aurora (SIGMOD 2017): Evidence-First Paper Analysis
 
+## TL;DR
+
 Aurora's key idea is to treat network I/O, not disks, as the scarce database resource. The database engine sends **redo records rather than full pages** to a six-way, multi-AZ storage service. Storage nodes continuously materialize pages, repair replicas, back up data, and perform much of recovery. This removes duplicated database-to-storage traffic and turns crash recovery from a serial startup phase into ongoing distributed work.
 
-## Publication identity and boundary
+## Publication Identity and Boundary
 
 - **Paper:** *Amazon Aurora: Design Considerations for High Throughput Cloud-Native Relational Databases*
 - **Authors:** Alexandre Verbitski, Anurag Gupta, Debanjan Saha, Murali Brahmadesam, Kamal Gupta, Raman Mittal, Sailesh Krishnamurthy, Sandor Maurice, Tengiz Kharatishvili, and Xiaofeng Bao
@@ -13,7 +15,7 @@ The paper does not describe every present Aurora engine, feature, or topology. I
 
 [Write-Ahead Logging](../03-storage-engines/04-write-ahead-logging.md), [Single-Leader Replication](../02-distributed-databases/01-single-leader-replication.md), and [Failure Modes](../01-foundations/06-failure-modes.md) cover conventional mechanisms. This chapter focuses on Aurora's changed storage contract.
 
-## Problem and workload assumptions
+## Problem and Workload Assumptions
 
 A traditional primary database may send a write-ahead log, dirty pages, replicated log traffic, backups, and cache-management I/O across the network. In a multi-AZ cloud design, those flows multiply. Checkpointing, page flushing, replica apply, backup, and crash recovery also create foreground jitter.
 
@@ -27,7 +29,7 @@ Aurora targets MySQL/InnoDB OLTP workloads whose transaction and query processin
 
 This is **storage disaggregation**, not a shared-nothing distributed SQL engine. The writer still performs SQL execution, locking, buffer-pool management, and log-sequence allocation.
 
-## Protection groups and quorum invariants
+## Protection Groups and Quorum Invariants
 
 A logical volume is divided into 10 GB segments. Each segment is replicated six ways as a **protection group**: two copies in each of three Availability Zones. Volumes allocate more protection groups as they grow; the paper reports support up to 64 TB of unreplicated logical data.
 
@@ -41,7 +43,7 @@ Because `Vw + Vr > 6`, a read quorum intersects every completed write quorum. Fo
 
 Quorum counts are not the whole failure model. Placement across three independent AZs addresses correlation; rapid segment repair reduces exposure time. The paper states that a 10 GB segment can be repaired in about 10 seconds over a 10 Gbit/s link in its environment. That observed repair speed is part of the durability argument, not a universal bound.
 
-## Redo-only storage protocol
+## Redo-Only Storage Protocol
 
 The database assigns each redo record a monotonically increasing log sequence number (LSN) and sends only records relevant to each protection group. Storage nodes queue, persist, acknowledge, gossip missing records to peers, coalesce redo into pages, upload backups, scrub checksums, and garbage-collect old versions.
 
@@ -58,7 +60,7 @@ This distinction is the core invariant:
 
 The database also limits LSN allocation to at most 10 million beyond the current VDL in the paper. That backpressure prevents compute from creating an unbounded recovery/truncation window when storage or network falls behind. It is an implementation value, not a tuning recommendation.
 
-## Foreground reads, writes, and commits
+## Foreground Reads, Writes, and Commits
 
 ### Write path
 
@@ -74,7 +76,7 @@ The buffer cache serves present pages. On a miss, the database chooses a storage
 
 The writer and read replicas share the same storage volume. Redo also streams to replica compute nodes so they can update cached pages; if a page is absent, a replica discards that redo and later reads a current page from storage. Replicas apply only records no greater than VDL and apply each mini-transaction atomically in their cache. Publication-era replicas were asynchronous from the writer's commit path.
 
-## Failure, repair, and recovery
+## Failure, Repair, and Recovery
 
 - **Storage-copy loss:** remaining segment replicas serve requests; peers reconstruct the missing 10 GB segment and restore the six-copy placement.
 - **Slow storage node:** parallel requests and a four-of-six write quorum prevent one straggler from determining every write latency.
@@ -85,7 +87,7 @@ The writer and read replicas share the same storage volume. Redo also streams to
 
 The paper says database recovery was generally under 10 seconds even after processing more than 100,000 write statements/s. This is an operational observation from Aurora, not a bound under every volume, cache, or control-plane failure.
 
-## Evaluation evidence and methodology
+## Evaluation Evidence and Methodology
 
 The authors are the system's designers and operator. Most comparisons used r3.8xlarge EC2 instances with 32 vCPUs, 244 GB RAM, Intel Xeon E5-2670 v2 processors, and a 170 GB buffer cache. MySQL used EBS with 30,000 provisioned IOPS unless stated otherwise. Results measure particular configurations, not architecture alone.
 
@@ -118,7 +120,7 @@ Table 4 defines replica lag as time from writer commit until visibility on a rep
 
 The Percona TPC-C variant used 100 or 1,000 warehouses and 500 or 5,000 connections. Aurora's reported throughput ranged from 30,221 to 73,955 tpmC across those four cases, 2.3–16.3 times MySQL 5.7. It was a TPC-C-derived workload, not an audited TPC-C result.
 
-## Limits and assumptions
+## Limits and Assumptions
 
 - One writer is the serialization and SQL-compute bottleneck in the published architecture.
 - Six-way storage replication spends capacity to reduce correlated-failure risk and tail latency.
@@ -128,11 +130,11 @@ The Percona TPC-C variant used 100 or 1,000 warehouses and 500 or 5,000 connecti
 - Benchmarks are vendor-run and compare stacks with different implementations and, in some cases, feature paths.
 - Compatibility was based on a MySQL 5.6 fork at publication; it was not identical to upstream MySQL behavior or ecosystem surface.
 
-## What the follow-up clarified
+## What the Follow-up Clarified
 
 The 2018 SIGMOD paper, *Amazon Aurora: On Avoiding Distributed Consensus for I/Os, Commits, and Membership Changes*, makes explicit how the single-writer epoch, quorum state, and locally reconstructed metadata avoid running a general consensus round for most storage I/O. It retains the 2017 architecture while deepening the invariant argument. That clarification should not be simplified to “Aurora has no consensus”: the system still establishes unique writer epochs and durable quorum state; it avoids consensus on particular steady-state paths under stated invariants.
 
-## Architecture review questions
+## Architecture Review Questions
 
 1. Which bytes cross the compute/storage boundary: logical operations, redo, or full pages?
 2. What contiguous and transaction-consistent frontier makes an acknowledgement safe?
@@ -142,8 +144,17 @@ The 2018 SIGMOD paper, *Amazon Aurora: On Avoiding Distributed Consensus for I/O
 6. Does one writer have enough CPU, lock, log-allocation, and network capacity?
 7. Are comparisons matched for durability, replicas, cache size, instance, and workload compliance?
 
-## Primary sources
+## References
 
 - [Verbitski et al., *Amazon Aurora: Design Considerations for High Throughput Cloud-Native Relational Databases* (SIGMOD 2017), official Amazon Science PDF](https://cdn.amazon.science/dc/2b/4ef2b89649f9a393d37d3e042f4e/amazon-aurora-design-considerations-for-high-throughput-cloud-native-relational-databases.pdf)
 - [Amazon Science publication record for the 2017 paper](https://www.amazon.science/publications/amazon-aurora-design-considerations-for-high-throughput-cloud-native-relational-databases)
 - [Verbitski et al., *Amazon Aurora: On Avoiding Distributed Consensus for I/Os, Commits, and Membership Changes* (SIGMOD 2018)](https://www.amazon.science/publications/amazon-aurora-on-avoiding-distributed-consensus-for-i-os-commits-and-membership-changes)
+
+---
+
+## Related Chapters
+
+- [Write-Ahead Logging](../03-storage-engines/04-write-ahead-logging.md): the log-is-the-database argument, examined at the level of the storage protocol
+- [Single-Leader Replication](../02-distributed-databases/01-single-leader-replication.md): a leader that replicates only records, moving the failure model into the storage tier
+- [FoundationDB](13-foundationdb.md): two ways to buy durability with a quorum, and what each one charges a write
+- [Failure Semantics, Detection, and Recovery Boundaries](../01-foundations/06-failure-modes.md): the recovery contract when a majority of storage nodes can be wrong and still commit

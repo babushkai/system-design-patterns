@@ -476,3 +476,13 @@ The trust boundary is the snapshot manifest. It pins the label contract and reso
 8. [Trustworthy Online Controlled Experiments](https://www.cambridge.org/core/books/trustworthy-online-controlled-experiments/6A3B263E7114E81B95669A95B219C1D8): Kohavi, Tang & Xu, 2020
 9. [Maximum Likelihood Estimation of Observer Error-Rates Using the EM Algorithm](https://www.jstor.org/stable/2346806): Dawid & Skene, 1979
 10. [Survival Analysis: A Self-Learning Text](https://link.springer.com/book/10.1007/978-1-4419-6646-9): Kleinbaum & Klein; censoring foundations
+
+---
+
+## Related Chapters
+
+- [Offline Evaluation and Metric Design](12-offline-evaluation-metrics.md): a metric is only as trustworthy as its labels, including their disagreements
+- [Dataset Management and Versioning](11-dataset-management-versioning.md): labels are datasets too, with versions, leakage risks, and a retention policy
+- [Model Monitoring](04-model-monitoring.md): the delayed signal that says whether last week was actually bad
+- [ML Risk and Governance](09-ml-risk-governance.md): annotation guidelines are policy, and reviewers are the control implementing it
+- [Stream Execution](../13-data-pipelines/02-stream-processing.md): outcome evidence arrives late and out of order, so a label is a watermark over corrections rather than an append

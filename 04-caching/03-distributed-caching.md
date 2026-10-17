@@ -499,9 +499,19 @@ A benchmark on a warm, healthy, single node proves none of these properties.
 - [ ] Reshard, failover, and failback have automated pause gates.
 - [ ] Metrics expose topology convergence and user-visible miss load.
 
+## Key Takeaways
+
+1. **Separate the data plane from the control plane.** Key placement, membership and ownership epochs, the data plane verbs, and origin protection fail differently, and a routing change without a versioned protocol lets two clients store one key on different nodes.
+2. **Rebalancing cost is a design input.** Modular hashing remaps roughly (N-1)/N of keys when a node joins, which is survivable only when the origin can absorb an almost complete cold start; consistent, rendezvous, and jump hashing exist to move that cost down.
+3. **Products differ in who owns the map.** Redis Cluster keeps 16,384 slots and their owners inside the cluster with hash tags to co-locate related keys, while client-partitioned Memcached pushes topology into every client library and its upgrade schedule.
+4. **Name the role before choosing the product.** Lost cache writes are acceptable because the authoritative source rebuilds them; sessions, locks, rate limits, and acknowledged write-behind data do not share that property and need stronger replication than the cache default.
+5. **Plan capacity around shard loss and hot keys.** One key can consume most of a single execution resource while aggregate QPS looks low, so watch p99 and queueing, and remember that failing open against an origin that survives 5,000 reads per second turns a cache incident into an outage.
+6. **L1 is replication multiplied by fleet size.** It removes a network hop for hot read-mostly values but multiplies memory and invalidation endpoints, and validating every L1 hit remotely keeps the hop it was supposed to remove.
+7. **Topology change is a runbook, not an event.** Rate-limit migrated bytes and keys, watch redirections and client-map epochs, warm only the moved hot set, confirm convergence for every client generation before draining old owners, and test failback so a recovered node cannot resume ownership from stale state.
+
 ---
 
-## Primary References
+## References
 
 - [Redis Cluster specification](https://redis.io/docs/latest/operate/oss_and_stack/reference/cluster-spec/)
 - [Redis pipelining](https://redis.io/docs/latest/develop/using-commands/pipelining/)
@@ -512,3 +522,12 @@ A benchmark on a warm, healthy, single node proves none of these properties.
 - [Consistent Hashing and Random Trees, Karger et al.](https://people.csail.mit.edu/karger/Papers/ConsistentHashing.pdf)
 - [A Fast, Minimal Memory, Consistent Hash Algorithm](https://arxiv.org/abs/1406.2294)
 - [Scaling Memcache at Facebook, NSDI 2013](https://www.usenix.org/conference/nsdi13/technical-sessions/presentation/nishtala)
+
+---
+
+## Related Chapters
+
+- [Cache Semantics and Economics](01-cache-strategies.md): the serving semantics this routing layer has to preserve one key at a time
+- [Cache Invalidation and Coherence](02-cache-invalidation.md): coherence across tiers is hard in one process and harder across a shard ring
+- [Cache Stampede, Cold Start, and Warming](04-cache-stampede.md): a shared pool turns a thundering herd into a per-key single-flight problem
+- [Database Sharding](../06-scaling/03-database-sharding.md): slot maps, rebalancing, and hot shards, with a cache instead of a table behind them

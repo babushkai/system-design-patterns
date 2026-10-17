@@ -2,15 +2,15 @@
 
 > **注:** この記事は英語の原文を日本語に翻訳したものです。コードブロック、Mermaidダイアグラム、論文タイトル、システム名、技術用語は原文のまま保持しています。
 
+## TL;DR
+
+Dynamoは、特定の障害シナリオ下で一貫性を犠牲にする高可用性キーバリューストアです。パーティショニングに**Consistent Hashing**、競合検出に**Vector Clock**、チューナブルな一貫性のための**Quorum ベースのレプリケーション**、可用性のための**Sloppy Quorum**とHinted Handoff、レプリカ同期のための**Merkle Treeを用いたAnti-Entropy**を使用しています。Dynamoは、現在分散データベースで標準となっている多くの技術を先駆けました。
+
 ## 論文概要
 
 **著者:** Giuseppe DeCandia他 (Amazon)
 **発表:** SOSP 2007
 **背景:** Amazonのショッピングカートおよびセッションストレージ向けに設計
-
-## TL;DR
-
-Dynamoは、特定の障害シナリオ下で一貫性を犠牲にする高可用性キーバリューストアです。パーティショニングに**Consistent Hashing**、競合検出に**Vector Clock**、チューナブルな一貫性のための**Quorum ベースのレプリケーション**、可用性のための**Sloppy Quorum**とHinted Handoff、レプリカ同期のための**Merkle Treeを用いたAnti-Entropy**を使用しています。Dynamoは、現在分散データベースで標準となっている多くの技術を先駆けました。
 
 ---
 
@@ -301,14 +301,12 @@ class VectorClock:
     def copy(self) -> 'VectorClock':
         return VectorClock(clock=copy.copy(self.clock))
 
-
 @dataclass
 class VersionedValue:
     """Value with its vector clock"""
     value: any
     clock: VectorClock
     timestamp: float  # Wall clock for display/pruning
-
 
 class DynamoStore:
     """
@@ -451,7 +449,6 @@ class QuorumConfig:
     n: int = 3  # Replication factor
     r: int = 2  # Read quorum
     w: int = 2  # Write quorum
-
 
 class DynamoCoordinator:
     """
@@ -667,7 +664,6 @@ class HintedValue:
     value: VersionedValue
     created_at: float
 
-
 class HintedHandoffManager:
     """
     Manages hinted handoff for temporarily failed nodes.
@@ -866,7 +862,6 @@ class MerkleTree:
         """Combine two hashes"""
         return hashlib.sha256(left + right).digest()
 
-
 class AntiEntropyService:
     """
     Background service for replica synchronization.
@@ -979,11 +974,13 @@ class AntiEntropyService:
 ## 影響とレガシー
 
 ### 直接的な後継システム
+
 - **Apache Cassandra** - Dynamoに触発されたオープンソースデータベース
 - **Riak** - Dynamoの商用実装
 - **Voldemort** - LinkedInのキーバリューストア
 
 ### 広く採用されたコンセプト
+
 - Consistent Hashing（ほぼすべての分散システムで使用）
 - Vector Clock（Conflict-freeデータ型、CRDT）
 - Quorumベースのレプリケーション

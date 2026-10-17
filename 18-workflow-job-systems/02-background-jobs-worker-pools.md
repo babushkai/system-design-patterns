@@ -1,5 +1,7 @@
 # Background Jobs and Worker Pools
 
+## TL;DR
+
 A background-job system accepts a bounded unit of work, makes it eligible through a durable queue or job table, gives a replaceable worker temporary authority to attempt it, and records a terminal or retryable outcome. Its safety depends on the exact claim token, state transition, and shutdown protocol, not on the existence of “a queue.”
 
 Background-job execution covers job records and transitions, receive/claim/complete protocols, broker acknowledgement interaction, database-backed claims, concurrency, restart boundaries, and graceful shutdown. [Message Queue Architecture](../05-messaging/01-message-queues.md) covers broker internals; [Poison-Message Quarantine](../05-messaging/08-dead-letter-queues.md) covers quarantine and redrive; [Priority, Fairness, and Backpressure](./07-priority-fairness-backpressure.md) covers allocation and admission; [Effect Commit Protocols](./06-retry-idempotency-compensation.md) covers external effects; [Leases and Recovery](./08-leases-heartbeats-recovery.md) covers lease timing, progress, and fencing.
@@ -14,7 +16,7 @@ Background-job execution covers job records and transitions, receive/claim/compl
 | Kubernetes Pod termination documentation | Termination is a bounded sequence with a grace period; forced termination remains possible | Process lifecycle, not proof that an external effect or broker ack completed |
 | Sidekiq and Celery task guidance | Jobs should carry simple/versionable inputs, be idempotent, and use late acknowledgement/retry behavior deliberately | Framework-specific defaults must still be verified by version/configuration |
 
-## Job execution contract
+## Job Execution Contract
 
 Define before enqueue:
 
@@ -34,7 +36,7 @@ Define before enqueue:
 
 Use a background job when one bounded handler can restart safely from the beginning or from an explicit application checkpoint. If correctness requires a durable graph frontier, many external signals, or weeks-long orchestration, use a [DAG](./05-dag-orchestration.md) or [durable workflow](./04-durable-execution-workflow-engines.md).
 
-## Durable job and attempt state
+## Durable Job and Attempt State
 
 Separate the logical job from physical attempts.
 
@@ -62,7 +64,7 @@ attempt:
 
 Do not use a hostname or PID alone as worker identity; both are reusable. A process incarnation is unique per start. Do not use the broker delivery count as the sole business-attempt identity: redelivery counters have provider-specific semantics and can reset during redrive or migration.
 
-## State machine and invariants
+## State Machine and Invariants
 
 ~~~mermaid
 stateDiagram-v2
@@ -97,7 +99,7 @@ stateDiagram-v2
 9. Handler/payload/key versions remain available until no retained or delayed job can require them.
 10. Forced worker death may cause retry, not silent terminal success.
 
-## Worker execution path
+## Worker Execution Path
 
 ~~~mermaid
 sequenceDiagram
@@ -121,7 +123,7 @@ Reserve or bound local execution capacity before pulling a large batch. Otherwis
 
 The terminal-state commit and external effect may not share a transaction. The diagram intentionally leaves that gap visible; [Effect Commit Protocols](./06-retry-idempotency-compensation.md) owns how the logical effect converges.
 
-## Three claim protocols that must not be conflated
+## Three Claim Protocols That Must Not Be Conflated
 
 ### SQS-style visibility receipt
 
@@ -204,7 +206,7 @@ PostgreSQL explicitly says `SKIP LOCKED` gives an inconsistent view and is suita
 
 For complex/critical jobs, keep lifecycle state in a database and use the broker only to wake workers. Messages carry job ID and expected revision, not the sole copy of job truth. A missing wakeup is repaired by an eligibility scan; duplicate wakeups lose the claim CAS or observe terminal state. This adds two systems and reconciliation but makes inspection, version gating, cancellation, and repair explicit.
 
-## Job inputs and checkpoints
+## Job Inputs and Checkpoints
 
 Prefer a small, immutable envelope over serialized application objects. If it references mutable data, declare one of two semantics:
 
@@ -217,7 +219,7 @@ Checkpoints are application state, not broker acknowledgements. A useful checkpo
 
 Split work when one attempt cannot fit the maximum claim/shutdown window or when restart cost exceeds the orchestration cost. Do not chain jobs with “job A completes, then best-effort enqueue B”: atomically commit A's transition plus a dispatch intent, or use a workflow engine, so crash does not lose or duplicate the continuation.
 
-## Concurrency and capacity
+## Concurrency and Capacity
 
 Concurrency is a vector:
 
@@ -259,7 +261,7 @@ Let prefetch/hidden count be $P$ and active local slots be $C$. If $P$ greatly e
 
 [Auto-Scaling](../06-scaling/08-auto-scaling.md) owns controller stability. The worker-specific input is required safe slots by class and downstream; oldest eligible age and predicted drain time are usually stronger SLO signals than raw depth or CPU.
 
-## Graceful shutdown and deployment
+## Graceful Shutdown and Deployment
 
 Shutdown is a protocol, not `SIGTERM` plus hope:
 
@@ -277,7 +279,7 @@ For RabbitMQ, cancel the consumer to stop future deliveries, drain/ack current i
 
 Deployment capacity includes old and new pools concurrently, plus drain. Route only payload/handler versions a worker supports. Canary one job class/tenant, compare duration/error/effect evidence, then expand. Rollback retains the new payload decoder and any state transitions already emitted; an old binary that cannot read queued jobs is not a rollback.
 
-## Specialized failure traces
+## Specialized Failure Traces
 
 ### Prefetch expires before execution starts
 
@@ -315,7 +317,7 @@ The worker reports ready until termination, receives a large batch, then closes 
 
 A 14-day delayed job references payload schema 4, but the last schema-4 worker was removed after two days. Generic retries cannot create a decoder. Gate worker retirement on retained/delayed job inventory and keep an upcaster or compatible drain pool.
 
-## Security and abuse boundaries
+## Security and Abuse Boundaries
 
 Authorize producers by tenant and allowed job type; workers revalidate tenant/object authority at execution time because permissions and data may change while queued. Never dispatch arbitrary module/class/function names from untrusted payloads. Use an allowlisted handler registry and safe serialization: language-native object deserialization can execute code.
 
@@ -323,7 +325,7 @@ Payload references need integrity hashes, access controls, expiry compatible wit
 
 Limit payload bytes, enqueue rate, outstanding jobs, runtime, memory, fan-out, checkpoint bytes, and downstream calls per tenant/type. Sandbox untrusted transforms and restrict network/filesystem access. Separate permissions for enqueue, inspect payload, cancel, force retry, change handler routing, and bulk repair; audit every override.
 
-## Observability and verification
+## Observability and Verification
 
 Measure by tenant, job type, handler version, queue/partition, and downstream:
 
@@ -352,7 +354,7 @@ Verification includes:
 9. open-loop load with production duration/fan-out skew, downstream saturation, backlog, and recovery;
 10. authorization, malicious payload, oversized fan-out, and operator repair controls.
 
-## Decision framework
+## Decision Framework
 
 1. Can one bounded handler safely restart, or is finer durable progress required?
 2. Is the broker message, database row, or hybrid ledger authoritative for job lifecycle?
@@ -367,7 +369,7 @@ Verification includes:
 11. Do authorization and tenant quotas apply at both enqueue and execution?
 12. Have ambiguous effect, stale worker, forced shutdown, and duplicate delivery been fault-tested?
 
-## Primary references
+## References
 
 - [Amazon SQS, *Visibility timeout*](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-visibility-timeout.html)
 - [Amazon SQS API, *DeleteMessage*](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_DeleteMessage.html)
@@ -380,3 +382,12 @@ Verification includes:
 - [Kubernetes, *Pod lifecycle: termination of Pods*](https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/#pod-termination)
 - [Sidekiq, *Best Practices*](https://github.com/sidekiq/sidekiq/wiki/Best-Practices)
 - [Celery, *Tasks*](https://docs.celeryq.dev/en/stable/userguide/tasks.html)
+
+---
+
+## Related Chapters
+
+- [Message Queue Architecture](../05-messaging/01-message-queues.md): the source of work, whose delivery semantics decide what workers must tolerate
+- [Leases, Heartbeats, and Recovery](08-leases-heartbeats-recovery.md): how a pool learns that a worker holding a job stopped existing
+- [Auto-Scaling](../06-scaling/08-auto-scaling.md): scaling on queue depth is a control loop over a lagging and gameable signal
+- [Poison-Message Quarantine and Redrive](../05-messaging/08-dead-letter-queues.md): what a pool does with the one message that will never succeed

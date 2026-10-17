@@ -560,3 +560,12 @@ Keep golden encoded events for every schema and verify the exact redacted repres
 - [Distributed Tracing and Telemetry Pipelines](./01-distributed-tracing.md): shared collectors, context, and trace correlation
 - [Metrics Systems and Monitoring](./02-metrics-monitoring.md): aggregate event rates and pipeline health
 - [Incident Command and Learning](./07-incident-management.md): evidence timelines, access, preservation, and postmortems
+
+---
+
+## Related Chapters
+
+- [Distributed Tracing and Telemetry Pipelines](01-distributed-tracing.md): the correlation id that turns a pile of lines into one story across services
+- [Incident Command and Learning](07-incident-management.md): what a responder actually reads, under time pressure and against a retention policy
+- [Metrics Systems and Monitoring](02-metrics-monitoring.md): a log-derived metric is an aggregate waiting for someone to write the parser
+- [Workflow Observability and Replay](../18-workflow-job-systems/09-workflow-observability-replay.md): structured logs as replay input, where the log becomes workflow state

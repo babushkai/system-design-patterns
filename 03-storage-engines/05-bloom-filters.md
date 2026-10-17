@@ -392,3 +392,12 @@ The same "prepaid negative answer" pattern recurs anywhere a cheap check can vet
 - Graf, T. M., & Lemire, D. (2020). *Xor Filters: Faster and Smaller Than Bloom and Cuckoo Filters*. ACM JEA; and (2022) *Binary Fuse Filters*.
 - RocksDB Wiki: *RocksDB Bloom Filter* (format_version 5 fast local bloom) and *Ribbon Filter*.
 - BIP-37 (Connection Bloom Filtering) and BIP-158 (Compact Block Filters): Bitcoin Improvement Proposals.
+
+---
+
+## Related Chapters
+
+- [LSM Trees](02-lsm-trees.md): the read path that turns a filter miss into a saved disk seek
+- [SSTables and Compaction](03-sstables-compaction.md): filters are rebuilt per run, so compaction policy sets their size and staleness
+- [Secondary Indexes in Distributed Databases](../02-distributed-databases/06-secondary-indexes.md): the cheapest index there is, valuable exactly where a lookup is going to miss
+- [Vector Retrieval Systems](../14-search-systems/03-vector-search.md): a different probabilistic shortcut: bounded work instead of an exact answer

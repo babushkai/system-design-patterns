@@ -1,5 +1,7 @@
 # Load Balancing
 
+## TL;DR
+
 Load balancing is the controlled assignment of work to eligible capacity. The difficult part is not choosing between round robin and least connections. It is keeping a fast, distributed data plane aligned with changing backend authority, then preventing health reactions, retries, drains, and long-lived connections from turning a small fault into a fleet-wide overload.
 
 Load-balancing correctness depends on **L4 and L7 data planes, endpoint eligibility, health and ejection, connection skew, and the controller state that programs routing**. [Partitioning Strategies](../02-distributed-databases/05-partitioning-strategies.md) owns placement algorithms for durable key spaces. [DNS and Connection Management](./13-dns-and-connection-management.md) owns discovery, resolver caching, and connection-pool lifetimes. [Multi-Region Architecture](./09-multi-region-architecture.md) owns regional authority and failover policy.
@@ -16,7 +18,7 @@ Load-balancing correctness depends on **L4 and L7 data planes, endpoint eligibil
 
 These sources show mechanisms. They do not justify copying another operator's thresholds, endpoint counts, or health intervals.
 
-## Workload and routing contract
+## Workload and Routing Contract
 
 Define the unit being assigned before selecting an algorithm. An L4 balancer normally assigns a transport flow, while an L7 balancer can assign an HTTP request or RPC stream. A TCP connection may carry one request, thousands of sequential requests, or many concurrent HTTP/2 streams; equality of connections therefore does not imply equality of work.
 
@@ -34,7 +36,7 @@ Record at least:
 
 **Reference design:** make the admission contract explicit: “accept only while the selected priority has a bounded request and connection budget; otherwise return a classified overload result.” A balancer redistributes admitted work. It cannot manufacture backend capacity.
 
-## State, authority, and invariants
+## State, Authority, and Invariants
 
 The controller's authoritative state is more than a list of IP addresses:
 
@@ -59,7 +61,7 @@ The data plane holds a compiled, cached projection of that state plus local obse
 7. Loss of the controller does not erase the last known safe data-plane configuration.
 8. Tenant or session affinity never bypasses endpoint eligibility or authorization.
 
-## Data plane and control plane
+## Data Plane and Control Plane
 
 ~~~mermaid
 flowchart LR
@@ -113,7 +115,7 @@ Partial configuration is dangerous. A listener from the new epoch combined with 
 
 Controller freshness must not be confused with endpoint liveness. If discovery stalls, a healthy last-known endpoint set may be safer than an empty one. If endpoint identities are security-revoked, fail-stale may be unacceptable. Specify the policy per failure class.
 
-## Selection algorithms and their information cost
+## Selection Algorithms and Their Information Cost
 
 No algorithm balances “load” without defining what load means and when it is observed.
 
@@ -131,7 +133,7 @@ No algorithm balances “load” without defining what load means and when it is
 
 For uniform independent assignment of `m` requests to `n` endpoints, the expected count is `m/n`, but finite-sample variance remains. More importantly, production requests are not uniform. Measure per-route service demand and the hottest affinity key. The canonical treatment of stable hashing and movement is in [Partitioning Strategies](../02-distributed-databases/05-partitioning-strategies.md).
 
-## Health, degradation, and ejection
+## Health, Degradation, and Ejection
 
 Health is a claim about eligibility for a particular class of work:
 
@@ -147,7 +149,7 @@ Health is a claim about eligibility for a particular class of work:
 
 Never let a shared dependency failure make every application instance look individually bad. The detector should preserve failure provenance. If all endpoints begin returning the same dependency error at once, ejecting them cannot create a healthy destination.
 
-## Connections, draining, and skew
+## Connections, Draining, and Skew
 
 Balancing happens only when the data plane gets a choice. Adding a backend does not redistribute established TCP connections, WebSockets, database sessions, or QUIC connections. Removing an endpoint from new-flow selection likewise does not finish its existing work.
 
@@ -171,7 +173,7 @@ Connection age creates historical skew. Suppose four backends each hold 250,000 
 
 QUIC connection IDs and address migration require a QUIC-aware routing contract; hashing only the UDP 4-tuple can move a migrated connection to the wrong backend. See [Network Transport Internals](./14-network-transport-internals.md).
 
-## Capacity, headroom, and cost
+## Capacity, Headroom, and Cost
 
 Size each independent resource, then take the largest fleet requirement. A packet balancer can exhaust packets/s before bits/s; an L7 proxy can exhaust CPU, TLS operations, connection memory, or upstream pools before network bandwidth.
 
@@ -207,7 +209,7 @@ total cost = balancer compute + data processing/egress + control plane
 
 High utilization is not automatically economical if it turns one failure into overload. Compare cost at the required SLO and named failure, not at the healthy-fleet average.
 
-## Overload and specialized failure traces
+## Overload and Specialized Failure Traces
 
 ### Correlated ejection collapses the pool
 
@@ -252,7 +254,7 @@ Failover is an admission decision: compute surviving capacity first, shed lower-
 
 Use layered checks and real-request success telemetry. Do not make a deep probe so expensive or correlated that the probe itself causes failure.
 
-## Operations, migration, and rollback
+## Operations, Migration, and Rollback
 
 Introduce a new balancer or policy as a controlled traffic migration:
 
@@ -267,7 +269,7 @@ A policy rollback does not automatically restore old affinity. Quantify how many
 
 Runbooks should cover frozen discovery, mass ejection, certificate failure, conntrack exhaustion, one-sided DSR loss, configuration rejection, reconnect storm, and overload with no eligible endpoint. Operators need an explicit “hold last safe config,” “freeze ejection,” and “shed priority” action with audit logs.
 
-## Security boundaries
+## Security Boundaries
 
 The balancer is often an authentication and trust boundary:
 
@@ -282,7 +284,7 @@ The balancer is often an authentication and trust boundary:
 
 DSR and preserved source addresses change firewall and return-path assumptions. Test spoofing, fragmented packets, malformed HTTP, request smuggling across parser differences, TLS-key compromise, and a malicious controller update. [API Security](../10-security/04-api-security.md) owns the broader application controls.
 
-## Observability and verification
+## Observability and Verification
 
 Separate control-plane convergence from data-plane outcomes.
 
@@ -304,7 +306,7 @@ Test at four layers:
 
 Success is not “the proxy stayed up.” It is bounded admitted load, correct routing authority, predictable remapping, and preserved end-user SLOs through the declared failures.
 
-## Decision framework
+## Decision Framework
 
 1. Is the assignable unit a flow or a request, and can one unit contain unbounded work?
 2. Which application semantics justify L7 parsing, and which traffic can remain L4?
@@ -317,7 +319,7 @@ Success is not “the proxy stayed up.” It is bounded admitted load, correct r
 9. Can controller loss, rollback, and a bad configuration preserve the last safe data plane?
 10. When no safe backend exists, which traffic is rejected rather than redistributed into a cascade?
 
-## Primary references
+## References
 
 - [Eisenbud et al., *Maglev: A Fast and Reliable Software Network Load Balancer* (NSDI 2016)](https://research.google/pubs/maglev-a-fast-and-reliable-software-network-load-balancer/)
 - [Meta Engineering, *Open-sourcing Katran, a scalable network load balancer* (May 2018)](https://engineering.fb.com/2018/05/22/open-source/open-sourcing-katran-a-scalable-network-load-balancer/)
@@ -331,3 +333,12 @@ Success is not “the proxy stayed up.” It is bounded admitted load, correct r
 - [Mitzenmacher, Richa, and Sitaraman, *The Power of Two Random Choices* (2001)](https://www.eecs.harvard.edu/~michaelm/postscripts/handbook2001.pdf)
 - [RFC 9000, *QUIC: A UDP-Based Multiplexed and Secure Transport* (May 2021)](https://www.rfc-editor.org/rfc/rfc9000)
 - [Little, *A Proof for the Queuing Formula: L = λW* (1961)](https://pubsonline.informs.org/doi/10.1287/opre.9.3.383)
+
+---
+
+## Related Chapters
+
+- [Service Discovery and Control-Plane State](../12-service-mesh/01-service-discovery.md): the pool this balancer chooses from, and how quickly it learns a member left
+- [DNS and Connection Management](13-dns-and-connection-management.md): the first hop of routing, cached by resolvers longer than your failover takes
+- [Circuit Breakers](06-circuit-breakers.md): ejection is a breaker scoped to a pool instead of a dependency
+- [Network Transport Internals](14-network-transport-internals.md): what a client does with your address after the connection opens, including migration

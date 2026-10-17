@@ -651,7 +651,7 @@ class ServiceDiscoveryCache:
 
 ---
 
-## 参考資料
+## 参考文献
 
 - [Consul Service Discovery](https://www.consul.io/docs/concepts/service-discovery)
 - [Kubernetes Service Discovery](https://kubernetes.io/docs/concepts/services-networking/service/)

@@ -1,12 +1,14 @@
 # CDN Architecture
 
+## TL;DR
+
 A content delivery network is a globally distributed consistency and overload-control system. It must route a client to a healthy edge, decide whether a stored representation is reusable for that exact request, coordinate fills and invalidations across thousands of failure domains, and prevent a cold or malicious workload from collapsing the origin.
 
 CDN design spans edge data/control planes, client-to-edge routing, cache identity, surrogate invalidation, tiering, origin protection, and edge recovery. [Cache Strategies](../04-caching/01-cache-strategies.md) covers application policy; [Cache Invalidation](../04-caching/02-cache-invalidation.md) covers general coherence trade-offs.
 
 Evidence labels distinguish **Documented** claims backed by dated primary or official sources, **Inference** derived without asserting a private implementation, and unmarked **Reference design** guidance that is reusable rather than provider-attributed.
 
-## Workload and delivery contract
+## Workload and Delivery Contract
 
 **Reference design.** Inventory content by behavior, not file extension:
 
@@ -33,7 +35,7 @@ The contract must state:
 
 “The CDN caches GETs for five minutes” is not a contract. It omits representation identity, validators, purge ordering, stale exceptions, and who may observe the object.
 
-## Standards baseline
+## Standards Baseline
 
 **Documented, RFC 9111, Internet Standard, June 2022.** An HTTP cache key contains at least request method and target URI. When a stored response carries `Vary`, nominated request headers participate in selection. The RFC defines freshness, validation, shared/private cache rules, authenticated-request constraints, and security considerations including poisoning and sensitive data. [RFC 9111](https://www.rfc-editor.org/rfc/rfc9111.html)
 
@@ -43,7 +45,7 @@ The contract must state:
 
 Provider-specific behavior can be stricter, broader, or configurable. Verify the implementation and product contract instead of assuming every edge implements every optional RFC behavior identically.
 
-## State and invariants
+## State and Invariants
 
 **Reference design.** Separate four authorities:
 
@@ -90,7 +92,7 @@ $$
 
 Queued, retrying, revalidating, prefetched, and shield requests all count. A cache miss is not permission to bypass the origin budget.
 
-## Data plane and control plane
+## Data Plane and Control Plane
 
 **Reference design.** The serving data plane continues through a control-plane outage using a last known-good, signed configuration:
 
@@ -115,7 +117,7 @@ Configuration has an epoch and activation time. An edge validates syntax, refere
 
 **Documented, Akamai paper, 2010.** Nygren, Sitaraman, and Sun described a large CDN as an overlay with a distributed mapping system, edge servers, transport/route optimization, and origin-facing mechanisms. It is a historical primary-source architecture, useful for plane separation and mapping concepts but not a description of every current CDN. [The Akamai Network](https://www.akamai.com/site/en/documents/research-paper/the-akamai-network-a-platform-for-high-performance-internet-applications-technical-publication.pdf)
 
-## Client-to-edge routing
+## Client-to-Edge Routing
 
 **Reference design.** Two common mechanisms are:
 
@@ -132,7 +134,7 @@ Routing inputs include transport reachability, regional capacity, origin/shield 
 
 DNS/route changes do not move existing TCP/QUIC sessions instantly. A draining PoP stops taking new connections, advertises a graceful close where protocol permits, retains state long enough for in-flight responses, and leaves capacity for reconnect bursts. See [DNS and connection management](13-dns-and-connection-management.md) and [transport internals](14-network-transport-internals.md).
 
-## Cache-key engineering
+## Cache-Key Engineering
 
 The key is a security boundary and a capacity lever.
 
@@ -156,7 +158,7 @@ Do not key on raw bearer tokens: this stores secrets in cache metadata and destr
 
 Changing normalization or key policy changes object identity. Publish key version `k+1`, read only from `k+1`, optionally fill from a verified `k` object when equivalence is proven, and let `k` expire. In-place reinterpretation can serve old bytes under new semantics.
 
-## Request flow and tiering
+## Request Flow and Tiering
 
 **Reference design.** An edge request proceeds as follows:
 
@@ -175,7 +177,7 @@ A **shield** or mid-tier aggregates misses from many edges, raising reuse and re
 
 General eviction algorithms and cache-aside mechanics are in [distributed caching](../04-caching/03-distributed-caching.md). CDN-specific selection must additionally consider bytes, transfer cost, fill latency, regional popularity, object expiry, and purge frequency.
 
-## Freshness, revalidation, and stale policy
+## Freshness, Revalidation, and Stale Policy
 
 **Reference design.** Choose policy per business consequence:
 
@@ -191,7 +193,7 @@ Serving stale is an availability decision that can become a correctness or secur
 
 Conditional requests (`If-None-Match`/ETag or `If-Modified-Since`) reduce bytes but still consume origin request capacity. Collapse revalidation and protect it with permits. If an origin deploy changes bytes without changing a strong validator, no CDN can infer the mistake.
 
-## Invalidation and versioning
+## Invalidation and Versioning
 
 ### Content-addressed publication
 
@@ -215,7 +217,7 @@ Tags must be tenant-scoped, length/count bounded, authorized, and normalized. On
 
 **Documented, Cloudflare 2024 snapshot.** Cloudflare described exact, prefix, hostname, tag, and purge-everything scopes and a redesigned purge plane that actively deletes local objects. Its article reported under-150 ms invalidation performance for measured production traffic in August 2024. This is a dated provider result, not a universal purge guarantee. [Cloudflare, Instant Purge](https://blog.cloudflare.com/instant-purge/)
 
-## Origin protection and overload
+## Origin Protection and Overload
 
 Cache effectiveness and origin stability are one system. A 99% hit ratio at 10 million requests/s still sends 100,000 requests/s upstream, before fills, revalidation, retries, and failover.
 
@@ -242,7 +244,7 @@ Collapse only requests with identical authorization and representation keys. Giv
 
 Rate-limit purge breadth, then pace refills. “Purge everything” followed by unrestricted misses converts the CDN into a load amplifier. Keep a shield copy only if purge semantics allow it; otherwise gate origin refills and serve a controlled error/stale response by content class.
 
-## Capacity and cost model
+## Capacity and Cost Model
 
 ### Origin offload: illustrative assumptions
 
@@ -280,7 +282,7 @@ If a 400 TiB PoP cache turns over 12%/hour, write rate is about 13.7 GiB/s befor
 
 One million tenants issuing 20 tag purges/day yields 231 purge records/s on average, but deployment bursts dominate. Tombstone retention must cover maximum edge outage plus log replay lag; otherwise an offline edge can return with pre-purge objects after the central tombstone vanished.
 
-## Specialized failure traces
+## Specialized Failure Traces
 
 ### Missing cache-key dimension leaks private content
 
@@ -314,7 +316,7 @@ An edge loses both shields and configuration streaming. It has a signed configur
 
 A fill for tag `product:7` starts at generation 81. Purge 82 applies while origin is streaming. Before committing, the fill compares its captured generation with the current generation, detects 82, serves the current client only if policy permits but does not store, and releases waiters to refetch. Without the commit check, invalidated content immediately reappears.
 
-## Security and abuse boundaries
+## Security and Abuse Boundaries
 
 Threats include cache poisoning, cache deception, request smuggling across inconsistent parsers, cross-tenant key collision, personalized-data leakage, purge abuse, origin bypass, signed-URL normalization bugs, and diagnostic-header leakage.
 
@@ -324,7 +326,7 @@ Origin servers accept traffic only from authenticated CDN egress or verify signe
 
 Do not expose raw cache keys containing cookies, authorization classes, or signed URLs in `Cache-Status`. RFC 9211 permits deployment-specific disclosure choices; production diagnostics should be sampled, access-controlled, and redacted.
 
-## Observability and operations
+## Observability and Operations
 
 Measure by tenant, content class, PoP, shield, and origin pool with cardinality controls:
 
@@ -342,7 +344,7 @@ Measure by tenant, content class, PoP, shield, and origin pool with cardinality 
 
 Use standardized `Cache-Status` where appropriate, but do not treat it as the only source of truth. Edge logs sample decisions with an opaque key digest, config epoch, purge generation, and upstream attempt ID. Correlate one client request through edge and shield without logging secrets.
 
-## Testing and verification
+## Testing and Verification
 
 Property and conformance tests cover RFC freshness/validation, `Vary`, range requests, authorization rules, `Age`, conditional responses, and malformed headers. Differential tests feed the same corpus to edge, purge normalizer, and origin to find parser/key disagreement.
 
@@ -361,7 +363,7 @@ Fault tests inject:
 
 Canary new cache-key/config logic by request shadowing: compute old and new keys and decisions without storing under the new policy, then compare cardinality, cacheability, authorization class, and expected origin load. Synthetic objects with known variants verify global purge and edge integrity continuously.
 
-## Onboarding and migration
+## Onboarding and Migration
 
 **Reference design.** Put an origin behind a CDN progressively:
 
@@ -378,7 +380,7 @@ Canary new cache-key/config logic by request shadowing: compute old and new keys
 
 Changing CDN provider repeats this discipline. Dual-CDN routing can improve failure isolation, but purge, key semantics, TLS configuration, log definitions, and stale rules must be reconciled; otherwise the two providers serve different security policies.
 
-## Design review questions
+## Design Review Questions
 
 1. What exact inputs can change response bytes or authorization, and are all in the key?
 2. Which content may be shared, revalidated, served stale, or never stored?
@@ -391,10 +393,19 @@ Changing CDN provider repeats this discipline. Dual-CDN routing can improve fail
 9. How is a cache-key migration canaried without cross-user risk?
 10. Can immutable publication replace broad invalidation?
 
-## Primary sources
+## References
 
 - [RFC 9111, “HTTP Caching,” Internet Standard, June 2022](https://www.rfc-editor.org/rfc/rfc9111.html)
 - [RFC 5861, “HTTP Cache-Control Extensions for Stale Content,” May 2010](https://www.rfc-editor.org/rfc/rfc5861.html)
 - [RFC 9211, “The Cache-Status HTTP Response Header Field,” June 2022](https://www.rfc-editor.org/rfc/rfc9211.html)
 - [Nygren, Sitaraman, and Sun, “The Akamai Network: A Platform for High-Performance Internet Applications,” 2010](https://www.akamai.com/site/en/documents/research-paper/the-akamai-network-a-platform-for-high-performance-internet-applications-technical-publication.pdf)
 - [Cloudflare Engineering, “Instant Purge: invalidating cached content in under 150ms,” 2024](https://blog.cloudflare.com/instant-purge/)
+---
+
+## Related Chapters
+
+- [Netflix](../08-case-studies/04-netflix.md): segment delivery, where origin egress dominates cost and a healthy API can still fail playback
+- [Cloudflare System Design](../08-case-studies/12-cloudflare.md): the edge as the product, with per-request compute and control-plane fan-out at PoP scale
+- [DNS and Connection Management](13-dns-and-connection-management.md): which edge you reach is a DNS decision that lags by a connection lifetime
+- [Cache Semantics and Economics](../04-caching/01-cache-strategies.md): the same cache questions at internet scale, with egress as the cost function
+- [Network Transport Internals](14-network-transport-internals.md): what a client does with your edge after the connection opens, including QUIC migration

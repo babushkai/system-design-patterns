@@ -17,7 +17,7 @@ The central invariant is stronger than “an attacker cannot read the ciphertext
 
 ---
 
-## 1. Start with the Protection Contract
+## 1. Start With the Protection Contract
 
 Cryptography can only enforce a stated boundary. Before selecting a primitive, identify:
 
@@ -471,3 +471,11 @@ Reject a design that says only “AES-256 at rest and TLS in transit.” It name
 - [NIST SP 800-57 Part 1: Recommendation for Key Management](https://csrc.nist.gov/pubs/sp/800/57/pt1/r5/final): key lifecycle and protection guidance
 - [OWASP Cryptographic Storage Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Cryptographic_Storage_Cheat_Sheet.html): application threat-model and implementation guidance
 - [AWS KMS Cryptographic Details](https://docs.aws.amazon.com/kms/latest/cryptographic-details/intro.html) and [Google Cloud envelope encryption](https://cloud.google.com/kms/docs/envelope-encryption): concrete managed-key hierarchy designs
+
+---
+
+## Related Chapters
+
+- [Object Storage Architecture and Commit Protocols](../03-storage-engines/08-object-storage.md): objects, metadata, and copies that outlive the key protecting them
+- [WhatsApp](../08-case-studies/10-whatsapp.md): end-to-end encryption, where routing continues with no plaintext boundary at the server
+- [Multi-Region Architecture](../06-scaling/09-multi-region-architecture.md): residency and deletion promises that a key hierarchy has to survive

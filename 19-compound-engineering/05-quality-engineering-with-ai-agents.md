@@ -363,3 +363,12 @@ The system is ready to integrate a candidate when every required claim has appli
 - [Coding Agent Platform Fundamentals](./01-compound-engineering-fundamentals.md)
 - [Repository Architecture for Safe Agentic Change](./04-ai-native-software-architecture.md)
 - [Deployment Strategies](../15-deployment/01-deployment-strategies.md)
+
+---
+
+## Related Chapters
+
+- [Software Delivery Control Planes and GitOps Reconciliation](../15-deployment/04-cicd-gitops.md): the pipeline becomes the reviewer that cannot be talked out of anything
+- [Tool and Runtime Contracts for Coding Agents](02-coding-agent-tool-design.md): a test command is a tool, and its exit code is the only honest feedback loop
+- [LLM Evaluation and Observability](../17-llm-systems/10-llm-evaluation.md): evaluating the agent as well as the change it produced
+- [Zero-Trust Service and Workload Architecture](../10-security/05-zero-trust-architecture.md): an agent is an untrusted principal with write access, which is an old problem

@@ -1,10 +1,12 @@
 # Message Ordering
 
+## TL;DR
+
 Ordering is a scoped relation between events, not a property that a broker can provide “globally” without cost or qualification. A useful design names which events must be comparable, who assigns their sequence, what happens at gaps, and how epochs prevent an old writer from extending a sequence after failover.
 
 Message ordering is defined by its scope, partition sequencing, causal metadata, gap handling, reorder buffers, epochs, rebalancing, and resharding. Queue claims are in [Message Queue Architecture](01-message-queues.md); duplicate/loss and acknowledgement ambiguity are in [Delivery Guarantees](04-delivery-guarantees.md).
 
-## Workload and order contract
+## Workload and Order Contract
 
 Start from the invariant, not “FIFO.” Examples:
 
@@ -41,7 +43,7 @@ Define:
 
 “Ordered delivery” is incomplete unless these fields are known.
 
-## State and invariants
+## State and Invariants
 
 Sequencing state usually includes current writer epoch, next sequence per ordered stream, partition assignment generation, committed log end, transaction/batch boundaries, and each consumer’s last applied sequence plus reorder buffer.
 
@@ -59,7 +61,7 @@ Enforce:
 
 **Cutover has one pivot.** During repartitioning, every key has a declared last position in the old assignment and first epoch/position in the new one.
 
-## Ordering models
+## Ordering Models
 
 ### Per-producer FIFO
 
@@ -79,7 +81,7 @@ Many applications need only explicit dependencies: carry predecessor event IDs, 
 
 A global log assigns every event a comparable sequence. It simplifies deterministic replication and audit but centralizes sequencing/consensus, increases cross-region latency, and imposes order between unrelated events. Use it only when the invariant truly spans the entire scope. The consensus mechanics are covered in [Consensus Algorithms](../02-distributed-databases/08-consensus-algorithms.md).
 
-## Sequence assignment and writer epochs
+## Sequence Assignment and Writer Epochs
 
 A safe partition leader is elected under an epoch/term. Append requests contain producer identity, producer epoch where applicable, and a sequence. The leader accepts only the current authoritative epoch and persists the record before exposing its position according to the durability contract.
 
@@ -97,7 +99,7 @@ On producer retry, an idempotent append protocol can map `(producer_id, epoch, p
 
 Writer epochs require fencing at every acceptance point. If leader A loses authority but stays alive in a partition, leader B begins epoch 18. Consumers and replicas reject A’s epoch 17 records even if their numeric sequence is higher. Comparing sequence without epoch re-admits a stale writer.
 
-## Partition routing and hot keys
+## Partition Routing and Hot Keys
 
 The routing function is versioned and deterministic. Hash `(tenant, entity_id)` to a virtual bucket, then map the bucket to a physical partition under an assignment generation. Avoid process-randomized hashes. Producers either receive the current map or send through a router that does.
 
@@ -113,7 +115,7 @@ A hot key cannot be scaled by ordinary partition splitting while retaining one t
 
 If none applies, the single-lane throughput is a real domain limit.
 
-## Consumer reorder algorithm
+## Consumer Reorder Algorithm
 
 A strict consumer stores `last_applied` and a bounded map keyed by `(epoch, sequence)`:
 
@@ -128,7 +130,7 @@ Persist future records before acknowledging them if the broker can otherwise dis
 
 Applying state-setting events by source version can make out-of-order arrival naturally safe: `set profile to version 19` is ignored after version 20. Delta events such as `increment by 3` still need their sequence or a commutative operation identity. Choose event semantics that reduce ordering dependence where possible.
 
-## Gap detection and repair
+## Gap Detection and Repair
 
 A gap may mean delayed delivery, filtered event, publisher abort, retention loss, corrupt segment, wrong routing key, or sequence allocation that permits holes. The sequence contract must say which gaps are valid.
 
@@ -145,7 +147,7 @@ Repair sources include broker replay, authoritative event store, source snapshot
 
 Gap age uses broker/source recorded time, not arbitrary client event time. Alert on the oldest blocked strict stream and total buffered bytes; aggregate out-of-order counts can hide one permanently wedged high-value entity.
 
-## Atomic batches and transactions
+## Atomic Batches and Transactions
 
 Some domains require several records to appear together. Add `transaction_id`, ordered indices, count or end marker, and source commit position. Consumers buffer until the complete batch is durable, validate all members, then apply it atomically where their state store permits.
 
@@ -153,7 +155,7 @@ If a broker transaction spans partitions, consumers need a read-committed view a
 
 Large transactions delay the stable/visible watermark and increase recovery buffers. Bound record count and bytes; prefer one domain event describing the committed fact over thousands of mechanically coupled messages when semantics permit.
 
-## Rebalancing and resharding
+## Rebalancing and Resharding
 
 Consumer rebalance is a handoff of an ordered prefix. The old owner stops fetching, completes or persists in-flight records, commits a checkpoint under membership generation `g`, and revokes. The new owner starts from that checkpoint under `g+1`. If the old owner crashes, overlap/replay can occur; generation-fenced checkpoints prevent it from later moving progress.
 
@@ -169,7 +171,7 @@ Producer repartitioning is harder because moving a key between sequencers can in
 
 Dual-producing without a barrier creates two incomparable total orders. Migration testing must include delayed producers holding the old map.
 
-## Capacity and cost model
+## Capacity and Cost Model
 
 Illustrative ordered stream:
 
@@ -186,13 +188,13 @@ Logical bandwidth is about 80 MiB/s and replicated append about 240 MiB/s before
 
 If an 8-minute partition gap affects 1,250/s, its suffix is 600,000 events or about 401 MiB before indexing/overhead. Decide whether to buffer, pause upstream, or rebuild rather than discovering the memory limit during failure.
 
-## Concrete failure trace: reshard without a barrier
+## Concrete Failure Trace: Reshard Without a Barrier
 
 Key `customer-9` maps to partition 3. A new assignment moves it to partition 11. Producer A refreshes immediately and emits update B to partition 11; producer C retains the old map and emits earlier update A to partition 3. Consumers read partitions independently and apply B then A, reverting state. Both partitions are internally ordered and healthy.
 
 Containment pauses the key and reconstructs source commit order. Repair replays from the authoritative source version. Prevention uses the migration barrier/new key epoch, rejects old assignment generations after cutover, and makes consumers version-gate state. Monitoring compares routing generation and detects the same key active under two partitions/epochs.
 
-## Operations and observability
+## Operations and Observability
 
 Track by ordered scope, partition, writer epoch, assignment, and consumer:
 
@@ -207,13 +209,13 @@ Track by ordered scope, partition, writer epoch, assignment, and consumer:
 
 Runbooks cover stale producer epoch, permanent gap, hot key, consumer checkpoint regression, incomplete batch, and reshard rollback. Logs retain event ID, scope, epoch, sequence, partition, assignment generation, source version, and trace correlation without exposing payloads.
 
-## Security and integrity
+## Security and Integrity
 
 Only the authoritative sequencer may set epoch/sequence fields. Brokers reject publisher-supplied values outside its assigned producer session or domain stream. Sign or authenticate cross-region/source replication so an attacker cannot inject a higher epoch or enormous sequence to block a consumer.
 
 Limit key length, buffer span, batch size, dependency count, and causal metadata. Tenant boundaries apply to routing, diagnostic gap APIs, replay, and logs. Sequence numbers can reveal activity volume; treat them as metadata subject to disclosure policy.
 
-## Verification strategy
+## Verification Strategy
 
 - model-test sequence/epoch/reorder transitions against a simple ordered map;
 - differential-test optimized buffers and batch application with exhaustive sorted replay;
@@ -224,7 +226,7 @@ Limit key length, buffer span, batch size, dependency count, and causal metadata
 - load-test real key skew and prove serial hot-key capacity assumptions;
 - fuzz huge sequence jumps, dependency lists, and incomplete batches.
 
-## Decision framework
+## Decision Framework
 
 Choose the weakest relation that preserves the domain invariant:
 
@@ -251,3 +253,12 @@ Then answer:
 - [Apache Kafka: Message Delivery and Ordering](https://kafka.apache.org/documentation/#semantics)
 - [Apache Kafka Protocol: Control Plane and Leader Epochs](https://kafka.apache.org/protocol.html)
 - [CloudEvents Specification](https://github.com/cloudevents/spec)
+
+---
+
+## Related Chapters
+
+- [Kafka](../09-whitepapers/06-kafka.md): a partition is the ordering domain and the offset is the sequence number
+- [Delivery Guarantees and Effect Boundaries](04-delivery-guarantees.md): ordering without deduplication still permits duplicates, which surprises most consumers
+- [Collaborative Document Replication and CRDT Sync Engines](../07-real-time/07-crdts-collaborative-editing.md): convergence as the alternative when a total order is not available at any price
+- [Idempotency and Operation Identity](../01-foundations/08-idempotency.md): the practical substitute for exactly-once, and the only one a broker can verify

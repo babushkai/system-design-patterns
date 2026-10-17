@@ -617,7 +617,7 @@ If these answers are absent, “the endpoint supports idempotency keys” is an 
 
 ---
 
-## Primary References
+## References
 
 - [RFC 9110: HTTP Semantics, Idempotent Methods](https://www.rfc-editor.org/rfc/rfc9110#section-9.2.2)
 - [Amazon Builders' Library: Making Retries Safe with Idempotent APIs](https://aws.amazon.com/builders-library/making-retries-safe-with-idempotent-APIs/)
@@ -629,8 +629,9 @@ If these answers are absent, “the endpoint supports idempotency keys” is an 
 
 ## Related Chapters
 
-- [Delivery Guarantees and Effect Boundaries](../05-messaging/04-delivery-guarantees.md)
-- [Transactional Outbox, Inbox, and CDC Publication](../05-messaging/07-outbox-pattern.md)
-- [Effect Commit Protocols for Workflows](../18-workflow-job-systems/06-retry-idempotency-compensation.md)
-- [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md)
-- [Distributed Locks](./09-distributed-locks.md)
+- [Delivery Guarantees and Effect Boundaries](../05-messaging/04-delivery-guarantees.md): at-least-once delivery is why every consumer needs a convergence rule rather than a deduplication trick
+- [Transactional Outbox, Inbox, and CDC Publication](../05-messaging/07-outbox-pattern.md): the outbox turns a split write and publish into one durable intent with an idempotent applier
+- [Effect Commit Protocols for Workflows](../18-workflow-job-systems/06-retry-idempotency-compensation.md): where the per-operation contract becomes a multi-step protocol with compensation and human escalation
+- [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md): hedged requests make duplicates a designed-in success, so convergence must hold under concurrency
+- [Distributed Locks and Leases](09-distributed-locks.md): a lock is the alternative to idempotency, and usually the worse one across regions and partitions
+- [Stripe](../08-case-studies/06-stripe.md): idempotency keys shipped as a public API contract, with the duplicate-callback trace attached

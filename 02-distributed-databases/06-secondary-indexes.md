@@ -1,10 +1,12 @@
 # Secondary Indexes in Distributed Databases
 
+## TL;DR
+
 A primary-key lookup begins with a routing answer: the key identifies a logical partition and therefore a replica set. A query on email, status, location, or event time has no such route unless the system maintains another access path. A distributed secondary index is that path: another materialized copy whose consistency, placement, recovery, and cost must be designed.
 
 A distributed secondary index must define maintenance and query semantics for local versus global placement, synchronous and asynchronous updates, online backfill, global uniqueness, scatter-gather, and freshness. [B-Trees](../03-storage-engines/01-b-trees.md) owns ordered page structures, [LSM Trees](../03-storage-engines/02-lsm-trees.md) owns the write-buffered storage pipeline, and [Search Index Architecture](../14-search-systems/01-inverted-indexes.md) owns analyzers, postings, relevance, and search-segment internals. [Partitioning Strategies](./05-partitioning-strategies.md) owns the routing map on which all three depend.
 
-## Query and consistency contract
+## Query and Consistency Contract
 
 Inventory real query shapes before creating an index. Record equality and range predicates, sort order, limit, projection, expected selectivity, tenant boundary, result freshness, pagination stability, and whether the index must enforce uniqueness. A query such as “newest 50 open orders for merchant M” has a different physical requirement from “find any user with email E,” even if both mention one secondary field.
 
@@ -18,7 +20,7 @@ The important consistency choices are observable:
 
 “Eventually consistent” must also define false negatives. Revalidating a candidate removes a stale positive; it cannot discover a missing entry. Search, authorization, billing, and deletion workflows often tolerate those two errors differently.
 
-## State and invariants
+## State and Invariants
 
 A minimal global index entry is not merely `secondary_value -> primary_key`:
 
@@ -44,7 +46,7 @@ The core invariants are:
 
 Normalization is part of the schema. Case folding, collation, Unicode version, timezone conversion, null ordering, and expression semantics must produce the same key during foreground writes, backfill, and reads. Changing any of them creates a new index version; silently rebuilding in place can make equal values compare differently across partitions.
 
-## Placement: local and global
+## Placement: Local and Global
 
 A **local secondary index** lives with each base partition and covers only rows owned there. Base and index changes can normally commit atomically in one storage-engine transaction. A query containing the primary partition key is targeted; a query without it fans out to every candidate partition.
 
@@ -62,7 +64,7 @@ flowchart LR
 
 Partitioning an index by term is efficient for equality predicates but can hotspot a common value such as `status = pending`. Adding a deterministic bucket spreads writes, at the cost of querying all buckets. Range indexes need ordered partitions and split policy. Local indexes distribute writes naturally but turn unqualified queries into scatter-gather. These are routing tradeoffs, not B-tree versus LSM tradeoffs.
 
-## Maintenance protocols
+## Maintenance Protocols
 
 ### Synchronous global maintenance
 
@@ -78,7 +80,7 @@ For a change from email A at version 18 to email B at version 19, the consumer r
 
 At-least-once delivery is expected. Stable mutation IDs and base versions make it harmless. A poison record stops or visibly gaps that source checkpoint; sending it to a dead-letter queue and advancing silently converts an operational error into a permanent false negative.
 
-## Query protocol
+## Query Protocol
 
 An equality query routes to the index partition, reads entries in `(index_key, primary_key)` order, and obtains primary keys plus projection and versions. A non-covering query batches primary-key fetches by base partition. Before returning candidate-only results, it confirms that each base row is visible to the caller, still satisfies the predicate, and is at least the indexed version. A covering asynchronous index avoids base fetches but necessarily exposes its own freshness contract.
 
@@ -90,7 +92,7 @@ Pagination uses a cursor containing the normalized sort tuple, primary-key tie-b
 
 An asynchronous base commit can return source coordinate `s`. A subsequent index query carrying `s` has three defensible outcomes: wait until the index checkpoint dominates `s`, route to a synchronous/base-table fallback, or return an explicit not-current response. Sleeping for an assumed replication delay supplies no guarantee and produces pathological tail latency during backlog.
 
-## Uniqueness is a reservation protocol
+## Uniqueness Is a Reservation Protocol
 
 A local unique index proves uniqueness only inside one base partition. An asynchronous global index cannot prevent two successful base writes from claiming the same value; it can merely discover them later.
 
@@ -98,7 +100,7 @@ To enforce global uniqueness, normalize the value and route it to one reservatio
 
 This is a small consistency service embedded in the index. High-contention names, quota slots, or inventory may require sharding by the constrained value, but they cannot be made coordination-free.
 
-## Online build, replacement, and removal
+## Online Build, Replacement, and Removal
 
 Create a new index under a unique build ID and move it through explicit states:
 
@@ -111,7 +113,7 @@ At frontier `L`, establish a consistent base snapshot and begin retaining all la
 
 Shadow reads compare old and new paths without serving the new answer. Cut over by index version, not by mutating a name in place, so rollback is a metadata change while both builds remain maintained. To drop an index, first stop new query plans, wait out cursor and transaction leases, stop maintenance at a recorded frontier, then reclaim partitions. Database-wide migration patterns appear in [Database Schema Migrations](../15-deployment/03-database-migrations.md).
 
-## Specialized failure traces
+## Specialized Failure Traces
 
 ### Application dual-write creates a false negative
 
@@ -133,7 +135,7 @@ Page one is read from build 12 under collation A. Build 13 becomes active with c
 
 The key is `(email, user_id)` instead of `(tenant_id, email, user_id)`. A lookup for one tenant returns another tenant’s primary key; the subsequent base fetch uses an internal bypass role and leaks the row. Tenant scope belongs in the authenticated key and must be rechecked at the base.
 
-## Capacity, cost, and overload
+## Capacity, Cost, and Overload
 
 Let base write rate be `Qw`. For index `j`, let `m_j` be average physical index mutations per base write: zero if unaffected, one for an insert, and usually two when an indexed key changes. With entry size `E_j` and replication factor `n_j`:
 
@@ -150,7 +152,7 @@ For a local scatter query over `P` partitions, request count is `P` and latency 
 
 An asynchronous lag backlog of `L` mutations drains in at least `L / (Capply - Qarrival)` seconds while traffic continues. If `Capply <= Qarrival`, it never recovers. Admission control should bound per-tenant query fan-out, candidate count, page size, backfill bandwidth, and maintenance queue age. Pause a backfill before it starves current index updates.
 
-## Security, observability, and verification
+## Security, Observability, and Verification
 
 Indexes duplicate sensitive values and often make them easier to enumerate. Encrypt storage and transport, authorize index predicates rather than trusting an internal query plan, audit broad scans, and avoid raw secrets as keys. Deterministic hashes support equality lookup but leak equality and are vulnerable to dictionary attacks on small domains; keyed tokens with rotation-aware versions are safer when exact search is required. Residency, retention, legal holds, and deletion apply to index entries, CDC logs, old builds, and query caches.
 
@@ -158,13 +160,13 @@ Operate from freshness and correctness signals: source and applied checkpoints, 
 
 Tests should interleave base commits, key changes, deletes, replay, and backfill at every boundary; crash before and after checkpoint commits; reorder old and new versions; reshard the index while cursors are active; overload a low-cardinality key; and change collation or expression code. Model checks assert no false negatives for strong indexes, monotonic async application, correct old-key removal, single-owner uniqueness, cursor order, tenant isolation, and rollback to the prior build.
 
-## Decision framework
+## Decision Framework
 
 Use a local index when writes must remain single-partition and queries already carry the base partition key, or when bounded scatter is acceptable. Use a synchronous global index for targeted reads that require transactional freshness or uniqueness and can afford cross-partition coordination. Use an asynchronous global index when low write latency matters and the product can name its stale-positive and false-negative behavior. Use denormalized query tables when one access pattern deserves an explicit schema and ownership lifecycle. Use a search engine when tokenization, relevance, and text retrieval (not merely alternate routing) are the requirement.
 
 Before adding an index, quantify the query it makes cheaper and the writes, bytes, coordination groups, backfill time, and new correctness contract it adds. “Maybe useful later” is especially expensive in a distributed database.
 
-## Primary references
+## References
 
 - Mohan, C., and Narang, I. [Algorithms for Creating Indexes for Very Large Tables Without Quiescing Updates](https://doi.org/10.1145/130283.130337). SIGMOD, 1992.
 - Graefe, G. [Modern B-Tree Techniques](https://doi.org/10.1561/1900000028). Foundations and Trends in Databases, 2011.
@@ -172,3 +174,12 @@ Before adding an index, quantify the query it makes cheaper and the writes, byte
 - Google Cloud Spanner. [Secondary indexes](https://cloud.google.com/spanner/docs/secondary-indexes).
 - PostgreSQL. [Building Indexes Concurrently](https://www.postgresql.org/docs/current/sql-createindex.html#SQL-CREATEINDEX-CONCURRENTLY).
 - MongoDB. [Read Operations to Sharded Clusters](https://www.mongodb.com/docs/manual/core/sharded-cluster-query-router/).
+---
+
+## Related Chapters
+
+- [TAO](../09-whitepapers/05-tao.md): a graph traversal API that hides index maintenance behind associative fetches
+- [Vector Retrieval Systems](../14-search-systems/03-vector-search.md): an index whose keys are not comparable values, and what that costs the maintainer
+- [Search Index Architecture and Internals](../14-search-systems/01-inverted-indexes.md): a derived index with its own publication, freshness, and repair contract
+- [Partitioning Strategies](05-partitioning-strategies.md): where the index lands relative to its base table, and what that costs a write
+- [Change Data Capture](../13-data-pipelines/04-change-data-capture.md): the feed most index maintenance is really running on

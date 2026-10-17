@@ -644,7 +644,7 @@ spec:
 
 ---
 
-## 参考資料
+## 参考文献
 
 - [Envoy Proxy Documentation](https://www.envoyproxy.io/docs/envoy/latest/)
 - [Istio Documentation](https://istio.io/latest/docs/)

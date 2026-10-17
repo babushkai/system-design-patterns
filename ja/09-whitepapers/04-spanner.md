@@ -2,15 +2,15 @@
 
 > **注:** この記事は英語の原文を日本語に翻訳したものです。コードブロック、Mermaidダイアグラム、論文タイトル、システム名、技術用語は原文のまま保持しています。
 
+## TL;DR
+
+Spannerは、分散トランザクションに対して**外部整合性**（最も強力な整合性保証）を提供するグローバル分散データベースです。その主要なイノベーションは**TrueTime**で、制限された不確実性を持つグローバル同期クロックAPIです。これにより、**ロックフリーの読み取り専用トランザクション**とグローバルに整合性のあるスナップショットが可能になります。Spannerは従来のデータベースのスキーマとSQLを、NoSQLシステムのスケーラビリティと組み合わせています。
+
 ## 論文概要
 
 **著者:** James C. Corbett et al. (Google)
 **発表:** OSDI 2012
 **背景:** GoogleのAdWords広告バックエンド「F1」を支えるシステム
-
-## TL;DR
-
-Spannerは、分散トランザクションに対して**外部整合性**（最も強力な整合性保証）を提供するグローバル分散データベースです。その主要なイノベーションは**TrueTime**で、制限された不確実性を持つグローバル同期クロックAPIです。これにより、**ロックフリーの読み取り専用トランザクション**とグローバルに整合性のあるスナップショットが可能になります。Spannerは従来のデータベースのスキーマとSQLを、NoSQLシステムのスケーラビリティと組み合わせています。
 
 ---
 
@@ -81,7 +81,6 @@ class TTInterval:
     def uncertainty(self) -> float:
         """Uncertainty epsilon in microseconds"""
         return (self.latest - self.earliest) / 2
-
 
 class TrueTime:
     """
@@ -360,7 +359,6 @@ class Transaction:
     write_buffer: Dict[str, bytes] = field(default_factory=dict)
     participants: Set[str] = field(default_factory=set)  # Paxos group IDs
 
-
 class SpannerCoordinator:
     """
     Transaction coordinator for Spanner.
@@ -514,7 +512,6 @@ class SpannerCoordinator:
             for key in keys_to_release:
                 del self.lock_table[key]
 
-
 class ReadOnlyTransaction:
     """
     Lock-free read-only transaction.
@@ -539,7 +536,6 @@ class ReadOnlyTransaction:
 
         # Read at snapshot
         return paxos_group.read_at(key, self.read_timestamp)
-
 
 class PaxosGroup:
     """
@@ -699,12 +695,14 @@ class PaxosGroup:
 ## 影響とレガシー
 
 ### 直接的な影響
+
 - **CockroachDB** - オープンソースのSpannerライクなデータベース
 - **TiDB** - 類似設計の分散SQL
 - **YugabyteDB** - Spannerにインスパイアされた分散SQL
 - **Cloud Spanner** - Googleのマネージドサービス
 
 ### 採用された主要イノベーション
+
 - 順序付けのためのTrueTime/HLC
 - ロックフリーの読み取り専用トランザクション
 - ローカリティのためのインターリーブテーブル

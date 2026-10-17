@@ -2,15 +2,15 @@
 
 > **注:** この記事は英語の原文を日本語に翻訳したものです。コードブロック、Mermaidダイアグラム、論文タイトル、システム名、技術用語は原文のまま保持しています。
 
+## TL;DR
+
+Bigtableは、ペタバイト規模の構造化データを管理する分散ストレージシステムです。`(row, column, timestamp)`でインデックス付けされた**疎で、分散された、永続的な多次元ソート済みマップ**を提供します。主なイノベーションには、水平スケーリングのための**Tablet**、インメモリバッファリングを備えた**SSTableベースのストレージ**、完全なACIDなしの**単一行トランザクション**、ストレージと調整のための**GFSおよびChubby**との統合があります。Bigtableは、事実上すべての現代のNoSQLデータベースに影響を与えました。
+
 ## 論文概要
 
 **著者:** Fay Chang他 (Google)
 **発表:** OSDI 2006
 **背景:** Webインデックス、Google Earth、Google Finance向けのGoogle社内ストレージ
-
-## TL;DR
-
-Bigtableは、ペタバイト規模の構造化データを管理する分散ストレージシステムです。`(row, column, timestamp)`でインデックス付けされた**疎で、分散された、永続的な多次元ソート済みマップ**を提供します。主なイノベーションには、水平スケーリングのための**Tablet**、インメモリバッファリングを備えた**SSTableベースのストレージ**、完全なACIDなしの**単一行トランザクション**、ストレージと調整のための**GFSおよびChubby**との統合があります。Bigtableは、事実上すべての現代のNoSQLデータベースに影響を与えました。
 
 ---
 
@@ -265,7 +265,6 @@ class ColumnFamily:
     columns: Dict[str, List[Cell]] = field(default_factory=dict)
     max_versions: int = 3
 
-
 class Memtable:
     """
     In-memory sorted buffer for recent writes.
@@ -349,7 +348,6 @@ class Memtable:
         """Freeze memtable for flushing"""
         self.frozen = True
 
-
 class SSTableWriter:
     """Writes memtable to SSTable file format"""
 
@@ -412,7 +410,6 @@ class SSTableWriter:
             # Write footer
             f.write(self._serialize_footer(index_offset, bloom_offset))
 
-
 class SSTableReader:
     """Reads from SSTable file"""
 
@@ -470,7 +467,6 @@ class SSTableReader:
                 right = mid - 1
 
         return result
-
 
 class TabletServer:
     """
@@ -803,10 +799,12 @@ class BigtableMaster:
 ## 影響とレガシー
 
 ### 直接的な後継システム
+
 - **Apache HBase** - Bigtableのオープンソース実装
 - **Apache Cassandra** - BigtableのデータモデルとDynamoの分散方式を組み合わせ
 
 ### 採用されたコンセプト
+
 - SSTableフォーマット（RocksDB、LevelDB）
 - LSM-treeストレージ（ほとんどの現代データベース）
 - Tabletベースのシャーディング

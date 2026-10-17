@@ -1,10 +1,12 @@
 # Column-Oriented Storage
 
+## TL;DR
+
 Column-oriented storage makes one physical bet: analytical queries usually touch many rows but only a subset of their attributes. Storing values from the same column together reduces projected I/O, exposes homogeneous data to encoding, and lets execution operate on vectors rather than repeatedly interpreting row objects.
 
 An analytical column store is defined by its **physical layout and scan path**: row groups, column chunks and pages, encodings, metadata pruning, late materialization, vectorized execution, update overlays, and scan capacity. [Data Encoding](./07-data-encoding.md) owns general serialization rules. [SSTables and Compaction](./03-sstables-compaction.md) owns immutable sorted-run lifecycle, and [Lakehouse Table Formats](../13-data-pipelines/05-lakehouse-table-formats.md) owns multi-file table snapshots and metadata protocols.
 
-## Workload and correctness contract
+## Workload and Correctness Contract
 
 Columnar layout is strongest when:
 
@@ -28,7 +30,7 @@ The file contract must preserve more than values:
 
 Fast wrong pruning is worse than a slow scan. Metadata participates in query correctness.
 
-## Physical state: row groups, chunks, and pages
+## Physical State: Row Groups, Chunks, and Pages
 
 A columnar file is horizontally divided into **row groups**. Within one row group, each field has a **column chunk** containing pages. This creates two locality dimensions:
 
@@ -45,7 +47,7 @@ Flat fixed-width arrays often use a validity bitmap: one bit says whether each p
 
 Schema fields need stable identity and repetition/nullability semantics. Matching only by ordinal is dangerous when columns are inserted or reordered; matching only by name is dangerous when names are reused. A migration plan should define field IDs, aliases, defaults, type promotions, and whether old readers may encounter new required fields.
 
-## Encoding is chosen per data distribution
+## Encoding Is Chosen per Data Distribution
 
 Column locality creates opportunities, but no encoding wins for every page.
 
@@ -60,7 +62,7 @@ Writers may sample a page and fall back when a dictionary overflows or an encodi
 
 Dictionary codes are normally local to a page or chunk. Code 7 in one row group need not equal code 7 in another. Join, grouping, or comparison across dictionaries must compare values, unify dictionaries, or carry dictionary identity.
 
-## The analytical scan protocol
+## The Analytical Scan Protocol
 
 A well-designed scan discards work in stages:
 
@@ -83,7 +85,7 @@ Statistics implementations must define nulls, NaNs, signed zero, decimal scale, 
 
 Physical clustering determines pruning power. If data is ordered by `(tenant_id, event_time)`, tenant-time queries may touch few row groups, while a global time query can overlap many tenants. No one sort order serves every predicate. Multi-dimensional clustering, duplicated projections, or secondary data structures exchange storage/rewrite cost for broader pruning.
 
-## Vectorized execution
+## Vectorized Execution
 
 A row-at-a-time interpreter repeatedly resolves field offsets, branches on types/nulls, dispatches an operator, and produces one result. A vectorized engine processes a batch of values with one typed operator:
 
@@ -103,7 +105,7 @@ Early materialization reconstructs rows near the scan and lets conventional row 
 
 The correct boundary depends on selectivity, projected widths, join shape, and whether the storage format supports efficient page/position access. Optimizers should cost both rather than treating late materialization as always faster.
 
-## Inserts, updates, and deletes
+## Inserts, Updates, and Deletes
 
 Appending one row into separate durable streams for hundreds of columns is inefficient and difficult to publish atomically. Column stores buffer rows, sort/cluster a batch, transpose it into columns, encode pages, and publish a complete segment. The buffer and spill path is therefore part of ingestion capacity.
 
@@ -117,7 +119,7 @@ A position delete must bind to the exact immutable data-file identity and row po
 
 Merge-on-read reduces write amplification and increases scan merge work. Copy-on-write makes reads simpler and turns small updates into large rewrites. Background maintenance eventually folds deltas/deletes into new files; its transactional multi-file publication belongs in [Lakehouse Table Formats](../13-data-pipelines/05-lakehouse-table-formats.md), while immutable run replacement inside an LSM belongs in [SSTables and Compaction](./03-sstables-compaction.md).
 
-## Concrete failure and correctness traces
+## Concrete Failure and Correctness Traces
 
 ### Positional schema evolution swaps fields
 
@@ -168,7 +170,7 @@ Immutable objects need a transactional manifest/snapshot as table authority. Obj
 
 Batching and compaction must be sized as part of the ingest/query cost model.
 
-## Capacity and cost model
+## Capacity and Cost Model
 
 For a scan, estimate bytes by the actual chunks that survive pruning:
 
@@ -211,7 +213,7 @@ Even when requests run concurrently, service limits and coordinator CPU cap usef
 
 Clustering maintenance is a write cost. If ingest arrives out of order, row-group min/max ranges widen and pruning decays. Re-sorting rewrites data and needs temporary space. Model it as a recurring background workload with an SLO, not a one-time `ORDER BY` choice.
 
-## Production operation and migration
+## Production Operation and Migration
 
 Observe pruning by layer (file, row group, page), projected versus fetched columns, compressed bytes read, decoded bytes, rows before/after filters, codec CPU, vector batch occupancy, materialization/gather cost, spill, footer/cache hit rate, files per query, delete/delta density, and clustering quality. A query can read few bytes yet be CPU-bound on pathological decoding or nested reconstruction.
 
@@ -221,7 +223,7 @@ Schema migration should maintain stable field IDs, explicitly allow type promoti
 
 Fault tests should interrupt multipart upload, footer write, snapshot publication, delete-file replacement, and compaction. A reader must see either the old complete snapshot or the new complete snapshot, never a directory-shaped mixture.
 
-## Decision framework
+## Decision Framework
 
 1. What percentage of rows and columns does each dominant query actually touch after pruning?
 2. Which physical sort/clustering order serves those predicates, and which workloads does it harm?
@@ -232,7 +234,7 @@ Fault tests should interrupt multipart upload, footer write, snapshot publicatio
 7. Can ingestion, clustering, delete folding, and small-file compaction keep up with steady state plus bursts?
 8. Are schema IDs, statistics, and vectorized results cross-version and differentially tested?
 
-## Primary references
+## References
 
 - [Stonebraker et al., *C-Store: A Column-oriented DBMS* (VLDB 2005)](https://www.vldb.org/conf/2005/papers/p553-stonebraker.pdf)
 - [Boncz, Zukowski, and Nes, *MonetDB/X100: Hyper-Pipelining Query Execution* (CIDR 2005)](https://www.cidrdb.org/cidr2005/papers/P19.pdf)
@@ -241,3 +243,12 @@ Fault tests should interrupt multipart upload, footer write, snapshot publicatio
 - [Google, *Capacitor: Columnar Storage for the Cloud* (VLDB 2016)](https://research.google/pubs/capacitor-columnar-storage-for-the-cloud/)
 - [Apache Parquet, official file-format specification](https://parquet.apache.org/docs/file-format/)
 - [Apache Arrow, official columnar-format specification](https://arrow.apache.org/docs/format/Columnar.html)
+
+---
+
+## Related Chapters
+
+- [Data Encoding](07-data-encoding.md): columnar storage is mostly encoding, because layout only decides what compresses well
+- [SSTables and Compaction](03-sstables-compaction.md): the same immutable-file tradeoff, with row groups where the LSM has runs
+- [Lakehouse Table Formats](../13-data-pipelines/05-lakehouse-table-formats.md): the commit protocol that turns columnar files into a table with history and rollback
+- [LSM Trees](02-lsm-trees.md): how updates and deletes arrive in a layout designed to avoid them

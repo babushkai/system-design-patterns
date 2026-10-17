@@ -1,10 +1,12 @@
 # Distributed Transactions
 
+## TL;DR
+
 A distributed transaction makes one outcome authoritative across multiple independently durable participants. The central problem is not sending `COMMIT` twice. It is preserving atomicity when processes crash at every instruction boundary, messages are lost or duplicated, and some participants have made promises they can no longer revoke.
 
 Distributed transaction design centers on **atomic commit across storage participants**, its interaction with isolation, and alternatives whose contracts are explicitly weaker. [ACID Transactions](../01-foundations/01-acid-transactions.md) and [Isolation Levels](../01-foundations/02-isolation-levels.md) define local transaction semantics. [Consensus Algorithms](./08-consensus-algorithms.md) owns replication of a participant or decision record. [Outbox Pattern](../05-messaging/07-outbox-pattern.md) owns reliable database-to-message publication, and [Database Sharding](../06-scaling/03-database-sharding.md) owns operational shard migration.
 
-## Define the outcome contract
+## Define the Outcome Contract
 
 Three different problems are commonly called a distributed transaction:
 
@@ -25,7 +27,7 @@ For each use case, state:
 
 A transfer inside one distributed database is different from “update a database, charge a third-party card, and publish an email.” The latter systems do not share one prepare/commit protocol, so atomic rollback is generally unavailable.
 
-## Durable state and atomicity invariants
+## Durable State and Atomicity Invariants
 
 Let transaction `T` have coordinator `C` and participant set `P`. A recoverable protocol needs:
 
@@ -47,7 +49,7 @@ The critical invariants are:
 
 Atomicity is a recovery property. A transaction may temporarily be committed at A and still prepared at B after a lost message; the protocol remains atomic only if readers cannot expose an invalid mix under the isolation model and recovery inevitably drives B to the same durable decision.
 
-## Two-phase commit, precisely
+## Two-Phase Commit, Precisely
 
 ### Phase 1: prepare
 
@@ -78,7 +80,7 @@ Once prepared, a participant cannot safely infer the outcome from silence:
 
 Timing out and aborting can contradict an already durable commit. Timing out and committing can contradict an abort. Classic 2PC therefore blocks an uncertain prepared participant until it can learn the decision. Replicating the decision record reduces the coordinator failure window, but it does not let a participant invent an answer when the decision quorum or its own replica quorum is unavailable.
 
-## Failure traces
+## Failure Traces
 
 ### Participant crashes before voting
 
@@ -123,7 +125,7 @@ Transaction metadata garbage collection requires a recovery horizon and membersh
 
 Atomic all-or-nothing outcome is not serializable isolation. The read/write conflict protocol must cover the invariant.
 
-## Making the coordinator and participants fault tolerant
+## Making the Coordinator and Participants Fault Tolerant
 
 In a sharded database, each participant is often a replicated state machine. Preparing a shard means committing the prepare/intents through that shard's consensus group. The coordinator decision may itself be a replicated transaction record.
 
@@ -138,7 +140,7 @@ Spanner composes Paxos-replicated participants with 2PC. CockroachDB stores inte
 
 Gray and Lamport's Paxos Commit replaces the single 2PC coordinator's volatile role with consensus on participant outcomes. It improves non-blocking progress under its quorum assumptions, while requiring more replicated protocol state and messages. Consensus and atomic commit remain distinct: consensus chooses one value within a replica group; atomic commit couples the outcomes of all resource managers.
 
-## Latency, throughput, and contention model
+## Latency, Throughput, and Contention Model
 
 Let `p` be the number of participants. Prepare and decision dissemination send `O(p)` messages, and every participant must persist at least a prepare outcome plus terminal/cleanup state according to its logging design. With replicated participants, each “persist” is itself a quorum operation.
 
@@ -168,7 +170,7 @@ One in-doubt transaction can therefore block unrelated work on every key it touc
 
 Tail latency also amplifies with fan-out. If each participant completion has CDF `F(t)` and were independent, all `p` complete by `t` with probability `F(t)^p`. A transaction coordinator observes the maximum, so a rare slow shard becomes common at high fan-out.
 
-## Optimizations and alternate execution models
+## Optimizations and Alternate Execution Models
 
 - **Read-only or single-participant fast paths:** skip distributed prepare only after proving the participant set cannot expand.
 - **Presumed abort/commit:** reduce log records for the common outcome by defining what missing recovery state means. The presumed outcome is a protocol rule, not a timeout guess after `YES`.
@@ -178,7 +180,7 @@ Tail latency also amplifies with fan-out. If each participant completion has CDF
 
 No optimization removes the need to identify which durable facts make success irrevocable after each crash point.
 
-## Sagas are durable workflows, not atomic commit
+## Sagas Are Durable Workflows, Not Atomic Commit
 
 A saga is a durable sequence of local transactions with compensating actions. Intermediate states are visible, and compensation is a new business operation, not time travel.
 
@@ -197,7 +199,7 @@ Use semantic locks, reservations, version checks, or rereads to limit the isolat
 
 For a database update plus event publication, a transactional outbox places the business row and event record in one local transaction; a publisher or CDC process delivers the event with retries. Delivery is normally at least once, so consumers deduplicate by stable event/operation ID. This solves a dual-write boundary without pretending the broker joined the database transaction.
 
-## Production operation and migration
+## Production Operation and Migration
 
 ### Recovery is a continuously running subsystem
 
@@ -219,7 +221,7 @@ When removing 2PC in favor of a saga, change the API contract. Expose pending st
 
 Crash the coordinator and each participant immediately before and after prepare persistence, vote send, decision persistence, decision send, participant application, acknowledgement, and garbage collection. Duplicate and reorder every message. Partition the decision-record quorum, restore an old participant snapshot, change membership mid-transaction, and force lock conflicts. History checking must assert both atomic outcomes and the advertised isolation level.
 
-## Decision framework
+## Decision Framework
 
 1. Is the requirement atomic visibility, serializable isolation, or eventual workflow completion?
 2. Can all invariant-related data be placed in one transaction participant?
@@ -230,7 +232,7 @@ Crash the coordinator and each participant immediately before and after prepare 
 7. Are external effects prepare/commit capable, or must they use outbox, idempotency, and compensation?
 8. Does the latency and availability budget tolerate the slowest of all touched participant quorums?
 
-## Primary references
+## References
 
 - [Gray, *Notes on Data Base Operating Systems* (1978)](https://jimgray.azurewebsites.net/papers/dbos.pdf)
 - [Gray and Lamport, *Consensus on Transaction Commit* (ACM TODS 2006), Microsoft Research publication](https://www.microsoft.com/en-us/research/publication/consensus-on-transaction-commit/)
@@ -240,3 +242,10 @@ Crash the coordinator and each participant immediately before and after prepare 
 - [Thomson et al., *Calvin: Fast Distributed Transactions for Partitioned Database Systems* (SIGMOD 2012)](https://cs.yale.edu/homes/thomson/publications/calvin-sigmod12.pdf)
 - [Taft et al., *CockroachDB: The Resilient Geo-Distributed SQL Database* (SIGMOD 2020)](https://www.cockroachlabs.com/pdf/cockroachdb-the-resilient-geo-distributed-sql-database-sigmod-2020.pdf)
 - [Helland, *Life Beyond Distributed Transactions: an Apostate's Opinion* (CIDR 2007)](https://www.cidrdb.org/cidr2007/papers/cidr07p15.pdf)
+---
+
+## Related Chapters
+
+- [CockroachDB](../09-whitepapers/10-cockroachdb.md): transactions and geo-partitioning argued as the primitive replicas should not have to negotiate
+- [FoundationDB](../09-whitepapers/13-foundationdb.md): a single serializable key space, and the workload evidence behind that bet
+- [Stripe](../08-case-studies/06-stripe.md): money movement, where an ambiguous commit becomes a reconciliation project instead of a bug

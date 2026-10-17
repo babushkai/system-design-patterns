@@ -471,9 +471,19 @@ Use sampling for per-key telemetry; logging every key can create a new cost and 
 - [ ] Rollout includes shadow comparison and an independently tested kill switch.
 - [ ] Metrics distinguish useful hits from stale, incompatible, or slow hits.
 
+## Key Takeaways
+
+1. **A cache is a projection, not an owner.** The design is finished only when the contract names the authoritative system, the eligible reads, key and value versioning, the maximum acceptable age, miss and stale-hit behavior, cold-cache origin load, and the measurements that justify the cache.
+2. **Policy names do not create atomicity.** Cache-aside and read-through decide who performs a load; write-through, write-around, and write-behind decide where writes flow. None of them makes an independent cache commit with the database.
+3. **State hit rate as a conditional composition.** L1 hitting 80% of reads and L2 hitting 90% of what L1 misses gives 98% effective coverage and 400 origin reads per second at 20,000 requests per second; two numbers both labeled “90%” hide whether they are conditional.
+4. **Size the origin from misses plus refresh.** Origin load is lambda times (1 - h) plus the refresh rate, so warming adds work rather than replacing it, and p95 miss cost needs its own model because one miss can hold a connection or fan out to several services.
+5. **Working set comes from a trace, not a percentage.** Derive a miss-ratio curve per tenant, region, and endpoint; a single aggregate hides skew, and “20% of the database” is not evidence.
+6. **Charge entries for their real footprint.** A 48 B key, a 512 B value, and 80 B of measured metadata cost 640 B per entry, and a 500 MB process-local L1 across 200 instances is 100 GB plus allocator pressure.
+7. **Rollout is a sequence of gates.** Baseline without the cache, shadow keying, dark fill, canary reads that compare source versions or payload digests, injected failure tests, a gated ramp, and a kill switch that disables fills independently of reads.
+
 ---
 
-## Primary References
+## References
 
 - [RFC 9111: HTTP Caching](https://www.rfc-editor.org/rfc/rfc9111.html)
 - [RFC 5861: stale-while-revalidate and stale-if-error](https://www.rfc-editor.org/rfc/rfc5861.html)
@@ -481,3 +491,12 @@ Use sampling for per-key telemetry; logging every key can create a new cost and 
 - [Redis server-assisted client-side caching](https://redis.io/docs/latest/develop/reference/client-side-caching/)
 - [Caffeine: eviction and admission efficiency](https://github.com/ben-manes/caffeine/wiki/Efficiency)
 - [Scaling Memcache at Facebook, NSDI 2013](https://www.usenix.org/conference/nsdi13/technical-sessions/presentation/nishtala)
+
+---
+
+## Related Chapters
+
+- [Cache Invalidation and Coherence](02-cache-invalidation.md): the write half of a promise this chapter is only allowed to state
+- [Distributed Cache Internals](03-distributed-caching.md): where the tiers stop being process-local and acquire their own failure domain
+- [Cache Stampede, Cold Start, and Warming](04-cache-stampede.md): what a miss costs when every client misses at the same moment
+- [CDN Architecture](../06-scaling/04-cdn-architecture.md): the same economics at internet scale, with egress replacing origin load as the constraint

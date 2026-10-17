@@ -237,3 +237,12 @@ The decisive design artifact is not the system prompt. It is the run state machi
 - [SWE-bench](https://www.swebench.com/) / [τ-bench](https://arxiv.org/abs/2406.12045) / [GAIA](https://arxiv.org/abs/2311.12983): agent benchmarks
 - [Context Rot: How Increasing Input Tokens Impacts LLM Performance](https://research.trychroma.com/context-rot): Chroma research
 - [ReAct: Synergizing Reasoning and Acting in Language Models](https://arxiv.org/abs/2210.03629): reasoning-and-action feedback-loop formulation
+
+---
+
+## Related Chapters
+
+- [Agent Orchestration Patterns](02-orchestration-patterns.md): the loop promoted into a topology, with retries and budgets attached
+- [Harness Engineering](09-harness-engineering.md): the harness is where an agent model becomes a program you can operate
+- [LLM Evaluation and Observability](10-llm-evaluation.md): an agent without evaluation is a stochastic distributed system with no tests
+- [Tool and Runtime Contracts for Coding Agents](../19-compound-engineering/02-coding-agent-tool-design.md): the tool contract, where most agent capability claims quietly fail

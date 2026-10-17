@@ -635,7 +635,7 @@ def run_pipeline(date):
 
 ---
 
-## 参考資料
+## 参考文献
 
 - [MapReduce Paper](https://research.google/pubs/pub62/)
 - [Spark: Cluster Computing with Working Sets](https://www.usenix.org/legacy/event/hotcloud10/tech/full_papers/Zaharia.pdf)

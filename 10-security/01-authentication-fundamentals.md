@@ -277,3 +277,13 @@ The final architecture should be explainable in four sentences: who owns authent
 - [RFC 9700: Best Current Practice for OAuth 2.0 Security](https://www.rfc-editor.org/rfc/rfc9700)
 - [RFC 7009: OAuth 2.0 Token Revocation](https://www.rfc-editor.org/rfc/rfc7009)
 - [RFC 7662: OAuth 2.0 Token Introspection](https://www.rfc-editor.org/rfc/rfc7662)
+
+---
+
+## Related Chapters
+
+- [OAuth 2.0 and OpenID Connect](02-oauth2-openid-connect.md): the delegation protocol that turns a successful login into an issued assertion
+- [JOSE and JSON Web Token Verification](03-jwt-tokens.md): the access and refresh split, and why signature validity is not revocation
+- [Authorization at Scale](07-authorization-patterns.md): authentication answers who; authorization decides what they may do
+- [Cache Invalidation and Coherence](../04-caching/02-cache-invalidation.md): session propagation is cache invalidation with a security deadline attached
+- [Multi-Region Architecture](../06-scaling/09-multi-region-architecture.md): online authority versus availability when the session store is regional

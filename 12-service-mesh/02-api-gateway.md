@@ -715,3 +715,12 @@ Keep it downstream when it requires current business state, transactional invari
 - [Rate Limiting](../06-scaling/05-rate-limiting.md): algorithms, distributed counters, fairness, and quotas
 - [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md): deadlines, retry budgets, and overload safety
 - [API Design and Evolution](./04-api-design-patterns.md): public resource, error, concurrency, pagination, and compatibility contracts
+
+---
+
+## Related Chapters
+
+- [API Threat Boundaries and Abuse Resistance](../10-security/04-api-security.md): where authentication stops being a library and quietly becomes infrastructure
+- [Rate Limiting](../06-scaling/05-rate-limiting.md): the enforcement point for admission policy, plus the shared state it requires
+- [API Design and Evolution](04-api-design-patterns.md): a gateway can only mediate the API contract it was handed
+- [Circuit Breakers](../06-scaling/06-circuit-breakers.md): dependency failure handled once at the edge instead of in every client
