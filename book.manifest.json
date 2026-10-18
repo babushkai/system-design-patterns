@@ -298,6 +298,18 @@
         {"route": "19-compound-engineering/05-quality-engineering-with-ai-agents", "title": {"en": "Verification & Governance", "ja": "AIエージェント品質エンジニアリング"}},
         {"route": "19-compound-engineering/06-compound-development-workflows", "title": {"en": "Parallel Development", "ja": "コンパウンド開発ワークフロー"}}
       ]
+    },
+    {
+      "number": 20,
+      "dir": "20-production-readiness",
+      "title": {"en": "Production Readiness and Governance", "ja": "本番準備とガバナンス"},
+      "chapters": [
+        {"route": "20-production-readiness/01-design-documents-and-decision-records", "title": {"en": "Design Documents & ADRs", "ja": "設計文書とアーキテクチャ決定記録"}},
+        {"route": "20-production-readiness/02-architecture-review-and-governance", "title": {"en": "Architecture Review & Governance", "ja": "アーキテクチャレビューと技術ガバナンス"}},
+        {"route": "20-production-readiness/03-third-party-dependencies-and-supply-chain", "title": {"en": "Third-Party & Supply Chain", "ja": "サードパーティ依存とサプライチェーン設計"}},
+        {"route": "20-production-readiness/04-verification-strategy-for-distributed-systems", "title": {"en": "Verification Strategy", "ja": "分散システムの検証戦略"}},
+        {"route": "20-production-readiness/05-data-retention-and-compliance-engineering", "title": {"en": "Data Retention & Compliance", "ja": "データ保持とコンプライアンス設計"}}
+      ]
     }
   ]
 }

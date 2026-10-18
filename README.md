@@ -45,6 +45,7 @@ The parts are grouped by role, not by difficulty. Pick an entry point, then foll
 | 8-9: [Case Studies](08-case-studies/01-twitter.md), [Whitepapers](09-whitepapers/01-mapreduce.md) | Evidence for the mechanisms above | Read beside the mechanism chapter that names the system, not as a tour of companies; the pairing tables below give those neighbors |
 | 10-15: [Security](10-security/01-authentication-fundamentals.md) through [Deployment](15-deployment/01-deployment-strategies.md) | Complete subsystems with their own failure models | Any order; each is one design surface |
 | 16-19: [ML](16-ml-systems/01-ml-system-fundamentals.md), [LLM](17-llm-systems/01-agent-fundamentals.md), [Workflow](18-workflow-job-systems/01-workflow-system-fundamentals.md), and [Agent Engineering](19-compound-engineering/01-compound-engineering-fundamentals.md) | Applied domains built on Parts 1-6 | Start with Part 1, then take a track |
+| 20: [Production Readiness](20-production-readiness/01-design-documents-and-decision-records.md) | The layer that turns a working design into an approved, verified, lawful one | Read when a design needs sign-off, a dependency needs an owner, or an audit needs evidence |
 
 ### Reading one chapter
 
@@ -76,6 +77,7 @@ Chapters own one concept each. Where two designs meet, the boundary is stated in
 - **Service boundaries and API contracts** - [Discovery & Control-Plane State](12-service-mesh/01-service-discovery.md), [Mesh Data & Control Planes](12-service-mesh/03-sidecar-pattern.md), and [Edge Gateway & API Mediation](12-service-mesh/02-api-gateway.md) decide where cross-cutting policy lives, then [API Design & Evolution](12-service-mesh/04-api-design-patterns.md), [API Threat Boundaries](10-security/04-api-security.md), and [Zero-Trust Workload Architecture](10-security/05-zero-trust-architecture.md) decide what each hop is allowed to assume.
 - **Retrieval and ranking** - [Index Architecture & Internals](14-search-systems/01-inverted-indexes.md) and [Lexical Query Execution](14-search-systems/02-full-text-search.md) build the lexical path, [Vector Retrieval Systems](14-search-systems/03-vector-search.md) builds the semantic one, then [Ranking & Evaluation](14-search-systems/04-ranking-algorithms.md) and [Typeahead & Autocomplete](14-search-systems/06-typeahead-autocomplete.md) turn scores into a product, with [RAG Patterns](17-llm-systems/04-rag-patterns.md) and [Recommendation Systems](16-ml-systems/07-recommendation-systems.md) as the two consumers.
 - **Engineering systems for coding agents** - [Platform Fundamentals](19-compound-engineering/01-compound-engineering-fundamentals.md), [Tool & Runtime Contracts](19-compound-engineering/02-coding-agent-tool-design.md), and [Context & Policy Plane](19-compound-engineering/03-agent-context-engineering.md) build the platform, then [Repository Architecture](19-compound-engineering/04-ai-native-software-architecture.md), [Verification & Governance](19-compound-engineering/05-quality-engineering-with-ai-agents.md), and [Parallel Development](19-compound-engineering/06-compound-development-workflows.md) make it survive a fleet of agents, on top of [Agent Fundamentals](17-llm-systems/01-agent-fundamentals.md) and [Harness Engineering](17-llm-systems/09-harness-engineering.md).
+- **From design review to signed-off production** - [Design Documents & ADRs](20-production-readiness/01-design-documents-and-decision-records.md) and [Architecture Review & Governance](20-production-readiness/02-architecture-review-and-governance.md) put the decision on paper and give it a forum, [Third-Party & Supply Chain](20-production-readiness/03-third-party-dependencies-and-supply-chain.md) prices the failure modes that decision inherits, [Verification Strategy](20-production-readiness/04-verification-strategy-for-distributed-systems.md) proves it survives interleavings and injected faults, and [Data Retention & Compliance](20-production-readiness/05-data-retention-and-compliance-engineering.md) keeps it lawful after launch, on top of [Resilience Testing & Fault Injection](11-observability/09-resilience-testing-and-fault-injection.md) and [Progressive Delivery](15-deployment/01-deployment-strategies.md), which supply the two verifiers no pre-production environment can replicate.
 
 ### Papers next to mechanisms
 
@@ -324,6 +326,13 @@ Each case study starts from a product you can use today and works back to the me
 - [Repository Architecture for Safe Agentic Change](19-compound-engineering/04-ai-native-software-architecture.md)
 - [Verification and Governance for Agentic Change](19-compound-engineering/05-quality-engineering-with-ai-agents.md)
 - [Parallel Development and Integration](19-compound-engineering/06-compound-development-workflows.md)
+
+### Part 20: Production Readiness and Governance
+- [Design Documents and Architecture Decision Records](20-production-readiness/01-design-documents-and-decision-records.md)
+- [Architecture Review and Technical Governance](20-production-readiness/02-architecture-review-and-governance.md)
+- [Third-Party Dependency and Supply Chain Architecture](20-production-readiness/03-third-party-dependencies-and-supply-chain.md)
+- [Verification Strategy for Distributed Systems](20-production-readiness/04-verification-strategy-for-distributed-systems.md)
+- [Data Retention and Compliance Engineering](20-production-readiness/05-data-retention-and-compliance-engineering.md)
 
 <!-- BOOK_TOC:END -->
 
