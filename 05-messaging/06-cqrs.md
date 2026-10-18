@@ -178,6 +178,35 @@ Projection consumers accept old/new source event forms through tested adapters. 
 
 When a projection changes ownership, transfer source contract, checkpoint history, rebuild artifacts, runbooks, privacy classification, and query SLO, not just database credentials.
 
+## Product Knob Map
+
+Read-model products ship defaults chosen for indexing throughput, and those defaults decide what a query is allowed to return. The knobs below are the ones that determine freshness, version safety, generation visibility, and whether a rebuild can be paused without an outage. Confirm each on your cluster: several differ between managed and self-hosted builds.
+
+| Product and scope | Knob | Invariant it enforces | Default and how it misleads |
+| --- | --- | --- | --- |
+| Apache Kafka Streams projection | `commit.interval.ms`, `cache.max.bytes.mb` | progress is durable and each record contributes exactly once to an aggregate | commit interval trades write load against observable staleness, so "the projection is broken" is often the commit period. Caching suppresses intermediate updates per key, which silently changes aggregate results unless caching is disabled for those operators; correctness depends on a memory setting. |
+| Elasticsearch or OpenSearch read model | `refresh_interval`, `if_seq_no` with `if_primary_term` | a visible document reflects a known source version, and a stale writer cannot overwrite it | visibility lags the refresh interval, so an immediately following query legitimately misses the row; without conditional writes the index is last-write-wins, which lets a delayed update resurrect a deleted document. Setting `refresh_interval=-1` for a bulk load and forgetting it produces a permanently stale model with green health. |
+| AWS Lambda event source mapping (DynamoDB Streams, Kinesis, SQS) | `MaximumRetryAttempts`, `MaximumRecordAgeInSeconds`, `DestinationConfig` | a failing record is retried under a bound and then retained somewhere queryable | retries are unbounded and there is no failure destination by default, so one poison record either holds its shard forever or, once an age limit is added later, is discarded with no copy kept. Both outcomes look like transient consumer instability in metrics. |
+| PostgreSQL materialized view as a read model | `REFRESH MATERIALIZED VIEW CONCURRENTLY` plus a unique index over the full output | readers never see a partially refreshed model and queries are not blocked by maintenance | concurrency requires a unique index covering the output rows; without one the statement fails, and the usual fallback to a non-concurrent refresh takes an exclusive lock that stalls every query on it. Materialized views are also not incremental: each refresh re-reads the base relation. |
+| Multi-region read replica with last-writer-wins merging (for example DynamoDB global tables) | conflict resolution timestamp granularity | replicas converge to one value for a key | resolution uses coarse item timestamps, so two writes inside the same unit resolve by an implementation-defined tie-break. A projection that emits several updates per business event needs monotonic versioned writes or one writer region per key, not convergence-by-clock. |
+| Redis or Memcached in front of a read model | `maxmemory-policy`, TTLs | a served answer is either correct or explicitly absent | all-keys eviction removes projection entries under memory pressure and the client sees a miss rather than degradation, so treating an evictable store as authoritative turns capacity pressure into phantom deletions. Keep it a cache with a defined source fallback. |
+| Search index generation publication | alias swap in one atomic actions request | query traffic moves to a complete, validated generation only | pointing queries directly at a physical index exposes a half-built generation; an alias plus an atomic actions request is what makes cutover and rollback single-step operations rather than a data migration. |
+| PostgreSQL read replicas for read-your-writes | `hot_standby_feedback`, `max_standby_streaming_delay`, LSN-based session staleness | a client reads its own write without waiting arbitrarily | replica backlog is measured in WAL bytes, not seconds, and feedback trades replication lag against query cancellations on the replica. Session-staleness checks also assume you reuse the same connection, which transaction-mode pooling breaks silently: the check passes against a different backend than the query. |
+
+```bash
+# read-only: what will a query actually see right now?
+curl -s "$ES_URL/_alias/search-orders" | jq '.'                     # active generation
+curl -s "$ES_URL/search-orders-*/_settings?pretty" \
+  | grep -E 'refresh_interval|number_of_replicas'
+aws lambda list-event-source-mappings --query \
+  'EventSourceMappings[].{fn:FunctionName,retries:MaximumRetryAttempts,age:MaximumRecordAgeInSeconds,onFailure:DestinationConfig.OnFailure.Destination,state:State}'
+psql "$READ_DB" -c "SELECT matname, populated FROM pg_matviews"
+psql "$PRIMARY_DB" -c "SELECT client_addr, state, replay_lag,
+                             pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn)) AS backlog
+                      FROM pg_stat_replication"
+redis-cli CONFIG GET maxmemory-policy                                # cache or accidental authority?
+```
+
 ## Capacity and Cost Model
 
 Illustrative read model:
@@ -216,6 +245,30 @@ Track by projection, generation, source partition/schema, tenant, and query clas
 - source-to-projection reconciliation mismatches.
 
 Runbooks cover lag, poison schema, permanent gap, corrupt generation, query regression, failed cutover, rebuild overload, and privacy deletion. Operators need per-entity repair and partition rebuild tools with audit/dry-run.
+
+## Incident Playbook
+
+Read-model incidents are usually freshness or completeness disputes rather than hard failures, which means the first job is deciding whether the projection is wrong or merely behind. That distinction changes the action completely: one justifies a rebuild, the other only justifies a routing decision while it catches up.
+
+### Users report stale reads after successful writes
+
+Separate transport lag from applied state: last available source position, last contiguous applied position, and the source recorded time at that position. If those advance normally, the pipeline is healthy and the product contract about freshness is what failed, so answer with the freshness bound rather than infrastructure work. If a command path promised read-your-writes, honour it explicitly for that entity (consistency token wait within a deadline, write-side read path, or a typed not-yet-projected response) and check that waiters are bounded per tenant, because unbounded waiting converts a freshness bug into a connection-exhaustion outage. Do not insert sleeps into the client or lower the projection commit interval under pressure: the first is wrong under load and the second trades every other consumer's throughput for one screen.
+
+### A rebuild finished but the two generations disagree
+
+Reconcile by identity sets, not counts: per-partition row counts agree far more often than ID sets do, and a missing record plus an extra record is invisible to `COUNT`. Diff sampled ID ranges, aggregate values, and entity versions between generations, then locate the first divergence in source position; that position tells you whether the cause is a skipped range, an enrichment lookup that changed mid-build, or a schema adapter. Keep the old generation readable and do not promote. Do not accept "the difference is under the tolerance" for a user-facing model: state the specific reconciliation result, and if enrichment was involved, pin it to a versioned reference before rebuilding, otherwise the next rebuild disagrees differently.
+
+### Deleted rows reappear
+
+Almost always an ordering artifact rather than a lost delete: check whether tombstones outlive the maximum replay and out-of-order window, and whether writes are version-gated so an older source version cannot overwrite a newer row. Absence is not a version, so a projection that represents deletion only by removing the row cannot distinguish "deleted" from "not yet arrived". Restore correctness with versioned tombstones or a retained highest-source-version column that survives payload deletion under privacy policy. Do not fix it by deleting again and rebuilding the affected partition immediately afterward: if the replay window still contains the older update, you have scheduled the resurrection a second time.
+
+### Queries regressed after a generation cutover
+
+Compare per-query-class latency distributions and cache hit ratios between generations before touching either; a mean that moved while p99 did not is usually noise plus a smaller result set. Real regressions come from physical layout: index or partition key chosen for the wrong filter/sort combination, missing stable tie-breaker forcing large sorts, unbounded collections rewritten on hot entities, or a new generation with fewer shards and the same write share. Verify by replaying recorded queries against both generations offline. Do not roll routing back and forth to "see if it gets better": every flip discards warm caches and invalidates the comparison you need, so pick one generation deliberately and keep it pinned while measuring.
+
+### The projection is stuck on one record
+
+Classify before acting: a schema or code defect will fail every occurrence of that shape, while a data or authorization defect fails one record and its siblings succeed. Read the failure's position and event type, then quarantine the specific identity with its source version and error so the pipeline advances past it under a recorded decision, and per-item inbox state keeps the rest of the batch durable. Restarting the consumer without changing anything is the most common non-action here and simply replays the same failure. Do not drop the record or advance the contiguous checkpoint through it to relieve lag: a skipped required change makes every later checkpoint claim false, and the eventual rebuild will not know which records were ever omitted.
 
 ## Security and Privacy
 
@@ -258,6 +311,9 @@ Before creating a projection:
 - [PostgreSQL: Materialized Views](https://www.postgresql.org/docs/current/rules-materializedviews.html)
 - [Elasticsearch: Index Aliases](https://www.elastic.co/guide/en/elasticsearch/reference/current/aliases.html)
 - [CloudEvents Specification](https://github.com/cloudevents/spec)
+- [Apache Kafka Streams: cache.max.bytes.mb](https://kafka.apache.org/documentation/#streamsconfigs_cache.max.bytes.mb)
+- [PostgreSQL: REFRESH MATERIALIZED VIEW](https://www.postgresql.org/docs/current/sql-refreshmaterializedview.html)
+- [Amazon DynamoDB: Global Tables Conflict Resolution](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/globaltables.HOWITWORKS.html)
 
 ---
 

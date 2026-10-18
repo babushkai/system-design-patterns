@@ -129,6 +129,34 @@ Deletion proceeds from a watermark: all required replicas have the segment; no l
 
 External payloads need reference accounting or expiry derived from the queue’s maximum retention plus safety margin. A periodic reconciliation compares live message references with objects and detects both missing payloads and orphaned cost.
 
+## Product Knob Map
+
+Queue products disagree about which side of a claim owns time, so the mapping below starts from the invariant and walks to the setting that enforces it. In each product exactly one knob carries the correctness promise, and its default was chosen for throughput or developer convenience rather than for your deadline. Read the defaults off the running deployment before trusting any table, including this one.
+
+| Product and scope | Knob | Invariant it enforces | Default and how it misleads |
+| --- | --- | --- | --- |
+| Amazon SQS, per queue or per receive | `VisibilityTimeout` | a claim is exclusive for a bounded window | 30 s. It is a redelivery timer, not an execution deadline: a healthy worker still running at second 31 gets a duplicate peer rather than an extension. Renew from the worker's own heartbeat with `ChangeMessageVisibility` (12 h ceiling). |
+| Amazon SQS, per queue | `RedrivePolicy.maxReceiveCount` | retry attempts are bounded and quarantine happens automatically | counts deliveries, not failures, so a crash loop burns the budget before anyone reads the payload; the DLQ then holds one message with twenty attempts. |
+| RabbitMQ, per channel | `basic.qos` prefetch count | in-flight work per consumer is bounded | 0 means unbounded, which turns one slow consumer into the queue's cold storage and makes rebalancing take minutes. Set it to a concurrency budget, not to "a bit more". |
+| RabbitMQ quorum queues | `x-delivery-limit`, `x-retry-interval` | poison work is quarantined without manual intervention | classic mirrored queues have no delivery limit at all, so a migration that keeps them silently loses the bounded-retry invariant. |
+| Apache Kafka consumer group | `max.poll.records`, `max.poll.interval.ms` | a member that stops making progress is removed | 500 records and 300 s. A batch whose p99 exceeds the interval produces a rebalance loop, not an error at the failing record. |
+| Apache Kafka consumer group | `enable.auto.commit`, `auto.offset.reset` | progress is recorded only after effects complete | background time-based commit advances the offset ahead of processing, so a rebalance loses exactly the in-flight window; `latest` skips history on a new group unless you reset it deliberately. |
+| Redis Streams consumer group | `XAUTOCLAIM` / `XCLAIM` min-idle-time | work abandoned by a dead consumer is reassigned | nothing reassigns by itself: entries stay in the pending entries list forever, and `maxmemory-policy` eviction deletes stream entries rather than rejecting the write. |
+| PostgreSQL as a queue | `SELECT … FOR UPDATE SKIP LOCKED` plus a `(status, visible_at)` partial index | claim contention stays bounded as the table grows | no delay, retry, or expiry semantics come free; without the partial index every claim scans and autovacuum falls behind the delete churn. |
+| NATS JetStream workqueue | `ack_wait`, `max_deliver`, ack-pending window | unacked work is redelivered with a bound | redelivery is driven by wall clock since delivery, not by worker liveness, so an overloaded pool sees the same message again while it is still running. |
+
+```bash
+# what the queue actually promises right now (script this into the service runbook)
+aws sqs get-queue-attributes --queue-url "$QUEUE_URL" \
+  --attribute-names VisibilityTimeout MaximumMessageSize MessageRetentionPeriod \
+    RedrivePolicy ReceiveWaitTimeSeconds
+rabbitmqctl list_queues name type arguments state messages messages_unacknowledged consumers
+redis-cli XINFO GROUPS orders:stream                       # pending vs largest-delivered id
+kafka-consumer-groups.sh --bootstrap-server "$BROKERS" --describe --group billing-workers
+psql -c "SELECT status, count(*) AS n, now() - min(visible_at) AS oldest_wait
+         FROM jobs GROUP BY status ORDER BY oldest_wait DESC"
+```
+
 ## Capacity and Cost Model
 
 Consider an illustrative queue:
@@ -166,6 +194,30 @@ Observe by queue, partition, tenant, message class, and consumer group:
 - payload fetch failures, missing objects, and orphaned objects.
 
 Runbooks cover growing backlog, hot partition, full disk, stuck scheduled mover, consumer rebalance loop, mass lease expiry, corrupt payload, and control-plane outage. Drills should use production-sized backlogs; empty-queue failover proves little.
+
+## Incident Playbook
+
+The order below is the triage order: each step names what to read, the decision it licenses, and the action that is safe while the backlog is still growing. All five assume the queue itself is serving traffic; a control-plane or partition outage is a different runbook.
+
+### Backlog grows with no errors
+
+Compare arrival rate with completion rate per message class, then check whether service time moved. Flat service time and flat throughput mean a capacity or placement limit: one hot partition, a prefetch ceiling, or a concurrency budget. Rising service time means a dependency, and adding workers converts a slow incident into an outage of that dependency. Decision rule: only add consumers when the saturated resource is the consumer itself; otherwise raise the downstream budget first or shed low-priority classes at admission. Expected drain time is backlog divided by surplus capacity, so state it in the incident channel as a number and re-derive it after each change.
+
+### Duplicates appear although one worker owns the message
+
+Read claim expirations and redeliveries next to the service-time distribution for that class. Expiry outrunning p99 execution is the usual cause, and the queue is behaving correctly. Contain by lengthening the lease for that class and lowering its concurrency; do not lower it globally, because unrelated classes inherit the change. Repair with the effect idempotency key rather than the message id when the effect lives in a third-party system, then prevent recurrence with heartbeat-driven extension and claim-generation fencing at the effect service.
+
+### Consumers flap or rebalance in a loop
+
+Check oldest in-flight age against the liveness deadline of the client library before touching any timeout. A member that exceeds its poll interval is being evicted for not finishing, so raising the session timeout only widens the window in which two members own the same partition. Shrink the unit of work per poll instead, and confirm recovery by watching assignment epochs stop incrementing while completion rate holds.
+
+### Dead-letter queue grows during a deploy
+
+Classify before redriving: sample twenty messages, group by error class, producer version, and tenant. One poison payload is quarantined individually; a systemic class means the consumer or producer is wrong and every redrive re-runs broken code against live effects. Fix forward or roll back, then replay in a controlled pass at a rate the downstream can absorb, with duplicate suppression verified on a small slice first. Purging to make the dashboard quiet destroys the only complete record of what failed.
+
+### Queue reads empty while work is unfinished
+
+Look for work that is stored but not visible: in-flight or claimed counts, delayed and scheduled lanes, redelivery backoff windows, subscription filters that match nothing, and consumers holding prefetched messages that died without releasing them. Only after those are ruled out should the incident be treated as message loss, because the recovery path (replaying producers from their own durable log) is expensive and itself creates duplicates.
 
 ## Security and Isolation
 
@@ -208,6 +260,11 @@ Choose the queue design by answering:
 - [PostgreSQL: SELECT, SKIP LOCKED](https://www.postgresql.org/docs/current/sql-select.html)
 - [John D. C. Little: A Proof for the Queuing Formula L = λW](https://doi.org/10.1287/opre.9.3.383)
 - [CloudEvents Specification](https://github.com/cloudevents/spec)
+- [Apache Kafka: Consumer Configuration](https://kafka.apache.org/documentation/#consumerconfigs)
+- [RabbitMQ: Quorum Queues](https://www.rabbitmq.com/docs/quorum-queues)
+- [Redis: Streams, Declarative and Consumer Groups](https://redis.io/docs/latest/develop/data-types/streams/)
+- [NATS JetStream: Consumer Configuration](https://docs.nats.io/using-nats/jetstream/manage_jetstream/consumers)
+- [Amazon SQS: FIFO Queues and Duplicate Deduplication](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/standard-queues-fifo.html)
 ---
 
 ## Related Chapters

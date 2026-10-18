@@ -79,6 +79,36 @@ review questions, or lessons that transfer.
   chapter's voice beats a generic summary, and a takeaway that would still read correctly
   at the end of any other chapter is not a takeaway.
 
+### Product Knob Map and Incident Playbook
+
+Every chapter in `05-messaging` plus the replication chapters of `02-distributed-databases`
+carry an operational pair, and the check names both headings so a new chapter cannot describe
+a mechanism without the parts that make it usable on a shift:
+
+```markdown
+## Capacity and Cost Model     ...capacity section
+## Product Knob Map            Real settings that decide the contract, then read-only checks
+...
+## Operations and Observability Metrics and the runbook list
+## Incident Playbook           Symptom-first routes: look, decide, do, verify
+```
+
+- `## Product Knob Map` sits immediately before the capacity section, where a reader decides
+  what to configure. One table maps product and scope to the knob, the invariant it enforces,
+  and how the default misleads; a fenced block after it prints the live values.
+- Mutating commands stay out of that block. Someone under pressure copies what is on the
+  screen, so the test for every line is that it could run on production at three in the
+  morning and change nothing.
+- `## Incident Playbook` follows the observability or security section, after every mechanism
+  it operates on has been introduced. Each subsection is one symptom written in look, decide,
+  do, verify order, and names the reflex action it replaces: the costliest move in these
+  subsystems is usually the plausible-looking one.
+- Adopt the pair chapter by chapter. `RUNBOOK_SECTIONS` accepts a part directory or an
+  individual chapter, so a part under construction enrolls the chapters it has finished
+  instead of leaving a heading promise over the ones that are not ready.
+- Hedge version-dependent defaults and tell the reader to read values off the running system.
+  The section is a map of where the levers are, not an oracle for someone else's cluster.
+
 ### Related Chapters format
 
 Three to eight bullets, each one link plus the reason the edge exists:

@@ -184,6 +184,36 @@ Cross-aggregate transactions are possible only within a shared transactional sha
 
 Recovery validates the latest complete store checkpoint/snapshot, replays committed database/WAL state, then restarts publication and projections from their durable checkpoints. Align command-result identities with event recovery. Restoring events without idempotent command results can cause a retried client command to append a second logical transition.
 
+## Product Knob Map
+
+Event store settings decide how much history you can still reconstruct, which is the promise customers actually rely on. The knobs below are grouped by the invariant each one carries: contiguity, concurrency fencing, snapshot subordination, retention honesty, and command identity. Several stay invisible until a replay disagrees with your current state, so read them from production rather than from a framework default file.
+
+| Product and scope | Knob | Invariant it enforces | Default and how it misleads |
+| --- | --- | --- | --- |
+| EventStoreDB or Kurrent DB stream | append expected version (`Any`, `StreamExists`, exact version) | two commands based on one version cannot both commit | an unconditional expected version is convenient in tests, so a code path copied into a command handler removes optimistic concurrency while the aggregate code still assumes it. Fencing must be asserted per append, not inherited from a repository helper. |
+| EventStoreDB or Kurrent DB stream metadata | `$maxCount`, `$maxAge`, `truncateBefore` plus scavenging | reconstruction is possible from the earliest retained event | these are silent history truncation: scavenging physically removes events, so temporal queries and alternative projections stop working at an unannounced boundary while writes keep succeeding. Record the truncation boundary as a product decision with a named owner. |
+| Apache Kafka compacted topic used as a store | `cleanup.policy=compact` with `min.compaction.lag.ms`, `delete.retention.ms` | every key's latest value survives and tombstones expire predictably | compaction removes intermediate facts by design and drops tombstones after the retention window, so a lagging consumer can neither replay history nor prove deletion. A compacted topic is a state table with a changelog, not an event store. |
+| Kafka Streams or ksqlDB projection | `processing.guarantee=exactly_once_v2`, `transaction.timeout.ms`, changelog topic policy | a failed task republishes nothing and recoverable state survives restart | changelog and repartition topics need compaction while cleanup defaults to delete, so inheriting it leaves the state store unrecoverable after a long outage. Under exactly-once, Streams sets `transaction.timeout.ms` to 10 s instead of the 60 s producer default, requires at least `commit.interval.ms`, and cannot exceed the broker's 15-minute `transaction.max.timeout.ms`: a commit slower than that timeout aborts and fences the producer, which surfaces as restart loops rather than as slow processing. |
+| PostgreSQL event table | unique `(stream_id, aggregate_version)` plus sequence `CACHE n` on the global position | per-stream contiguity is enforced by the store rather than by application discipline | a cached sequence allocates in blocks and jumps after a restart, so the global position legitimately has holes; using it as an aggregate version turns every restart into phantom gaps. Keep stream versions separate from commit positions and document which one readers may assume is dense. |
+| Axon Server retention and deduplication | events-to-keep with snapshot-based retention; command deduplication time-to-live | pruning keeps a valid reconstruction point and retried commands are recognized | snapshot-based retention discards events preceding the newest retained snapshot, so "we keep everything" is false after the first prune. Deduplication expires on a timer, which means a command retried after that window becomes a second accepted transition. |
+| Debezium or logical decoding feed off the event table | `snapshot.mode`, replication slot lifetime | a rebuilt consumer sees history exactly once | re-snapshotting to fix lag re-reads rows that projections already applied, and a dropped slot forces a fresh snapshot rather than resuming, which reads like recovery and is a history rewrite. Consumers needing resume semantics belong on the outbox feed, not on a new connector. |
+| Field-level encryption for privacy-sensitive event payloads | key custody and scheduled deletion window | erasure is provable without rewriting immutable events | crypto-shredding works only if every copy is covered by the same key policy; a deletion pending window shorter than your backup restore policy, or an unencrypted duplicate in a debug export, makes erasure unverifiable. Verify with a restore drill rather than a ticket closure. |
+
+```bash
+# read-only: does the live store still honor the promises its schema implies?
+psql "$EVENT_DB" -c "SELECT stream_id, count(*) AS rows, max(aggregate_version) AS top_version
+                     FROM events GROUP BY 1 HAVING count(*) <> max(aggregate_version)
+                     LIMIT 20"                                # streams with version holes
+psql "$EVENT_DB" -c "SELECT min(created_at) AS oldest_command_result,
+                            now() - max(created_at) AS newest_result_age FROM command_results"
+psql "$EVENT_DB" -c "SELECT slot_name, active, restart_lsn,
+                            pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)) AS retained
+                     FROM pg_replication_slots"
+kafka-topics.sh --bootstrap-server "$BROKERS" --describe --topic orders.projection.changelog \
+  | grep -E 'cleanup.policy|min\.compaction\.lag|delete\.retention'
+aws kms get-key-rotation-status --key-id "$FIELD_KEY_ID"      # crypto-shred feasibility input
+```
+
 ## Capacity and Cost Model
 
 Illustrative domain:
@@ -225,6 +255,30 @@ Track by aggregate/event type, shard, schema, snapshot version, and projection/p
 
 Runbooks cover corrupt event, unknown schema, hot aggregate, conflict storm, invalid snapshot, projection/publication lag, replay overload, privacy erasure, and inconsistent disaster restore.
 
+## Incident Playbook
+
+Event-store incidents are usually discovered far from their cause, because the store keeps accepting writes while reconstruction quietly diverges. The sequence below resolves whether the authoritative record is damaged or a derived artifact is wrong, which is the decision that determines whether you stop traffic or stop a rebuild.
+
+### Expected-version conflicts spike after a deploy
+
+Separate contention from corruption by charting conflict rate per aggregate against append success rate. A healthy store rejecting concurrent writers means fencing works and something started two writers on one aggregate: typically a retry loop, a scheduled job overlapping request traffic, or a workflow that lost its single-owner guarantee. Reload the stream and re-run the command decision, which is the correct response; if conflicts persist for one aggregate, that aggregate is too large and needs splitting at an invariant boundary, or per-aggregate serialization in front of it. Do not switch appends to an unconditional expected version to quiet the alert: you trade a visible rejection for two committed histories, and every later replay will disagree with itself.
+
+### Replay no longer reproduces current state
+
+Bisect by comparing a per-version state digest computed on replay against the digest recorded when that version was written; the first mismatch is where non-determinism entered. Usual sources are reducers that read wall-clock time, mutable configuration, or remote lookups, plus an upcaster that quietly gained a default. Contain by pinning the reducer version that reproduces the stored state for reads, then move the missing input into the event or an immutable historical reference, and emit a corrective event for aggregates already affected. Do not overwrite current state with a hand-built snapshot: it destroys the only evidence of which transition was wrong, and a store trusted for audit has to explain a correction rather than replace it.
+
+### Load latency creeps up with no errors
+
+Check snapshot hit ratio before touching cache sizes or database tuning, because a silent drop to zero hits means loaders fell back to full-stream replay. Selection fails on ordinary changes: a reducer or snapshot schema version bump that excludes older snapshots, an aggregate class rename that stops a type filter matching, or a digest mismatch that marks snapshots invalid so they are discarded as designed. Confirm by loading one hot aggregate with instrumentation and reading which candidate snapshot was rejected, then fix the compatibility rule and rebuild snapshots for the affected population in the background. Do not raise snapshot frequency as the remedy: write amplification rises while every load still replays, so the incident appears mitigated until the next release.
+
+### Reconstruction starts at a boundary nobody can explain
+
+Establish the truncation boundary first (earliest retained event per stream class, and which policy removed what preceded it), then classify the request as temporal query, projection rebuild, or audit obligation. Each has a different answer and only some of them require history. Where the removed prefix is required, restore from a backup whose retention covered it, verify against surviving integrity anchors, and publish a genesis or compaction event so the new floor is explicit rather than inferred from an empty read. Enumerate every copy when privacy deletion is the reason, including backups, exported broker events, projections, snapshots, and debug stores. Do not answer with "the data is old, replay from now": downstream consumers rebuilding from the new floor will silently omit state, and after pruning you cannot claim full temporal reconstruction before that boundary.
+
+### One business intent produced two transitions
+
+Determine whether the duplicate is a retry of the same command identity or a genuinely second accepted intent, since only the first is a store defect: compare command ids and request digests in the command-result table, then check how long that evidence is retained against both the client retry window and your disaster-recovery replay depth. Repair with an explicit compensating transition rather than deletion. Prevention is the command-identity check inside the append transaction plus command-result retention beyond the maximum retry horizon, which is exactly what a restore exposes as missing when events and idempotency evidence come from different recovery points. Do not rely on a unique event id alone: it catches byte-identical retries and misses the same intent re-submitted under a fresh identifier, which is what real clients produce after a timeout.
+
 ## Security and Isolation
 
 Authorize command handling, stream reads, temporal queries, replay/export, schema registration, snapshots, and repair independently. Tenant ID comes from authenticated context, not untrusted event payload. Encrypt payloads and backups with scoped keys; redact sensitive metadata from logs and traces.
@@ -265,6 +319,10 @@ Answer:
 - [Microsoft: CQRS Journey](https://learn.microsoft.com/en-us/previous-versions/msp-n-p/jj554200(v=pandp.10))
 - [CloudEvents Specification](https://github.com/cloudevents/spec)
 - [NIST SP 800-92: Guide to Computer Security Log Management](https://csrc.nist.gov/pubs/sp/800/92/final)
+- [Apache Kafka: Log Compaction](https://kafka.apache.org/documentation/#compaction)
+- [Apache Kafka Streams: Processing Guarantee](https://kafka.apache.org/documentation/#streamsconfigs_processing.guarantee)
+- [AWS KMS: Scheduling Key Deletion](https://docs.aws.amazon.com/kms/latest/developerguide/deleting-keys.html)
+- [PostgreSQL: CREATE SEQUENCE](https://www.postgresql.org/docs/current/sql-createsequence.html)
 
 ---
 

@@ -67,6 +67,24 @@ DEEP_SYSTEM_REQUIRED_HEADINGS = [
     re.compile(r"^## References$", re.MULTILINE),
 ]
 
+# The runbook chapters carry an incident-readiness pair: the settings that decide whether
+# the chapter's contract holds on a live deployment, and a symptom-first route through the
+# failures those settings produce. Naming the pair here keeps the two from drifting apart
+# one chapter at a time, which is how a reference book turns into a description of
+# mechanisms that nobody can operate. Entries are either a part directory, which enrolls
+# every chapter in it, or an individual chapter, so a part can adopt the pair chapter by
+# chapter instead of in one sweeping edit.
+RUNBOOK_SECTIONS = [
+    Path("05-messaging"),
+    Path("02-distributed-databases/01-single-leader-replication.md"),
+    Path("02-distributed-databases/02-multi-leader-replication.md"),
+    Path("02-distributed-databases/03-leaderless-replication.md"),
+]
+RUNBOOK_REQUIRED_HEADINGS = [
+    re.compile(r"^## Product Knob Map$", re.MULTILINE),
+    re.compile(r"^## Incident Playbook$", re.MULTILINE),
+]
+
 # Every chapter opens with the same scannable summary so readers (and the site's
 # excerpt/OG pipeline) can rely on the first section being the verdict, not a preamble.
 LEAD_SUMMARY_HEADING = "TL;DR"
@@ -300,6 +318,42 @@ def validate_deep_system_chapters(errors: list[str]) -> None:
             if positions and positions != sorted(positions):
                 errors.append(
                     f"{rel(path)}: required deep-system headings are out of order"
+                )
+
+
+def validate_runbook_sections(errors: list[str]) -> None:
+    """Keep the incident-readiness pair in the chapters that carry it.
+
+    A Product Knob Map names the product settings that decide whether the chapter's
+    contract holds once it is deployed, and an Incident Playbook turns the chapter's
+    failure traces into symptom-first actions. Both belong in the middle of a chapter,
+    so this pins presence and relative order only: which knobs and which symptoms earn a
+    place is editorial judgment that no heading pattern can encode.
+    """
+
+    for section in RUNBOOK_SECTIONS:
+        entry = ROOT / section
+        chapters = sorted(entry.glob("*.md")) if entry.is_dir() else [entry]
+        for path in chapters:
+            if not path.is_file():
+                errors.append(f"{rel(path)}: listed as a runbook chapter but missing")
+                continue
+            prose = strip_fenced_code(path.read_text(encoding="utf-8"))
+            positions: list[int] = []
+            for heading in RUNBOOK_REQUIRED_HEADINGS:
+                match = heading.search(prose)
+                if not match:
+                    errors.append(
+                        f"{rel(path)}: missing required heading matching {heading.pattern}"
+                    )
+                    break
+                positions.append(match.start())
+
+            if len(positions) == len(RUNBOOK_REQUIRED_HEADINGS) and positions != sorted(
+                positions
+            ):
+                errors.append(
+                    f"{rel(path)}: required runbook headings are out of order"
                 )
 
 
@@ -989,6 +1043,7 @@ def main() -> int:
     validate_advertised_counts(errors, article_count)
     validate_frontmatter(errors)
     validate_deep_system_chapters(errors)
+    validate_runbook_sections(errors)
     validate_unique_chapter_titles(errors)
     validate_unique_h2_headings(errors)
     validate_english_section_casing(errors)

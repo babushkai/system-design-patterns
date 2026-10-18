@@ -177,6 +177,33 @@ Subscription metadata can dominate control-plane operations. With 60 subscriptio
 
 If one replay reads the full seven-day logical corpus in 12 hours, it adds about 1.3 GiB/s before replication and downstream writes. Allocate replay capacity explicitly.
 
+## Product Knob Map
+
+Every product below stores subscription progress somewhere different, and that difference decides what a paused consumer costs you. Locate the position store first, then read the retention knob that garbage-collects it.
+
+| Product and scope | Knob | Invariant it enforces | Default and how it misleads |
+| --- | --- | --- | --- |
+| Apache Kafka topic and group | `retention.ms` against `offsets.retention.minutes` | replay is possible for as long as a subscription may be paused | both default to seven days. A group idle longer than the offset window loses its committed positions, and on restart `auto.offset.reset` decides silently whether it re-reads everything or skips everything. |
+| Google Cloud Pub/Sub subscription | `ackDeadlineSeconds`, exactly-once flag | a delivery is owned by one attempt for a bounded time | 10 s unless extended. Long handlers see redelivery while still working; enabling ordered or exactly-once delivery raises the minimum deadline and changes throughput ceilings. |
+| Google Cloud Pub/Sub subscription | `messageRetentionDuration`, `retainAckedMessages` | undelivered backlog is bounded and observable | unacknowledged messages are held seven days from the moment of publication by default, bounded between ten minutes and thirty-one days, so the clock starts before the first failed delivery. With no dead-letter topic attached an expired message is simply gone: a consumer paged on Monday cannot recover Tuesday's backlog. |
+| Amazon SNS subscription | `FilterPolicy`, endpoint `DeliveryPolicy` | routing and retry are decided on metadata the broker may see | filters match message attributes, never the body, which pushes teams to duplicate business fields into attributes; endpoint retries stop at the policy ceiling and drop unless a dead-letter queue is attached. |
+| Amazon SNS FIFO topic | `ContentBasedDeduplicationId` window | duplicate publications collapse into one delivery | deduplication uses a short rolling window of message digests, so it protects against an immediate retry storm and not against a replay written last week. |
+| RabbitMQ exchange or stream | binding pattern, stream `x-stream-offset` | one publication reaches many independent readers | bindings match routing keys only, so payload predicates become consumer-side scans; a stream offset stored per application name survives restarts while a client-held cursor does not. |
+| NATS JetStream consumer | `deliver_policy`, `max_ack_pending` | a new reader states where history begins | an omitted start policy means deliver-all, so recreating a durable consumer replays retained history and the team reads legitimate redelivery as a duplicate bug; switching it to deliver-new to stop that silently skips everything published during the outage instead. In-flight caps bound worker memory rather than correctness. |
+| Azure Service Bus subscription | `DefaultMessageTimeToLive`, `MaxDeliveryCount`, `AutoDeleteOnIdle` | abandoned subscriptions expire by policy rather than by surprise | a per-subscription TTL shorter than the topic's, or an idle auto-delete, removes replayable state during a quiet quarter with no incident attached. |
+
+```bash
+# read-only: what each subscription is actually promised (changes go through the control plane)
+gcloud pubsub subscriptions describe orders-auditor --format \
+  'config(ackDeadlineSeconds,messageRetentionDuration,enableMessageOrdering,filter,deadLetterPolicy)'
+aws sns list-subscriptions-by-topic --topic-arn "$TOPIC_ARN" \
+  --query 'Subscriptions[].{proto:Protocol,filters:FilterPolicy}'
+kafka-get-offsets.sh --bootstrap-server "$BROKERS" --topic orders          # log end offsets
+kafka-consumer-groups.sh --bootstrap-server "$BROKERS" --describe --all-groups \
+  | awk '$6 != "-" && $6 > 0 {print}'                                      # groups with committed lag
+nats consumer inspect orders auditor                                       # ack floor vs stream state
+```
+
 ## Concrete Failure Trace: Abandoned Subscription Pins Retention
 
 A team creates a replayable subscription for an experiment, pauses it, and abandons the project. Retention policy says the oldest active subscription checkpoint protects data. The checkpoint remains six months behind, disk usage grows, and brokers approach full capacity. Deleting old segments would violate the subscription’s apparent replay contract; keeping them threatens the whole topic.
@@ -197,6 +224,28 @@ Track per topic, partition, subscription, schema, tenant, and region:
 - regional relay lag, duplicate imports, loops prevented, and RPO exposure.
 
 Runbooks cover publisher schema regression, slow/abandoned subscription, accidental replay, corrupt snapshot, filter rollout error, control-plane outage, regional relay loop, and retention pressure.
+
+## Incident Playbook
+
+### One subscription lags while the rest are healthy
+
+Establish whether its freshness contract is actually broken, because lag without a deadline is a cost problem rather than an outage. Read retained bytes attributable to that subscription next: if it pins topic retention, the shared resource is at risk and the decision is which of three options to take (throttle the consumer, extend storage with an owner and an expiry, or expire its retention lease under audit). Seek it forward to reclaim space only with a recorded approval naming the events being abandoned; deleting the subscription achieves the same thing with worse evidence.
+
+### Consumers resume on stale data, or skip history entirely
+
+Compare committed positions with the log start and look for a reset event rather than an outage: idle group reaped by offset retention, a renamed consumer group, a restored deployment with an old position store, or a filter version change that made previously skipped records visible. Restore the previous positions from the offset store or audit log if they exist; otherwise choose explicitly between backfill and forward-only restart. Alert on committed-position regression, since it is invisible in lag dashboards that only measure distance to the log end.
+
+### A new subscriber needs current state immediately
+
+Do not point a fresh earliest-position consumer at live effects: it re-executes every historical side effect while pretending to bootstrap. Take the snapshot-plus-suffix path from this chapter, then derive the ETA from retained bytes divided by measured read throughput, and throttle by bytes against downstream capacity. Verify on a shadow destination that idempotency holds before the replay touches production effects, and keep the replay in its own subscription so production progress is never moved backward.
+
+### A publisher ships an event shape consumers reject
+
+Bound the blast radius by schema ID and traffic share before touching code: which subscriptions validate at ingress, which fail per record, and which accept silently and write garbage. Reject or quarantine at ingress if the topic has validated publication, otherwise roll the producer back; a consumer hotfix that accepts both shapes without a versioned resolver creates a third interpretation of the fact. After containment, the event catalog entry and CI compatibility check are the fix, not the rollback commit.
+
+### Fan-out or relay duplication across regions
+
+A duplicate is always an identity failure before it is a transport failure: check whether the relay preserved source topic, partition, position, and event ID, and whether the loop-prevention marker survived the hop. Stop the relay rather than the consumers, since stopping the writer bounds growth while downstream effects are still deduplicable. Confirm healing with per-region digest comparison over a bounded window, then redrive only the range proven missing.
 
 ## Security and Privacy
 
@@ -239,6 +288,9 @@ Before creating a topic, answer:
 - [Apache Avro Specification: Schema Resolution](https://avro.apache.org/docs/current/specification/#schema-resolution)
 - [Google Cloud Pub/Sub: Subscription Properties](https://cloud.google.com/pubsub/docs/subscription-properties)
 - [NATS JetStream: Consumers](https://docs.nats.io/nats-concepts/jetstream/consumers)
+- [Amazon SNS: Message Filtering](https://docs.aws.amazon.com/sns/latest/dg/sns-message-filtering.html)
+- [Google Cloud Pub/Sub: Subscription Types and Delivery Behaviour](https://cloud.google.com/pubsub/docs/subscriber)
+- [RabbitMQ: Streams](https://www.rabbitmq.com/docs/streams)
 
 ---
 
