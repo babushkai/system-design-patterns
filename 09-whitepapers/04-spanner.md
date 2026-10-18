@@ -4,7 +4,7 @@
 
 Spanner's distinguishing contribution is not merely “a database synchronized by atomic clocks.” It composes **per-shard consensus, multi-version state, pessimistic transactions, and a bounded time API** so commit timestamps respect real-time order. TrueTime does not eliminate coordination; it makes the remaining uncertainty explicit and sometimes waits it out.
 
-## Publication Identity and Version Discipline
+## Publication Identity and Scope
 
 - **Paper:** *Spanner: Google's Globally-Distributed Database*
 - **Authors:** James C. Corbett, Jeffrey Dean, Michael Epstein, Andrew Fikes, Christopher Frost, J. J. Furman, Sanjay Ghemawat, Andrey Gubarev, Christopher Heiser, Peter Hochschild, Wilson Hsieh, Sebastian Kanthak, Eugene Kogan, Hongyi Li, Alexander Lloyd, Sergey Melnik, David Mwaura, David Nagle, Sean Quinlan, Rajesh Rao, Lindsay Rolig, Yasushi Saito, Michal Szymaniak, Christopher Taylor, Ruth Wang, and Dale Woodford
@@ -104,7 +104,7 @@ The OSDI evaluation mixes microbenchmarks, failure injection, TrueTime measureme
 - F1's 24-hour production measurements reported mean client-observed latencies of 8.7 ms over 21.5 billion reads, 72.3 ms over 31.2 million single-site commits, and 103.0 ms over 32.1 million multi-site commits. The read standard deviation was 376.4 ms and write tails included lock contention, emphasizing that means hide broad distributions.
 - The F1 dataset was tens of terabytes uncompressed. The previous manual MySQL resharding had taken more than two years of work across dozens of teams. That is organizational evidence for automatic placement, not a direct throughput benchmark.
 
-## Limits and Assumptions
+## Assumptions and Limits
 
 - Synchronous quorum and 2PC latency follow replica placement; geography cannot be abstracted away.
 - Strict 2PL can block and deadlock; contention appears in tail latency.

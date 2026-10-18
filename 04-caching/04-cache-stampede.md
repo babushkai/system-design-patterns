@@ -130,7 +130,7 @@ ABSENT -> LEADER_LOADING
 Required semantics:
 
 - perform a second cache check after becoming leader;
-- attach waiter cancellation to its own deadline without cancelling work needed by others;
+- attach waiter cancellation to its own deadline without canceling work needed by others;
 - cap waiters per key and total in-flight keys;
 - remove failed futures so the key can recover;
 - add backoff before a failed key is retried;

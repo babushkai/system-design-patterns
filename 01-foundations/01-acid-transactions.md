@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-ACID names four properties of a transaction, but the label alone is not a complete contract. The exact isolation level, durability boundary, replication acknowledgement, and failure assumptions vary by database and configuration. Each letter hides real engineering tradeoffs: undo versus redo, flush latency versus durability, and concurrency control versus throughput. Read the product's documented semantics and verify the deployed configuration instead of treating "ACID" as a binary feature flag.
+ACID names four properties of a transaction, but the label alone is not a complete contract. The exact isolation level, durability boundary, replication acknowledgment, and failure assumptions vary by database and configuration. Each letter hides real engineering tradeoffs: undo versus redo, flush latency versus durability, and concurrency control versus throughput. Read the product's documented semantics and verify the deployed configuration instead of treating "ACID" as a binary feature flag.
 
 ---
 
@@ -27,7 +27,7 @@ What can go wrong without transactional guarantees?
 
 **Concurrency failures:**
 - Two transfers from A execute concurrently. Both read USD 500, both subtract USD 100, both write USD 400. A should be USD 300, but is USD 400. The bank created USD 100 from nothing.
-- A reporting query runs between steps 3 and 6. It sees A debited but B not yet credited. The books don't balance.
+- A reporting query runs between steps 3 and 6. It sees A debited but B not yet credited. The books do not balance.
 
 **Durability failures:**
 - The database says COMMIT succeeded. Power dies. The kernel had the write in its page cache but never called fsync. On restart, the write is gone.
@@ -89,7 +89,7 @@ PostgreSQL transaction lifecycle:
 6. Old row versions cleaned up by autovacuum (async)
 ```
 
-The key difference: InnoDB needs undo logs for rollback because it updates pages in-place. PostgreSQL uses MVCC (old row versions remain in the heap until vacuumed), so it doesn't need a separate undo log for atomicity.
+The key difference: InnoDB needs undo logs for rollback because it updates pages in-place. PostgreSQL uses MVCC (old row versions remain in the heap until vacuumed), so it does not need a separate undo log for atomicity.
 
 ### How ROLLBACK Works: Undo Chains and Transaction Status
 
@@ -221,7 +221,7 @@ COMMIT PREPARED 'transfer_1001_partA';
 
 ## Consistency: Invariants Are a Shared Responsibility
 
-### What the Database Enforces vs What It Can't
+### What the Database Enforces vs What It Cannot
 
 In the ACID acronym, **consistency means that a transaction preserves the invariants the system claims**. It is a property of the transaction program plus the database guarantees, not a promise that the engine understands every business rule. The engine can reject violations only for rules represented in its schema, transaction logic, or trusted stored code.
 
@@ -256,7 +256,7 @@ These are three fundamentally different concepts sharing one word. When someone 
 
 ### Deferred Constraints
 
-Some constraints can't be checked row-by-row. Consider mutual foreign keys:
+Some constraints cannot be checked row-by-row. Consider mutual foreign keys:
 
 ```sql
 -- PostgreSQL
@@ -393,7 +393,7 @@ Prefer a transaction API or `BEGIN ... ISOLATION LEVEL` so scope is visible. If 
 
 ### Why It Matters
 
-Durability defines which failures a successful commit is promised to survive. A local WAL flush may cover process, OS, and power failure on one host while still not cover device loss, an availability-zone outage, operator error, or regional disaster. The acknowledgement policy and failure model must be stated together.
+Durability defines which failures a successful commit is promised to survive. A local WAL flush may cover process, OS, and power failure on one host while leaving device loss, an availability-zone outage, operator error, and regional disaster uncovered. The acknowledgment policy and failure model must be stated together.
 
 ### fsync Deep Dive
 
@@ -415,7 +415,7 @@ What fsync actually forces:
 **Where the durability contract can break:**
 
 ```text
-Failure point 1: Device or controller acknowledgement
+Failure point 1: Device or controller acknowledgment
   - Firmware may not honor flushes correctly
   - Volatile caches need power-loss protection or correct flush semantics
   - RAID/controller policy must preserve ordering and flush requests
@@ -426,14 +426,14 @@ Failure point 2: Filesystem and error propagation
   - Writeback errors must reach the database rather than being ignored or retried
 
 Failure point 3: Virtualized or network storage
-  - The guest acknowledgement is only as strong as the provider's documented contract
+  - The guest acknowledgment is only as strong as the provider's documented contract
   - Replication can improve device-failure tolerance without protecting against
     corruption, credentials misuse, or application-level deletion
 ```
 
 **PostgreSQL and fsync: the 2018 incident:**
 
-PostgreSQL before v12 had a critical bug: if fsync() failed, PostgreSQL retried the fsync, assuming the dirty page was still in the kernel page cache. But some Linux kernels (pre-5.2) removed the dirty page from the page cache on fsync failure. The retry fsync'd a clean page, succeeding without writing anything. This meant PostgreSQL thought data was durable when it wasn't.
+PostgreSQL before v12 had a critical bug: if fsync() failed, PostgreSQL retried the fsync, assuming the dirty page was still in the kernel page cache. But some Linux kernels (pre-5.2) removed the dirty page from the page cache on fsync failure. The retry called fsync on a clean page and succeeded without writing anything. This meant PostgreSQL believed data was durable when it was not.
 
 PostgreSQL 12+ responds to fsync failure by performing a PANIC (crash recovery) rather than retrying, because the kernel state is untrustworthy.
 
@@ -568,10 +568,10 @@ SET LOCAL synchronous_commit = off;
 
 **When this is NOT acceptable:**
 - Financial transactions
-- Any write whose acknowledgement contract promises survival of a host crash
+- Any write whose acknowledgment contract promises survival of a host crash
 - Writes that trigger irreversible side effects (sent emails, API calls)
 
-The throughput difference is entirely workload- and storage-dependent. Benchmark commit-latency distributions and the business value of the enlarged acknowledgement window; do not reuse a generic commits-per-second multiplier.
+The throughput difference is entirely workload- and storage-dependent. Benchmark commit-latency distributions and the business value of the enlarged acknowledgment window; do not reuse a generic commits-per-second multiplier.
 
 ### Cloud Gotchas: Not All fsync Is Equal
 
@@ -579,7 +579,7 @@ Cloud block storage introduces a layer of abstraction that changes durability gu
 
 Provider volume names, limits, and service-level objectives change. At design and deployment time, record:
 
-- whether acknowledgement means one device, replicated storage in one zone, or multiple zones;
+- whether acknowledgment means one device, replicated storage in one zone, or multiple zones;
 - whether an outage makes the volume unavailable versus permanently loses it;
 - provisioned and burst IOPS/throughput limits, queue-depth behavior, and measured flush latency;
 - snapshot/backup consistency and restore time; and
@@ -605,7 +605,7 @@ Tier 1: synchronous_commit = on (default)
   - Use: single-node development, small deployments
 
 Tier 2: Synchronous streaming replication
-  - With the appropriate acknowledgement mode, WAL is flushed on a standby
+  - With the appropriate acknowledgment mode, WAL is flushed on a standby
     before COMMIT returns
   - synchronous_standby_names = 'standby1'
   - Risk: simultaneous failure of primary + standby
@@ -615,7 +615,7 @@ Tier 2: Synchronous streaming replication
 Tier 3: Synchronous replication to multiple standbys across AZs
   - synchronous_standby_names = 'FIRST 2 (standby1, standby2, standby3)'
   - Risk: required quorums can make writes unavailable; correlated failure remains
-  - Cost: commit latency includes the slowest required acknowledgement
+  - Cost: commit latency includes the slowest required acknowledgment
   - Use: critical financial/healthcare systems
 ```
 
@@ -736,7 +736,7 @@ lock_timeout = '5s'                            # fail fast on lock waits
 
 ### Autocommit Misuse
 
-Most database drivers default to autocommit=on, wrapping each statement in its own transaction. This is correct for simple queries but causes problems when developers don't realize multi-statement logic needs explicit transactions.
+Most database drivers default to autocommit=on, wrapping each statement in its own transaction. This is correct for simple queries but causes problems when developers do not realize multi-statement logic needs explicit transactions.
 
 ```python
 # DANGEROUS: each statement is a separate transaction
@@ -925,12 +925,12 @@ Verify the deployed release and settings. This table lists contract dimensions, 
 
 | Database | Common Default Isolation | Durability Mechanism | Verify Before Claiming a Guarantee |
 |----------|--------------------------|----------------------|------------------------------------|
-| PostgreSQL | Read Committed | WAL + configured flush policy | `fsync`, `synchronous_commit`, full-page writes, standby acknowledgement, pool/session settings |
-| MySQL InnoDB | Repeatable Read | Undo + redo + doublewrite; binary log if enabled | Redo flush and binary-log sync policies, storage flush semantics, replication acknowledgement |
-| MongoDB | Read and write semantics depend on `readConcern`/`writeConcern`; transactions can request snapshot reads | WiredTiger journal + replica-set acknowledgement | Explicit concern levels, journaling, majority acknowledgement, and transaction retry labels |
+| PostgreSQL | Read Committed | WAL + configured flush policy | `fsync`, `synchronous_commit`, full-page writes, standby acknowledgment, pool/session settings |
+| MySQL InnoDB | Repeatable Read | Undo + redo + doublewrite; binary log if enabled | Redo flush and binary-log sync policies, storage flush semantics, replication acknowledgment |
+| MongoDB | Read and write semantics depend on `readConcern`/`writeConcern`; transactions can request snapshot reads | WiredTiger journal + replica-set acknowledgment | Explicit concern levels, journaling, majority acknowledgment, and transaction retry labels |
 | SQLite | Serializable transactions by serializing writes; WAL and rollback-journal modes have different concurrency | WAL or rollback journal | Filesystem/locking support, `synchronous` mode, journal mode, single-writer contention |
 | CockroachDB | Serializable by default; supported levels can vary by release/configuration | Replicated consensus log + storage-engine WAL | Transaction retry contract, selected isolation level, replica placement, quorum availability |
-| SQL Server | Read Committed, commonly locking unless read-committed snapshot is enabled | Transaction log | Database-level snapshot settings, delayed durability, availability-group acknowledgement |
+| SQL Server | Read Committed, commonly locking unless read-committed snapshot is enabled | Transaction log | Database-level snapshot settings, delayed durability, availability-group acknowledgment |
 
 ### Warning: Check Your Defaults
 

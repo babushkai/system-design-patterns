@@ -237,7 +237,7 @@ Propensity semantics must match the estimator: exact-slate probability, item-at-
 
 ## Why the Loop Poisons Itself, and How to Stop It
 
-A recommender trained naively on its own logs degrades in characteristic, well-documented ways. Understanding these failure trajectories matters more than any single countermeasure, because they all stem from the same root: *the model only sees feedback on items it chose to show, so it cannot learn about the items it didn't.*
+A recommender trained naively on its own logs degrades in characteristic, well-documented ways. Understanding these failure trajectories matters more than any single countermeasure, because they all stem from the same root: *the model only sees feedback on items it chose to show, so it cannot learn about the items it did not show.*
 
 **Popularity bias** is the gravitational pull of the loop. Popular items receive more exposure and therefore more feedback, which may earn still more exposure. Exposure correction can help only when propensities are estimable and nonzero; it cannot recover preferences for items the policy never exposed. Diversity constraints, source quotas, and randomized exploration address different parts of the causal chain.
 

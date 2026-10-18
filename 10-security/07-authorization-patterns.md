@@ -276,7 +276,7 @@ viewer(document:design)
 A distributed evaluator generally needs:
 
 - parallel dispatch across union branches;
-- short-circuit on a proven allow while cancelling unnecessary work;
+- short-circuit on a proven allow while canceling unnecessary work;
 - memoization of repeated subproblems within a request;
 - deduplication of identical in-flight subqueries;
 - cycle detection and maximum recursion depth;

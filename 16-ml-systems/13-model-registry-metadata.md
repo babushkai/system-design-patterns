@@ -473,7 +473,7 @@ Products change names, APIs, and bundled features. The durable selection problem
 | Training/evaluation → eligibility | Evidence is immutable, uncertainty-aware, and bound to the candidate | Can policy evaluate a versioned evidence bundle rather than mutable tags? |
 | Approval → eligibility transition | Role, subject hash, scope, and revocation are durable | Does approval authorize exact bytes and policy, or only a friendly version name? |
 | Registry → deployment control plane | Only eligible bundles can become desired state | Is the handoff transactional or fenced against stale and concurrent writers? |
-| Deployment → serving workers | Desired generations converge with bounded, observable staleness | Which watch, lease, acknowledgement, and last-known-good semantics apply? |
+| Deployment → serving workers | Desired generations converge with bounded, observable staleness | Which watch, lease, acknowledgment, and last-known-good semantics apply? |
 | Serving → decision log | Every consequential result resolves to model, policy, and generation | Can impact be queried without joining ephemeral operational logs by hand? |
 | Eligibility and deployment roots → retention | Active, rollback, audit, and legal roots remain reachable | Who prevents garbage collection from deleting a transitive dependency? |
 
@@ -544,7 +544,7 @@ Assign one authority to each kind of truth before choosing a product:
 | Immutable model and evidence identity | Registry transaction + artifact hashes | No partial registration; idempotent retry |
 | Lifecycle eligibility | Registry policy state machine | Serializable transition over an evidence revision |
 | Desired endpoint generation | Deployment control plane | Atomic fenced update and durable audit |
-| Observed loaded/serving generation | Regional controllers and workers | Continuously reconciled; stale acknowledgements ignored |
+| Observed loaded/serving generation | Regional controllers and workers | Continuously reconciled; stale acknowledgments ignored |
 | Historical mutation record | Append-only audit log | Durable, attributable, ordered per governed object |
 | Consequential prediction | Decision log | Resolves to model, policy, feature, and deployment generation |
 

@@ -68,7 +68,7 @@ If any participant votes `NO` or the prepare deadline expires, the coordinator c
 
 On `COMMIT`, a participant makes provisional state visible under its concurrency-control rules, records the terminal state, and releases locks. On `ABORT`, it discards/undoes provisional state and releases locks. Repeated decisions return the same result.
 
-The coordinator does not need to wait for every phase-two acknowledgement before returning success if its decision is durable and a recovery service will continue dissemination. That optimization trades lower client latency for a potentially large background resolution queue. The API must not imply that every replica or downstream observer is already updated.
+The coordinator does not need to wait for every phase-two acknowledgment before returning success if its decision is durable and a recovery service will continue dissemination. That optimization trades lower client latency for a potentially large background resolution queue. The API must not imply that every replica or downstream observer is already updated.
 
 ### Why prepared participants block
 
@@ -203,7 +203,7 @@ For a database update plus event publication, a transactional outbox places the 
 
 ### Recovery is a continuously running subsystem
 
-Maintain indexed queues for prepared transactions, decisions awaiting acknowledgement, expired coordinator heartbeats, and intents requiring resolution. Recovery work needs reserved I/O and concurrency limits so an outage does not produce a repair storm that starves foreground commits.
+Maintain indexed queues for prepared transactions, decisions awaiting acknowledgment, expired coordinator heartbeats, and intents requiring resolution. Recovery work needs reserved I/O and concurrency limits so an outage does not produce a repair storm that starves foreground commits.
 
 Operators need a transaction-status query that reports participant set, authoritative decision, coordinator epoch, prepared age, held resources, and last recovery error. Manual “heuristic commit/abort” is a data-consistency decision; require audited approval and record that atomicity may have been broken.
 
@@ -219,7 +219,7 @@ When removing 2PC in favor of a saga, change the API contract. Expose pending st
 
 ### Test every durable boundary
 
-Crash the coordinator and each participant immediately before and after prepare persistence, vote send, decision persistence, decision send, participant application, acknowledgement, and garbage collection. Duplicate and reorder every message. Partition the decision-record quorum, restore an old participant snapshot, change membership mid-transaction, and force lock conflicts. History checking must assert both atomic outcomes and the advertised isolation level.
+Crash the coordinator and each participant immediately before and after prepare persistence, vote send, decision persistence, decision send, participant application, acknowledgment, and garbage collection. Duplicate and reorder every message. Partition the decision-record quorum, restore an old participant snapshot, change membership mid-transaction, and force lock conflicts. History checking must assert both atomic outcomes and the advertised isolation level.
 
 ## Decision Framework
 

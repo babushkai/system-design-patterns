@@ -223,7 +223,7 @@ stateDiagram-v2
     Retrying --> Sending
     Retrying --> Escalated: stage deadline
     Sending --> FailedPermanent
-    Delivered --> Acknowledged: human/system acknowledgement
+    Delivered --> Acknowledged: human/system acknowledgment
 ~~~
 
 Define “delivered”: accepted by provider, delivered to device, acknowledged by a human, and incident opened are different.
@@ -262,7 +262,7 @@ Human attention is the scarce resource. Measure:
 
 - pages per on-call hour/shift;
 - unique incidents versus notifications;
-- acknowledgements and escalations;
+- acknowledgments and escalations;
 - actionable pages;
 - pages requiring no action;
 - duplicate/stale/resolution-only noise;
@@ -272,7 +272,7 @@ Human attention is the scarce resource. Measure:
 - silences and inhibition duration; and
 - recurring alert families.
 
-Do not optimize acknowledgement time alone; responders can acknowledge quickly without understanding. Tie alert review to incident outcome and qualitative feedback.
+Do not optimize acknowledgment time alone; responders can acknowledge quickly without understanding. Tie alert review to incident outcome and qualitative feedback.
 
 ### Page, ticket, or dashboard
 
@@ -425,7 +425,7 @@ Track:
 - fingerprints and new-instance rate by bounded rule/service;
 - inhibited/silenced counts and oldest/expiry;
 - groups, members, wait/repeat, payload truncation, and transitions;
-- notification queue age, attempt, provider acceptance, acknowledgement, escalation, and failure;
+- notification queue age, attempt, provider acceptance, acknowledgment, escalation, and failure;
 - HA replica divergence, dedup hit, partition mode, and route revision;
 - unmatched/ambiguous routes and fallback usage;
 - page volume, duplicate/no-action rate, and responder load; and
@@ -474,7 +474,7 @@ Replay historical incidents and quiet periods through candidate rules. Compare p
 5. Inhibited and silenced alerts remain evaluated and visible.
 6. HA evaluation may be redundant, but notification transitions need stable idempotency.
 7. Regional evaluation protects outage visibility; global alerts expose coverage.
-8. Notification acceptance, delivery, acknowledgement, and incident creation are different states.
+8. Notification acceptance, delivery, acknowledgment, and incident creation are different states.
 9. Human attention has capacity and must be measured like compute.
 10. Validate rules by replaying incidents, gaps, partitions, and quiet periods.
 

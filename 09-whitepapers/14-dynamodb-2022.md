@@ -6,7 +6,7 @@ This chapter covers the 2022 USENIX ATC paper on DynamoDB as a managed service, 
 
 Predictability comes from admitting work against a customer's logical budget instead of per-partition limits, keeping quota decoupled from partition count so splits do not dilute it, restoring quorum durability with a log-only role before full read capacity returns, and treating durability as continuous verification.
 
-## Publication Boundary
+## Publication Identity and Scope
 
 - **Paper:** *Amazon DynamoDB: A Scalable, Predictably Performant, and Fully Managed NoSQL Database Service*
 - **Venue and version:** USENIX Annual Technical Conference 2022 proceedings paper
@@ -167,7 +167,7 @@ The Prime Day 89.2 million requests/s figure and this YCSB experiment have diffe
 6. Capacity-unit and backup details are dated to the publication.
 7. Cached control/security data needs explicit safe expiration; static stability is not permission to serve indefinitely stale authorization.
 
-## Design-Review Questions
+## Design Review Questions
 
 1. Is the customer's capacity unit also a physical partition budget? If so, how does skew waste purchased capacity?
 2. How are global token grants bounded when routers or GAC servers partition?

@@ -220,7 +220,7 @@ Model artifacts and feature definitions are executable decision inputs. Sign or 
 
 Explanation endpoints must not reveal private features, hidden policy, model internals exploitable for abuse, or the existence of unauthorized documents. Operational explanations can expose version and coarse score components to authorized staff while storing detailed traces in a protected system.
 
-## Observability and Operations
+## Operations and Observability
 
 Join technical and quality telemetry by decision and release version:
 

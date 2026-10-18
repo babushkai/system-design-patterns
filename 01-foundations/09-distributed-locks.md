@@ -156,7 +156,7 @@ Release-and-reacquire avoids deadlock but loses atomicity between observations. 
 
 For several lock keys, acquire in one global canonical order. If dynamic discovery makes the full set unknown, use bounded try-lock plus release/backoff, a database transaction, or redesign the invariant. Never hold lock A while making an unbounded network call to discover lock B.
 
-## Contention and Capacity Model
+## Capacity and Contention Model
 
 One exclusive lock is a single-server queue. Let acquisition arrival rate be $\lambda$, mean protected hold time be $S$, and utilization be $\rho$. Under an illustrative M/M/1 assumption:
 

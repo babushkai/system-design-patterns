@@ -12,7 +12,7 @@ A lease grants one attempt temporary authority; an epoch names that grant; recov
 
 The job-attempt protocol covers claim epochs, renewal, separate liveness and progress signals, deadlines, reclaim, checkpoint resume, fencing, shutdown, and reconciliation. [Distributed Locks](../01-foundations/09-distributed-locks.md) covers generic lock acquisition; [Failure Modes](../01-foundations/06-failure-modes.md) covers failure detection; [Retry, Idempotency, and Compensation](./06-retry-idempotency-compensation.md) covers end-to-end effect protocols.
 
-Do not assume every ownership mechanism has these semantics. A database lease, an SQS visibility timeout, a RabbitMQ delivery acknowledgement, an etcd lease, and a ZooKeeper session/version are different contracts. A visibility timeout makes a message eligible for redelivery; it does not fence the first consumer. A RabbitMQ acknowledgement is scoped to its delivery and channel. An etcd lease TTL and an MVCC revision are distinct values. A ZooKeeper version or sequence number is useful only within the comparison protocol built around it. Translate the invariant, not the product name.
+Do not assume every ownership mechanism has these semantics. A database lease, an SQS visibility timeout, a RabbitMQ delivery acknowledgment, an etcd lease, and a ZooKeeper session/version are different contracts. A visibility timeout makes a message eligible for redelivery; it does not fence the first consumer. A RabbitMQ acknowledgment is scoped to its delivery and channel. An etcd lease TTL and an MVCC revision are distinct values. A ZooKeeper version or sequence number is useful only within the comparison protocol built around it. Translate the invariant, not the product name.
 
 ---
 
@@ -346,7 +346,7 @@ A store latency spike expires thousands of leases. Unbounded reclaim immediately
 
 Model the job/attempt state machine and check the invariants under reordered renewals, duplicate claims, concurrent reclaimers, and delayed completion. Then exercise real boundaries:
 
-1. Kill the process before and after claim commit, checkpoint upload, pointer publication, effect acknowledgement, and completion commit.
+1. Kill the process before and after claim commit, checkpoint upload, pointer publication, effect acknowledgment, and completion commit.
 2. Pause application threads while renewal continues, then pause the entire process beyond the lease.
 3. Drop renewal responses after the authority commits.
 4. Skew wall clocks and verify only grantor time decides expiry.

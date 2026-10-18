@@ -6,7 +6,7 @@ Partitioning maps one logical key space onto independently placeable units. The 
 
 Partitioning starts by defining **logical partition boundaries, key-to-partition routing, and replica-placement primitives**. [Database Sharding](../06-scaling/03-database-sharding.md) owns the application and operational workflow for introducing shards, moving live data, cutover, rollback, and organizational ownership. [Secondary Indexes](./06-secondary-indexes.md) owns index placement, while [Distributed Transactions](./07-distributed-transactions.md) owns atomic work that crosses the resulting boundaries.
 
-## Workload Contract
+## Workload and Contract
 
 Start with the operations, not with hash versus range. For every high-volume request, identify:
 
@@ -125,7 +125,7 @@ The metadata operation must appear atomic even when copying bytes is not. Merge 
 
 Partitioning determines the unit; placement chooses its replicas. A policy such as “three replicas” is incomplete without topology. State constraints in terms of failures to survive: one host, one rack, one zone, or one region. Then verify the selected replica set and its quorum can make progress after that correlated failure.
 
-Placement also determines latency. Put the write authority near writers while ensuring the required acknowledgement set fits the durability policy. Moving a lease or leader without moving replicas changes latency but not storage placement; moving a replica changes data risk and network cost.
+Placement also determines latency. Put the write authority near writers while ensuring the required acknowledgment set fits the durability policy. Moving a lease or leader without moving replicas changes latency but not storage placement; moving a replica changes data risk and network cost.
 
 ## Failure Traces
 

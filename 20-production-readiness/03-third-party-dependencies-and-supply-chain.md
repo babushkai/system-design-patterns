@@ -32,10 +32,10 @@ Score candidates against the failure you are most exposed to rather than against
 | Criterion | What to look at | Strong signal | Disqualifier |
 |---|---|---|---|
 | Maintenance health | Time to merge pull requests, release cadence, open issue age, number of maintainers with commit access | Regular releases plus a published security policy | Bus factor of one and a "help wanted" issue from two years ago |
-| Failure behaviour | Timeout defaults, retry policy, connection pooling, error taxonomy | Explicit budgets the caller controls | Silent infinite retry, or exceptions swallowed into a log line |
+| Failure behavior | Timeout defaults, retry policy, connection pooling, error taxonomy | Explicit budgets the caller controls | Silent infinite retry, or exceptions swallowed into a log line |
 | Surface area | Resolved graph size, optional features, native extensions, install-time scripts | Small resolved graph; features opt-in | Pulls in a framework to parse a date |
 | Security posture | Public advisories and time-to-patch, fuzzing, formal review, artifact signing | Advisories published *and* fixed quickly with backports | Vulnerability reports handled by email forever |
-| Operational fit | Metrics exported, trace propagation, structured logs, deterministic configuration | Emits RED metrics and honours context cancellation | No way to observe it from outside |
+| Operational fit | Metrics exported, trace propagation, structured logs, deterministic configuration | Emits RED metrics and honors context cancellation | No way to observe it from outside |
 | Exit cost | Interface shape, data portability, whether their types cross your domain boundary | Thin adapter with contract tests | Their entity classes embedded in your domain model |
 
 Two heuristics resist argument. First, **prefer boring and old** on any request path: a library that has been stable for six years has already paid for its surprises, while a fast-moving one transfers its learning curve to your on-call rotation. Second, **count the resolved graph, not the manifest entry**: adopting one package that pulls in forty is a different decision from adopting one, and the diff is where maintainability either appears or does not.
@@ -112,7 +112,7 @@ Containment is a specific set of mechanisms, all of which are cheap and all of w
 - **Cache aggressively where staleness is acceptable**, with negative caching for permission lookups and product metadata, and an explicit stale-if-error path so cache expiry does not synchronize into a thundering herd against the vendor.
 - **Idempotency keys on every mutating call.** Vendor timeouts are not failed writes; without an operation identity you must either accept duplicates or build a reconciliation job, and the second option is what you will do anyway.
 - **Webhooks treated as attacker-supplied input**: signature verification, timestamp tolerance with replay protection, idempotent handlers, and quarantine for events that fail schema validation rather than a dead letter that nobody reads.
-- **Health defined by behaviour, not vendor status pages.** Track per-vendor success ratio, latency histogram, and rate-limit rejection as first-class signals; the vendor's status page is a communication channel, not an indicator.
+- **Health defined by behavior, not vendor status pages.** Track per-vendor success ratio, latency histogram, and rate-limit rejection as first-class signals; the vendor's status page is a communication channel, not an indicator.
 
 For components on the critical path, "we have a second provider" is a hypothesis until it has been tested in production traffic. A real failover design needs routing that can be switched by configuration, per-vendor credentials and quotas provisioned in advance, feature parity verified by contract tests against both vendors, and a game day where the primary is actually cut off (chapter on resilience testing). Where failover is genuinely impossible because of cost or semantics, say so in writing and record the compensating control: degraded mode, queue-and-retry with a bounded backlog, or an explicit customer-visible error state.
 
@@ -127,7 +127,7 @@ Upgrade debt behaves like any other debt: it compounds, and the interest rate ri
 | Runtime and toolchain EOL calendar | Base images, language runtimes, and managed engine versions tracked with dates | Forced migration during the busiest week of the quarter |
 | Dependency ownership register | Every direct dependency has an owning team and a named engineer | "Who approved this?" answered by silence at 3 a.m. |
 | Removal as a first-class task | Deleting a dependency gets the same estimate as adding one | Zombie integrations that nobody dares to touch |
-| Contract tests against vendors | Consumer-side assertions about response shape, error taxonomy, and rate-limit headers | Silent vendor behaviour changes discovered by customers |
+| Contract tests against vendors | Consumer-side assertions about response shape, error taxonomy, and rate-limit headers | Silent vendor behavior changes discovered by customers |
 
 **Documented**: the pattern behind most large-scale dependency failures is not a novel attack but an unmaintained component that nobody owned. This is why ownership registers outperform scanning tools in practice: a scanner produces findings, and findings without owners become background noise within a quarter.
 
@@ -161,7 +161,7 @@ For internal platforms the same logic applies with higher stakes, because your d
 
 ## References
 
-- Hindle, A., Barr, E., Su, Z., Gabel, M., and Devanbu, P. "On the Naturalness of Software." ICSE 2012. Repetition in source corpora, the underlying evidence for preferring widely-used components whose behaviour is already known.
+- Hindle, A., Barr, E., Su, Z., Gabel, M., and Devanbu, P. "On the Naturalness of Software." ICSE 2012. Repetition in source corpora, the underlying evidence for preferring widely-used components whose behavior is already known.
 - Rauber, R., and Rüsch, A. "Choice of Third-Party Components and Its Impact on the Security of Open Source Software." Companion Proceedings of ICSE 2013. Empirical link between component selection criteria and downstream security exposure.
 - Ralph, L. "A Leftpad Retrospective." npm blog, 2016. The availability incident that made transitive dependency risk a mainstream engineering conversation.
 - Unit 42, Palo Alto Networks. "Log4Shell: The Story So Far." 2021. Anatomy of a transitive vulnerability reaching systems that never referenced the library directly.

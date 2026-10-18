@@ -6,7 +6,7 @@ A content delivery network is a globally distributed consistency and overload-co
 
 CDN design spans edge data/control planes, client-to-edge routing, cache identity, surrogate invalidation, tiering, origin protection, and edge recovery. [Cache Strategies](../04-caching/01-cache-strategies.md) covers application policy; [Cache Invalidation](../04-caching/02-cache-invalidation.md) covers general coherence trade-offs.
 
-Evidence labels distinguish **Documented** claims backed by dated primary or official sources, **Inference** derived without asserting a private implementation, and unmarked **Reference design** guidance that is reusable rather than provider-attributed.
+Provider documentation fixes most of the vocabulary in this chapter, so each claim states its source class: **Documented** for dated vendor or standards text, **Inference** for behavior implied by HTTP semantics rather than stated by a provider, and unmarked **Reference design** guidance that transfers across CDNs.
 
 ## Workload and Delivery Contract
 
@@ -326,7 +326,7 @@ Origin servers accept traffic only from authenticated CDN egress or verify signe
 
 Do not expose raw cache keys containing cookies, authorization classes, or signed URLs in `Cache-Status`. RFC 9211 permits deployment-specific disclosure choices; production diagnostics should be sampled, access-controlled, and redacted.
 
-## Observability and Operations
+## Operations and Observability
 
 Measure by tenant, content class, PoP, shield, and origin pool with cardinality controls:
 
@@ -385,7 +385,7 @@ Changing CDN provider repeats this discipline. Dual-CDN routing can improve fail
 1. What exact inputs can change response bytes or authorization, and are all in the key?
 2. Which content may be shared, revalidated, served stale, or never stored?
 3. Can an in-flight fill commit after a purge or key-policy change?
-4. What does purge acknowledgement guarantee, and how are offline edges caught up?
+4. What does purge acknowledgment guarantee, and how are offline edges caught up?
 5. How much origin demand appears at normal miss ratio, regional loss, and purge cold start?
 6. Where are collapse and retry budgets enforced across edge and shield?
 7. What happens when configuration, purge, shield, or origin is independently unavailable?

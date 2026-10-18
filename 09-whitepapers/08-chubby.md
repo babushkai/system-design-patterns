@@ -47,7 +47,7 @@ This lease is not proof that the process holding a lock is still capable of safe
 
 Chubby therefore exposes a **sequencer** containing the lock name, acquisition mode, and monotonically increasing generation. A protected server can reject operations carrying an older generation. Where the resource cannot validate sequencers, Chubby supports a lock-delay period after session loss before another client may acquire the lock. Sequencers are stronger because they fence the old owner at the resource; delay only reduces risk under a timing assumption.
 
-Clients cache file contents, metadata, open handles, and negative lookups. Cache validity is tied to the session. Before modifying cached data, the master sends invalidations and waits for acknowledgements or for the relevant cache leases to expire. Only then does it perform the update. This keeps reads cheap without allowing a disconnected client to treat stale cached content as indefinitely current.
+Clients cache file contents, metadata, open handles, and negative lookups. Cache validity is tied to the session. Before modifying cached data, the master sends invalidations and waits for acknowledgments or for the relevant cache leases to expire. Only then does it perform the update. This keeps reads cheap without allowing a disconnected client to treat stale cached content as indefinitely current.
 
 Caching explains both scale and semantics: a stable configuration file can be read locally thousands of times while one KeepAlive stream maintains validity. The master load depends more on sessions and changes than on application read frequency.
 
@@ -112,7 +112,7 @@ The paper calls out several surprises:
 
 This is the paper's deeper lesson: a coordination protocol is only as reliable as its client library, overload behavior, operations, and fencing integration.
 
-## Assumptions and Limitations
+## Assumptions and Limits
 
 - A majority of replicas is required; Chubby favors consistency over partition-side availability.
 - One master per cell bounds write and session-processing capacity.

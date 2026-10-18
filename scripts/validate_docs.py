@@ -141,6 +141,26 @@ SECTION_CASE_CHUNK_RE = re.compile(r"[A-Za-z0-9'\u2019]+|[^\sA-Za-z0-9'\u2019]+|
 SECTION_CASE_WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9'\u2019]*")
 SECTION_CASE_BOUNDARY_RE = re.compile(r"[:\u2014\u2013]")
 SECTION_CASE_NUMBERING_RE = re.compile(r"^\d+\.\s*")
+SECTION_HEADING_STOPWORDS = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "as",
+        "by",
+        "for",
+        "from",
+        "in",
+        "is",
+        "of",
+        "on",
+        "or",
+        "that",
+        "the",
+        "to",
+        "with",
+    }
+)
 
 
 def rel(path: Path) -> str:
@@ -389,6 +409,41 @@ def validate_unique_h2_headings(errors: list[str]) -> None:
                 )
             else:
                 first_seen[heading] = lineno
+
+
+def validate_section_heading_word_order(errors: list[str]) -> None:
+    """Reject an English section name that re-spells a section the book already names.
+
+    Word order is the last difference left between two spellings of one section, and it is
+    invisible to a reader scanning an outline: "Workload Contract" and "Workload and
+    Contract" read as the same entry while site search indexes them as two. A pair like
+    that also splits the convention for the next chapter, which is how a shared spine
+    drifts into forty near-synonyms that no longer tell a reader what a chapter contains.
+    Numbering prefixes and stop words are ignored because they carry no meaning; identical
+    names across chapters stay legal, since a shared spine is the point.
+    """
+
+    seen: dict[tuple[str, ...], tuple[str, Path, int]] = {}
+    for relative in sorted(article_paths()):
+        path = ROOT / relative
+        for lineno, heading in h2_headings(path.read_text(encoding="utf-8")):
+            body = SECTION_CASE_NUMBERING_RE.sub("", heading)
+            signature = tuple(
+                sorted(
+                    word
+                    for word in re.findall(r"[a-z0-9]+", normalize_heading(body))
+                    if word not in SECTION_HEADING_STOPWORDS
+                )
+            )
+            previous = seen.get(signature)
+            if previous is None:
+                seen[signature] = (body, path, lineno)
+            elif normalize_heading(previous[0]) != normalize_heading(body):
+                errors.append(
+                    f'{rel(path)}:{lineno}: section heading "{heading}" reorders '
+                    + f'"{previous[0]}" at {rel(previous[1])}:{previous[2]}; use one '
+                    + "spelling book-wide"
+                )
 
 
 def validate_unique_chapter_titles(errors: list[str]) -> None:
@@ -1046,6 +1101,7 @@ def main() -> int:
     validate_runbook_sections(errors)
     validate_unique_chapter_titles(errors)
     validate_unique_h2_headings(errors)
+    validate_section_heading_word_order(errors)
     validate_english_section_casing(errors)
     validate_chapter_contract(errors)
     validate_related_chapters(errors)

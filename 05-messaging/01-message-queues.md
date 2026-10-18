@@ -2,9 +2,9 @@
 
 ## TL;DR
 
-A message queue is a durable ownership-transfer mechanism for asynchronous work. Producers append an intent; one worker at a time receives a temporary claim; completion becomes final only when the queue records an acknowledgement. The core design problem is managing that state under crashes, overload, rebalancing, and retention, not choosing an SDK call.
+A message queue is a durable ownership-transfer mechanism for asynchronous work. Producers append an intent; one worker at a time receives a temporary claim; completion becomes final only when the queue records an acknowledgment. The core design problem is managing that state under crashes, overload, rebalancing, and retention, not choosing an SDK call.
 
-A queue contract must specify enqueue, claim and visibility, acknowledgement, partitioning, worker flow control, backlog, retention, and capacity. [Message Ordering](03-message-ordering.md) owns sequence guarantees, [Delivery Guarantees](04-delivery-guarantees.md) owns duplicate/loss boundaries, and [Poison-Message Quarantine](08-dead-letter-queues.md) owns failed-message repair.
+A queue contract must specify enqueue, claim and visibility, acknowledgment, partitioning, worker flow control, backlog, retention, and capacity. [Message Ordering](03-message-ordering.md) owns sequence guarantees, [Delivery Guarantees](04-delivery-guarantees.md) owns duplicate/loss boundaries, and [Poison-Message Quarantine](08-dead-letter-queues.md) owns failed-message repair.
 
 ## Workload and Contract
 
@@ -22,7 +22,7 @@ A delivery token binds queue, message, claim generation, worker, and lease. Ackn
 
 Specify separately:
 
-- durability required before enqueue acknowledgement;
+- durability required before enqueue acknowledgment;
 - maximum accepted payload and whether payloads are inline or referenced;
 - time-to-visible for immediate and scheduled messages;
 - claim/visibility semantics and maximum extension;
@@ -31,7 +31,7 @@ Specify separately:
 - behavior when the queue is full or its control plane is unavailable;
 - whether approximate depth and age metrics are sufficient.
 
-The queue contract should not promise that a handler’s external effect happens once. [Delivery Guarantees](04-delivery-guarantees.md) covers acknowledgement and side-effect ambiguity end to end.
+The queue contract should not promise that a handler’s external effect happens once. [Delivery Guarantees](04-delivery-guarantees.md) covers acknowledgment and side-effect ambiguity end to end.
 
 ## State and Invariants
 
@@ -41,7 +41,7 @@ A durable queue tracks:
 |---|---|
 | message record | immutable ID, routing key, payload reference, enqueue time, expiry |
 | availability state | ready, scheduled, claimed, acknowledged, quarantined, expired |
-| claim generation | fences late acknowledgement or extension |
+| claim generation | fences late acknowledgment or extension |
 | partition position | append/scan location or priority/time bucket |
 | consumer membership | worker identity, capacity, liveness, assignment |
 | retention checkpoints | lowest data still required by consumers and repair policy |
@@ -62,13 +62,13 @@ The design enforces these invariants:
 
 ## Data Plane and Control Plane
 
-The **data plane** appends messages, replicates records, indexes ready/scheduled state, issues claims, validates claim generations, records acknowledgements, and streams payloads. Its hot path should use a cached versioned queue assignment rather than a global metadata lookup per message.
+The **data plane** appends messages, replicates records, indexes ready/scheduled state, issues claims, validates claim generations, records acknowledgments, and streams payloads. Its hot path should use a cached versioned queue assignment rather than a global metadata lookup per message.
 
 The **control plane** creates queues, defines durability/retention/quotas, assigns partitions and replicas, manages consumer membership, publishes encryption/schema policy, and coordinates movement. Nodes continue on a pinned assignment during a short control-plane outage, but reject unsafe mutations when their partition epoch is stale.
 
 Separate queue metadata from message payloads. Large payloads amplify replication, memory, and redelivery cost. A claim-check design places an immutable encrypted object in durable storage and queues a content-addressed reference plus integrity digest. Publication must not expose the reference before the object is durable, and retention must not delete the object while any message or replay can reference it.
 
-## Claim and Acknowledgement Protocol
+## Claim and Acknowledgment Protocol
 
 For a work-table design, claiming is one transaction:
 
@@ -81,7 +81,7 @@ A log-based queue may leave the record immutable and store delivery state in a s
 
 Visibility timeout is a recovery detector. Too short and slow healthy work is delivered concurrently; too long and a dead worker stalls recovery. Use task-specific initial leases plus bounded heartbeats/extensions. A worker extends only while making progress and stops extending before it loses local authority. The broker caps total lease lifetime so a wedged worker cannot hide work forever.
 
-Acknowledgement includes the latest claim generation. If claim 8 expires and worker B receives claim 9, a late `ack(claim=8)` is rejected. This protects the queue record. It does not fence an external database or payment effect; that boundary needs idempotency or a downstream fencing key.
+Acknowledgment includes the latest claim generation. If claim 8 expires and worker B receives claim 9, a late `ack(claim=8)` is rejected. This protects the queue record. It does not fence an external database or payment effect; that boundary needs idempotency or a downstream fencing key.
 
 Batch claims reduce round trips but increase invisible work, memory, and recovery delay. A worker should claim according to available execution slots, not prefetch thousands while only ten can run. Track claimed-but-not-started age separately from execution time.
 
@@ -105,7 +105,7 @@ Partitions are the unit of storage placement and parallelism. Hash routing balan
 
 Partition count limits maximum useful parallelism and affects metadata, file handles, recovery, and fan-out. More partitions are not free. Use many logical/virtual buckets mapped to physical partitions when rebalancing is expected, but pin the mapping version into each routing decision so producers and consumers agree.
 
-Consumer assignment is epoch-based. A coordinator publishes `(group, partition, owner, epoch)`. During rebalance, the old owner stops claiming, drains or releases in-flight messages according to policy, and checkpoints before the new owner starts. If the system cannot guarantee a clean handoff, it must tolerate overlapping delivery while fencing stale acknowledgements.
+Consumer assignment is epoch-based. A coordinator publishes `(group, partition, owner, epoch)`. During rebalance, the old owner stops claiming, drains or releases in-flight messages according to policy, and checkpoints before the new owner starts. If the system cannot guarantee a clean handoff, it must tolerate overlapping delivery while fencing stale acknowledgments.
 
 Hot partitions require better routing or isolated capacity, not merely more consumers: one partition may allow only limited concurrent claims or one ordered lane. Split a hot tenant/entity only if its semantic scope permits it. Otherwise apply per-key admission and expose that key as the bottleneck.
 
@@ -123,9 +123,9 @@ When consumers fall behind, retries and lease expirations can create positive fe
 
 ## Retention, Compaction, and Payload Lifecycle
 
-Work queues can remove acknowledged records after a repair/audit window; log queues retain by time/size independently of acknowledgement. Define retention from replay, incident investigation, legal, and cost requirements. “Keep forever” is not an operational plan.
+Work queues can remove acknowledged records after a repair/audit window; log queues retain by time/size independently of acknowledgment. Define retention from replay, incident investigation, legal, and cost requirements. “Keep forever” is not an operational plan.
 
-Deletion proceeds from a watermark: all required replicas have the segment; no live claim or replay window needs it; quarantine references are preserved; snapshots/checkpoints cover recovery; payload references have no remaining owners. Compaction by message key is not equivalent to queue acknowledgement and can erase intermediate work, so use it only for state-like streams whose contract permits replacement.
+Deletion proceeds from a watermark: all required replicas have the segment; no live claim or replay window needs it; quarantine references are preserved; snapshots/checkpoints cover recovery; payload references have no remaining owners. Compaction by message key is not equivalent to queue acknowledgment and can erase intermediate work, so use it only for state-like streams whose contract permits replacement.
 
 External payloads need reference accounting or expiry derived from the queue’s maximum retention plus safety margin. A periodic reconciliation compares live message references with objects and detects both missing payloads and orphaned cost.
 
@@ -176,7 +176,7 @@ At 18 ms mean service time, 25,000/s consumes 450 concurrent worker-seconds. At 
 
 ## Concrete Failure Trace: Lease Shorter Than Execution
 
-A media task normally takes 40 seconds, but its visibility lease is 30 seconds. Worker A starts and remains healthy. At 30 seconds the queue exposes the message; worker B receives claim generation 12 while A still holds generation 11. Both upload the result. A’s late acknowledgement is correctly rejected, yet the duplicate external upload already occurred.
+A media task normally takes 40 seconds, but its visibility lease is 30 seconds. Worker A starts and remains healthy. At 30 seconds the queue exposes the message; worker B receives claim generation 12 while A still holds generation 11. Both upload the result. A’s late acknowledgment is correctly rejected, yet the duplicate external upload already occurred.
 
 Containment reduces concurrency for that task class and uses a safe longer lease. Repair identifies duplicate outputs through the message/effect idempotency key. Prevention adds progress-based extension, a bound on claimed-but-not-started time, claim-generation propagation to the effect service, and a test that pauses a worker across lease expiry. The queue behaved according to its contract; the end-to-end effect protocol was incomplete.
 

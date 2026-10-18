@@ -4,17 +4,17 @@
 
 A background-job system accepts a bounded unit of work, makes it eligible through a durable queue or job table, gives a replaceable worker temporary authority to attempt it, and records a terminal or retryable outcome. Its safety depends on the exact claim token, state transition, and shutdown protocol, not on the existence of “a queue.”
 
-Background-job execution covers job records and transitions, receive/claim/complete protocols, broker acknowledgement interaction, database-backed claims, concurrency, restart boundaries, and graceful shutdown. [Message Queue Architecture](../05-messaging/01-message-queues.md) covers broker internals; [Poison-Message Quarantine](../05-messaging/08-dead-letter-queues.md) covers quarantine and redrive; [Priority, Fairness, and Backpressure](./07-priority-fairness-backpressure.md) covers allocation and admission; [Effect Commit Protocols](./06-retry-idempotency-compensation.md) covers external effects; [Leases and Recovery](./08-leases-heartbeats-recovery.md) covers lease timing, progress, and fencing.
+Background-job execution covers job records and transitions, receive/claim/complete protocols, broker acknowledgment interaction, database-backed claims, concurrency, restart boundaries, and graceful shutdown. [Message Queue Architecture](../05-messaging/01-message-queues.md) covers broker internals; [Poison-Message Quarantine](../05-messaging/08-dead-letter-queues.md) covers quarantine and redrive; [Priority, Fairness, and Backpressure](./07-priority-fairness-backpressure.md) covers allocation and admission; [Effect Commit Protocols](./06-retry-idempotency-compensation.md) covers external effects; [Leases and Recovery](./08-leases-heartbeats-recovery.md) covers lease timing, progress, and fencing.
 
 ## Primary Evidence and Scope
 
 | Primary evidence | What it establishes | Boundary |
 |---|---|---|
 | Amazon SQS visibility and delete documentation | Receive returns a receipt handle and temporarily hides a message; visibility can change; delete uses the latest handle; standard queues may still redeliver | SQS semantics, not RabbitMQ or database-row claims |
-| RabbitMQ consumer acknowledgement documentation | Manual acknowledgements are channel/delivery-tag scoped; unacknowledged deliveries requeue on channel/connection loss; prefetch bounds the unacknowledged window | AMQP/RabbitMQ semantics; not a renewable per-message visibility lease |
+| RabbitMQ consumer acknowledgment documentation | Manual acknowledgments are channel/delivery-tag scoped; unacknowledged deliveries requeue on channel/connection loss; prefetch bounds the unacknowledged window | AMQP/RabbitMQ semantics; not a renewable per-message visibility lease |
 | PostgreSQL 18 `SELECT` documentation | `FOR UPDATE SKIP LOCKED` can avoid row-lock contention for multiple consumers of a queue-like table | Inconsistent view by design; the application supplies lease, generation, and recovery state |
 | Kubernetes Pod termination documentation | Termination is a bounded sequence with a grace period; forced termination remains possible | Process lifecycle, not proof that an external effect or broker ack completed |
-| Sidekiq and Celery task guidance | Jobs should carry simple/versionable inputs, be idempotent, and use late acknowledgement/retry behavior deliberately | Framework-specific defaults must still be verified by version/configuration |
+| Sidekiq and Celery task guidance | Jobs should carry simple/versionable inputs, be idempotent, and use late acknowledgment/retry behavior deliberately | Framework-specific defaults must still be verified by version/configuration |
 
 ## Job Execution Contract
 
@@ -91,7 +91,7 @@ stateDiagram-v2
 1. Accepted jobs are durable before producer success is returned.
 2. One state revision has at most one current claim generation, while physical duplicate execution remains possible under broker or network failure.
 3. Claim, renew, relinquish, completion, and cancellation identify the exact attempt authority; an old receipt/owner/generation cannot complete a newer attempt.
-4. A job becomes terminal only after its declared result is durable; broker acknowledgement/deletion follows that commit.
+4. A job becomes terminal only after its declared result is durable; broker acknowledgment/deletion follows that commit.
 5. Redelivery of a terminal job is recognized and acknowledged without repeating the logical work.
 6. A job waiting locally for a worker slot does not consume an unbounded hidden/claimed broker window.
 7. Cancellation prevents or interrupts future work according to policy but never claims to undo an already committed effect.
@@ -141,13 +141,13 @@ Worker rules:
 
 SQS currently documents a maximum visibility interval of 12 hours from the receive request. Jobs exceeding a broker's maximum claim window need segmentation/checkpointing or another mechanism; repeated extension does not create infinite ownership.
 
-### RabbitMQ-style manual acknowledgement
+### RabbitMQ-style manual acknowledgment
 
-RabbitMQ manual acknowledgement is not a renewable SQS visibility timeout. A delivery tag is scoped to its channel. The broker maintains an unacknowledged delivery window bounded by prefetch; if the channel or connection closes before ack, unacknowledged deliveries are requeued. Acknowledging on another channel or acknowledging the same/unknown tag is a channel error.
+RabbitMQ manual acknowledgment is not a renewable SQS visibility timeout. A delivery tag is scoped to its channel. The broker maintains an unacknowledged delivery window bounded by prefetch; if the channel or connection closes before ack, unacknowledged deliveries are requeued. Acknowledging on another channel or acknowledging the same/unknown tag is a channel error.
 
 Worker rules:
 
-- use manual acknowledgement for work that must survive consumer failure;
+- use manual acknowledgment for work that must survive consumer failure;
 - keep prefetch bounded relative to active handler capacity and payload memory;
 - ack on the original channel only after durable completion;
 - reject/nack according to an explicit retry/quarantine policy;
@@ -215,7 +215,7 @@ Prefer a small, immutable envelope over serialized application objects. If it re
 
 A bare row ID is not automatically safe; it can transform an enqueue-time command into an execution-time read of unrelated newer state.
 
-Checkpoints are application state, not broker acknowledgements. A useful checkpoint contains input/version, completed range or cursor, output manifest/checksum, and monotonic checkpoint generation. Persist it before releasing the claim. On retry, validate it against the same logical job and immutable input; never trust a partially uploaded artifact merely because its key exists.
+Checkpoints are application state, not broker acknowledgments. A useful checkpoint contains input/version, completed range or cursor, output manifest/checksum, and monotonic checkpoint generation. Persist it before releasing the claim. On retry, validate it against the same logical job and immutable input; never trust a partially uploaded artifact merely because its key exists.
 
 Split work when one attempt cannot fit the maximum claim/shutdown window or when restart cost exceeds the orchestration cost. Do not chain jobs with “job A completes, then best-effort enqueue B”: atomically commit A's transition plus a dispatch intent, or use a workflow engine, so crash does not lose or duplicate the continuation.
 
@@ -359,7 +359,7 @@ Verification includes:
 1. Can one bounded handler safely restart, or is finer durable progress required?
 2. Is the broker message, database row, or hybrid ledger authoritative for job lifecycle?
 3. What exact receipt/channel/owner-generation token authorizes this attempt?
-4. Does completion conditionally record the exact attempt before broker acknowledgement?
+4. Does completion conditionally record the exact attempt before broker acknowledgment?
 5. How are missing and duplicate wakeups reconciled?
 6. What input version/snapshot semantics survive queue delay and data mutation?
 7. Are broker prefetch, local handlers, fan-out, and every downstream concurrency budget independently bounded?

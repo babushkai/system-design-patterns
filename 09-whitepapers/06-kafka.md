@@ -2,9 +2,9 @@
 
 ## TL;DR
 
-The 2011 Kafka paper describes a much smaller system than modern Kafka: brokers store **partitioned append-only files**, consumers pull by byte offset, and retention is independent of acknowledgements. Replication, durable producer acknowledgements, idempotent production, transactions, and KRaft were outside the published design.
+The 2011 Kafka paper describes a much smaller system than modern Kafka: brokers store **partitioned append-only files**, consumers pull by byte offset, and retention is independent of acknowledgments. Replication, durable producer acknowledgments, idempotent production, transactions, and KRaft were outside the published design.
 
-## Publication Identity and Historical Boundary
+## Publication Identity and Scope
 
 - **Paper:** *Kafka: a Distributed Messaging System for Log Processing*
 - **Authors:** Jay Kreps, Neha Narkhede, and Jun Rao, LinkedIn
@@ -77,7 +77,7 @@ Each record carries a CRC. On broker recovery, Kafka scans and removes records w
 
 The larger limitation is stark: **the 2011 implementation has no built-in replication**. If a broker fails, its unconsumed partitions are unavailable. If its storage is permanently damaged, those messages are lost. Section 6 lists replication as future work.
 
-Producer durability is also weak in the benchmarked path. The producer did not wait for a broker acknowledgement; the paper says this raises throughput but provides no guarantee that every published message reached the broker. Asynchronous broker flush means even receipt and process failure do not necessarily imply durable media persistence.
+Producer durability is also weak in the benchmarked path. The producer did not wait for a broker acknowledgment; the paper says this raises throughput but provides no guarantee that every published message reached the broker. Asynchronous broker flush means even receipt and process failure do not necessarily imply durable media persistence.
 
 ZooKeeper preserves group metadata, but it does not replicate log bytes. A healthy coordination service cannot recover a destroyed partition.
 
@@ -95,7 +95,7 @@ Each system received 10 million messages of 200 bytes. Kafka used batch sizes 1 
 - Kafka averaged 400,000 messages/s at batch 50, nearly saturating the 1 Gbit link.
 - The paper reports at least twice RabbitMQ's throughput and orders of magnitude above ActiveMQ in that setup.
 
-The comparison is not feature-equivalent. Kafka's producer did not wait for acknowledgements, while the competing products offered more messaging features. The paper itself says the purpose is to demonstrate the potential of specialization, not prove the other systems inferior.
+The comparison is not feature-equivalent. Kafka's producer did not wait for acknowledgments, while the competing products offered more messaging features. The paper itself says the purpose is to demonstrate the potential of specialization, not prove the other systems inferior.
 
 The record-format result is similarly bounded: the measured overhead was 9 bytes per Kafka message versus 144 bytes for ActiveMQ, making ActiveMQ use 70% more space for this 200-byte, 10-million-message dataset. Header requirements and indexing explain much of the difference.
 
@@ -109,7 +109,7 @@ Because everything was cache-resident, the experiment does not establish cold-st
 
 At publication, LinkedIn reported hundreds of gigabytes and close to one billion messages/day, with roughly 10-second average end-to-end latency into the offline-analysis pipeline without much tuning. This describes that deployment and pipeline, not a Kafka latency guarantee.
 
-## Limits and Assumptions
+## Assumptions and Limits
 
 - One partition is the ordering and consumer-parallelism unit; skewed partition keys create hot brokers.
 - The paper's producer path may lose messages before broker receipt or durable flush.
@@ -121,7 +121,7 @@ At publication, LinkedIn reported hundreds of gigabytes and close to one billion
 
 ## What Later Kafka Changed
 
-Apache Kafka's later replication design added a leader and replicas for each partition, an in-sync replica set (ISR), a high watermark for committed records, and producer acknowledgement choices. That design changes both failure recovery and the meaning of “published.” Subsequent releases added broker-managed consumer offsets, idempotent producers, transactions, stream processing, and eventually a Raft-based metadata quorum. These are significant new protocols, not implementation details hidden in the 2011 paper.
+Apache Kafka's later replication design added a leader and replicas for each partition, an in-sync replica set (ISR), a high watermark for committed records, and producer acknowledgment choices. That design changes both failure recovery and the meaning of “published.” Subsequent releases added broker-managed consumer offsets, idempotent producers, transactions, stream processing, and eventually a Raft-based metadata quorum. These are significant new protocols, not implementation details hidden in the 2011 paper.
 
 What survived is the architectural core: partitioned append logs, immutable offsets, batched sequential I/O, pull-based consumers, replay, and retention decoupled from individual subscriptions.
 
@@ -132,7 +132,7 @@ What survived is the architectural core: partitioned append logs, immutable offs
 3. Where is consumer progress stored relative to the side effect it represents?
 4. How long can a consumer be down before retention destroys required replay data?
 5. What happens to availability and durability when a partition leader or disk fails?
-6. Are benchmark comparisons matched for acknowledgements, flush, replication, batch size, and cache state?
+6. Are benchmark comparisons matched for acknowledgments, flush, replication, batch size, and cache state?
 7. Is partition count sufficient for growth without making coordination and recovery excessive?
 
 ## References

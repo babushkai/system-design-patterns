@@ -4,7 +4,7 @@
 
 A collaborative editor is a replicated database whose write latency must feel local. Each client applies edits optimistically, persists unsent intent, and exchanges operations or state deltas later. The system must converge after reordering, duplication, disconnection, retry, and failover while preserving a useful notion of user intent.
 
-Operational Transformation (OT), sequence CRDTs, server-ordered property updates, and application-specific hybrids solve different contracts. The algorithm is only one component. A production sync engine also needs stable document/element/operation identity, authorization on reconnect, durable snapshots and logs, causal or server frontiers, acknowledgement and duplicate suppression, schema migration, undo semantics, compaction, hot-document fan-out, offline-device policy, and proof that garbage collection cannot resurrect deleted content.
+Operational Transformation (OT), sequence CRDTs, server-ordered property updates, and application-specific hybrids solve different contracts. The algorithm is only one component. A production sync engine also needs stable document/element/operation identity, authorization on reconnect, durable snapshots and logs, causal or server frontiers, acknowledgment and duplicate suppression, schema migration, undo semantics, compaction, hot-document fan-out, offline-device policy, and proof that garbage collection cannot resurrect deleted content.
 
 [Conflict Resolution](../02-distributed-databases/04-conflict-resolution.md) covers general causal metadata and CRDT merge algebra. This chapter focuses on collaborative document state and end-to-end sync, including optimistic local editing, sequence/tree operations, snapshot-plus-delta publication, long-offline replicas, compaction, presence separation, and user-visible recovery.
 
@@ -44,7 +44,7 @@ user intent
 5. **Stable interpretation:** operation and schema versions determine semantics; readers never guess.
 6. **Authorization at acceptance:** local optimism does not grant server commit authority; revoked or unauthorized edits remain rejected/auditable.
 7. **Snapshot continuity:** a client sees one snapshot plus an exact, gap-free continuation of deltas.
-8. **Monotonic acknowledgement:** a server/client frontier never claims to cover an operation it cannot restore.
+8. **Monotonic acknowledgment:** a server/client frontier never claims to cover an operation it cannot restore.
 9. **Intent-scoped undo:** undo reverses the user's applicable operation, not an arbitrary global last writer.
 10. **Bounded retained state:** logs, tombstones, identifiers, pending edits, and presence state have explicit lifecycle rules.
 
@@ -229,11 +229,11 @@ Avoid the classic gap:
 
 The snapshot names a log/frontier position, and the subscription begins strictly after it. The server retains or can reconstruct the tail until the client installs it. If retention has passed, require a newer snapshot.
 
-### 5.2 Acknowledgements and ambiguity
+### 5.2 Acknowledgments and ambiguity
 
-If a client uploads an edit and loses the acknowledgement, it resends the same operation ID. The service returns the committed result/frontier rather than applying it again. Acknowledging before durable commit can lose an edit that the client then discards locally.
+If a client uploads an edit and loses the acknowledgment, it resends the same operation ID. The service returns the committed result/frontier rather than applying it again. Acknowledging before durable commit can lose an edit that the client then discards locally.
 
-Keep local pending operations until a durable server acknowledgement covers their IDs. A client snapshot/compaction must not erase unacknowledged intent.
+Keep local pending operations until a durable server acknowledgment covers their IDs. A client snapshot/compaction must not erase unacknowledged intent.
 
 ### 5.3 Backpressure and flow control
 
@@ -360,11 +360,11 @@ Keep a durable regional log or replicated snapshot frontier that meets recovery 
 
 ## 9. Concrete Failure Traces
 
-### 9.1 Lost acknowledgement duplicates an insertion
+### 9.1 Lost acknowledgment duplicates an insertion
 
 1. Client submits operation `R7:104`.
 2. Server commits and broadcasts it.
-3. Acknowledgement is lost.
+3. Acknowledgment is lost.
 4. Client reconnects and generates a new operation ID for the same pending edit.
 5. Text appears twice.
 
@@ -465,7 +465,7 @@ Use property-based shrinking to retain the smallest divergent history. Add human
 
 ### 10.3 Fault and load tests
 
-Kill clients and room owners before/after local persistence, durable commit, broadcast, acknowledgement, and snapshot publication. Restore an old client backup, expire its membership, lose a log segment, fail over regions, corrupt a snapshot block, and throttle a hot room. Run these under realistic concurrent-user/document skew; algorithm correctness at ten operations does not establish operational behavior at a million-history document.
+Kill clients and room owners before/after local persistence, durable commit, broadcast, acknowledgment, and snapshot publication. Restore an old client backup, expire its membership, lose a log segment, fail over regions, corrupt a snapshot block, and throttle a hot room. Run these under realistic concurrent-user/document skew; algorithm correctness at ten operations does not establish operational behavior at a million-history document.
 
 ---
 
@@ -494,7 +494,7 @@ Ask:
 2. Which server, delivery, causal, clock, and membership assumptions does the selected algorithm require?
 3. How are document, element, operation, replica, incarnation, snapshot, and schema identities persisted?
 4. What exact frontier binds snapshots and live deltas without a gap?
-5. What happens after an acknowledgement is lost or a local database is restored?
+5. What happens after an acknowledgment is lost or a local database is restored?
 6. Which condition makes deletion/tombstone/history compaction safe, and how are long-offline devices handled?
 7. How do tree/rich-text invariants and local undo survive concurrency?
 8. How quickly do revocation and tenant boundaries affect connected and offline writers?

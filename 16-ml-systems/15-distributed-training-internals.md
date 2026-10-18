@@ -286,7 +286,7 @@ Restore is a tested protocol, not the inverse of write by assumption. Verify man
 
 ---
 
-## The Parts That Aren't Matrix Math
+## The Parts That Are Not Matrix Math
 
 ### The input pipeline must outrun the GPUs
 

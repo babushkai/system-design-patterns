@@ -53,7 +53,7 @@ Before dispatch, ask:
 - Can each worker complete against immutable inputs?
 - Are shared contracts already versioned, or is one worker the explicit contract owner?
 - Can outputs be verified independently before integration?
-- Can a worker fail or be cancelled without invalidating unrelated work?
+- Can a worker fail or be canceled without invalidating unrelated work?
 - Does integration have a deterministic order?
 - Is the combined verification cost within downstream capacity?
 
@@ -183,7 +183,7 @@ A worker that lacks authority, input, or a contract transitions to `blocked` wit
 
 ### Cancellation
 
-Cancelling a parent propagates an epoch to children. No child may begin new effects after observing it. Each child persists its candidate/checkpoint, stops processes, releases reservations, and reports ambiguous external effects for reconciliation. The parent reaches terminal cancelled state only after required child cleanup or explicit abandonment policy.
+Canceling a parent propagates an epoch to children. No child may begin new effects after observing it. Each child persists its candidate/checkpoint, stops processes, releases reservations, and reports ambiguous external effects for reconciliation. The parent reaches terminal canceled state only after required child cleanup or explicit abandonment policy.
 
 ---
 

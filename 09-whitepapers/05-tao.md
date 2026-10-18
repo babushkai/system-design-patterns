@@ -100,7 +100,7 @@ The authors sampled 6.5 million requests randomly over 40 days and measured prod
 - Slave replication lag was under one second for 85% of the trace, under three seconds for 99%, and under ten seconds for 99.8%. Those are empirical lag observations, not consistency bounds.
 - Over 90 days, the web-server-observed failed-query fraction was `4.9 × 10^-6`; the authors warn that dependent queries and correlated systems complicate interpretation.
 
-## Limits and Assumptions
+## Assumptions and Limits
 
 - The graph API supports only object and one-hop association-list access, not arbitrary traversal or analytics.
 - The object API omits compare-and-set; eventual reads would make a client-visible CAS contract substantially less useful, and applications cannot infer conditional-update semantics that the paper never provides.

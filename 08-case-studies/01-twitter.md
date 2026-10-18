@@ -45,7 +45,7 @@ The core workload is asymmetric:
 | Search | Results honor deletion and visibility policy | Admit indexing lag and show an incomplete result set |
 | Delete | Canonical state changes once; derived copies are eventually removed or suppressed | Tombstone at read time until physical cleanup completes |
 
-Latency goals belong to a product SLO, not to this case study. Establish separate SLOs for publish acknowledgement, home-feed freshness, search freshness, and read latency; a single “API latency” percentile hides the asynchronous path.
+Latency goals belong to a product SLO, not to this case study. Establish separate SLOs for publish acknowledgment, home-feed freshness, search freshness, and read latency; a single “API latency” percentile hides the asynchronous path.
 
 ## State, Authority, and Invariants
 
@@ -107,7 +107,7 @@ This flow is an **explicit reference design**:
 
 1. The edge authenticates the actor, applies request and account quotas, and attaches an idempotency key.
 2. The command service validates text, audience, reply/quote references, media readiness, and abuse-policy preconditions.
-3. The service allocates a Tweet ID and atomically stores the Tweet plus an outbox record. The acknowledgement boundary is this durable commit.
+3. The service allocates a Tweet ID and atomically stores the Tweet plus an outbox record. The acknowledgment boundary is this durable commit.
 4. A relay publishes `TweetPublished(tweet_id, author_id, audience_version, event_id)` to a partitioned event log.
 5. Independent consumers update the author index, home candidate projections, search, notifications, counters, and offline datasets.
 6. Each projection records its source offset and projection version. Retrying the same event is harmless.
@@ -307,7 +307,7 @@ Test these with skewed follower graphs and viral bursts, not uniform random traf
 
 1. Separate canonical social state from disposable delivery and ranking projections.
 2. Model write amplification from the degree distribution, not the average follower count alone.
-3. Make fan-out policy adaptive and reversible; never put full fan-out on the publish acknowledgement path.
+3. Make fan-out policy adaptive and reversible; never put full fan-out on the publish acknowledgment path.
 4. Enforce safety and visibility after candidate retrieval, even when earlier projections attempted filtering.
 5. Treat feed freshness, search freshness, and publish durability as different SLOs.
 6. Keep control-plane failure from invalidating known-good data-plane routing.

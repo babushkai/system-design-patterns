@@ -206,7 +206,7 @@ Record:
 - incident/failure evidence;
 - source and candidate replica coordinates;
 - current and proposed epoch;
-- fence acknowledgement;
+- fence acknowledgment;
 - expected RPO and lost-tail procedure;
 - approver/quorum;
 - routing and capacity status;

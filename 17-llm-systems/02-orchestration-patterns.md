@@ -109,7 +109,7 @@ One node generates; another evaluates explicit criteria and returns defect-addre
 
 ## The Agent Loop
 
-When steps can't be enumerated, hand control flow to the model: tools in a loop, environment feedback each turn, harness-enforced budgets. The mechanics live in [Agent Fundamentals](./01-agent-fundamentals.md); what matters here is the macro-structure that makes loops reliable.
+When steps cannot be enumerated, hand control flow to the model: tools in a loop, environment feedback each turn, harness-enforced budgets. The mechanics live in [Agent Fundamentals](./01-agent-fundamentals.md); what matters here is the macro-structure that makes loops reliable.
 
 ### Plan, Context Fork, and Durable Resume
 
@@ -164,7 +164,7 @@ Control-plane decisions and data-plane effects should commit in a deliberate ord
 
 Branching introduces another semantic choice: what does a join mean? `all` requires every child to satisfy its success predicate; `any` accepts the first valid child and cancels or ignores the rest; `quorum(k)` waits for enough independent evidence; `best-of-n` requires a ranking function and a deterministic tie policy. The join policy belongs in persisted workflow state. If it exists only in a prompt such as “combine the best answers,” restart behavior and auditability are undefined.
 
-Cancellation is a propagated state transition, not process termination. Stop scheduling descendants, signal cancellable work, let non-cancellable external effects finish, and reconcile them before declaring the run cancelled. Compensation is similarly domain-specific: deleting an unpublished draft may reverse an action, while a sent email cannot be unsent and must instead be followed by a corrective action. “Rollback” is an unsafe abstraction unless every tool declares what reversal actually means.
+Cancellation is a propagated state transition, not process termination. Stop scheduling descendants, signal cancellable work, let non-cancellable external effects finish, and reconcile them before declaring the run canceled. Compensation is similarly domain-specific: deleting an unpublished draft may reverse an action, while a sent email cannot be unsent and must instead be followed by a corrective action. “Rollback” is an unsafe abstraction unless every tool declares what reversal actually means.
 
 ### Determinism and Replay
 
@@ -261,7 +261,7 @@ Patterns can compose, but their contracts compose too. A router changes the elig
 
 **Coordination without ownership** lets parallel workers mutate the same artifact or external state from inconsistent snapshots. The result may be syntactically mergeable and semantically contradictory. Partition write sets, use optimistic version checks at commit, and make synthesis a controlled merge step; [Multi-Agent Systems](./03-multi-agent-systems.md) develops these consistency models.
 
-**Cancellation leakage** happens when the root run is reported cancelled while child jobs, provider streams, or tool operations continue. Propagate cancellation tokens, record which activities acknowledge them, and reconcile non-cancellable work. Otherwise a user sees a stopped workflow while costs and side effects continue in the background.
+**Cancellation leakage** happens when the root run is reported canceled while child jobs, provider streams, or tool operations continue. Propagate cancellation tokens, record which activities acknowledge them, and reconcile non-cancellable work. Otherwise a user sees a stopped workflow while costs and side effects continue in the background.
 
 ## Decision Framework
 
@@ -304,7 +304,7 @@ Build the minimum graph that passes offline evaluations and shadow traffic. Then
 
 ## Related Chapters
 
-- [LLM Agent Fundamentals](01-agent-fundamentals.md): single-loop behaviour first, because a topology only amplifies what the loop does
+- [LLM Agent Fundamentals](01-agent-fundamentals.md): single-loop behavior first, because a topology only amplifies what the loop does
 - [Multi-Agent Systems](03-multi-agent-systems.md): when a second model earns its keep, and the coordination cost you accept for it
 - [Durable Execution and Workflow Engines](../18-workflow-job-systems/04-durable-execution-workflow-engines.md): durable execution as the substrate for an agent that has to survive a restart
 - [Context Management](08-context-management.md): orchestration decides who writes to the context window, which is the real budget

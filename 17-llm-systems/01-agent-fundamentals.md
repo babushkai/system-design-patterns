@@ -30,7 +30,7 @@ graph LR
     end
 ```
 
-A chatbot maps one input to one output. A **workflow** chains LLM calls along a code path you wrote. An **agent** lets the model direct its own process: it decides which tool to call next based on what the last tool returned, and it keeps going until the goal is met or the harness stops it. That autonomy is the value and the risk: agents handle tasks you couldn't enumerate steps for, and they fail in ways you didn't enumerate either.
+A chatbot maps one input to one output. A **workflow** chains LLM calls along a code path you wrote. An **agent** lets the model direct its own process: it decides which tool to call next based on what the last tool returned, and it keeps going until the goal is met or the harness stops it. That autonomy is the value and the risk: agents handle tasks whose steps you could not enumerate, and they fail in ways you did not enumerate either.
 
 | Aspect | Chatbot | Workflow | Agent |
 |--------|---------|----------|-------|

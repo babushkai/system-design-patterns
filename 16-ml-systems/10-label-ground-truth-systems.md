@@ -300,7 +300,7 @@ mature_labels_view
   labels whose observation window has closed and whose state is final
 ```
 
-The time axes matter. `outcome_event_time` is when the real-world event occurred; `source_observed_at` is when its source recorded it; `ingested_at` is when the platform received it; `effective_at` is when the resolver allowed it to affect a view. A dataset with knowledge cutoff March 1 must not use an event first known on March 10 even if the outcome occurred in February. This bitemporal discipline is the label-side analogue of point-in-time correctness in [feature stores](./02-feature-stores.md).
+The time axes matter. `outcome_event_time` is when the real-world event occurred; `source_observed_at` is when its source recorded it; `ingested_at` is when the platform received it; `effective_at` is when the resolver allowed it to affect a view. A dataset with knowledge cutoff March 1 must not use an event first known on March 10 even if the outcome occurred in February. This bitemporal discipline is the label-side analog of point-in-time correctness in [feature stores](./02-feature-stores.md).
 
 Ingestion is at-least-once and idempotent by source event key. Watermarks express expected lateness, not permission to drop later truth: events after the watermark create a new snapshot revision and correction metrics. Corrections append superseding events. A training manifest records label contract, resolver digest, source partitions or offsets, knowledge cutoff, watermark, and resulting row-set digest, allowing both “truth as known then” and “best corrected truth now” evaluations.
 

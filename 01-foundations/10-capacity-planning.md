@@ -225,7 +225,7 @@ bytes/s = operations/s × messages/operation × wire bytes/message
 packets/s ≈ bytes/s / measured mean wire packet size
 ```
 
-Include protocol headers, TLS, acknowledgements, replication, retries, compression ratio, and cross-zone/region copies. Packets/s can bind before bits/s for small messages.
+Include protocol headers, TLS, acknowledgments, replication, retries, compression ratio, and cross-zone/region copies. Packets/s can bind before bits/s for small messages.
 
 New-connection rate and mean connection lifetime produce mean active connections through Little's Law. Then size file descriptors, socket memory, TLS handshakes, NAT/conntrack, and load-balancer tables through failure/reconnect bursts. [DNS and Connection Management](../06-scaling/13-dns-and-connection-management.md) owns those lifecycle mechanics.
 
@@ -260,7 +260,7 @@ This is only the CPU bound. Five workers are insufficient if one hot tenant pins
 payload rate = 75,000 × 1.4 KiB = 102.5 MiB/s ≈ 0.86 Gbit/s
 ```
 
-Add replication traffic, acknowledgements, encryption overhead, retries, and failover routing before selecting network capacity.
+Add replication traffic, acknowledgments, encryption overhead, retries, and failover routing before selecting network capacity.
 
 ### Storage
 

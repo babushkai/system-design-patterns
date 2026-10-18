@@ -105,7 +105,7 @@ The mechanics that hold up:
 
 ## Compliance as a Testable Property
 
-Auditable controls are engineering artifacts: a control is a statement about system behaviour, and statements about behaviour can be checked automatically. The mapping exercise is short and its payoff is permanent:
+Auditable controls are engineering artifacts: a control is a statement about system behavior, and statements about behavior can be checked automatically. The mapping exercise is short and its payoff is permanent:
 
 | Control intent | Manual version | Automated version |
 |---|---|---|
@@ -175,7 +175,7 @@ Log and telemetry retention deserves its own note because it is the largest volu
 - [Verification Strategy for Distributed Systems](./04-verification-strategy-for-distributed-systems.md): absence of regulated data per copy class is an invariant you can and should test continuously
 - [LSM Trees](../03-storage-engines/02-lsm-trees.md): tombstones, compaction, and the read amplification that turns a retention job into an incident
 - [Change Data Capture](../13-data-pipelines/04-change-data-capture.md): deletes are events too, and lagging consumers quietly resurrect what you removed
-- [Lakehouse Table Formats](../13-data-pipelines/05-lakehouse-table-formats.md): snapshot isolation and row-level deletes are how a data lake honours a ceiling at all
+- [Lakehouse Table Formats](../13-data-pipelines/05-lakehouse-table-formats.md): snapshot isolation and row-level deletes are how a data lake honors a ceiling at all
 - [Disaster Recovery and Data Reconstruction](../15-deployment/05-disaster-recovery.md): restores re-introduce deleted data unless the erasure log is replayed
 - [Multi-Tenant Isolation and Tenant Lifecycle Architecture](../06-scaling/12-multi-tenancy.md): offboarding a tenant is retention, holds, and key destruction applied at scale
 - [Production Logging Architecture](../11-observability/03-logging.md): the highest-volume retention decision in most estates is what gets emitted in the first place

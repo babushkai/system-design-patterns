@@ -161,7 +161,7 @@ The categories of data failure are well understood. **Schema failures** (a colum
 | Range | `age = -3`, `prob = 1.4` | min/max + domain bounds | in-range corruption |
 | Distribution | mean order value halves overnight | divergence vs baseline (PSI/KS) | per-slice shifts hidden in aggregate |
 | Completeness | 40% of labels missing | null-rate + row-count delta | nulls concentrated in one segment |
-| Uniqueness | events double-counted | primary-key dedup + count | near-duplicates that aren't exact |
+| Uniqueness | events double-counted | primary-key dedup + count | near-duplicates that are not exact |
 
 The validation suite is itself a versioned artifact, declared next to the pipeline and enforced as a gate. A practical encoding looks like an explicit contract rather than scattered `assert` statements:
 
@@ -276,7 +276,7 @@ A step that reads "latest" data, consults the wall clock, calls a mutable API, o
 
 The lineage store answers two questions that every other reliability property depends on. *Provenance*: given this model, what produced it? *Impact*: given this dataset had a bug, which models must be retrained? It is a queryable DAG of artifacts and step executions, where each execution records its inputs (by content hash), its outputs, and its full execution context.
 
-The impact query is the one teams underinvest in until they desperately need it. When a data engineer discovers that a source table double-counted events for a week, the only question that matters is "which production models trained on that window?" Without forward lineage, the answer is "we don't know, retrain everything," which is both expensive and an admission that the system is not auditable. Google's ML Metadata and the lineage subsystems of every serious ML platform exist to make this query a lookup rather than an investigation.
+The impact query is the one teams underinvest in until they desperately need it, and the pipeline is where it is either won or lost. A run that records an output model and a dataset URI cannot answer it. The record has to name, per input, the snapshot ID, code revision, feature-view version, resolved partition list, and source watermark, because impact analysis later filters on exactly those columns. Platforms that write lineage at commit time answer the question as a lookup; platforms that treat it as documentation learn during the incident that nobody recorded the join that mattered.
 
 The storage choice follows the query pattern. A relational database handles provenance and impact well at modest scale and is where most platforms start. A graph database becomes worthwhile only when impact analysis must traverse many hops across thousands of models. An append-only log gives audit-grade immutability at the cost of harder ad-hoc querying. The right answer is almost always "start relational, migrate only when traversal latency hurts."
 

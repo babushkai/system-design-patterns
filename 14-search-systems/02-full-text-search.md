@@ -165,7 +165,7 @@ For global top-k, shards generally return more than `k` when later reranking or 
 
 Decide failure semantics by request class. An interactive catalog query may return clearly marked partial results after one shard misses its deadline. A legal discovery or administrative export may require all shards and fail closed. Retrying another replica consumes the remaining deadline and capacity; it is useful for isolated slowness and harmful during shared overload.
 
-Cancellation must travel to dictionary expansion, postings iteration, reranking, highlighting, and aggregation. Dropping the client connection without cancelling shard work leaves a fleet processing results nobody can use.
+Cancellation must travel to dictionary expansion, postings iteration, reranking, highlighting, and aggregation. Dropping the client connection without canceling shard work leaves a fleet processing results nobody can use.
 
 ## Pagination and Snapshot Semantics
 

@@ -4,7 +4,7 @@
 
 Aurora's key idea is to treat network I/O, not disks, as the scarce database resource. The database engine sends **redo records rather than full pages** to a six-way, multi-AZ storage service. Storage nodes continuously materialize pages, repair replicas, back up data, and perform much of recovery. This removes duplicated database-to-storage traffic and turns crash recovery from a serial startup phase into ongoing distributed work.
 
-## Publication Identity and Boundary
+## Publication Identity and Scope
 
 - **Paper:** *Amazon Aurora: Design Considerations for High Throughput Cloud-Native Relational Databases*
 - **Authors:** Alexandre Verbitski, Anurag Gupta, Debanjan Saha, Murali Brahmadesam, Kamal Gupta, Raman Mittal, Sailesh Krishnamurthy, Sandor Maurice, Tengiz Kharatishvili, and Xiaofeng Bao
@@ -39,7 +39,7 @@ The paper's quorum model uses:
 - write quorum `Vw = 4`;
 - read quorum `Vr = 3` during recovery or when discovering durable state.
 
-Because `Vw + Vr > 6`, a read quorum intersects every completed write quorum. Four write acknowledgements permit continued writes after any two copy failures, including loss of one two-copy AZ. Three readable copies permit recovery even after three copy failures, although new writes then lack four acknowledgements.
+Because `Vw + Vr > 6`, a read quorum intersects every completed write quorum. Four write acknowledgments permit continued writes after any two copy failures, including loss of one two-copy AZ. Three readable copies permit recovery even after three copy failures, although new writes then lack four acknowledgments.
 
 Quorum counts are not the whole failure model. Placement across three independent AZs addresses correlation; rapid segment repair reduces exposure time. The paper states that a 10 GB segment can be repaired in about 10 seconds over a 10 Gbit/s link in its environment. That observed repair speed is part of the durability argument, not a universal bound.
 
@@ -49,7 +49,7 @@ The database assigns each redo record a monotonically increasing log sequence nu
 
 Each redo record links to the previous record for that protection group. A segment derives a **Segment Complete LSN (SCL)**: the greatest point below which it has every required record. Peer gossip uses gaps in that sequence to repair missing data.
 
-The database tracks acknowledgements from segment replicas. Across protection groups it computes a **Volume Complete LSN (VCL)**: the highest contiguous volume point known complete. Completeness alone is not enough: InnoDB mini-transactions contain several contiguous redo records that must become visible atomically. The final record of each mini-transaction is marked a **Consistency Point LSN (CPL)**. The **Volume Durable LSN (VDL)** is the highest CPL no greater than the VCL.
+The database tracks acknowledgments from segment replicas. Across protection groups it computes a **Volume Complete LSN (VCL)**: the highest contiguous volume point known complete. Completeness alone is not enough: InnoDB mini-transactions contain several contiguous redo records that must become visible atomically. The final record of each mini-transaction is marked a **Consistency Point LSN (CPL)**. The **Volume Durable LSN (VDL)** is the highest CPL no greater than the VCL.
 
 This distinction is the core invariant:
 
@@ -120,7 +120,7 @@ Table 4 defines replica lag as time from writer commit until visibility on a rep
 
 The Percona TPC-C variant used 100 or 1,000 warehouses and 500 or 5,000 connections. Aurora's reported throughput ranged from 30,221 to 73,955 tpmC across those four cases, 2.3–16.3 times MySQL 5.7. It was a TPC-C-derived workload, not an audited TPC-C result.
 
-## Limits and Assumptions
+## Assumptions and Limits
 
 - One writer is the serialization and SQL-compute bottleneck in the published architecture.
 - Six-way storage replication spends capacity to reduce correlated-failure risk and tail latency.
@@ -134,10 +134,10 @@ The Percona TPC-C variant used 100 or 1,000 warehouses and 500 or 5,000 connecti
 
 The 2018 SIGMOD paper, *Amazon Aurora: On Avoiding Distributed Consensus for I/Os, Commits, and Membership Changes*, makes explicit how the single-writer epoch, quorum state, and locally reconstructed metadata avoid running a general consensus round for most storage I/O. It retains the 2017 architecture while deepening the invariant argument. That clarification should not be simplified to “Aurora has no consensus”: the system still establishes unique writer epochs and durable quorum state; it avoids consensus on particular steady-state paths under stated invariants.
 
-## Architecture Review Questions
+## Design Review Questions
 
 1. Which bytes cross the compute/storage boundary: logical operations, redo, or full pages?
-2. What contiguous and transaction-consistent frontier makes an acknowledgement safe?
+2. What contiguous and transaction-consistent frontier makes an acknowledgment safe?
 3. How do read and write quorums intersect for every allowed failure pattern?
 4. Can storage repair keep the vulnerable window below the correlated-failure budget?
 5. What state must compute rebuild before serving, and what can recover lazily?

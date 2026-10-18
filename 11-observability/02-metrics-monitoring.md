@@ -248,7 +248,7 @@ SDKs or collectors push batches to an ingest service.
 - producer queues/retries can affect applications;
 - ingest must authenticate tenant/resource;
 - overlapping writers and temporality conversion;
-- loss can be invisible without acknowledgements/drop counters.
+- loss can be invisible without acknowledgments/drop counters.
 
 Prefer local collectors so applications do not hold thousands of backend connections or synchronize retry storms.
 
@@ -297,7 +297,7 @@ flowchart LR
 The exact implementation varies, but the state transitions matter:
 
 1. validate schema, tenant, timestamp, and limits;
-2. append durably under defined acknowledgement;
+2. append durably under defined acknowledgment;
 3. update in-memory/head representation;
 4. compact into immutable blocks/chunks;
 5. replicate or upload;
@@ -489,7 +489,7 @@ Use a synthetic canary that emits known counter, gauge, and histogram patterns w
 5. Which histogram representation and resolution answer the required thresholds?
 6. Is cumulative or delta temporality safer across the chosen collector topology?
 7. Should the workload be scraped, push to a local collector, or use another durable accounting path?
-8. What acknowledgement, queue, and loss semantics are required?
+8. What acknowledgment, queue, and loss semantics are required?
 9. What retention/downsampling preserves future valid aggregation?
 10. Which queries/rules need precomputation and cost isolation?
 11. How do regional rules continue while global views expose partial coverage?

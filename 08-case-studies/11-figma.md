@@ -204,7 +204,7 @@ The single-writer choice removes distributed write-write reconciliation for an o
 | Metadata scale | Relational colos behind a proxy | Cross-entity transactions dominate and cannot be colocated; revisit boundaries rather than hiding them behind fan-out |
 | Browser engine | C++ compiled to Wasm | DOM accessibility/layout is the primary workload, or native code complexity outweighs renderer control |
 
-## Design-Review Questions
+## Design Review Questions
 
 1. What is the exact conflict unit: character, property, object, subtree, or whole document?
 2. Which response tells a client that its change is ordered, and which event tells it that the change is durable?

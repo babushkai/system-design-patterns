@@ -328,7 +328,7 @@ Feed escaped defects back into acceptance claims, fixtures, properties, policy, 
 | Canary metric is missing | Automation treats no data as success | Typed missing/non-finite state and conservative promotion policy |
 | Approval reused for broader effect | Authorization not bound to normalized scope | Scope/destination/revision-bound approval with expiry |
 
-Fault-inject the evidence pipeline: lost receipts, stale caches, verifier crashes after artifact creation, policy rollout during a run, target rebase, cancelled approval, and partial deployment. Governance is a distributed workflow and needs the same recovery discipline as the system it protects.
+Fault-inject the evidence pipeline: lost receipts, stale caches, verifier crashes after artifact creation, policy rollout during a run, target rebase, canceled approval, and partial deployment. Governance is a distributed workflow and needs the same recovery discipline as the system it protects.
 
 ---
 

@@ -56,7 +56,7 @@ result: blocked
 reason: japan_slice_fpr_regression
 ```
 
-This is the evaluation analogue of a deployment contract. It makes the decision reproducible and reviewable.
+This is the evaluation analog of a deployment contract. It makes the decision reproducible and reviewable.
 
 An evaluation report has two identities. The **measurement definition** pins label semantics, split, metric implementation, slice predicates, uncertainty method, baseline-selection rule, and gate policy. The **measurement realization** pins the candidate and baseline hashes, evaluation manifest, runtime image, random seeds, and computed outputs. A result is comparable across runs only when the definition is compatible; reusing the metric name after changing its code or population creates false history.
 

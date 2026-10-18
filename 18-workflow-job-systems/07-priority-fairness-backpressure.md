@@ -59,7 +59,7 @@ Useful invariants are testable:
 
 ---
 
-## Control Plane and Data Path
+## Data Plane and Control Plane
 
 ```mermaid
 flowchart LR

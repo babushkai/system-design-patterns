@@ -171,7 +171,7 @@ Do not write transient task state into long-term memory merely because it may be
 
 Conversation history is an event stream, but an agent run may fork: parallel tool calls, regenerated responses, speculative plans, or user edits. Assign stable event IDs and parent references. A branch has a base revision; its output cannot commit to current task state if that base has been superseded without reconciliation.
 
-The model-visible transcript may linearize concurrent events, but canonical state should preserve their causal relation. Tool call and result IDs must match; a late result from a cancelled branch is recorded but not inserted into the active context as current truth. When two branches produce candidate artifacts, the orchestrator selects or merges them explicitly rather than concatenating both and asking the model to infer which won.
+The model-visible transcript may linearize concurrent events, but canonical state should preserve their causal relation. Tool call and result IDs must match; a late result from a canceled branch is recorded but not inserted into the active context as current truth. When two branches produce candidate artifacts, the orchestrator selects or merges them explicitly rather than concatenating both and asking the model to infer which won.
 
 Session migration between models may alter chat templates, tool encodings, context limits, and cache identity. Recompile from canonical events instead of forwarding provider-rendered messages. Validate that the destination can represent every active tool call and content modality; otherwise close or summarize the incompatible state at a controlled boundary.
 
@@ -222,13 +222,13 @@ Two context projections can isolate high-value state without changing canonical 
 
 **Context distraction.** Stuffing the window with marginally relevant retrieval measurably *lowers* accuracy versus a tighter context. Defense: rerank hard, cap retrieved tokens, and evaluate retrieval precision, not just recall.
 
-**Stale memory.** Yesterday's convention, confidently injected today. Defense: memory provenance, easy deletion, user-visible memory contents, and skepticism about auto-injecting anything the user can't see.
+**Stale memory.** Yesterday's convention, confidently injected today. Defense: memory provenance, easy deletion, user-visible memory contents, and skepticism about auto-injecting anything the user cannot see.
 
 **Summary as source of truth.** Compaction replaces the only copy of task decisions or external receipts. Defense: canonical event/artifact state outside the prompt and rehydratable summary references.
 
 **Cross-tenant context reuse.** A response, semantic memory, or prefix cache crosses an authorization domain. Defense: tenant/policy identity in every cache and retrieval key, with provider cache semantics included in the threat model.
 
-**Late branch contamination.** A result from a cancelled or superseded branch enters the active transcript as current state. Defense: causal event IDs, base revisions, and commit validation.
+**Late branch contamination.** A result from a canceled or superseded branch enters the active transcript as current state. Defense: causal event IDs, base revisions, and commit validation.
 
 **Silent truncation.** A renderer drops the tail or a tool result to fit, removing the user question or decisive error. Defense: type-specific budget policy, explicit truncation markers, and manifest-level rejection when mandatory items do not fit.
 

@@ -194,7 +194,7 @@ Serving nodes memory-map immutable generations, verify manifest and block checks
 
 ## Client Protocol
 
-Debounce reduces requests but adds visible latency. Choose it from measured typing intervals and network latency, and allow immediate requests after actions such as paste or navigation. Cancel obsolete requests when possible, but also attach a monotonically increasing `request_sequence`; networks and servers can deliver cancelled work late.
+Debounce reduces requests but adds visible latency. Choose it from measured typing intervals and network latency, and allow immediate requests after actions such as paste or navigation. Cancel obsolete requests when possible, but also attach a monotonically increasing `request_sequence`; networks and servers can deliver canceled work late.
 
 The client renders a response only if its sequence and normalized prefix match current state. Keyboard navigation, selection, focus, and screen-reader announcements follow the appropriate combobox/listbox accessibility pattern. Suggestions must not steal focus or execute on mere highlight. Typed actions distinguish “submit query,” “navigate,” and “run command.”
 
@@ -225,7 +225,7 @@ Containment publishes an emergency negative overlay and purges/bypasses affected
 
 Prevention combines distinct-subject support, per-actor contribution caps, bot/fraud signals, candidate allow/deny policy, minimum support for trends, manual review for high-exposure prefixes, staged canary publication, and automated diffs of newly promoted suggestions. Telemetry alerts on abrupt score/share changes and on candidates entering high-traffic prefixes for the first time.
 
-## Security, Privacy, and Abuse Resistance
+## Security, Privacy, and Abuse
 
 Autocomplete is an output publication system. Apply stronger review to suggestions than to ordinary search results because the product proactively displays them. Enforce tenant and region boundaries before all caches. Escape display text; typed navigation targets must be validated server-side and limited to approved schemes/routes.
 

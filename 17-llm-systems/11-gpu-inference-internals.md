@@ -121,7 +121,7 @@ $$
 
 where $W$ is weight bytes, $B$ active sequences, $S$ their effective context length, and $K$ KV bytes per token. Weight traffic amortizes with $B$, while per-sequence KV traffic does not. Total throughput initially rises quickly, then approaches a compute, KV-bandwidth, or scheduler limit; per-stream inter-token latency can deteriorate throughout.
 
-Continuous batching keeps the active set populated by admitting and retiring sequences at iteration boundaries. It improves utilization but introduces scheduling choices around priority, adapter locality, KV residency, and long prefills. The economic objective is accelerator cost divided by SLO-compliant output tokens, including rejected, preempted, and cancelled work. Hourly accelerator price and sustained efficiency are deployment inputs, not constants suitable for a universal example.
+Continuous batching keeps the active set populated by admitting and retiring sequences at iteration boundaries. It improves utilization but introduces scheduling choices around priority, adapter locality, KV residency, and long prefills. The economic objective is accelerator cost divided by SLO-compliant output tokens, including rejected, preempted, and canceled work. Hourly accelerator price and sustained efficiency are deployment inputs, not constants suitable for a universal example.
 
 Benchmark across concurrency until the goodput curve reaches its knee. The selected operating point must leave headroom for length variance, failures, rollout surge, and cache misses; the maximum-throughput point is usually an overload condition for an interactive service.
 

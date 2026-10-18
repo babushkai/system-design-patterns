@@ -6,7 +6,7 @@ FoundationDB unbundles a transactional store into separately scalable roles coor
 
 Optimistic concurrency buys high throughput under light contention and makes hot logical records an application-visible bottleneck. Lag between roles becomes the primary operational variable, and deterministic simulation is how the published failure behavior was validated.
 
-## Publication Boundary
+## Publication Identity and Scope
 
 - **Paper:** *FoundationDB: A Distributed Unbundled Transactional Key Value Store*
 - **Venue and version:** ACM SIGMOD 2021, DOI 10.1145/3448016.3457559, 14-page proceedings paper
@@ -201,7 +201,7 @@ The authors reported more than 0.5 million CloudKit disk-years without detected 
 6. Simulator confidence depends on model fidelity and controlled nondeterminism.
 7. Storage-server engine details in current releases may differ from the paper.
 
-## Design-Review Questions
+## Design Review Questions
 
 1. Which exact log acknowledgments make commit durable under each replication policy?
 2. Can a client accidentally omit a read-conflict range and violate its intended invariant?

@@ -389,7 +389,7 @@ Build a deterministic event corpus with out-of-order records, duplicates, future
 - compare a continuous run with a bounded replay over the same source range;
 - kill a worker before and after local state update;
 - fail the coordinator while a checkpoint is completing;
-- fail the sink before prepare, after prepare, and after commit acknowledgement;
+- fail the sink before prepare, after prepare, and after commit acknowledgment;
 - replay records across the checkpoint boundary and verify state and sink invariants;
 - pause one source partition to test watermark and idleness behavior;
 - overload the sink and prove memory remains bounded while lag rises;

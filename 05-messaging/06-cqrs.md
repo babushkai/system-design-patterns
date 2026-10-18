@@ -54,7 +54,7 @@ Enforce:
 
 **Single write authority.** Only the projection pipeline mutates a read model. Query handlers are read-only.
 
-**Atomic apply.** Inbox insert, read-model mutation, entity version, and projection checkpoint commit in one transaction when they share a store. Broker acknowledgement follows that commit.
+**Atomic apply.** Inbox insert, read-model mutation, entity version, and projection checkpoint commit in one transaction when they share a store. Broker acknowledgment follows that commit.
 
 **Contiguous progress.** A checkpoint means all required source changes through that point are reflected or explicitly skipped by governed policy.
 
@@ -252,7 +252,7 @@ Read-model incidents are usually freshness or completeness disputes rather than 
 
 ### Users report stale reads after successful writes
 
-Separate transport lag from applied state: last available source position, last contiguous applied position, and the source recorded time at that position. If those advance normally, the pipeline is healthy and the product contract about freshness is what failed, so answer with the freshness bound rather than infrastructure work. If a command path promised read-your-writes, honour it explicitly for that entity (consistency token wait within a deadline, write-side read path, or a typed not-yet-projected response) and check that waiters are bounded per tenant, because unbounded waiting converts a freshness bug into a connection-exhaustion outage. Do not insert sleeps into the client or lower the projection commit interval under pressure: the first is wrong under load and the second trades every other consumer's throughput for one screen.
+Separate transport lag from applied state: last available source position, last contiguous applied position, and the source recorded time at that position. If those advance normally, the pipeline is healthy and the product contract about freshness is what failed, so answer with the freshness bound rather than infrastructure work. If a command path promised read-your-writes, honor it explicitly for that entity (consistency token wait within a deadline, write-side read path, or a typed not-yet-projected response) and check that waiters are bounded per tenant, because unbounded waiting converts a freshness bug into a connection-exhaustion outage. Do not insert sleeps into the client or lower the projection commit interval under pressure: the first is wrong under load and the second trades every other consumer's throughput for one screen.
 
 ### A rebuild finished but the two generations disagree
 

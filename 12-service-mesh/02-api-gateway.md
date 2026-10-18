@@ -394,7 +394,7 @@ Activation sequence:
 7. report received, validated, active, and rejected revisions; and
 8. retain a still-valid last-known-good snapshot.
 
-An acknowledgement that syntax validated is not proof that every route is reachable or every upstream is healthy. Monitor both configuration activation and request outcomes.
+An acknowledgment that syntax validated is not proof that every route is reachable or every upstream is healthy. Monitor both configuration activation and request outcomes.
 
 ### Safe rollout
 

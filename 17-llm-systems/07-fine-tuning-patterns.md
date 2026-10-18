@@ -119,7 +119,7 @@ The training corpus and its lineage determine what intervention can be reproduce
 
 **Deduplicate, decontaminate, split honestly.** Near-duplicate examples silently overweight their pattern; eval examples leaking into training data produce the classic too-good-to-be-true validation score ([leakage](../16-ml-systems/05-training-pipelines.md), in fine-tuning clothes). Split by *entity or scenario*, not by row, when generalization to new entities is the goal.
 
-**Version the dataset like a release artifact.** Snapshot, hash, and record the exact training set with the produced model: a tuned model whose data can't be reconstructed can't be debugged, audited, or legally defended. The full argument lives in [dataset management](../16-ml-systems/11-dataset-management-versioning.md); fine-tuning inherits all of it, plus a sharper privacy edge: PII in training data can resurface verbatim in generations, so scrubbing happens *before* training, not in the output filter.
+**Version the dataset like a release artifact.** Snapshot, hash, and record the exact training set with the produced model: a tuned model whose data cannot be reconstructed cannot be debugged, audited, or legally defended. The full argument lives in [dataset management](../16-ml-systems/11-dataset-management-versioning.md); fine-tuning inherits all of it, plus a sharper privacy edge: PII in training data can resurface verbatim in generations, so scrubbing happens *before* training, not in the output filter.
 
 **Format for the target.** Chat-tuned bases encode template assumptions through roles and special tokens; a training/serving mismatch silently changes the learned sequence distribution. Pin tokenizer, chat template, role boundaries, loss mask, and serving-time instruction contract as one compatibility tuple.
 
@@ -238,7 +238,7 @@ Safety tuning does not replace runtime policy. Distribution shift, adversarial i
 
 **Tuning what prompting solves.** A quarter of engineering for what a rewritten prompt plus five examples achieves. Defense: the prompting baseline is a mandatory pre-experiment, and the tune must beat it on the eval set to ship.
 
-**Knowledge baked into weights.** Facts go stale, can't be cited, can't be deleted; the model confidently recites last year. Defense: knowledge → RAG; behavior → weights.
+**Knowledge baked into weights.** Facts go stale, cannot be cited, cannot be deleted; the model confidently recites last year. Defense: knowledge → RAG; behavior → weights.
 
 **Data leakage and contamination.** Eval examples (or near-duplicates) in the training set produce a mirage of quality. Defense: hash-based dedup across train/eval, entity-level splits, and suspicion of any dramatic jump.
 
@@ -264,11 +264,11 @@ Safety tuning does not replace runtime policy. Distribution shift, adversarial i
 
 ## Decision Framework
 
-*Did a strong prompt with examples and schema enforcement fail, measurably, on an eval set?* If it wasn't tried, or there's no eval set, the answer to "should we fine-tune" is no, not yet.
+*Did a strong prompt with examples and schema enforcement fail, measurably, on an eval set?* If it was not tried, or there is no eval set, the answer to "should we fine-tune" is no, not yet.
 
 *Is the gap knowledge or behavior?* Knowledge → retrieval. Behavior (style, format, task skill, tool reliability) → tuning is on the table.
 
-*What's the unit economics goal?* First compare a smaller existing target, routing, prompt/context reduction, quantization, batching, and caching under the same quality constraints. Distillation is justified when a student can reproduce the bounded behavior more economically after including teacher generation, training, qualification, fallback, serving, and refresh cost. Its break-even model uses verified successful volume, not raw tokens alone.
+*What is the unit economics goal?* First compare a smaller existing target, routing, prompt/context reduction, quantization, batching, and caching under the same quality constraints. Distillation is justified when a student can reproduce the bounded behavior more economically after including teacher generation, training, qualification, fallback, serving, and refresh cost. Its break-even model uses verified successful volume, not raw tokens alone.
 
 *One model or many variants?* Per-tenant/per-task variants → LoRA + multi-adapter serving; single flagship behavior → merge and serve plain.
 

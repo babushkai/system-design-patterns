@@ -268,7 +268,7 @@ stateDiagram-v2
     Exported --> Buffered: retryable failure
 ~~~
 
-Transport acknowledgement needs defined semantics. If the collector acknowledges after memory receipt, a crash loses accepted spans. If it waits for durable storage, latency and backpressure rise. State the durability class and keep compliance audit logs out of a best-effort trace path.
+Transport acknowledgment needs defined semantics. If the collector acknowledges after memory receipt, a crash loses accepted spans. If it waits for durable storage, latency and backpressure rise. State the durability class and keep compliance audit logs out of a best-effort trace path.
 
 OTLP can report partial success. Exporters must count rejected spans and not treat a successful transport status as full acceptance.
 
@@ -285,7 +285,7 @@ Order of preference:
 
 Never let an unbounded telemetry queue exhaust application memory. When the backend is slow, retrying from every SDK can form a synchronized storm; local collectors absorb and coordinate that pressure.
 
-At-least-once export can duplicate spans after an ambiguous acknowledgement. Backends deduplicate by tenant, trace ID, span ID, and producer identity/revision within a defined window. Deduplication must not merge two malicious or broken producers that reused IDs across tenants.
+At-least-once export can duplicate spans after an ambiguous acknowledgment. Backends deduplicate by tenant, trace ID, span ID, and producer identity/revision within a defined window. Deduplication must not merge two malicious or broken producers that reused IDs across tenants.
 
 ## Baggage, Security, and Privacy
 
@@ -488,7 +488,7 @@ Inject a synthetic trace across each supported protocol and failure domain. Veri
 5. Which anomaly rules deserve tail retention, and what are their quotas?
 6. What decision horizon and incomplete-trace behavior are acceptable?
 7. Which collector layers are required for isolation, enrichment, buffering, and residency?
-8. What durability is promised at each acknowledgement?
+8. What durability is promised at each acknowledgment?
 9. What attribute, event, baggage, and trace-size budgets apply?
 10. Can the system survive an incident-driven match-all sampling surge?
 11. How are regional fragments queried without making application traffic depend on global tracing?
@@ -502,7 +502,7 @@ Inject a synthetic trace across each supported protocol and failure domain. Veri
 4. Head sampling is cheap and predictable; tail sampling is selective but stateful and failure-prone.
 5. Hybrid sampling preserves a deterministic baseline while bounding anomaly retention.
 6. Metrics, not biased trace samples, own population-level rates and percentiles.
-7. Collector acknowledgements, queues, retries, partial success, and drops need explicit semantics.
+7. Collector acknowledgments, queues, retries, partial success, and drops need explicit semantics.
 8. Tail-buffer and outage-match capacity, not average trace traffic, drive design.
 9. Regional collection protects latency and residency; global trace completeness is a tradeoff.
 10. Verify causal correctness, privacy, loss behavior, and queryability end to end.

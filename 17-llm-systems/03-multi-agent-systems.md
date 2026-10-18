@@ -169,7 +169,7 @@ Use fencing tokens with leases. Every commit includes the lease generation; a st
 
 An append-only event stream gives replay, audit, and recovery, provided event semantics are versioned. Useful events include `TaskProposed`, `TaskAdmitted`, `AttemptStarted`, `ArtifactPublished`, `ClaimRetracted`, `ApprovalGranted`, and `CommitApplied`. Store the data necessary to reproduce deterministic state transitions, not raw chain-of-thought.
 
-Projections such as “current plan” or “open tasks” may lag. Commands that require strong consistency should validate against the authoritative stream version. Observability dashboards may use eventually consistent projections. Mixing these expectations creates bugs where a worker acts on a stale “open” task after it was cancelled.
+Projections such as “current plan” or “open tasks” may lag. Commands that require strong consistency should validate against the authoritative stream version. Observability dashboards may use eventually consistent projections. Mixing these expectations creates bugs where a worker acts on a stale “open” task after it was canceled.
 
 ## Communication Semantics
 
@@ -194,7 +194,7 @@ Exactly-once delivery across queues and arbitrary tools is generally unattainabl
 3. write any outbound messages to an outbox in that transaction;
 4. asynchronously publish the outbox; duplicates are harmless.
 
-Ordering is usually per task or aggregate, not global. Include a sequence or expected revision. A response to a cancelled or superseded attempt remains auditable but cannot advance authoritative state.
+Ordering is usually per task or aggregate, not global. Include a sequence or expected revision. A response to a canceled or superseded attempt remains auditable but cannot advance authoritative state.
 
 ### Context transfer is lossy compression
 
@@ -243,7 +243,7 @@ Failures occur at four layers:
 
 Retry only the first class automatically, plus explicitly idempotent protocol failures. Semantic failures require new evidence, a different strategy, or escalation. Retrying the same model with the same context is correlated sampling, not remediation.
 
-The parent records child lifecycle independently from a live connection. On orchestrator restart it reconstructs the graph, reclaims expired leases, polls remote operations whose outcome is uncertain, and schedules only tasks that remain admissible. Orphan detection links every running attempt to a live lease and run state. Cancellation walks the descendant graph, signals workers, and reconciles side effects that cannot be cancelled.
+The parent records child lifecycle independently from a live connection. On orchestrator restart it reconstructs the graph, reclaims expired leases, polls remote operations whose outcome is uncertain, and schedules only tasks that remain admissible. Orphan detection links every running attempt to a live lease and run state. Cancellation walks the descendant graph, signals workers, and reconciles side effects that cannot be canceled.
 
 ### Sagas for external effects
 
@@ -287,7 +287,7 @@ Operational metrics include:
 - tokens and currency per successful run, not merely per call;
 - stale-result, duplicate-message, orphan-attempt, and write-conflict rates;
 - verifier disagreement, human override, and unsupported-claim rates;
-- cancellation acknowledgement and post-cancellation spend.
+- cancellation acknowledgment and post-cancellation spend.
 
 Alerts should be slice-aware. A global completion rate can remain stable while one tenant, tool, language, or task type fails completely.
 

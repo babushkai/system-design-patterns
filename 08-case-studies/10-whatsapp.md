@@ -18,14 +18,14 @@ Exact servers, languages, connection counts, and databases appear only when supp
 
 **Documented, 2026 snapshot.** WhatsApp reported default end-to-end encryption for more than three billion people in January 2026. [Meta Engineering, Rust at scale for WhatsApp security](https://engineering.fb.com/2026/01/27/security/rust-at-scale-security-whatsapp/)
 
-**Reference-design scope.** Support one-to-one and group text, attachments, calls, per-device delivery, offline receipt, delivery/read acknowledgements, linked devices, key changes, encrypted state sync, and optional encrypted backup.
+**Reference-design scope.** Support one-to-one and group text, attachments, calls, per-device delivery, offline receipt, delivery/read acknowledgments, linked devices, key changes, encrypted state sync, and optional encrypted backup.
 
 The contract is:
 
 1. only authenticated participant devices obtain message plaintext or content keys;
 2. the server cannot silently add a recipient device without authorization and detection mechanisms;
 3. each logical send has a stable ID and each target device applies it at most once;
-4. acknowledgements name a stage: server accepted, device received, or user read;
+4. acknowledgments name a stage: server accepted, device received, or user read;
 5. an offline target remains recoverable until the declared expiry policy;
 6. device-list and key changes are ordered and auditable;
 7. metadata collection is minimized because encryption does not hide routing metadata;
@@ -84,7 +84,7 @@ $$
 
 At-least-once transport may redeliver it, but the target persists `(sender_device,m)` before applying user-visible effects. This is business-effect deduplication, not exactly-once networking.
 
-### Acknowledgement lattice
+### Acknowledgment lattice
 
 **Reference design.** Receipt stages advance monotonically:
 
@@ -131,7 +131,7 @@ The data plane accepts encrypted envelopes, durably queues them, delivers to onl
 6. Deliver to online targets; retain offline targets durably and optionally send a plaintext-free push wake-up.
 7. A device durably records `m`, decrypts and commits locally, then acknowledges `device_received`.
 8. Remove or tombstone the delivered envelope under the replay/retention policy.
-9. Represent read acknowledgements as separate end-to-end encrypted control messages when enabled.
+9. Represent read acknowledgments as separate end-to-end encrypted control messages when enabled.
 
 Server acceptance proves custody under the mailbox policy, not recipient decryption. A device receipt proves one target processed the envelope, not that every linked device or the human read it.
 
@@ -189,13 +189,13 @@ At 1.1 KiB each, raw backlog is about 38.4 TiB before replication, indexes, and 
 
 For 900 million device connections at a measured 18 KiB application/transport footprint, memory is roughly 14.7 TiB. At 250,000 safe connections per host and 55% occupancy, the lower bound is about 6,546 hosts before regional redundancy. These assumptions are deliberately illustrative, not WhatsApp concurrency or server-density claims.
 
-## Failure Trace: Lost Acknowledgement During Device Change
+## Failure Trace: Lost Acknowledgment During Device Change
 
 **Reference-design trace.** Alice sends `m77` to Bob, whose directory version `d12` contains phone `B1` and desktop `B2`:
 
 1. Alice verifies `d12` and encrypts envelopes for `B1` and `B2`.
 2. The service durably accepts both; `B1` is online and `B2` offline.
-3. `B1` stores `m77`, but its acknowledgement is lost with the connection.
+3. `B1` stores `m77`, but its acknowledgment is lost with the connection.
 4. Alice retries. Uniqueness keys `(m77,B1)` and `(m77,B2)` return the existing receipt.
 5. The service redelivers to `B1`; Bob's durable dedup suppresses duplicate display.
 6. Bob removes `B2`, creating device version `d13` and a new transparency epoch. The old `B2` envelope is revoked or expires under declared policy; future sends bind to `d13`.
@@ -257,7 +257,7 @@ Keep warm capacity to absorb a region's connections and writes without cold prov
 2. Separate logical message identity from per-device ciphertext and delivery state.
 3. Encryption fanout and delivery fanout are different costs.
 4. Make key-directory history auditable; ciphertext is insufficient if recipients can be substituted.
-5. Treat acknowledgements as monotonic named stages.
+5. Treat acknowledgments as monotonic named stages.
 6. Keep offline backlog in durable mailboxes, not connection memory.
 7. Design privacy-preserving observability as part of the protocol.
 8. Never let availability degradation silently weaken encryption or key verification.

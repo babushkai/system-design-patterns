@@ -4,7 +4,7 @@
 
 Delivery guarantees describe uncertainty between producer, broker, consumer, and effect store. A broker can prove that a record was durably appended, fetched, or transactionally written to another broker partition. It cannot, by itself, prove that a payment, email, filesystem write, or unrelated database transaction happened exactly once. Correct design names each atomicity boundary and closes the gaps end to end.
 
-Delivery guarantees are end-to-end contracts over broker semantics, acknowledgement ambiguity, producer retry deduplication, consumer effect commit, and the limits of “exactly once.” [Outbox and Inbox](07-outbox-pattern.md) owns atomic database-to-broker publication and transactional consumer deduplication. [Ordering](03-message-ordering.md) owns sequences. Workflow-specific retries and compensation belong to [Effect Commit Protocols](../18-workflow-job-systems/06-retry-idempotency-compensation.md).
+Delivery guarantees are end-to-end contracts over broker semantics, acknowledgment ambiguity, producer retry deduplication, consumer effect commit, and the limits of “exactly once.” [Outbox and Inbox](07-outbox-pattern.md) owns atomic database-to-broker publication and transactional consumer deduplication. [Ordering](03-message-ordering.md) owns sequences. Workflow-specific retries and compensation belong to [Effect Commit Protocols](../18-workflow-job-systems/06-retry-idempotency-compensation.md).
 
 ## Workload and Guarantee Contract
 
@@ -26,7 +26,7 @@ For every arrow state:
 - what a timeout means;
 - whether retries can duplicate;
 - how long deduplication evidence is retained;
-- which failure domains the acknowledgement survives;
+- which failure domains the acknowledgment survives;
 - who reconciles ambiguous outcomes.
 
 Use precise vocabulary:
@@ -41,7 +41,7 @@ Relevant state includes producer identity/epoch/sequence, broker record identity
 
 Enforce:
 
-**Broker acknowledgement matches replication policy.** A producer success means the record is durably present on the declared failure domains, not merely accepted into one process buffer.
+**Broker acknowledgment matches replication policy.** A producer success means the record is durably present on the declared failure domains, not merely accepted into one process buffer.
 
 **Logical identity survives retry.** Every retry of the same intent carries the same event/idempotency identity; a new intent gets a new identity.
 
@@ -57,9 +57,9 @@ Enforce:
 
 ## Failure Windows
 
-The central ambiguity is the **lost acknowledgement**. Suppose the broker commits event E and sends success, but the response is lost. The producer cannot distinguish committed from uncommitted. Retrying with a new ID creates two logical events; abandoning the attempt can lose it. Retrying with the same identity lets the broker return the existing result.
+The central ambiguity is the **lost acknowledgment**. Suppose the broker commits event E and sends success, but the response is lost. The producer cannot distinguish committed from uncommitted. Retrying with a new ID creates two logical events; abandoning the attempt can lose it. Retrying with the same identity lets the broker return the existing result.
 
-On the consumer side, suppose the handler writes the effect and crashes before acknowledgement. Redelivery is necessary because the broker cannot know the effect committed. If the effect and inbox marker share one database transaction, the second attempt observes the marker and acknowledges without repeating the mutation. If the effect is an external API, that API must accept the same idempotency key or the workflow must reconcile/compensate.
+On the consumer side, suppose the handler writes the effect and crashes before acknowledgment. Redelivery is necessary because the broker cannot know the effect committed. If the effect and inbox marker share one database transaction, the second attempt observes the marker and acknowledges without repeating the mutation. If the effect is an external API, that API must accept the same idempotency key or the workflow must reconcile/compensate.
 
 Other windows include:
 
@@ -77,11 +77,11 @@ Build the protocol around these windows rather than happy-path SDK configuration
 
 ### Fire-and-forget
 
-The producer sends and does not await durable acknowledgement. It minimizes latency and resource use but permits silent loss during client, network, or broker failure. Restrict it to observations whose loss is acceptable and measured, such as sampled diagnostics, not business intent.
+The producer sends and does not await durable acknowledgment. It minimizes latency and resource use but permits silent loss during client, network, or broker failure. Restrict it to observations whose loss is acceptable and measured, such as sampled diagnostics, not business intent.
 
 ### Confirmed at-least-once publication
 
-The producer waits for a broker acknowledgement matching the replication policy. On timeout it retries the same logical event with bounded backoff/deadline. Without broker deduplication, the log may contain duplicates; consumers still need effect safety.
+The producer waits for a broker acknowledgment matching the replication policy. On timeout it retries the same logical event with bounded backoff/deadline. Without broker deduplication, the log may contain duplicates; consumers still need effect safety.
 
 ### Idempotent producer session
 
@@ -93,21 +93,21 @@ The strongest database-to-broker producer design is not “retry after commit”
 
 ## Broker Durability and Replication
 
-A leader append passes stages: accepted, written locally, replicated, committed under the quorum/in-sync policy, and retained in a published segment. Producer acknowledgements choose one of these stages. The contract must state whether process crash, node loss, zone loss, and simultaneous failures are covered.
+A leader append passes stages: accepted, written locally, replicated, committed under the quorum/in-sync policy, and retained in a published segment. Producer acknowledgments choose one of these stages. The contract must state whether process crash, node loss, zone loss, and simultaneous failures are covered.
 
-Replication settings are not independent toggles. A quorum acknowledgement is meaningful only if replica membership, failure-domain placement, minimum healthy replicas, and unclean leader-election policy preserve the claimed durability. Allowing an out-of-date replica to become leader restores availability by accepting data loss.
+Replication settings are not independent toggles. A quorum acknowledgment is meaningful only if replica membership, failure-domain placement, minimum healthy replicas, and unclean leader-election policy preserve the claimed durability. Allowing an out-of-date replica to become leader restores availability by accepting data loss.
 
 Fsync policy determines power-loss durability; replication does not protect against correlated software deletion or poison writes. Backups/archives and delayed replicas address different failures. Validate checksums and generation manifests during recovery.
 
 Retention bounds redelivery. Once the only retained copy is deleted, at-least-once cannot be honored for a consumer that has not checkpointed it. Tie topic retention to maximum permitted lag/replay, or make lagging subscriptions expire/fail explicitly.
 
-## Consumer Acknowledgement Strategies
+## Consumer Acknowledgment Strategies
 
 **Acknowledge before effect** gives at-most-once processing: a crash loses work. **Acknowledge after effect** gives at-least-once attempt: a crash after effect can repeat it. **Acknowledge atomically with effect** is possible only when broker progress and effect participate in one transactional domain or when a durable inbox/effect transaction lets redelivery converge.
 
 For batch consumption, process and commit a contiguous prefix. If item 4 fails after items 1–3 commit, do not advance a single checkpoint through item 10 unless individual durable identities allow safe replay. Store per-item inbox state or split the batch.
 
-Acknowledgement tokens contain consumer-group generation/claim generation. A consumer revoked during rebalance cannot move the checkpoint after a new member owns the partition. This prevents progress regression or skipping; it does not eliminate duplicate execution during an unclean handoff.
+Acknowledgment tokens contain consumer-group generation/claim generation. A consumer revoked during rebalance cannot move the checkpoint after a new member owns the partition. This prevents progress regression or skipping; it does not eliminate duplicate execution during an unclean handoff.
 
 Cancellation and deadlines matter. If the broker times out a consumer while its database transaction continues, it may redeliver concurrently. The effect store should serialize/idempotently reject the duplicate, and the consumer should stop work when authority/deadline is lost where safe.
 
@@ -181,7 +181,7 @@ Guarantee settings are spread across producer, broker, coordinator, and the down
 | Apache Kafka transactions | `transactional.id`, `transaction.timeout.ms`, `transaction.state.log.replication.factor` | only one live session per transactional identity can commit, and coordinator loss preserves that fact | the internal transaction state topic is functional at a replication factor of 1 with in-sync minimum 1, so an environment sized on defaults can lose coordinator state and fence nothing. Raising the client timeout past the broker ceiling also lengthens how long read-committed consumers wait for a stable watermark. |
 | Apache Kafka consumer group | `enable.auto.commit`, commit ordering | progress advances only over effects that are durable | background time-based commit runs independently of your handler, so a rebalance loses the in-flight window; committing after a batch that partially failed skips the failed members. Commit an explicit contiguous prefix after the effect commits. |
 | Amazon SQS | `VisibilityTimeout`, `RedrivePolicy`, FIFO `ContentBasedDeduplication` | retry is bounded and same-intent retries collapse | FIFO deduplication covers a short identity window, so it removes an immediate retry storm and not a replay issued days later; the redrive counter bounds delivery attempts rather than outcomes, and standard queues suppress only best-effort duplicates. |
-| RabbitMQ classic mirrored versus quorum queues | publisher confirms plus queue type | a confirm means the record survived the failure domains you claim | a confirm on a classic mirrored queue is issued by the primary alone, so failover can drop confirmed publishes; quorum queues confirm after a quorum write. The acknowledgement semantics are identical, which is why the migration looks risk-free in tests. |
+| RabbitMQ classic mirrored versus quorum queues | publisher confirms plus queue type | a confirm means the record survived the failure domains you claim | a confirm on a classic mirrored queue is issued by the primary alone, so failover can drop confirmed publishes; quorum queues confirm after a quorum write. The acknowledgment semantics are identical, which is why the migration looks risk-free in tests. |
 | RabbitMQ AMQP channel transactions | `select_transaction` scope | local consumption and publication commit together | the transaction covers only broker operations on that channel, never your database or external call, and it serialises throughput. Reaching for it usually means the boundary belongs in an outbox. |
 | Amazon SNS and Lambda asynchronous invocation | endpoint retry policy, function event-invoke destinations | a failed delivery is retained somewhere queryable | retries stop at the configured ceiling and, without an on-failure destination, the payload is discarded rather than quarantined; the retry counter is per invocation, so fan-out multiplies it across protocols. |
 | Google Cloud Pub/Sub exactly-once delivery | `enableExactlyOnceDelivery` with ordering keys and storage policy | at most one outstanding delivery per ordering key in a region | the guarantee is scoped per ordering key and per region rather than globally; a global or topic-mapped topic can hold one outstanding delivery in each region, so "exactly once" needs its scope named out loud. It also raises the minimum acknowledge deadline and lowers throughput ceilings. |
@@ -219,7 +219,7 @@ Replicated ingress is about 176 MiB/s before protocol/index overhead. Retry traf
 
 Fan-out delivery is `60,000 * 4 = 240,000` records/s. If consumer effect transactions sustain a measured 2,500/s per database shard at safe utilization, each full-rate subscription needs at least 24 effect shards before skew and failure reserve. Broker throughput is not end-to-end capacity.
 
-Batching amortizes acknowledgements but increases ambiguity/replay suffix and latency. Model batch fill time at low traffic, maximum transaction bytes, and recovery reprocessing, not only peak throughput.
+Batching amortizes acknowledgments but increases ambiguity/replay suffix and latency. Model batch fill time at low traffic, maximum transaction bytes, and recovery reprocessing, not only peak throughput.
 
 ## Concrete Failure Trace: Disaster Restore Forgets Dedup State
 
@@ -231,7 +231,7 @@ Containment pauses consumers and identifies effects with natural business refere
 
 Track each boundary:
 
-- producer attempts, stable IDs, acknowledgements, timeouts, retry age, epoch fences;
+- producer attempts, stable IDs, acknowledgments, timeouts, retry age, epoch fences;
 - leader append/replicate/commit latency and healthy failure domains;
 - unclean election, truncation, checksum/corruption, and retention exposure;
 - delivered/acknowledged/redelivered rates and consumer generation rejects;
@@ -244,7 +244,7 @@ Runbooks cover producer timeout ambiguity, broker data loss, replay beyond dedup
 
 ## Incident Playbook
 
-Guarantee incidents are rarely caused by a broker silently dropping data; they are caused by two components holding different ideas of what an acknowledgement meant. Each entry below names the evidence that closes that ambiguity first, because the tempting action in these moments usually destroys the evidence needed for repair.
+Guarantee incidents are rarely caused by a broker silently dropping data; they are caused by two components holding different ideas of what an acknowledgment meant. Each entry below names the evidence that closes that ambiguity first, because the tempting action in these moments usually destroys the evidence needed for repair.
 
 ### Effects repeated after failover or restore
 
@@ -260,7 +260,7 @@ Read transactional state first: open transaction age against `transaction.timeou
 
 ### Redelivery climbs in lockstep with throughput
 
-A duplicate ratio that tracks volume points at lease arithmetic rather than a poison message: compare the acknowledgement deadline or visibility timeout against handler p99 including queueing behind a busy dependency, and check whether batch commits advance past individual failures. Contain by shrinking the unit of work per poll and extending the lease for the affected class only, since global changes reach unrelated consumers that were healthy. Verify by watching redelivery rate fall while completion rate holds, not by watching lag alone. Do not disable retries or restart the group from the newest position as relief: that discards retained history and reappears as missing work instead of duplicate work.
+A duplicate ratio that tracks volume points at lease arithmetic rather than a poison message: compare the acknowledgment deadline or visibility timeout against handler p99 including queueing behind a busy dependency, and check whether batch commits advance past individual failures. Contain by shrinking the unit of work per poll and extending the lease for the affected class only, since global changes reach unrelated consumers that were healthy. Verify by watching redelivery rate fall while completion rate holds, not by watching lag alone. Do not disable retries or restart the group from the newest position as relief: that discards retained history and reappears as missing work instead of duplicate work.
 
 ### Downstream idempotency expires before your replay horizon does
 
@@ -270,13 +270,13 @@ Put both horizons in one view: broker retention plus maximum acceptable lag on o
 
 Authenticate producer identity/epoch issuance and consumer groups. An attacker who can choose another tenant’s event or idempotency IDs can suppress legitimate work or retrieve prior results. Namespace keys by authenticated caller and effect scope; bind them to a request digest.
 
-Protect acknowledgement/checkpoint operations with generation-scoped tokens. Limit retry rate, batch size, transaction duration, and replay privileges. Broker logs, inboxes, and reconciliation records contain business identifiers and result references; apply least privilege, encryption, retention, and audit.
+Protect acknowledgment/checkpoint operations with generation-scoped tokens. Limit retry rate, batch size, transaction duration, and replay privileges. Broker logs, inboxes, and reconciliation records contain business identifiers and result references; apply least privilege, encryption, retention, and audit.
 
 Never deserialize untrusted payloads before schema/size checks. Duplicate storms are an availability attack even when effects are idempotent: the duplicate path still consumes broker, network, lookup, and transaction resources.
 
 ## Verification Strategy
 
-- enumerate every crash point between append, acknowledgement, effect, inbox, checkpoint, and response;
+- enumerate every crash point between append, acknowledgment, effect, inbox, checkpoint, and response;
 - property-test stable identity reuse and reject same key/different request;
 - partition leaders/producers to verify epoch fencing and acknowledged durability;
 - crash consumers before/after database commit and prove one logical effect;
@@ -314,7 +314,7 @@ Use at-most-once only when loss is cheaper than duplication. Use at-least-once w
 
 ## Related Chapters
 
-- [WhatsApp](../08-case-studies/10-whatsapp.md): end-to-end encryption turns the acknowledgement contract into a device-state problem
+- [WhatsApp](../08-case-studies/10-whatsapp.md): end-to-end encryption turns the acknowledgment contract into a device-state problem
 - [Idempotency and Operation Identity](../01-foundations/08-idempotency.md): at-least-once is survivable only when the effect can be recognized a second time
 - [Transactional Outbox, Inbox, and CDC Publication](07-outbox-pattern.md): making the write and the publish commit as one decision
 - [Distributed Transactions](../02-distributed-databases/07-distributed-transactions.md): the alternative to reconciling two systems: one commit domain

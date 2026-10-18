@@ -130,7 +130,7 @@ Updating instead of deleting can avoid a miss, but only when the updater has the
 
 Returning success before the authoritative database accepts a write means the buffer is now authoritative for some interval. The minimum design includes:
 
-- a durable log before acknowledgement;
+- a durable log before acknowledgment;
 - idempotency keys and deterministic replay;
 - per-key ordering or conflict rules;
 - bounded backlog and producer backpressure;

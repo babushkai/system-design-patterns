@@ -289,7 +289,7 @@ Before creating a topic, answer:
 - [Google Cloud Pub/Sub: Subscription Properties](https://cloud.google.com/pubsub/docs/subscription-properties)
 - [NATS JetStream: Consumers](https://docs.nats.io/nats-concepts/jetstream/consumers)
 - [Amazon SNS: Message Filtering](https://docs.aws.amazon.com/sns/latest/dg/sns-message-filtering.html)
-- [Google Cloud Pub/Sub: Subscription Types and Delivery Behaviour](https://cloud.google.com/pubsub/docs/subscriber)
+- [Google Cloud Pub/Sub: Subscription Types and Delivery Behavior](https://cloud.google.com/pubsub/docs/subscriber)
 - [RabbitMQ: Streams](https://www.rabbitmq.com/docs/streams)
 
 ---

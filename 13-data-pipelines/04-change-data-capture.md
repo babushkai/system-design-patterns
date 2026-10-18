@@ -281,7 +281,7 @@ Write each change under a unique source identity such as source epoch + transact
 
 ### Transactional sink application
 
-Stage all events for a declared group, validate completeness, then commit them with the sink’s transaction protocol. Coordinate source offset acknowledgement with sink commit or use a connector protocol that can recover ambiguous commits. Confirm reader isolation hides staging data.
+Stage all events for a declared group, validate completeness, then commit them with the sink’s transaction protocol. Coordinate source offset acknowledgment with sink commit or use a connector protocol that can recover ambiguous commits. Confirm reader isolation hides staging data.
 
 ### Non-transactional target
 

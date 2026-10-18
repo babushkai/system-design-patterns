@@ -111,7 +111,7 @@ This is an **explicit reference design**:
 7. Search, notifications, unfurling, audit/export, and analytics consume independently.
 8. The sender receives the committed identity. A retry with the same command ID returns the prior result.
 
-The acknowledgement boundary is configurable but explicit. A durable API acknowledgement should mean canonical commit, not “every recipient saw it.” Read receipts, if offered, are separate events with their own semantics.
+The acknowledgment boundary is configurable but explicit. A durable API acknowledgment should mean canonical commit, not “every recipient saw it.” Read receipts, if offered, are separate events with their own semantics.
 
 A transactional outbox or equivalent commit-log coupling closes the gap between database commit and event publication. Search and notifications may lag without losing the message. See [Outbox Pattern](../05-messaging/07-outbox-pattern.md) and [Delivery Guarantees](../05-messaging/04-delivery-guarantees.md).
 

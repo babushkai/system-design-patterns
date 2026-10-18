@@ -109,7 +109,7 @@ The added control costs CPU, memory, TLS key operations, parsing, buffering, and
 
 ### Publishing controller state
 
-**Reference design:** publish an immutable snapshot or ordered delta stream with a monotonic epoch. A data-plane instance validates the full candidate, builds lookup structures off the hot path, then atomically swaps from epoch `N` to `N+1`. It reports acknowledgement and rejection reason. Keep the last safe snapshot for controller outages and rollback.
+**Reference design:** publish an immutable snapshot or ordered delta stream with a monotonic epoch. A data-plane instance validates the full candidate, builds lookup structures off the hot path, then atomically swaps from epoch `N` to `N+1`. It reports acknowledgment and rejection reason. Keep the last safe snapshot for controller outages and rollback.
 
 Partial configuration is dangerous. A listener from the new epoch combined with endpoints from the old epoch can route a request to a backend that does not implement the selected protocol. Validate referential integrity, endpoint uniqueness, weight bounds, certificate availability, and minimum viable capacity before activation.
 
@@ -169,7 +169,7 @@ Connection age creates historical skew. Suppose four backends each hold 250,000 
 2. advertise protocol-specific shutdown (`Connection: close`, HTTP/2 GOAWAY, or application signal) where applicable;
 3. wait for in-flight requests, streams, and leases within a deadline;
 4. close remaining work according to its retry/idempotency contract;
-5. remove the endpoint only after both controller acknowledgement and data-plane drain telemetry agree.
+5. remove the endpoint only after both controller acknowledgment and data-plane drain telemetry agree.
 
 QUIC connection IDs and address migration require a QUIC-aware routing contract; hashing only the UDP 4-tuple can move a migrated connection to the wrong backend. See [Network Transport Internals](./14-network-transport-internals.md).
 

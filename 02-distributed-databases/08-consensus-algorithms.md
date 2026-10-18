@@ -6,7 +6,7 @@ Consensus is the safety core of a replicated state machine: replicas choose one 
 
 Consensus design must preserve **replicated-state-machine safety, quorum intersection, log choice, recovery, membership, and explicit liveness assumptions**. [Leader Election](./09-leader-election.md) covers candidacy, authority epochs, leases, external-resource fencing, failover timing, and handoff. The [Raft paper analysis](../09-whitepapers/07-raft.md) follows one protocol; the sections below compare common proof obligations.
 
-## The Contract and Failure Model
+## Contract and Failure Model
 
 For a single consensus instance, the usual properties are:
 
@@ -180,7 +180,7 @@ cluster_log_write_rate    ~= lambda * s * n   before compaction
 
 Protocol headers, retransmission, snapshots, encryption, and checksums add overhead. A sharded system scales by using many consensus groups with leaders distributed across machines; one global group still has one ordering bottleneck.
 
-Normal-case commit latency is governed by the local durable append and the `q-1` fastest follower acknowledgements needed with the leader to form quorum `q`:
+Normal-case commit latency is governed by the local durable append and the `q-1` fastest follower acknowledgments needed with the leader to form quorum `q`:
 
 ```text
 commit_path >= max(local_stable_write,

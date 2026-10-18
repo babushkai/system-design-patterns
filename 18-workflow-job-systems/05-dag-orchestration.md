@@ -351,7 +351,7 @@ Repair operations are durable commands (clear, retry, mark skipped, adopt extern
 
 ---
 
-## Evolution and Verification
+## Definition Rollout and Verification
 
 ### Definition rollout
 

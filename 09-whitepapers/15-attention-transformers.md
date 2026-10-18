@@ -6,7 +6,7 @@ Attention Is All You Need replaces recurrent state with self-attention, so every
 
 The analysis stays inside the 2017 evidence boundary of encoder-decoder machine translation at 41.0 BLEU for the large English-French model, and separates later assumptions such as decoder-only language models, KV-cache serving, and FlashAttention from what the paper claims.
 
-## Publication Boundary
+## Publication Identity and Scope
 
 - **Paper:** *Attention Is All You Need*
 - **Authors:** Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N. Gomez, Łukasz Kaiser, and Illia Polosukhin
@@ -235,7 +235,7 @@ Decoder-only autoregressive models later reused masked self-attention for langua
 
 These systems consequences are covered in [LLM Inference Platforms](../08-case-studies/13-llm-inference-platforms.md), [LLM Infrastructure](../17-llm-systems/05-llm-infrastructure.md), and [GPU Inference Internals](../17-llm-systems/11-gpu-inference-internals.md). They are descendants, not results of the 2017 evaluation.
 
-## Design-Review Questions
+## Design Review Questions
 
 1. Is the architecture encoder-only, encoder-decoder, or decoder-only, and which attention masks apply?
 2. Does a complexity claim include projections, FFN, memory traffic, padding, and backward activations?

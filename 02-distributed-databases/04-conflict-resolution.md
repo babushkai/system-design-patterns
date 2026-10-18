@@ -193,7 +193,7 @@ Useful signals include unresolved siblings per key and percentile, causal-contex
 
 ### Test algebra and histories
 
-Property tests should randomly permute, duplicate, batch, and replay updates and then assert merge commutativity, associativity, and idempotence where promised. Generate concurrent operation histories and verify domain invariants, not only equal final bytes. Fault tests must include partitions, process pauses, lost acknowledgements, actor restart from backup, schema-version skew, and a replica returning after removal compaction.
+Property tests should randomly permute, duplicate, batch, and replay updates and then assert merge commutativity, associativity, and idempotence where promised. Generate concurrent operation histories and verify domain invariants, not only equal final bytes. Fault tests must include partitions, process pauses, lost acknowledgments, actor restart from backup, schema-version skew, and a replica returning after removal compaction.
 
 ## Decision Framework
 

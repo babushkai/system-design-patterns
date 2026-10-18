@@ -8,9 +8,9 @@ A leaderless-replication design must specify quorum coordination, replica select
 
 ## Contract and Failure Model
 
-For each operation, define a replication factor `N`, acknowledgement requirement `W`, read response requirement `R`, whether the coordinator may substitute non-home replicas, and the version relation used to reconcile responses. Also define the failure model: crash-stop or crash-recovery nodes, lossy and reordered messages, network partitions, bounded or unbounded clock skew, and whether disks can lose acknowledged writes.
+For each operation, define a replication factor `N`, acknowledgment requirement `W`, read response requirement `R`, whether the coordinator may substitute non-home replicas, and the version relation used to reconcile responses. Also define the failure model: crash-stop or crash-recovery nodes, lossy and reordered messages, network partitions, bounded or unbounded clock skew, and whether disks can lose acknowledged writes.
 
-An acknowledgement normally means that at least `W` selected replicas durably recorded a version. It does not mean every replica has it, that a later low-consistency read will find it, or that a timed-out attempt did not commit. Likewise, “eventual consistency” needs a liveness condition: after writes stop, communication recovers, topology stabilizes, and repair continues, every live home replica converges.
+An acknowledgment normally means that at least `W` selected replicas durably recorded a version. It does not mean every replica has it, that a later low-consistency read will find it, or that a timed-out attempt did not commit. Likewise, “eventual consistency” needs a liveness condition: after writes stop, communication recovers, topology stabilizes, and repair continues, every live home replica converges.
 
 Classify invariants before choosing consistency levels. Immutable blobs and add-wins sets can tolerate reconciliation. Unique usernames, non-negative balances, and compare-and-set require a conditional authority or a linearizable protocol; `QUORUM` as a product label does not manufacture those semantics.
 
@@ -32,7 +32,7 @@ Wall-clock timestamps are convenient tags, but they depend on clocks for correct
 
 ## Data Path: Write and Read Quorums
 
-For key `k`, a coordinator reads the current topology epoch and computes an ordered preference list. The first `N` eligible nodes are the natural replicas. In a strict quorum write it sends the same immutable mutation to those nodes, waits for `W` durable acknowledgements, and returns the mutation identity and observed version context. Late acknowledgements are still recorded; a client timeout is an unknown outcome, not proof of failure.
+For key `k`, a coordinator reads the current topology epoch and computes an ordered preference list. The first `N` eligible nodes are the natural replicas. In a strict quorum write it sends the same immutable mutation to those nodes, waits for `W` durable acknowledgments, and returns the mutation identity and observed version context. Late acknowledgments are still recorded; a client timeout is an unknown outcome, not proof of failure.
 
 ```mermaid
 sequenceDiagram
@@ -95,7 +95,7 @@ Removing or replacing a node likewise drains hints, streams its ranges, and fenc
 
 ### Timeout followed by a non-idempotent retry
 
-Two replicas durably store `increment(+1)`, but their acknowledgements arrive after the client deadline. The client retries with a new identity and two replicas apply another increment. Both attempts were valid; the counter is now two. Reuse an idempotency key, or replicate a convergent counter operation whose identity is deduplicated.
+Two replicas durably store `increment(+1)`, but their acknowledgments arrive after the client deadline. The client retries with a new identity and two replicas apply another increment. Both attempts were valid; the counter is now two. Reuse an idempotency key, or replicate a convergent counter operation whose identity is deduplicated.
 
 ### Read observes an incomplete write, then time goes backward
 
@@ -119,14 +119,14 @@ Leaderless clusters fail on numbers that live in a configuration file rather tha
 
 | Product and scope | Knob | Invariant it enforces | Default and how it misleads |
 | --- | --- | --- | --- |
-| Apache Cassandra, node | `num_tokens` | one failed node costs a bounded slice of the ring, so repair and bootstrap fit inside the outage window | 16 ships in the current reference configuration, but a node configured without the key falls back to legacy single-token behaviour and owns a contiguous span of the ring: capacity looks identical on a dashboard while one failure now streams a token range instead of a vnode, which is how a routine repair becomes an hours-long recovery. |
+| Apache Cassandra, node | `num_tokens` | one failed node costs a bounded slice of the ring, so repair and bootstrap fit inside the outage window | 16 ships in the current reference configuration, but a node configured without the key falls back to legacy single-token behavior and owns a contiguous span of the ring: capacity looks identical on a dashboard while one failure now streams a token range instead of a vnode, which is how a routine repair becomes an hours-long recovery. |
 | Apache Cassandra, node | `hinted_handoff_enabled`, `max_hint_window` | an acknowledged write survives a short outage without waiting for scheduled repair | enabled, with a 3h window in the current shipped configuration; 4.x spells the same setting `max_hint_window_in_ms: 10800000`, so a configuration template carried across a major version can set nothing at all. Hints are not repair and not a second source of truth: once the window closes, no new hints are written for that host until it is seen alive and goes down again, so a node quietly unreachable for a week accumulates no hint debt and still returns missing data. |
 | Apache Cassandra, table | `gc_grace_seconds` | a tombstone outlives every replica, hint, snapshot, or repair source that could still reintroduce the value it shadows | 864000 (ten days), set per table and almost never compared with the measured maximum repair interval and longest observed outage. Below that horizon it resurrects deleted rows; far above it, reads carry delete history for weeks and storage grows with no writes to explain it. |
 | Apache Cassandra, node | `tombstone_warn_threshold`, `tombstone_failure_threshold` | a read that must scan excessive delete history fails loudly instead of occupying the thread pool | 1000 and 100000. The warn half only writes a log line nobody reads; the failure half aborts the query with an error that surfaces as a timeout or an overloaded cluster, so teams add hardware for what is a tombstone retention decision made years earlier. |
 | Apache Cassandra, node | `concurrent_reads`, `concurrent_writes` | foreground capacity and recovery capacity stay separable on shared disks | 32 and 32, with the shipped comment recommending roughly eight times the core count as the rule of thumb. Those values were chosen for modest machines; on a large host they oversubscribe the same device that repair needs, and raising them during an incident converts latency into thrash without adding throughput. |
 | Apache Cassandra, node | `compaction_throughput` | compaction keeps pace with writes without starving foreground I/O | 64MiB/s. The misleading part is that a healthy-looking rate says nothing about backlog: the signal is pending compaction tasks and their age, and a cap held too low leaves tombstones uncollected and read paths walking more tables, which then surfaces as read timeouts on an otherwise idle cluster. |
 | Apache Cassandra, node | `phi_convict_threshold`, `dynamic_snitch_badness_threshold` | gossip suspicion tracks real failure, and routing switches only for a measured reason | the failure threshold ships commented out at 8, so a review that greps active keys finds no policy at all; the snitch badness threshold ships at 1.0, whose shipped comment explains that the example value 0.2 means a pinned host may be twenty percent worse before routing moves, so at 1.0 a remote replica is effectively pinned until it is twice as slow. |
-| Apache Cassandra, request | consistency level `ANY`, `EACH_QUORUM` | the write path only admits acknowledgements the deployment can reason about | the level enum offers both. `ANY` can be satisfied by a hint alone, meaning a client was told success with no durable home replica holding the version; `EACH_QUORUM` demands a quorum per datastore location, so an unrelated distant region turns into failed writes. Neither appears in a capacity model, and both are one refactor away from being used. |
+| Apache Cassandra, request | consistency level `ANY`, `EACH_QUORUM` | the write path only admits acknowledgments the deployment can reason about | the level enum offers both. `ANY` can be satisfied by a hint alone, meaning a client was told success with no durable home replica holding the version; `EACH_QUORUM` demands a quorum per datastore location, so an unrelated distant region turns into failed writes. Neither appears in a capacity model, and both are one refactor away from being used. |
 | Basho Riak, bucket | `allow_mult` | concurrent writes stay visible to the merge function that is supposed to reconcile them | `buckets.default.allow_mult` ships false, so an untyped bucket silently collapses siblings and returns one value as though a winner had been chosen. The cluster reports no conflicts, the application never sees a sibling, and reconciliation logic written for vector clocks never runs on exactly the workload that needs it. |
 | Apache CouchDB, replicator | `new_edits=false`, `_local/{id}` log | the target stores the exact revision the source supplied, and a resume point survives a restart | the replicator always writes with `new_edits=false` so the replica accepts the supplied `_rev` rather than minting its own; progress lives in a `_local` document holding a session id and sequence history. A restored or pruned `_local` log resumes from the wrong sequence, and nothing in the scheduler reports that the two databases now disagree about where replication started. |
 
@@ -158,19 +158,19 @@ curl -s "http://node:5984/_scheduler/jobs" | jq '.jobs[] | {id, database, doc_id
 curl -s "http://node:5984/orders_replica/_local/orders-sync" | jq '{session_id, history}'
 ```
 
-## Capacity, Overload, and Cost
+## Capacity, Cost, and Overload
 
 Let logical writes and reads be `Qw` and `Qr` operations/s, value plus metadata size be `B`, replication factor be `N`, and a replica sustain `Cw` durable writes/s at the chosen compaction budget. Approximate foreground work is:
 
 ```text
 replica write requests/s       ~= Qw * N          if fan-out targets all N
-minimum write acknowledgements = Qw * W
+minimum write acknowledgments = Qw * W
 read responses/s               >= Qr * R          plus speculative requests
 stored live bytes              ~= logical_bytes * N * space_amplification
 write network bytes/s          ~= Qw * N * B
 ```
 
-Sending only until `W` acknowledgements reduces immediate work only if the remaining replicas are deliberately repaired later; it does not erase the replication obligation. Quorum latency is an order statistic of replica latencies, not simply their mean. Increasing `R` or `W` can improve confidence while moving the request deeper into the straggler tail.
+Sending only until `W` acknowledgments reduces immediate work only if the remaining replicas are deliberately repaired later; it does not erase the replication obligation. Quorum latency is an order statistic of replica latencies, not simply their mean. Increasing `R` or `W` can improve confidence while moving the request deeper into the straggler tail.
 
 For data size `D` per replica and maximum full-repair interval `Trepair`, baseline sequential repair scan must exceed `D / Trepair`, before mismatch streaming. A failed node absent for `Tout` at incoming mutation rate `λ` creates roughly `λTout` versions of catch-up debt. Reserve measured headroom for hints, bootstrap, and repair simultaneously; a cluster whose foreground load consumes all sustainable I/O has no recovery capacity.
 
@@ -182,9 +182,9 @@ Replica RPC is an authorization boundary. Use mutual authentication, encryption,
 
 Include `tenant_id` in the authenticated key namespace, encrypt sensitive values and hints, and isolate keys where equality or size leaks matter. Fair schedulers should cap per-tenant request, hint, and repair debt. Deletion obligations include every replica, hint store, snapshot, and quarantine stream; tombstone retention cannot be shortened merely to meet a storage target.
 
-Observe coordinator latency separately from replica latency. Core signals are successful acknowledgements by consistency level, timeout-with-late-success count, unavailable versus timed-out requests, stale-version and sibling rates, per-node version age, hint bytes and oldest age, repair coverage frontier, streamed mismatch bytes, tombstone age, topology-epoch rejects, speculative requests, disk saturation, and per-tenant queueing. Periodic digest comparisons and end-to-end canary keys detect silent divergence that request success rates miss.
+Observe coordinator latency separately from replica latency. Core signals are successful acknowledgments by consistency level, timeout-with-late-success count, unavailable versus timed-out requests, stale-version and sibling rates, per-node version age, hint bytes and oldest age, repair coverage frontier, streamed mismatch bytes, tombstone age, topology-epoch rejects, speculative requests, disk saturation, and per-tenant queueing. Periodic digest comparisons and end-to-end canary keys detect silent divergence that request success rates miss.
 
-Verification should model arbitrary message loss, duplication, reordering, coordinator crashes, and membership changes. Jepsen-style history checking can test the advertised register or set semantics. Deterministic simulations should pause a write after every acknowledgement subset, overlap reads, advance tombstone GC, restore old disks, exhaust hint storage, and restart repair. Assert not only convergence but also acknowledgement durability, no new/old inversion when linearizability is claimed, monotonic topology epochs, idempotent retries, and tenant isolation.
+Verification should model arbitrary message loss, duplication, reordering, coordinator crashes, and membership changes. Jepsen-style history checking can test the advertised register or set semantics. Deterministic simulations should pause a write after every acknowledgment subset, overlap reads, advance tombstone GC, restore old disks, exhaust hint storage, and restart repair. Assert not only convergence but also acknowledgment durability, no new/old inversion when linearizability is claimed, monotonic topology epochs, idempotent retries, and tenant isolation.
 
 ## Incident Playbook
 

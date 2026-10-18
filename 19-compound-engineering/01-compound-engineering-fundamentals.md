@@ -136,7 +136,7 @@ stateDiagram-v2
     Conflict --> Queued: new pinned target
 ```
 
-Transitions use compare-and-swap on `state_version` or an equivalent transaction. A late worker cannot move a cancelled task back to running. Scheduler claims carry a lease and fencing token; every authoritative write checks the token. This applies the workflow mechanics from [Leases, Heartbeats, and Recovery](../18-workflow-job-systems/08-leases-heartbeats-recovery.md) rather than reinventing them in the agent layer.
+Transitions use compare-and-swap on `state_version` or an equivalent transaction. A late worker cannot move a canceled task back to running. Scheduler claims carry a lease and fencing token; every authoritative write checks the token. This applies the workflow mechanics from [Leases, Heartbeats, and Recovery](../18-workflow-job-systems/08-leases-heartbeats-recovery.md) rather than reinventing them in the agent layer.
 
 ### Attempt identity versus task identity
 
@@ -213,7 +213,7 @@ Children cannot exceed the parent’s remaining budget. Reserve a small reconcil
 
 Separate interactive and batch queues, enforce tenant quotas, and use weighted fair scheduling rather than one global FIFO. Bound per-task parallelism: ten subtasks that contend on the same repository, cache, or test environment create more integration work rather than tenfold progress. Backpressure must reach task admission; otherwise the platform accumulates stale tasks whose target revisions have already moved.
 
-Cancellation propagates to queued model calls, tool execution, sandboxes, and subtasks. It cannot assume the external world rolled back. Store which effects began before the cancellation epoch and reconcile them before declaring the task cancelled.
+Cancellation propagates to queued model calls, tool execution, sandboxes, and subtasks. It cannot assume the external world rolled back. Store which effects began before the cancellation epoch and reconcile them before declaring the task canceled.
 
 ---
 
@@ -327,7 +327,7 @@ Measure distributions and repository-specific baselines. A fixed “10x” multi
 | Orchestrator crashes after tool effect | Retry may duplicate external action | Durable intent, idempotency key, receipt lookup, reconciliation state |
 | Worker continues after lease expiry | Two attempts mutate or publish | Fencing token checked by workspace/effect authorities |
 | Target branch advances | Evidence no longer applies | Integrate onto pinned target, rerun required checks, record new evidence revision |
-| Cancellation races with deployment | UI says cancelled while effect continues | Cancellation epoch, no new grants, reconcile in-flight effect before terminal state |
+| Cancellation races with deployment | UI says canceled while effect continues | Cancellation epoch, no new grants, reconcile in-flight effect before terminal state |
 | Context summary omits constraint | Patch violates hidden requirement | Provenance, retrieval of authoritative constraints, independent policy/acceptance checks |
 | Test runner is compromised by repo code | Secret theft or host escape | Strong sandbox, scoped credentials, egress restriction, disposable environment |
 | Model or harness rollout regresses | Fleet-wide bad changes | Versioned runtime, canary tasks, offline regression suite, rapid rollback |

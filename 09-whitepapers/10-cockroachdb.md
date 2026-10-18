@@ -4,7 +4,7 @@
 
 CockroachDB's 2020 design assembles range-level Raft, MVCC timestamps, transaction records, leases, and a distribution-aware optimizer. No component alone provides distributed SQL; the challenge is preserving serializable SQL semantics while every table and index is encoded across independently replicated key ranges that can move and fail.
 
-## Publication Identity and Frozen Version
+## Publication Identity and Scope
 
 - **Paper:** *CockroachDB: The Resilient Geo-Distributed SQL Database*
 - **Authors:** Rebecca Taft, Irfan Sharif, Andrei Matei, Nathan VanBenschoten, Jordan Lewis, Tobias Grieger, Kai Niemi, Andy Woods, Anne Birzin, Raphael Poss, Paul Bardea, Amruta Ranade, Ben Darnell, Bram Gruneir, Justin Jaffray, Lucy Zhang, and Peter Mattis
@@ -142,7 +142,7 @@ The largest case represented about 50 billion rows and 8 TB. The high efficiency
 
 Figure 6 used nine 4-vCPU GCP nodes across three US regions plus regional load generators, running TPC-C 1,000 while injecting an AZ failure and a region failure. All four placement policies tolerated the AZ failure in the experiment. Only the geo-partitioned-leaseholder policy sustained the region-wide failure, at the price of higher p90 latency during normal operation and recovery. This demonstrates policy trade-offs for that replica layout, not automatic region survival for every table.
 
-## Limits and Assumptions
+## Assumptions and Limits
 
 - Every range needs a Raft majority; cross-range availability is the intersection of all touched ranges.
 - Maximum clock offset is an operational correctness dependency.

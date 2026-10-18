@@ -25,7 +25,7 @@ committed outbox row
   -> broker append with stable event identity
   -> consumer delivery
   -> inbox + local effect + checkpoint transaction
-  -> broker acknowledgement
+  -> broker acknowledgment
 ```
 
 Define:
@@ -92,12 +92,12 @@ A scalable poller uses leased claims:
 1. select a bounded batch of eligible rows ordered within the required scope, skipping rows locked/claimed by live workers;
 2. atomically set `claim_owner`, increment `claim_generation`, and set `claim_until`;
 3. publish each event using stable `event_id` and partition key;
-4. wait for the broker durability acknowledgement;
+4. wait for the broker durability acknowledgment;
 5. mark published only if owner/generation still match;
 6. release or let the lease expire after ambiguous failure;
 7. clean up later under a separate watermark.
 
-The publish/mark step cannot be atomic across database and broker. If publish succeeds and marking fails, the row is republished. This is why stable IDs and consumer inbox/effect idempotency are mandatory. Marking before broker acknowledgement creates loss.
+The publish/mark step cannot be atomic across database and broker. If publish succeeds and marking fails, the row is republished. This is why stable IDs and consumer inbox/effect idempotency are mandatory. Marking before broker acknowledgment creates loss.
 
 Batching database claims and broker appends improves throughput, but preserve per-aggregate sequence. Publishing rows concurrently can reorder versions even if selected in order. Route each aggregate to one ordered lane/partition or gate completion/claim by preceding version. Cross-aggregate global order is normally not required.
 
@@ -194,7 +194,7 @@ An outbox is small enough that its settings look incidental, and they are not: t
 | Product and scope | Knob | Invariant it enforces | Default and how it misleads |
 | --- | --- | --- | --- |
 | PostgreSQL logical replication slot | `max_slot_wal_keep_size`, `max_replication_slots` | a stalled reader cannot silently consume the primary's disk | unbounded by default, so a connector down for days pins WAL until the primary fills; set a ceiling and accept that exceeding it invalidates the slot, which is a correctness event requiring backfill rather than a warning to silence. |
-| Debezium PostgreSQL connector | `slot.drop.on.stop`, `snapshot.mode`, publication auto-create behaviour | restarting a relay resumes from its source position instead of rewriting history | dropping the slot on shutdown turns a routine redeploy into a fresh snapshot, and a table created after the publication was defined may not be published at all, so events for the new aggregate simply never appear while the connector reports running. |
+| Debezium PostgreSQL connector | `slot.drop.on.stop`, `snapshot.mode`, publication auto-create behavior | restarting a relay resumes from its source position instead of rewriting history | dropping the slot on shutdown turns a routine redeploy into a fresh snapshot, and a table created after the publication was defined may not be published at all, so events for the new aggregate simply never appear while the connector reports running. |
 | PostgreSQL polling relay | partial index on eligibility plus `SKIP LOCKED`, `idle_in_transaction_session_timeout` | claim cost stays bounded and no transaction outlives its network call | without a partial index every poll scans published rows; holding the transaction open across broker I/O pins the oldest xmin, so autovacuum cannot reclaim deleted rows and, sustained long enough, drives the cluster toward xid wraparound. Claim, commit, then do network I/O. |
 | Apache Kafka producer used as the relay | `max.block.ms`, `buffer.memory`, `delivery.timeout.ms`, `linger.ms` | broker backpressure surfaces as relay latency, not lost or unbounded blocking work | a full buffer blocks the caller for up to `max.block.ms`, which is harmless only if that call is outside a database transaction; `delivery.timeout.ms` ends retries silently, so the relay must record the failure rather than assume eventual success. |
 | Kafka Connect or similar relay runtime | `errors.tolerance`, `errors.limit`, dead-letter topic settings | a rejected record is retained with its source position | tolerance defaults to none, so one bad record parks the task and everything behind it; teams respond by enabling tolerance without a dead-letter topic, which converts a loud stall into records that vanish with only a log line as evidence. |
@@ -224,7 +224,7 @@ Illustrative producer database:
 - 35% create one outbox event;
 - average outbox row 1.4 KiB including indexes;
 - polling batch 500 rows;
-- broker acknowledgement batch latency measured at 12 ms p50, 80 ms p99;
+- broker acknowledgment batch latency measured at 12 ms p50, 80 ms p99;
 - broker outage budget 6 hours;
 - three database replicas.
 
@@ -248,7 +248,7 @@ Track by source DB/shard, destination, relay generation, event type, consumer, a
 
 - outbox insert rate/bytes and transactions missing required event intents;
 - oldest unpublished/claimed row age, claim expiries, attempts, and backlog drain ETA;
-- broker publish acknowledgement, timeout, duplicates, and routing/schema rejects;
+- broker publish acknowledgment, timeout, duplicates, and routing/schema rejects;
 - CDC source position, slot/log retained bytes, transaction lag, schema-history health;
 - cleanup watermark, table/index/WAL bytes, partitions eligible/blocked for deletion;
 - inbox duplicate/conflict rate, apply/checkpoint latency, and retention horizon;
@@ -292,7 +292,7 @@ Replay, seek, cleanup, connector reset, and bulk redrive are privileged audited 
 ## Verification Strategy
 
 - transaction tests prove every committed domain transition has its required outbox row and rollbacks publish none;
-- kill pollers before/after broker acknowledgement and mark-published to prove duplicates but no loss;
+- kill pollers before/after broker acknowledgment and mark-published to prove duplicates but no loss;
 - partition/fence poller claim generations and relay generations;
 - restart CDC from checkpoints, lose a slot/log range, and execute the documented backfill;
 - crash consumers before/after inbox/effect/checkpoint commit;

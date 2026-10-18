@@ -112,7 +112,7 @@ Figure 14 repeatedly crashed the leader of a five-server cluster whose broadcast
 
 The paper recommends a conservative 150–300 ms range for that environment. It is not a universal configuration value: real deployments must measure heartbeat broadcast tails, pauses, storage latency, and network paths.
 
-## Assumptions and Omissions
+## Assumptions and Limits
 
 - A majority is required for availability; a two-of-three outage stops progress.
 - One leader orders each log, so its CPU, disk, and network can bound throughput.
@@ -128,7 +128,7 @@ Production Raft families often add pre-vote phases, leadership transfer, acceler
 
 What should be retained from the paper is the review method: enumerate persistent state, term transitions, quorum intersections, the exact commit rule, and every recovery state. A product calling its metadata service “Raft-based” does not establish which of these extensions it uses.
 
-## Implementation Review Questions
+## Design Review Questions
 
 1. Which state is persisted before granting a vote or acknowledging an append?
 2. Does RequestVote compare last term before last index?

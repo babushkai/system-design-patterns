@@ -466,7 +466,7 @@ Test with the primary CI provider, repository, registry region, identity issuer,
 
 ---
 
-## 11. Verification and Migration
+## 11. Migration and Verification
 
 ### 11.1 Test the delivery system
 

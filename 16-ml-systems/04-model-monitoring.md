@@ -40,7 +40,7 @@ flowchart LR
     T --> A["contain · investigate · recalibrate · retrain"]
 ```
 
-**Layer 1: Operational health.** Latency, error rate, throughput, fallback rate, feature-lookup miss rate. This is ordinary service observability, and it catches the failures that *do* announce themselves: a crashed feature store, a timed-out model server, a deployment that won't load. It says nothing about prediction quality, but it is free, instant, and the right first thing to wire up. A model that cannot respond cannot be wrong correctly.
+**Layer 1: Operational health.** Latency, error rate, throughput, fallback rate, feature-lookup miss rate. This is ordinary service observability, and it catches the failures that *do* announce themselves: a crashed feature store, a timed-out model server, a deployment that fails to load. It says nothing about prediction quality, but it is free, instant, and the right first thing to wire up. A model that cannot respond cannot be wrong correctly.
 
 **Layer 2: Data quality at serving time.** Schema conformance, value ranges, null rates, enum validity on the *features as the model actually receives them*. This is the highest-leverage layer in practice, because the most common cause of sudden model degradation is not the model at all: it is an upstream pipeline that started sending nulls, changed a unit, or dropped a join. A feature that silently becomes 90% null will quietly destroy a model's predictions while every distribution looks superficially plausible. Validating inputs at the serving boundary catches these before they reach the model.
 

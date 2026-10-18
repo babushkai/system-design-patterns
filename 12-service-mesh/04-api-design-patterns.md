@@ -523,7 +523,7 @@ Define ordering scope, if any (often per subject or subscription partition), and
 
 Classify outcomes:
 
-- success acknowledgement: complete;
+- success acknowledgment: complete;
 - explicit permanent rejection: dead-letter or disable under policy;
 - authentication/signature mismatch: stop and alert rather than retry forever;
 - rate limit/overload: honor bounded retry guidance;
@@ -730,7 +730,7 @@ cancel request sets status cancelled
 -> effect completes after client was told it would not
 ~~~
 
-**Controls:** cancel-requested intermediate state, fenced worker acknowledgement, effect reconciliation, and truthful terminal semantics.
+**Controls:** cancel-requested intermediate state, fenced worker acknowledgment, effect reconciliation, and truthful terminal semantics.
 
 ### Webhook retry storm targets a recovering customer
 

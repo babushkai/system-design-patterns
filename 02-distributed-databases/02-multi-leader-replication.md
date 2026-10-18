@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-Multi-leader replication lets more than one site commit writes without first obtaining permission from a single remote leader. That can keep a disconnected client productive and remove an inter-region round trip from the foreground path. It also creates independent histories that must later be combined. The design is therefore not “single-leader replication, twice”: its core product contract is what a local acknowledgement means while other writers are unreachable.
+Multi-leader replication lets more than one site commit writes without first obtaining permission from a single remote leader. That can keep a disconnected client productive and remove an inter-region round trip from the foreground path. It also creates independent histories that must later be combined. The design is therefore not “single-leader replication, twice”: its core product contract is what a local acknowledgment means while other writers are unreachable.
 
 This chapter traces replication streams between writable sites through durable capture, topology, ordering, deduplication, causal sessions, bootstrap, rejoin, and regional operations. [Conflict Resolution](./04-conflict-resolution.md) owns merge algebra and CRDT mechanics. [Partitioning Strategies](./05-partitioning-strategies.md) owns key placement, while [Consensus Algorithms](./08-consensus-algorithms.md) covers systems that choose one ordered history instead of reconciling several.
 
@@ -49,7 +49,7 @@ The following invariants make recovery reason-able:
 
 An `event_id` alone is not enough. If the deduplication marker commits and the data mutation does not, the event is lost; if the data commits and the marker does not, replay repeats it. They must be atomic, or the target operation must itself be conditional on a stored version.
 
-## Architecture: Data Plane and Control Plane
+## Data Plane and Control Plane
 
 ```mermaid
 flowchart LR
@@ -106,7 +106,7 @@ Schema changes use expand–migrate–contract. Readers and appliers first learn
 
 ## Specialized Failure Traces
 
-### Acknowledgement outruns durable capture
+### Acknowledgment outruns durable capture
 
 Region A updates a row, replies success, and intends to enqueue replication afterward. The process loses power between those actions. A recovers the row from its database, but no other region can ever learn the mutation. If A is then lost permanently, an acknowledged write disappears. A transactional outbox or shared WAL boundary closes this gap.
 
@@ -205,7 +205,7 @@ Multi-leader incidents rarely announce themselves as replication failures: they 
 
 ### An acknowledged write exists in only one region
 
-Compare the origin's durable commit coordinate with that origin's durable-receive frontier at every destination: a gap that never drains for one site means the capture step, not the transport, is losing events, typically because acknowledgement and enqueue are two separate actions and the process died between them. Confirm before acting by taking a row or range digest of the affected window on the origin and matching it against each destination rather than trusting queue depth. Remediation is a targeted re-ship from the origin's own log or a bounded re-snapshot of the affected key range, applied under the normal resolver so provenance stays intact. Do not hand-copy rows from a query result, do not replay from application logs that lack version metadata, and do not silence it by widening the destination's conflict window. Verify by re-running the digest on the repaired window and by killing a canary write at each boundary until one path proves that acknowledgement cannot outrun durable capture.
+Compare the origin's durable commit coordinate with that origin's durable-receive frontier at every destination: a gap that never drains for one site means the capture step, not the transport, is losing events, typically because acknowledgment and enqueue are two separate actions and the process died between them. Confirm before acting by taking a row or range digest of the affected window on the origin and matching it against each destination rather than trusting queue depth. Remediation is a targeted re-ship from the origin's own log or a bounded re-snapshot of the affected key range, applied under the normal resolver so provenance stays intact. Do not hand-copy rows from a query result, do not replay from application logs that lack version metadata, and do not silence it by widening the destination's conflict window. Verify by re-running the digest on the repaired window and by killing a canary write at each boundary until one path proves that acknowledgment cannot outrun durable capture.
 
 ### Conflicts jumped after a resolver or schema change
 

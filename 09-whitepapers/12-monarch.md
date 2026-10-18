@@ -6,7 +6,7 @@ Monarch is a monitoring database, and its unusual decisions follow from that wor
 
 The 2020 paper documents regional autonomy, a recovery log deliberately placed off the synchronous commit path, collection-time aggregation, and a field-hints index that removes most empty fan-out. Availability policy is derived from data value rather than set globally.
 
-## Publication Boundary
+## Publication Identity and Scope
 
 - **Paper:** *Monarch: Google's Planet-Scale In-Memory Time Series Database*
 - **Venue and version:** Proceedings of the VLDB Endowment, volume 13, issue 12, pages 3181–3194, 2020
@@ -244,7 +244,7 @@ Partial query metadata is part of correctness. A graph that silently omits an un
 6. Zones are operationally autonomous but still consume globally managed configuration when reachable.
 7. The paper's scale figures do not imply one query can scan all 950 billion series within interactive latency.
 
-## Design-Review Questions
+## Design Review Questions
 
 1. Which alerting functions survive loss of the global plane and of the durable storage service?
 2. What acknowledged telemetry can be lost, and how is the RPO measured under log lag and leaf failure?

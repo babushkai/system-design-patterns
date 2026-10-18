@@ -40,7 +40,7 @@ An **explicit reference-design contract** is:
 | Story expiry | Expired content is no longer served after the contract's grace bound | Physical deletion may complete later |
 | Delete content | Canonical tombstone immediately dominates every derived copy | Cache/index cleanup is asynchronous |
 
-Define separate SLOs for upload availability, publish acknowledgement, rendition readiness, Feed freshness, ranking availability, and media startup. A fast metadata API cannot compensate for a stalled media origin.
+Define separate SLOs for upload availability, publish acknowledgment, rendition readiness, Feed freshness, ranking availability, and media startup. A fast metadata API cannot compensate for a stalled media origin.
 
 ## State, Authority, and Invariants
 
@@ -107,7 +107,7 @@ The following is an **explicit reference design**:
 7. `PublishPost` atomically stores post metadata and an outbox event referencing a ready manifest generation.
 8. Feed, search, feature, moderation, and notification consumers update independently.
 
-The post acknowledgement need not wait for every optional rendition, but it must not point to missing required bytes. A basic rendition can unblock publish while expensive high-quality variants continue under a workflow deadline.
+The post acknowledgment need not wait for every optional rendition, but it must not point to missing required bytes. A basic rendition can unblock publish while expensive high-quality variants continue under a workflow deadline.
 
 Use immutable URLs or versioned cache keys for media. Purge is a safety mechanism, not the only consistency mechanism: authorization and lifecycle checks belong in signed delivery tokens or an edge authorization step for private content.
 

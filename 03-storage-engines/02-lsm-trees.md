@@ -10,7 +10,7 @@ The end-to-end LSM pipeline spans WAL and memtable admission, internal versions,
 
 Record sustained and burst write bytes, key and value sizes, update frequency, point-hit and point-miss rates, range widths, snapshot lifetime, delete/TTL behavior, durability latency, and device bandwidth shared with reads. LSMs excel when foreground random page modification is the constraint and background sequential work has headroom. They are less attractive when the same hot records are overwritten repeatedly, long ranges dominate, or the device is already saturated by reads.
 
-Define acknowledgement precisely. A durable write normally means its WAL record has crossed the configured persistence boundary and the corresponding memtable mutation is visible. It does not mean the value is already in an SSTable, backed up, replicated, or immune to loss of the whole node. Group commit changes latency and throughput but not that boundary.
+Define acknowledgment precisely. A durable write normally means its WAL record has crossed the configured persistence boundary and the corresponding memtable mutation is visible. It does not mean the value is already in an SSTable, backed up, replicated, or immune to loss of the whole node. Group commit changes latency and throughput but not that boundary.
 
 For reads, declare snapshot semantics and maximum acceptable staleness. A point lookup must return the newest visible version or a deletion. A range iterator must produce each user key once in comparator order at its snapshot, even though versions reside in several memtables and files.
 
@@ -65,7 +65,7 @@ Memtables may be skip lists, balanced trees, tries, or hash-plus-ordered structu
 
 ## Write Path and Durability
 
-A write batch receives a contiguous sequence range. The engine encodes a checksummed WAL record, appends it, applies the same batch to the active memtable, and acknowledges according to the durability mode. With synchronous durability, acknowledgement waits until the WAL bytes are confirmed durable. Group commit lets many batches share one persistence operation; their ordering and individual outcomes must still be deterministic after a short write or error.
+A write batch receives a contiguous sequence range. The engine encodes a checksummed WAL record, appends it, applies the same batch to the active memtable, and acknowledges according to the durability mode. With synchronous durability, acknowledgment waits until the WAL bytes are confirmed durable. Group commit lets many batches share one persistence operation; their ordering and individual outcomes must still be deterministic after a short write or error.
 
 When the active memtable reaches its configured budget, the engine freezes it and immediately installs a new active one. Flush workers write the immutable table as a sorted file and publish it through the manifest protocol described in [SSTables and Compaction](./03-sstables-compaction.md). Several immutable memtables absorb a burst, but their total memory is finite. If flush cannot keep up, writers slow and eventually stop before memory runs out.
 

@@ -6,7 +6,7 @@ Zanzibar makes authorization a low-latency graph evaluation: membership is compu
 
 Its contract is stricter than fast lookup. ACL writes are externally consistent, a content read can require an authorization snapshot no older than the token it returns (the new-enemy problem), and Leopard materializes large group membership to keep fan-out flat. Read it as a cost model for policy evaluation.
 
-## Publication Boundary
+## Publication Identity and Scope
 
 - **Paper:** *Zanzibar: Google's Consistent, Global Authorization System*
 - **Venue and version:** USENIX Annual Technical Conference 2019, proceedings paper, pages 33–46
@@ -226,7 +226,7 @@ Denormalizing every effective permission makes reads cheap but writes explode wi
 6. The paper does not benchmark open-source systems, public-cloud multitenancy, or policy languages added later.
 7. `Expand` returns a structural userset representation; enumerating every member of enormous groups remains undesirable.
 
-## Design-Review Questions
+## Design Review Questions
 
 1. What exact interleaving creates a “new enemy” in this product, and where is its freshness token persisted?
 2. Does every content read carry the minimum authorization snapshot, including caches and asynchronous jobs?

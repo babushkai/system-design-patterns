@@ -4,7 +4,7 @@
 
 Dynamo is a study in making **write acceptance during failure** the primary invariant. It is not a generic claim that eventual consistency is faster, nor is it the architecture of the later Amazon DynamoDB service. The paper describes an internal Amazon key/value system whose applications were prepared to receive concurrent versions and reconcile them.
 
-## Publication Identity and Reading Boundary
+## Publication Identity and Scope
 
 - **Paper:** *Dynamo: Amazon's Highly Available Key-value Store*
 - **Authors:** Giuseppe DeCandia, Deniz Hastorun, Madan Jampani, Gunavardhan Kakulapati, Avinash Lakshman, Alex Pilchin, Swaminathan Sivasubramanian, Peter Vosshall, and Werner Vogels
@@ -97,7 +97,7 @@ Section 6 states that measurements came from a live `(3,2,2)` deployment of a co
 
 The paper also reports an important operational failure mode: anti-entropy and handoff competed with foreground traffic. Dynamo introduced admission control that monitored foreground disk latency, lock contention, transaction timeouts, and queue waits, then limited background work. Repair capacity is part of serving capacity.
 
-## Limits and Hidden Costs
+## Assumptions and Limits
 
 - Only single-key atomicity is provided; no isolation spans keys.
 - Application owners must design, test, and monitor conflict reconciliation.

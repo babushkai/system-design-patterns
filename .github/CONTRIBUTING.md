@@ -2,8 +2,8 @@
 
 Every chapter is a reference page, not a tutorial step: readers arrive from a search box
 or one internal link, decide in ten seconds whether the page is theirs, and leave with a
-decision they can defend. The rules below exist to keep that true for 160 chapters without
-any one author holding the conventions in their head. Each rule is enforced by
+decision they can defend. The rules below exist to keep that true for every chapter
+without any one author holding the conventions in their head. Each rule is enforced by
 `scripts/validate_docs.py` unless it says otherwise.
 
 ## What a Chapter Owns
@@ -49,6 +49,9 @@ Title case, minor words lowercase, one spelling per name across the book:
 - The outline is the only map of a chapter longer than a screen, and readers meet it in
   every chapter. Two spellings of one name read as two sections in an outline and in site
   search, and neither spelling can be recommended to whoever writes the next chapter.
+- Reordering a name counts as a second spelling: `## Workload Contract` beside the book's
+  `## Workload and Contract` splits one section into two, so the check compares the words
+  of every English section name regardless of order.
 - The check adds capitalisation and never removes it, so deliberate lowercase stays:
   `## Does fsync Actually Sync?`, `## Top-k Execution and Dynamic Pruning`, and
   `## Composition with Overload Budgets` all pass as written.

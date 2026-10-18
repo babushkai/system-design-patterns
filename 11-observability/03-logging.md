@@ -163,7 +163,7 @@ parser/schema version
 last acknowledged downstream batch
 ~~~
 
-Path alone is insufficient: rotation can rename the old file and create a new one at the same path. Copy-truncate can shrink a file under the same identity. The collector needs explicit policies for rename, truncate, deletion, and files that disappear before acknowledgement.
+Path alone is insufficient: rotation can rename the old file and create a new one at the same path. Copy-truncate can shrink a file under the same identity. The collector needs explicit policies for rename, truncate, deletion, and files that disappear before acknowledgment.
 
 Multiline reconstruction is risky. Prefer one framed structured record per line or a protocol with length framing. If legacy stack traces require multiline parsing, bound record bytes and wait time; emit parse/truncation evidence.
 
@@ -200,7 +200,7 @@ stateDiagram-v2
     Persisted --> Archived
 ~~~
 
-Each boundary states acknowledgement durability. At-least-once retry can duplicate records. Assign an event/record ID when meaningful or deduplicate using authenticated producer identity, incarnation, sequence, and content hash within a bounded window.
+Each boundary states acknowledgment durability. At-least-once retry can duplicate records. Assign an event/record ID when meaningful or deduplicate using authenticated producer identity, incarnation, sequence, and content hash within a bounded window.
 
 ## Buffering and Backpressure
 
@@ -492,7 +492,7 @@ Track:
 - emitted/accepted/parsed/redacted/quarantined/persisted/indexed/dropped records and bytes;
 - collection checkpoint age, file discovery, rotation/truncate, and parser failure;
 - producer/local/regional queue bytes and oldest age;
-- backend ingest acknowledgement, retry, duplicate, and late event;
+- backend ingest acknowledgment, retry, duplicate, and late event;
 - index fields/cardinality, segment/block count, compaction, and retention lag;
 - query scanned bytes, partitions, queue, cancel, and bulk export;
 - redaction/secret violations and policy revision;
@@ -524,7 +524,7 @@ Keep golden encoded events for every schema and verify the exact redacted repres
 2. Is this diagnostic, security, audit, access, domain, or platform evidence?
 3. What stable event name/schema and bounded attributes express it?
 4. Which time, sequence, and causal fields are available?
-5. What acknowledgement/durability does the event class require?
+5. What acknowledgment/durability does the event class require?
 6. Can collection duplicate, and how is identity/dedup handled?
 7. What happens when every queue and disk boundary is full?
 8. Which fields may be indexed, retained, exported, or correlated?
@@ -552,7 +552,7 @@ Keep golden encoded events for every schema and verify the exact redacted repres
 
 - [OpenTelemetry Logs Data Model](https://opentelemetry.io/docs/specs/otel/logs/data-model/): event/observed timestamps, severity, body, attributes, trace context, and resources
 - [OpenTelemetry Logging Specification](https://opentelemetry.io/docs/specs/otel/logs/): collection, correlation, appenders, and legacy sources
-- [OTLP Specification](https://opentelemetry.io/docs/specs/otlp/): transport acknowledgement, retry, throttling, and partial success
+- [OTLP Specification](https://opentelemetry.io/docs/specs/otlp/): transport acknowledgment, retry, throttling, and partial success
 - [RFC 5424: The Syslog Protocol](https://www.rfc-editor.org/rfc/rfc5424): structured event transport, timestamps, and origin
 - [RFC 3339: Date and Time on the Internet](https://www.rfc-editor.org/rfc/rfc3339): interoperable timestamps
 - [OWASP Logging Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html): security event design, injection, sensitive data, verification, and protection

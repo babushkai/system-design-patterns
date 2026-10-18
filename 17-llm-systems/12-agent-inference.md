@@ -108,7 +108,7 @@ C_{success}=\frac{\sum C_{attempted\ tasks}}
 {N_{verified\ successful\ tasks}}.
 $$
 
-A cache policy that lowers per-turn cost but increases timeouts or task abandonment may worsen this metric. Include unsuccessful tasks, safety refusals where execution was attempted, cancelled generations that continued consuming backend work, and fan-out branches discarded by synthesis.
+A cache policy that lowers per-turn cost but increases timeouts or task abandonment may worsen this metric. Include unsuccessful tasks, safety refusals where execution was attempted, canceled generations that continued consuming backend work, and fan-out branches discarded by synthesis.
 
 ## KV Capacity and Residency Economics
 
@@ -200,7 +200,7 @@ A_{tokens}=\frac{\text{all attempted child + parent tokens}}
 {\text{tokens in the best qualified single-agent baseline}}.
 $$
 
-The numerator includes retries, synthesis, and cancelled branches. Shared-prefix reuse reduces prefill work but not child decode or tool cost.
+The numerator includes retries, synthesis, and canceled branches. Shared-prefix reuse reduces prefill work but not child decode or tool cost.
 
 ## Speculation and Structured Agent Output
 

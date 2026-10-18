@@ -4,7 +4,7 @@
 
 Ordering is a scoped relation between events, not a property that a broker can provide “globally” without cost or qualification. A useful design names which events must be comparable, who assigns their sequence, what happens at gaps, and how epochs prevent an old writer from extending a sequence after failover.
 
-Message ordering is defined by its scope, partition sequencing, causal metadata, gap handling, reorder buffers, epochs, rebalancing, and resharding. Queue claims are in [Message Queue Architecture](01-message-queues.md); duplicate/loss and acknowledgement ambiguity are in [Delivery Guarantees](04-delivery-guarantees.md).
+Message ordering is defined by its scope, partition sequencing, causal metadata, gap handling, reorder buffers, epochs, rebalancing, and resharding. Queue claims are in [Message Queue Architecture](01-message-queues.md); duplicate/loss and acknowledgment ambiguity are in [Delivery Guarantees](04-delivery-guarantees.md).
 
 ## Workload and Order Contract
 
@@ -184,7 +184,7 @@ Order is produced by client configuration more often than by broker configuratio
 | Amazon SQS FIFO queue | `MessageGroupId`, `FIFOThroughputLimit` | one group is processed by at most one consumer at a time in receive order | throughput limit defaults to per-queue, which serializes unrelated groups behind the busiest key; sequence numbers are monotonic but explicitly not gap-free, so contiguity checks produce false alarms. |
 | Google Cloud Pub/Sub subscription | `enableMessageOrdering`, exactly-once delivery | records sharing an ordering key are delivered in publish order to one attempt at a time | off by default, and it applies per storage partition rather than globally. A publisher that omits the ordering key on some messages gets unordered best-effort delivery for exactly those messages. Ordered delivery also raises the minimum acknowledge deadline. |
 | Amazon Kinesis stream after a split | shard parent/child graph, `SequenceNumberForOrdering` | a partition key's history is read oldest shard first | the service preserves order across a split only if the consumer traverses parent to child itself. Nothing stops a parallel reader from starting the child shard while the parent still has records for that key. |
-| RabbitMQ quorum queue / NATS JetStream consumer | single active consumer; `max_ack_pending` | one lane applies a scope without interleaved redelivery | single active consumer is off by default and does not create per-key order across publishers; an in-flight acknowledgement window above one means redelivered records can be applied after newer ones. |
+| RabbitMQ quorum queue / NATS JetStream consumer | single active consumer; `max_ack_pending` | one lane applies a scope without interleaved redelivery | single active consumer is off by default and does not create per-key order across publishers; an in-flight acknowledgment window above one means redelivered records can be applied after newer ones. |
 | PostgreSQL logical decoding / Debezium | one replication slot per publication | the change stream carries one source log sequence number order | a single slot is one ordered lane, so throughput is bounded by that lane and its restart position; snapshot-phase rows and streaming-phase changes need explicit sequencing or the initial load lands after the changes it precedes. |
 
 ```bash

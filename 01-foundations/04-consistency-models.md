@@ -126,7 +126,7 @@ Linearizability composes across objects, but multi-object **operations** still n
 | Bounded staleness | Measured authority and replica frontiers | Serve locally within bound; otherwise wait/route/fail | Bound is observable and may become unavailable |
 | Eventual convergence | Durable asynchronous log, idempotent delivery, deterministic merge/repair | Local acceptance can avoid remote coordination | Divergence is allowed until delivery assumptions recover |
 
-Stronger history does not have one universal latency multiplier. Placement, durability, batching, read leases, contention, and requested operation matter. Model components explicitly: for a quorum write, completion follows the required acknowledgement order statistic; for a causal read, cost may be zero when dependencies are local or an unbounded wait while one predecessor is missing.
+Stronger history does not have one universal latency multiplier. Placement, durability, batching, read leases, contention, and requested operation matter. Model components explicitly: for a quorum write, completion follows the required acknowledgment order statistic; for a causal read, cost may be zero when dependencies are local or an unbounded wait while one predecessor is missing.
 
 **Illustrative calculation, not a product claim.** A replica applies 150 log positions/s while its source commits 200/s for 20 seconds. Its deficit grows by `(200 - 150) * 20 = 1,000` positions. If apply capacity later rises to 300/s while commits remain 200/s, catch-up needs at least `1,000 / (300 - 200) = 10` seconds. A session requiring the latest source position cannot receive a read-your-writes result there before catch-up unless the request routes elsewhere. Queueing, batches, and retries make real tails worse.
 
@@ -144,9 +144,9 @@ Observe required versus served frontier, replica apply position and age, wait/ro
 
 ## Specialized Failure Traces
 
-### Acknowledgement precedes the durable linearization point
+### Acknowledgment precedes the durable linearization point
 
-A leader returns success before the entry is committed on the required quorum, then fails. A new leader without the entry serves the old value. The completed write has no legal place before the later read. Acknowledgement must follow the protocol’s durable commit point, not local receipt.
+A leader returns success before the entry is committed on the required quorum, then fails. A new leader without the entry serves the old value. The completed write has no legal place before the later read. Acknowledgment must follow the protocol’s durable commit point, not local receipt.
 
 ### Paused leaseholder serves after its lease
 

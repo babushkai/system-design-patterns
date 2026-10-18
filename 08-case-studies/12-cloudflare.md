@@ -221,7 +221,7 @@ Do not add independent p99 values and call the result a p99. Preserve per-reques
 
 Cells and a homogeneous fleet are not opposites at every layer. Cloudflare can expose a uniform global service while still using process, machine, object, or storage failure domains internally. See [Cell-Based Architecture](../06-scaling/11-cell-based-architecture.md).
 
-## Design-Review Questions
+## Design Review Questions
 
 1. Which routing layer chooses the site, machine, process, and state owner, and how stale can each decision be?
 2. What percentage of traffic can be rejected before allocating connection or application state?

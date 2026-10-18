@@ -192,7 +192,7 @@ A watch is not just a stream of arrays. It needs:
 - detection of compaction and stream gaps;
 - a resnapshot path;
 - per-client subscription identity and authorization; and
-- client acknowledgement or applied-revision telemetry where rollout safety matters.
+- client acknowledgment or applied-revision telemetry where rollout safety matters.
 
 A robust client state machine:
 

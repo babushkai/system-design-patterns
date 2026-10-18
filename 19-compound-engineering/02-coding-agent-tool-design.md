@@ -314,7 +314,7 @@ Test tool adapters as security- and transaction-critical services:
 - network redirects, DNS changes, proxy bypass, metadata endpoints, and exfiltration attempts;
 - crash after intent, during effect, after effect, and before receipt persistence;
 - duplicate idempotency keys and concurrent refresh of the same logical effect;
-- stale capability, cancelled task, expired deadline, and policy-version changes;
+- stale capability, canceled task, expired deadline, and policy-version changes;
 - tool registry upgrade/downgrade and durable-task resume;
 - redaction canaries in inputs, outputs, exceptions, traces, and artifacts.
 

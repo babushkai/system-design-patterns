@@ -119,7 +119,7 @@ flowchart LR
     ACK --> OFFW
 ```
 
-The offline appender's write time is **not** the feature's availability time. It proves only that the history row landed offline. If the online write completes later, using the offline timestamp gives training information production could not yet read. Exact reconstruction requires an acknowledgement or commit ledger from the online writer recording `(update_id, servable_at, generation)`, later joined into offline history. When that cost is unjustified, the system must state its approximation (for example a conservative availability watermark) and validate it against sampled feature vectors logged at serving time.
+The offline appender's write time is **not** the feature's availability time. It proves only that the history row landed offline. If the online write completes later, using the offline timestamp gives training information production could not yet read. Exact reconstruction requires an acknowledgment or commit ledger from the online writer recording `(update_id, servable_at, generation)`, later joined into offline history. When that cost is unjustified, the system must state its approximation (for example a conservative availability watermark) and validate it against sampled feature vectors logged at serving time.
 
 ---
 

@@ -444,7 +444,7 @@ Alert on contract risk, not arbitrary universal thresholds: maintenance completi
 - race compatible appends and verify both survive;
 - race overwrite/merge with append, delete, and compaction and verify conflict handling;
 - kill a writer before data files, after data files, during metadata write, and during publication;
-- make publication acknowledgement ambiguous and prove retry resolves rather than double-commits;
+- make publication acknowledgment ambiguous and prove retry resolves rather than double-commits;
 - run orphan cleanup against a slow in-flight writer;
 - expire snapshots while a maximum-duration reader and streaming consumer are pinned;
 - read every enabled feature from every approved engine version;

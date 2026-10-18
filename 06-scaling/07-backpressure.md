@@ -311,7 +311,7 @@ Include:
 
 - buffer memory = queued items × per-item retained bytes plus allocator/index overhead;
 - durable storage = arrival byte rate × retained backlog time × replication factor;
-- enqueue/dequeue and acknowledgement operations;
+- enqueue/dequeue and acknowledgment operations;
 - retry/dead-letter amplification;
 - network and serialization copies;
 - consumer idle headroom reserved for drain;

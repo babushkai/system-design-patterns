@@ -247,7 +247,7 @@ Without confidence gates, one false report can redirect a city. Without version 
 
 Live traffic has a short useful life. Replicate aggregated regional features to the cells that serve that area; losing one ingest region may cause a visible freshness downgrade without preventing static routing. The publication authority should be strongly fenced, while immutable read serving can be active-active. Keep enough compute and cached data for regional evacuation; see [multi-region architecture](../06-scaling/09-multi-region-architecture.md).
 
-## Privacy, Security, and Abuse
+## Security, Privacy, and Abuse
 
 **Documented, 2020 high-level description.** Google stated that aggregate location data from navigation can be used to understand traffic. The public article describes the aggregate use but not a full retention or anonymization protocol. [Google Maps, traffic and routing](https://blog.google/products-and-platforms/products/maps/google-maps-101-how-ai-helps-predict-traffic-and-determine-routes/)
 

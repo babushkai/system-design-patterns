@@ -192,7 +192,7 @@ This links retry policy directly to queue and egress cost.
 7. A processor callback reports `a-1=authorized`; a recovery query reports the same result.
 8. Both workers race to transition the payment. One compare-and-set from version 3 to 4 succeeds; the other observes version 4 and becomes a no-op.
 9. The winning transaction posts the balanced ledger movement and outbox event atomically.
-10. The webhook worker delivers the event twice because its first acknowledgement is lost. The merchant deduplicates by event ID.
+10. The webhook worker delivers the event twice because its first acknowledgment is lost. The merchant deduplicates by event ID.
 
 The design tolerates duplicate messages at every boundary while committing one payment transition and one economic effect.
 

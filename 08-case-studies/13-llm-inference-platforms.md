@@ -208,7 +208,7 @@ Use a content hash only over data permitted to share a cache domain. A tenant-sc
 
 At each decode iteration, the scheduler can:
 
-1. remove completed or cancelled sequences,
+1. remove completed or canceled sequences,
 2. admit sequences whose KV allocation is guaranteed,
 3. choose token and block budgets,
 4. run one model step,
@@ -267,7 +267,7 @@ Break the loop before allocation:
 
 Retries require budgets and jitter; see [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md). Hedging full decode is usually wasteful because both copies allocate KV and generate billable tokens. A narrow prefill hedge may be defensible only when cancellation is fast and duplicate cost is bounded.
 
-## Observability and Evaluation
+## Observability and Benchmarks
 
 Every request trace should carry at least:
 
@@ -313,7 +313,7 @@ See [LLM Evaluation](../17-llm-systems/10-llm-evaluation.md) for model-quality g
 | Local SSD | Dense and cheap | Read amplification, wear, and millisecond tails |
 | Remote tier | Fleet-wide sharing and durability options | Network congestion, privacy boundary, coordination |
 
-## Design-Review Questions
+## Design Review Questions
 
 1. What exact arrival, input-length, output-length, and prefix-reuse distributions drive capacity?
 2. Which objective is published: TTFT, TPOT, end-to-end latency, or goodput? If it is latency-based, which percentile does it constrain?

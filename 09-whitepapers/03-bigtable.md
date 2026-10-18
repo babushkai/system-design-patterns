@@ -4,7 +4,7 @@
 
 Bigtable's central move is to expose **physical locality as part of the data model**. Rows are globally ordered by an application-chosen key; contiguous ranges become independently assignable tablets; column families determine storage and access-control boundaries. That bargain enables enormous sparse tables, but makes schema design a placement decision rather than a purely logical one.
 
-## Publication Identity and Boundary
+## Publication Identity and Scope
 
 - **Paper:** *Bigtable: A Distributed Storage System for Structured Data*
 - **Authors:** Fay Chang, Jeffrey Dean, Sanjay Ghemawat, Wilson C. Hsieh, Deborah A. Wallach, Mike Burrows, Tushar Chandra, Andrew Fikes, and Robert E. Gruber
@@ -104,7 +104,7 @@ Section 7 used clusters of 1, 50, 250, and 500 tablet servers plus an equal numb
 
 Production observations complement the microbenchmarks. As of August 2006, the paper reports 388 non-test clusters and about 24,500 tablet servers. Fourteen busy clusters totaling 8,069 servers handled more than 1.2 million requests/s, about 741 MB/s incoming RPC traffic, and 16 GB/s outgoing. Table 2 lists, among other examples, a roughly 200 TB Google Analytics raw-click table compressed to 14% of original size and a roughly 70 TB uncompressed Google Earth imagery table. These are point-in-time deployment facts, not capacity guarantees.
 
-## Assumptions and Limitations
+## Assumptions and Limits
 
 - Clients must know their access paths in advance and encode locality into row keys.
 - One-row atomicity cannot protect cross-row invariants.
@@ -120,7 +120,7 @@ Later wide-column stores retained ordered partition keys, sparse dynamic qualifi
 
 Google's [Spanner paper](./04-spanner.md) addresses a different requirement: synchronous replication and transactions across rows and locations. It retains range partitioning and a structured schema but adds Paxos groups, MVCC timestamps, two-phase commit, and TrueTime. That progression shows the cost of moving from “scale keyed access” to “scale externally consistent transactions.”
 
-## Review Questions for a Bigtable-Like Design
+## Design Review Questions
 
 1. Does the row key distribute writes while preserving the scans the application needs?
 2. Which invariant fits inside one row, and what protects the rest?

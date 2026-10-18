@@ -107,7 +107,7 @@ The evaluation demonstrates feasibility, failure recovery, and the value of loca
 
 These are design choices, not historical defects. They make a narrow, common workload unusually operable.
 
-## What Later Systems Retained and Changed
+## Later Systems Retained and Changed
 
 Google's 2010 FlumeJava paper retained data-parallel operators but replaced hand-wired chains of MapReduce jobs with immutable parallel collections, deferred execution, and whole-pipeline optimization. The 2015 Dataflow model retained partitioned data-parallel execution while adding explicit event-time windows, triggers, and correctness/latency/cost choices for unbounded data. Neither result means MapReduce secretly had those semantics; they identify the next boundaries the original model did not cover.
 

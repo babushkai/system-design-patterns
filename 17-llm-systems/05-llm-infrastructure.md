@@ -250,7 +250,7 @@ Multi-provider designs reduce correlated business dependency only if application
 
 The gateway owns the client stream even if the backend changes. It assigns monotonically ordered event sequence numbers, sends heartbeats where intermediaries have idle timeouts, applies backpressure, and records the terminal state. A slow client must not retain unlimited decoded tokens in memory; buffer to a bound and then pause, spill, or cancel according to protocol.
 
-Client disconnect propagates cancellation to the provider or inference server. Cancellation is best effort: already submitted accelerator work or provider generation may continue. Track post-cancellation tokens and spend, and prevent cancelled results from populating caches unless policy explicitly allows it.
+Client disconnect propagates cancellation to the provider or inference server. Cancellation is best effort: already submitted accelerator work or provider generation may continue. Track post-cancellation tokens and spend, and prevent canceled results from populating caches unless policy explicitly allows it.
 
 Idempotency keys identify a logical generation request, but replay semantics must be explicit. Returning a stored completed response is safe for deterministic product semantics even if sampling was nondeterministic originally. Joining a currently active stream requires retained event history and authorization equality. Starting a second generation with the same key is not idempotent.
 
@@ -316,7 +316,7 @@ Provision for normal headroom, failure-domain loss, rollout surge, and forecast 
 
 Showback and chargeback use the immutable usage ledger. Attribute shared platform costs, failed attempts, cache savings, and reserved capacity consistently. Product teams need cost per successful task or user outcome, not only token totals.
 
-## Observability and Operations
+## Operations and Observability
 
 One trace should connect edge request, gateway admission, policy, routing, cache, provider/inference queue, prefill, decode, safety, tool calls, and stream completion. Use stable generation, session, and logical action IDs. OpenTelemetry's GenAI semantic conventions can provide a common vocabulary, but extend them with platform-specific queue, budget, rollout, and policy fields.
 
@@ -416,7 +416,7 @@ Prefer the least operationally complex architecture that meets quality, policy, 
 
 ## Related Chapters
 
-- [GPU Inference Internals](11-gpu-inference-internals.md): the scheduler and cache behaviour underneath every capacity number here
+- [GPU Inference Internals](11-gpu-inference-internals.md): the scheduler and cache behavior underneath every capacity number here
 - [Model Serving](../16-ml-systems/03-model-serving.md): serving a stateless model, which is simpler than this in almost every way
 - [Backpressure](../06-scaling/07-backpressure.md): a token stream is a slow response, so overload must be shed at admission
 - [LLM Inference Platforms](../08-case-studies/13-llm-inference-platforms.md): the same infrastructure sold as a product, with tenants, quotas, and incidents

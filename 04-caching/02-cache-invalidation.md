@@ -326,7 +326,7 @@ For immutable content, change the URL. For mutable content:
 - measure purge completion across points of presence;
 - retain an origin shield to collapse simultaneous revalidation.
 
-A purge acknowledgement may mean “accepted,” not “every edge is empty.” Put that provider behavior into the propagation SLO.
+A purge acknowledgment may mean “accepted,” not “every edge is empty.” Put that provider behavior into the propagation SLO.
 
 ### 5.4 Browser caches
 

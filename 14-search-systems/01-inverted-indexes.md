@@ -47,7 +47,7 @@ The design should enforce these invariants:
 
 **Generation publication is atomic.** Readers observe the old complete generation or the new complete generation, never a mixture assembled during a merge.
 
-**Acknowledged durability matches the API.** If an acknowledgement promises survival of one node failure, the operation must be on enough independent failure domains before acknowledgement. A page-cache write on one node is not that guarantee.
+**Acknowledged durability matches the API.** If an acknowledgment promises survival of one node failure, the operation must be on enough independent failure domains before acknowledgment. A page-cache write on one node is not that guarantee.
 
 **Primary epochs fence old writers.** Every mutation and replication message carries a shard term or lease token. After failover, the new primary rejects operations from an older term, even if the old process is still alive in a partition.
 
@@ -114,7 +114,7 @@ Merge output is published like any other generation. The safe sequence is: write
 A recoverable shard needs an ordering relation between accepted operations and committed index state. One pattern is:
 
 1. assign a monotonically increasing shard sequence number;
-2. append the operation to a checksummed log and replicate according to the acknowledgement policy;
+2. append the operation to a checksummed log and replicate according to the acknowledgment policy;
 3. apply it to the in-memory indexing buffer;
 4. write a segment covering a known inclusive sequence range;
 5. publish a manifest containing the highest fully represented sequence number;
@@ -216,7 +216,7 @@ Test invariants at several layers:
 - **load tests** replay the measured query and mutation mix while merges, relocation, and recovery compete for resources;
 - **fault drills** corrupt a segment, fill a disk, delay one replica, and remove a failure domain.
 
-A green query test is not enough. The hard bugs live at lifecycle boundaries: acknowledgement versus durability, refresh versus commit, failover versus fencing, and publication versus reclamation.
+A green query test is not enough. The hard bugs live at lifecycle boundaries: acknowledgment versus durability, refresh versus commit, failover versus fencing, and publication versus reclamation.
 
 ## Decision Framework
 
