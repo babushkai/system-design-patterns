@@ -652,3 +652,4 @@ Choose pooling when logical controls, fair sharing and lifecycle tooling meet th
 - [Rate Limiting](05-rate-limiting.md): fair share is a rate limit with a definition of fair attached to it
 - [Authorization at Scale](../10-security/07-authorization-patterns.md): the tenant as an authorization scope, enforced somewhere other than the query
 - [Partitioning Strategies](../02-distributed-databases/05-partitioning-strategies.md): where rows for one tenant land decides whether isolation is physical or aspirational
+- [Threat Modeling and Abuse Case Engineering](../10-security/08-threat-modeling-and-abuse-cases.md): tenant isolation claims need an enumerated abuse case and a test per boundary, not a diagram

@@ -373,3 +373,4 @@ Verification should include:
 - [Auto-Scaling](08-auto-scaling.md): the actuator for horizontal scaling, with its reaction delay inside the headroom
 - [Database Sharding](03-database-sharding.md): the stateful case, where scaling horizontally means splitting data instead of adding compute
 - [Cell-Based Architecture and Shuffle Sharding](11-cell-based-architecture.md): where horizontal stops being elastic and becomes a fixed partition of blast radius
+- [Compute Platform and Scheduling Architecture](../15-deployment/07-compute-platform-scheduling.md): the scheduler is where a vertical choice becomes a machine type and a packing constraint

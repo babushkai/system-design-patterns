@@ -709,3 +709,4 @@ Exercise the socio-technical system, not only a failover command. Include missin
 - [Progressive Delivery and Deployment Strategies](../15-deployment/01-deployment-strategies.md): most incidents are changes, which is why rollback has to be a designed capability
 - [Production Logging Architecture](03-logging.md): the evidence available at three in the morning, already shaped by retention and sampling
 - [Multi-Region Architecture](../06-scaling/09-multi-region-architecture.md): a region failure is a decision to shed or fail over on incomplete evidence
+- [Resilience Testing and Fault Injection](09-resilience-testing-and-fault-injection.md): drills rehearse the incident role set before an outage audits whether it works

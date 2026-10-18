@@ -623,3 +623,4 @@ If a design can answer only “where are the backups?”, it has described stora
 - [Cryptographic Key and Data-Protection Architecture](../10-security/06-encryption.md): a restore that cannot reach its keys is data loss with extra steps
 - [Multi-Region Architecture](../06-scaling/09-multi-region-architecture.md): the topology that decides whether failover is a switch or a rebuild
 - [Workflow Observability and Replay](../18-workflow-job-systems/09-workflow-observability-replay.md): replaying events to rebuild state, which needs the log you hoped nobody would require
+- [Resilience Testing and Fault Injection](../11-observability/09-resilience-testing-and-fault-injection.md): restore drills are how an RTO and RPO claim becomes a dated measurement

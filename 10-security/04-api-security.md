@@ -693,3 +693,4 @@ Secure APIs make illegal states and ambiguous interpretations hard to express. A
 - [Rate Limiting](../06-scaling/05-rate-limiting.md): exhaustion defenses are admission policy, and per-principal budgets are where abuse control becomes real
 - [Backpressure](../06-scaling/07-backpressure.md): a saturated API should shed load deliberately instead of queueing it onto a failing downstream
 - [Edge Gateway and API Mediation](../12-service-mesh/02-api-gateway.md): the layer that terminates credentials is also where spoofed identity headers get invented
+- [Threat Modeling and Abuse Case Engineering](08-threat-modeling-and-abuse-cases.md): the design-time method that decides which abuse cases an API boundary has to resist
