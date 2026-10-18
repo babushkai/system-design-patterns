@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from 'vue'
-import { useRouter, withBase } from 'vitepress'
+import { computed, onMounted, ref } from 'vue'
+import { withBase } from 'vitepress'
+import BookVolume from './BookVolume.vue'
+import bookManifest from '../../../book.manifest.json'
 
 type Locale = 'en' | 'ja'
 
@@ -8,589 +10,518 @@ const props = withDefaults(defineProps<{ locale?: Locale }>(), {
   locale: 'en',
 })
 
+type LocalizedTitle = Record<Locale, string>
+type BookChapter = { route: string; title: LocalizedTitle }
+type BookPart = {
+  number: number
+  dir: string
+  title: LocalizedTitle
+  chapters: BookChapter[]
+}
+
+const parts = (bookManifest as unknown as { parts: BookPart[] }).parts
+const totalChapters = parts.reduce((sum, part) => sum + part.chapters.length, 0)
+
+/** One entry per question a reader arrives with. Routes are checked against the manifest. */
+const doors = [
+  { id: 'correctness', route: '01-foundations/01-acid-transactions' },
+  { id: 'load', route: '04-caching/01-cache-strategies' },
+  { id: 'async', route: '18-workflow-job-systems/01-workflow-system-fundamentals' },
+  { id: 'retrieval', route: '14-search-systems/01-inverted-indexes' },
+  { id: 'intelligence', route: '16-ml-systems/01-ml-system-fundamentals' },
+  { id: 'signoff', route: '20-production-readiness/01-design-documents-and-decision-records' },
+].map((door, index) => ({ ...door, order: index + 1 }))
+
+const chaptersByRoute = new Map<string, { part: BookPart; chapter: BookChapter }>()
+for (const part of parts) {
+  for (const chapter of part.chapters) {
+    chaptersByRoute.set(chapter.route, { part, chapter })
+  }
+}
+
 const copy = {
   en: {
-    kicker: 'Architecture Fieldbook',
-    titleLead: 'System Design',
-    titleAccent: 'Patterns',
-    subject: 'Distributed systems · Data · ML · AI',
-    edition: 'Fieldbook edition',
-    openHint: 'Open the book',
-    openLabel: 'Open System Design Patterns and begin with ACID Transactions',
-    opening: 'Opening the book',
-    chapter: 'Chapter 01',
-    chapterTitle: 'ACID Transactions',
-    destination: '/01-foundations/01-acid-transactions',
+    scale: `${parts.length} parts · ${totalChapters} chapters · English + 日本語`,
+    pitch:
+      'Mechanism-level reasoning for distributed, data, ML, and AI systems. Every chapter is written as a production contract: the invariant, the arithmetic behind it, and the evidence that defends it.',
+    doorsHeading: 'Start with your question',
+    partsHeading: 'The whole edition',
+    footnote:
+      'Parts are grouped by role rather than difficulty. Every chapter opens with a TL;DR and closes with three to eight curated neighbours, so any page can be the first one you open.',
+    search: `Search ${totalChapters} chapters`,
+    source: 'PDF / EPUB',
+    otherLocale: '日本語で読む',
+    partLabel: (part: BookPart) => `Part ${part.number}`,
+    chapterCount: (count: number) => `${count} ${count === 1 ? 'chapter' : 'chapters'}`,
+    doors: {
+      correctness: {
+        question: 'Is this data still correct under concurrent writes?',
+        answer:
+          'Transactions, isolation levels, replication and conflict resolution, traced through the interleavings that break each guarantee.',
+      },
+      load: {
+        question: 'What gives way first when the load grows?',
+        answer:
+          'Cache economics, invalidation races, partitioning and edge delivery, with the capacity arithmetic behind every choice.',
+      },
+      async: {
+        question: 'How does work survive past the request?',
+        answer:
+          'Queues, worker pools, durable execution, commit protocols for retries and idempotency, leases and recovery.',
+      },
+      retrieval: {
+        question: 'How do you find the right thing quickly?',
+        answer:
+          'Inverted indexes, lexical query execution, vector retrieval, ranking, and typeahead under real traffic.',
+      },
+      intelligence: {
+        question: 'How do models and agents reach production?',
+        answer:
+          'Feature stores, GPU inference, serving, offline and online evaluation, retrieval, and platforms for coding agents.',
+      },
+      signoff: {
+        question: 'Is this design ready to be signed off?',
+        answer:
+          'Design documents and ADRs, review governance, supply-chain risk, verification strategy, and lawful retention.',
+      },
+    },
   },
   ja: {
-    kicker: 'Architecture Fieldbook',
-    titleLead: 'システム設計',
-    titleAccent: 'パターン',
-    subject: '分散システム · データ · ML · AI',
-    edition: 'フィールドブック版',
-    openHint: '本を開く',
-    openLabel: 'システム設計パターンを開き、ACIDトランザクションから読み始める',
-    opening: '本を開いています',
-    chapter: '第1章',
-    chapterTitle: 'ACIDトランザクション',
-    destination: '/ja/01-foundations/01-acid-transactions',
+    scale: `全${parts.length}部・合計${totalChapters}章・日英対応`,
+    pitch:
+      '分散システム・データ・ML・AIの仕組みを、契約として読む一冊。不変条件、その背後の計算、主張を支える根拠まで、一章ごとに揃えてあります。',
+    doorsHeading: '問いから入る',
+    partsHeading: '全編の構成',
+    footnote:
+      '部は難易度ではなく役割で分けてあります。各章の冒頭にTL;DR、末尾に関連する3〜8章を理由付きで置いてあるので、どのページから開いても構いません。',
+    search: `全${totalChapters}章を検索`,
+    source: 'PDF / EPUB',
+    otherLocale: 'Read in English',
+    partLabel: (part: BookPart) => `第${part.number}部`,
+    chapterCount: (count: number) => `${count}章`,
+    doors: {
+      correctness: {
+        question: '同時書き込みの下で、データはまだ正しいか？',
+        answer: 'トランザクション、分離レベル、レプリケーション、競合解決。保証を壊す干渉まで追跡する。',
+      },
+      load: {
+        question: '負荷が増えたとき、最初にどこが壊れるか？',
+        answer: 'キャッシュの経済性、無効化の競合、パーティショニング、エッジ配信と、その容量計算。',
+      },
+      async: {
+        question: 'リクエストを超えた仕事をどう進めるか？',
+        answer: 'キュー、ワーカープール、永続実行、リトライと冪等性、リースと復旧。',
+      },
+      retrieval: {
+        question: '正しいものをどう素早く見つけるか？',
+        answer: '転置インデックス、語彙クエリ実行、ベクトル検索、ランキング、入力補完。',
+      },
+      intelligence: {
+        question: 'モデルとエージェントをどう本番に出すか？',
+        answer: 'フィーチャーストア、GPU推論、サービング、評価、検索、そしてコーディングエージェントの基盤。',
+      },
+      signoff: {
+        question: 'その設計は承認できる状態か？',
+        answer: '設計文書とADR、レビューとガバナンス、サプライチェーン、検証戦略、データの保持。',
+      },
+    },
   },
 } satisfies Record<Locale, {
-  kicker: string
-  titleLead: string
-  titleAccent: string
-  subject: string
-  edition: string
-  openHint: string
-  openLabel: string
-  opening: string
-  chapter: string
-  chapterTitle: string
-  destination: string
+  scale: string
+  pitch: string
+  doorsHeading: string
+  partsHeading: string
+  footnote: string
+  search: string
+  source: string
+  otherLocale: string
+  partLabel: (part: BookPart) => string
+  chapterCount: (count: number) => string
+  doors: Record<string, { question: string; answer: string }>
 }>
 
 const page = computed(() => copy[props.locale])
-const destination = computed(() => withBase(page.value.destination))
-const isOpening = ref(false)
-const router = useRouter()
 
-let navigationTimer: number | undefined
+/**
+ * Doors resolve through the manifest. A route that stops existing falls back to the
+ * first chapter of Part 1 rather than shipping a dead link, and says so in development.
+ */
+const resolvedDoors = computed(() =>
+  doors.map((door) => {
+    const found = chaptersByRoute.get(door.route) ?? { part: parts[0], chapter: parts[0].chapters[0] }
+    if (import.meta.env.DEV && !chaptersByRoute.has(door.route)) {
+      console.warn(`[landing] door "${door.id}" points at a route that is no longer in the manifest: ${door.route}`)
+    }
+    return {
+      id: door.id,
+      order: door.order,
+      href: withBase(`/${found.chapter.route}`),
+      meta: `${page.value.partLabel(found.part)} · ${found.chapter.title[props.locale]}`,
+      ...page.value.doors[door.id],
+    }
+  })
+)
 
-function beginOpening() {
-  if (isOpening.value) return
+const index = computed(() =>
+  parts.map((part) => ({
+    number: String(part.number).padStart(2, '0'),
+    href: withBase(`/${part.chapters[0].route}`),
+    title: part.title[props.locale],
+    count: page.value.chapterCount(part.chapters.length),
+  }))
+)
 
-  isOpening.value = true
-  navigationTimer = window.setTimeout(() => {
-    void router.go(destination.value)
-  }, 720)
-}
+const localeSwitch = computed(() => withBase(props.locale === 'ja' ? '/' : '/ja/'))
 
-function openBook(event: MouseEvent) {
-  if (
-    event.button !== 0 ||
-    event.metaKey ||
-    event.ctrlKey ||
-    event.shiftKey ||
-    event.altKey
-  ) {
-    return
-  }
-
-  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-    return
-  }
-
-  event.preventDefault()
-  beginOpening()
-}
-
-onBeforeUnmount(() => {
-  if (navigationTimer !== undefined) {
-    window.clearTimeout(navigationTimer)
+const searchKeys = ref('⌘K')
+onMounted(() => {
+  if (!/Mac|iPhone|iPod|iPad/i.test(navigator.platform)) {
+    searchKeys.value = 'Ctrl K'
   }
 })
+
+function focusSearch() {
+  document.querySelector<HTMLButtonElement>('.VPNavBarSearch button')?.click()
+}
 </script>
 
 <template>
-  <main class="sdp-home book-landing" :lang="locale">
-    <a
-      class="book-entry"
-      :class="{ 'is-opening': isOpening }"
-      :href="destination"
-      target="_self"
-      :aria-label="page.openLabel"
-      :aria-busy="isOpening"
-      @click="openBook"
-    >
-      <span class="book-status" aria-live="polite">
-        {{ isOpening ? page.opening : '' }}
-      </span>
+  <main class="sdp-home sdp-entrance" :lang="locale">
+    <div class="entrance-shell">
+      <header class="entrance-rail">
+        <BookVolume :locale="locale" />
 
-      <span class="book-volume">
-        <span class="book-back-cover" aria-hidden="true" />
+        <p class="entrance-scale">{{ page.scale }}</p>
+        <p class="entrance-pitch">{{ page.pitch }}</p>
 
-        <span class="book-pages" aria-hidden="true">
-          <span class="book-page-edge book-page-edge-one" />
-          <span class="book-page-edge book-page-edge-two" />
-          <span class="book-first-page">
-            <span class="inside-chapter">{{ page.chapter }}</span>
-            <strong>{{ page.chapterTitle }}</strong>
-            <span class="inside-rule" />
-          </span>
-        </span>
+        <ul class="entrance-utility">
+          <li>
+            <button type="button" @click="focusSearch">
+              {{ page.search }}
+              <kbd>{{ searchKeys }}</kbd>
+            </button>
+          </li>
+          <li>
+            <a
+              href="https://github.com/babushkai/system-design-patterns/releases/latest"
+              target="_blank"
+              rel="noopener"
+              >{{ page.source }}</a
+            >
+          </li>
+          <li>
+            <a :href="localeSwitch">{{ page.otherLocale }}</a>
+          </li>
+        </ul>
+      </header>
 
-        <span class="book-front-cover">
-          <span class="cover-face">
-            <span class="cover-kicker">{{ page.kicker }}</span>
-            <h1 class="cover-title">
-              <span>{{ page.titleLead }}</span>
-              <strong>{{ page.titleAccent }}</strong>
-            </h1>
-            <span class="cover-plate">
-              <img
-                :src="withBase('/art/systems-constellation-960.webp')"
-                :srcset="`${withBase('/art/systems-constellation-640.webp')} 640w, ${withBase('/art/systems-constellation-960.webp')} 960w`"
-                sizes="(max-width: 680px) 180px, 205px"
-                alt=""
-                width="960"
-                height="960"
-                decoding="async"
-                fetchpriority="high"
-              >
-            </span>
-            <span class="cover-subject">{{ page.subject }}</span>
-            <span class="cover-footer">
-              <span>{{ page.edition }}</span>
-              <span class="cover-open-hint">{{ page.openHint }} <b>→</b></span>
-            </span>
-          </span>
+      <div class="entrance-index">
+        <section aria-labelledby="entrance-doors">
+          <h2 id="entrance-doors" class="entrance-heading">{{ page.doorsHeading }}</h2>
+          <div class="door-grid">
+            <a
+              v-for="door in resolvedDoors"
+              :key="door.id"
+              class="door"
+              :href="door.href"
+            >
+              <span class="door-question">{{ door.question }}</span>
+              <span class="door-answer">{{ door.answer }}</span>
+              <span class="door-meta">{{ door.meta }} <b>→</b></span>
+            </a>
+          </div>
+        </section>
 
-          <span class="cover-inside" aria-hidden="true">
-            <span class="inside-mark" />
-          </span>
-        </span>
-      </span>
-    </a>
+        <section aria-labelledby="entrance-parts">
+          <h2 id="entrance-parts" class="entrance-heading">{{ page.partsHeading }}</h2>
+          <ol class="parts-index">
+            <li v-for="partEntry in index" :key="partEntry.number">
+              <a class="part-row" :href="partEntry.href">
+                <span class="part-number">{{ partEntry.number }}</span>
+                <span class="part-title">{{ partEntry.title }}</span>
+                <span class="part-count">{{ partEntry.count }}</span>
+              </a>
+            </li>
+          </ol>
+          <p class="entrance-footnote">{{ page.footnote }}</p>
+        </section>
+      </div>
+    </div>
   </main>
 </template>
 
-<style>
-.VPDoc:has(.book-landing),
-.VPDoc:has(.book-landing) .main,
-.VPDoc:has(.book-landing) .container,
-.VPDoc:has(.book-landing) .content,
-.VPDoc:has(.book-landing) .content-container {
-  width: 100% !important;
-  min-width: 0 !important;
-  max-width: none !important;
-  box-sizing: border-box;
-  padding: 0 !important;
-}
-
-.VPDoc:has(.book-landing) {
-  overflow: clip;
-}
-
-.Layout:has(.book-landing) .VPFooter {
-  display: none;
-}
-</style>
-
 <style scoped>
-.book-landing {
-  --cover: #3f2923;
-  --cover-deep: #281914;
-  --cover-ink: #f0e5ce;
-  --paper: #eee5d2;
-  --paper-deep: #d6c8ad;
+.sdp-entrance {
   min-height: calc(100svh - var(--vp-nav-height, 64px) - 1px);
   color: var(--vp-c-text-1);
   background:
-    radial-gradient(circle at 50% 43%, color-mix(in srgb, var(--sdp-accent) 5%, transparent), transparent 34%),
+    radial-gradient(circle at 18% 8%, color-mix(in srgb, var(--sdp-accent) 7%, transparent), transparent 42%),
     var(--vp-c-bg);
 }
 
-.book-entry {
+.entrance-shell {
   display: grid;
-  min-height: inherit;
-  place-items: center;
+  grid-template-columns: minmax(0, 1fr);
+  gap: clamp(44px, 6vw, 84px);
   box-sizing: border-box;
-  padding: clamp(24px, 5vw, 64px);
-  color: inherit;
-  text-decoration: none;
-  cursor: pointer;
-  perspective: 1800px;
-  -webkit-tap-highlight-color: transparent;
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: clamp(32px, 5vw, 72px) clamp(20px, 5vw, 64px) clamp(56px, 7vw, 104px);
 }
 
-.book-entry:focus-visible {
-  outline: none;
+@media (min-width: 1024px) {
+  .entrance-shell {
+    grid-template-columns: minmax(288px, 356px) minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .entrance-rail {
+    position: sticky;
+    top: calc(var(--vp-nav-height) + 32px);
+  }
 }
 
-.book-entry:focus-visible .book-volume {
-  outline: 3px solid var(--sdp-accent);
-  outline-offset: 8px;
-}
-
-.book-status {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  padding: 0;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  white-space: nowrap;
-  border: 0;
-}
-
-.book-volume {
-  position: relative;
-  display: block;
-  width: min(390px, calc(100vw - 72px), 56svh);
-  aspect-ratio: 0.72;
-  border-radius: 3px 10px 10px 3px;
-  transform: rotateX(1.5deg) rotateY(-5deg);
-  transform-style: preserve-3d;
-  transition: transform 680ms cubic-bezier(0.2, 0.72, 0.18, 1);
-}
-
-.book-back-cover,
-.book-pages,
-.book-front-cover,
-.cover-face,
-.cover-inside {
-  position: absolute;
-  inset: 0;
-  display: block;
-  border-radius: inherit;
-}
-
-.book-back-cover {
-  background: var(--cover-deep);
-  box-shadow:
-    4px 20px 38px rgb(28 20 15 / 22%),
-    18px 22px 42px rgb(28 20 15 / 18%);
-  transform: translateZ(-10px);
-}
-
-.book-pages {
-  inset: 5px 5px 5px 9px;
-  overflow: hidden;
-  background: var(--paper);
-  border: 1px solid rgb(84 64 40 / 16%);
-  border-radius: 2px 8px 8px 2px;
-  box-shadow:
-    inset -8px 0 12px rgb(77 57 35 / 8%),
-    3px 3px 0 var(--paper-deep),
-    6px 6px 0 color-mix(in srgb, var(--paper-deep) 75%, #7d6a4b);
-  transform: translateZ(-2px);
-}
-
-.book-page-edge {
-  position: absolute;
-  right: 0;
-  left: 0;
-  height: 1px;
-  background: rgb(95 74 49 / 16%);
-}
-
-.book-page-edge-one {
-  top: 34%;
-}
-
-.book-page-edge-two {
-  top: 71%;
-}
-
-.book-first-page {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 12%;
-  color: #3f352a;
-  font-family: var(--sdp-font-reading);
-  text-align: center;
-  background:
-    linear-gradient(90deg, rgb(94 70 42 / 8%), transparent 11%),
-    var(--paper);
-}
-
-.inside-chapter {
-  margin-bottom: 14px;
-  color: #77634b;
+.entrance-scale {
+  margin: clamp(24px, 3vw, 32px) 0 0;
+  color: var(--sdp-accent);
   font-family: var(--sdp-font-ui);
   font-size: 0.68rem;
-  font-weight: 650;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-}
-
-.book-first-page strong {
-  max-width: 12ch;
-  font-family: var(--sdp-font-display);
-  font-size: clamp(1.6rem, 4vw, 2.25rem);
-  font-weight: 560;
-  line-height: 1.08;
-}
-
-.inside-rule {
-  width: 32px;
-  height: 1px;
-  margin-top: 22px;
-  background: #9d6e4a;
-}
-
-.book-front-cover {
-  z-index: 3;
-  transform: translateZ(2px);
-  transform-origin: left center;
-  transform-style: preserve-3d;
-  transition: transform 680ms cubic-bezier(0.2, 0.72, 0.18, 1);
-}
-
-.cover-face,
-.cover-inside {
-  overflow: hidden;
-  backface-visibility: hidden;
-  -webkit-backface-visibility: hidden;
-}
-
-.cover-face {
-  display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
-  gap: clamp(12px, 2vw, 18px);
-  box-sizing: border-box;
-  padding: clamp(28px, 5vw, 44px) clamp(26px, 4.5vw, 40px) clamp(24px, 4vw, 34px);
-  color: var(--cover-ink);
-  background:
-    linear-gradient(90deg, rgb(255 255 255 / 4%), transparent 8%, transparent 93%, rgb(0 0 0 / 12%)),
-    var(--cover);
-  border: 1px solid rgb(239 224 193 / 16%);
-  box-shadow:
-    inset 10px 0 18px rgb(0 0 0 / 16%),
-    inset 1px 0 rgb(255 255 255 / 8%),
-    2px 16px 30px rgb(28 20 15 / 24%);
-}
-
-.cover-face::before {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 16px;
-  width: 1px;
-  background: rgb(237 217 180 / 19%);
-  box-shadow: 4px 0 12px rgb(0 0 0 / 12%);
-  content: '';
-}
-
-.cover-kicker,
-.cover-subject,
-.cover-footer {
-  position: relative;
-  z-index: 1;
-  font-family: var(--sdp-font-ui);
-  font-weight: 650;
+  font-weight: 700;
   letter-spacing: 0.13em;
   text-transform: uppercase;
 }
 
-.cover-kicker {
-  font-size: clamp(0.58rem, 1.4vw, 0.68rem);
+.entrance-pitch {
+  max-width: 36ch;
+  margin: 14px 0 0;
+  font-family: var(--sdp-font-reading);
+  font-size: 1.02rem;
+  line-height: 1.66;
 }
 
-.cover-title {
-  position: relative;
-  z-index: 1;
+.sdp-entrance:lang(ja) .entrance-pitch {
+  max-width: none;
+  font-family: var(--sdp-font-reading-ja);
+  font-size: 0.95rem;
+  line-height: 1.9;
+}
+
+.entrance-utility {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: clamp(24px, 3vw, 32px) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.entrance-utility a,
+.entrance-utility button {
+  display: inline-flex;
+  gap: 9px;
+  align-items: center;
+  padding: 9px 13px;
+  color: var(--sdp-ink);
+  font-family: var(--sdp-font-ui);
+  font-size: 0.7rem;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-decoration: none;
+  background: color-mix(in srgb, var(--sdp-paper-raised) 70%, transparent);
+  border: 1px solid var(--sdp-rule);
+  border-radius: 3px;
+  cursor: pointer;
+  transition: border-color 160ms ease, color 160ms ease;
+}
+
+.entrance-utility a:hover,
+.entrance-utility button:hover {
+  color: var(--sdp-accent);
+  border-color: color-mix(in srgb, var(--sdp-accent) 62%, var(--sdp-rule));
+}
+
+.entrance-utility kbd {
+  padding: 2px 5px;
+  color: var(--sdp-ink-muted);
+  font-family: var(--sdp-font-mono);
+  font-size: 0.6rem;
+  background: var(--sdp-paper-sunken);
+  border: 1px solid var(--sdp-rule);
+  border-radius: 2px;
+}
+
+.entrance-heading {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  margin: 0 0 clamp(20px, 2.4vw, 28px);
+  color: var(--sdp-ink-muted);
+  font-family: var(--sdp-font-ui);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.17em;
+  text-transform: uppercase;
+}
+
+.entrance-heading::after {
+  flex: 1;
+  height: 1px;
+  background: var(--sdp-rule);
+  content: '';
+}
+
+.entrance-index section + section {
+  margin-top: clamp(48px, 6vw, 72px);
+}
+
+.door-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(252px, 1fr));
+  gap: clamp(20px, 2.4vw, 30px) clamp(26px, 3vw, 44px);
+}
+
+.door {
   display: flex;
   flex-direction: column;
-  font-family: var(--sdp-font-display);
-  font-size: clamp(2.15rem, 7vw, 3.35rem);
-  font-weight: 520;
-  line-height: 0.93;
-  letter-spacing: -0.045em;
-  margin: 0 !important;
+  gap: 9px;
+  padding-top: 17px;
+  color: inherit;
+  text-decoration: none;
+  border-top: 1px solid var(--sdp-rule);
 }
 
-.cover-title strong {
-  color: #dca472;
-  font: inherit;
-  font-style: italic;
+.door-question {
+  color: var(--vp-c-text-1);
+  font-family: var(--sdp-font-reading);
+  font-size: 1.07rem;
+  line-height: 1.3;
+  letter-spacing: -0.012em;
+  text-decoration: none;
+  transition: color 160ms ease;
 }
 
-.book-landing:lang(ja) .cover-title {
-  font-size: clamp(2rem, 6.5vw, 3rem);
-  line-height: 1.08;
-  letter-spacing: -0.04em;
+.sdp-entrance:lang(ja) .door-question {
+  font-family: var(--sdp-font-reading-ja);
+  font-size: 1rem;
+  line-height: 1.6;
+  letter-spacing: 0;
 }
 
-.book-landing:lang(ja) .cover-title strong {
-  font-style: normal;
+.door-answer {
+  color: var(--sdp-ink-muted);
+  font-family: var(--sdp-font-ui);
+  font-size: 0.83rem;
+  line-height: 1.62;
 }
 
-.cover-plate {
-  position: relative;
-  align-self: center;
-  justify-self: center;
-  width: min(100%, 205px);
-  aspect-ratio: 1;
-  overflow: hidden;
-  border: 1px solid rgb(239 224 193 / 22%);
-  background: #d8cbae;
+.sdp-entrance:lang(ja) .door-answer {
+  font-size: 0.8rem;
+  line-height: 1.95;
 }
 
-.cover-plate img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  filter: sepia(0.12) saturate(0.72) contrast(1.04);
+.door-meta {
+  margin-top: auto;
+  padding-top: 6px;
+  color: color-mix(in srgb, var(--sdp-accent) 78%, var(--sdp-ink-muted));
+  font-family: var(--sdp-font-ui);
+  font-size: 0.63rem;
+  font-weight: 650;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
 }
 
-.cover-subject {
-  font-size: clamp(0.52rem, 1.2vw, 0.62rem);
-  line-height: 1.5;
-}
-
-.cover-footer {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  justify-content: space-between;
-  font-size: clamp(0.5rem, 1.1vw, 0.58rem);
-}
-
-.cover-open-hint {
-  color: #e4ad7b;
-}
-
-.cover-open-hint b {
+.door-meta b {
   display: inline-block;
-  font-size: 0.85rem;
-  transition: transform 180ms ease;
+  font-weight: 400;
+  transition: transform 160ms ease;
 }
 
-.book-entry:hover .cover-open-hint b {
+.door:hover .door-question {
+  color: var(--sdp-accent);
+}
+
+.door:hover .door-meta b {
   transform: translateX(3px);
 }
 
-.cover-inside {
-  background:
-    linear-gradient(90deg, rgb(70 50 31 / 15%), transparent 14%),
-    var(--paper);
-  border: 1px solid rgb(84 64 40 / 18%);
-  transform: rotateY(180deg);
+.parts-index {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(276px, 1fr));
+  gap: 0 clamp(30px, 4vw, 58px);
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
-.inside-mark {
-  position: absolute;
-  inset: 10%;
-  border: 1px solid rgb(117 88 54 / 14%);
+.part-row {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  padding: 10px 0;
+  color: inherit;
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--sdp-rule) 64%, transparent);
 }
 
-.book-entry.is-opening {
-  cursor: wait;
+.part-number {
+  color: var(--sdp-accent);
+  font-family: var(--sdp-font-mono);
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
 }
 
-.book-entry.is-opening .book-volume {
-  transform: translateX(11%) rotateX(0.5deg) rotateY(0deg) scale(0.96);
+.part-title {
+  flex: 1;
+  font-size: 0.92rem;
+  line-height: 1.4;
+  transition: color 160ms ease;
 }
 
-.book-entry.is-opening .book-front-cover {
-  transform: translateZ(2px) rotateY(-82deg);
+.sdp-entrance:lang(ja) .part-title {
+  font-family: var(--sdp-font-reading-ja);
+  font-size: 0.87rem;
 }
 
-.book-entry.is-opening .book-first-page {
-  animation: page-arrive 750ms 180ms ease both;
+.part-count {
+  color: var(--sdp-ink-muted);
+  font-family: var(--sdp-font-ui);
+  font-size: 0.66rem;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
 }
 
-@keyframes page-arrive {
-  from {
-    opacity: 0.66;
-    transform: translateX(-5px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
+.part-row:hover .part-title {
+  color: var(--sdp-accent);
 }
 
-:global(.dark) .book-landing {
-  --cover: #34231e;
-  --cover-deep: #1d1411;
-  background:
-    radial-gradient(circle at 50% 43%, rgb(198 132 79 / 6%), transparent 34%),
-    var(--vp-c-bg);
+.entrance-footnote {
+  max-width: 74ch;
+  margin: clamp(22px, 3vw, 30px) 0 0;
+  color: var(--sdp-ink-muted);
+  font-size: 0.8rem;
+  line-height: 1.68;
 }
 
-@media (max-width: 680px) {
-  .book-entry {
-    padding: 24px 20px 34px;
-  }
-
-  .book-volume {
-    width: min(316px, calc(100vw - 48px));
-  }
-
-  .book-entry.is-opening .book-volume {
-    transform: translateX(8%) rotateX(0deg) rotateY(0deg) scale(0.94);
-  }
-
-  .book-entry.is-opening .book-front-cover {
-    transform: translateZ(2px) rotateY(-78deg);
-  }
-
-  .cover-face {
-    gap: 13px;
-    padding: 27px 26px 23px 29px;
-  }
-
-  .cover-plate {
-    width: min(100%, 180px);
-  }
+.sdp-entrance:lang(ja) .entrance-footnote {
+  font-size: 0.78rem;
+  line-height: 2;
 }
 
-@media (max-height: 720px) and (min-width: 681px) {
-  .book-volume {
-    width: min(330px, calc(100vw - 72px));
-  }
-
-  .cover-face {
-    gap: 12px;
-    padding: 28px 30px 24px 34px;
-  }
-
-  .cover-plate {
-    width: min(100%, 184px);
-  }
-}
-
-@media (max-height: 540px) {
-  .book-entry {
-    padding-block: 12px;
-  }
-
-  .book-volume {
-    width: min(390px, calc(100vw - 72px), 50svh);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .book-volume,
-  .book-front-cover,
-  .cover-open-hint b {
-    transition-duration: 120ms;
-  }
-
-  .book-entry.is-opening .book-volume {
-    transform: none;
-  }
-
-  .book-entry.is-opening .book-front-cover {
-    transform: none;
-  }
-
-  .book-entry.is-opening .book-first-page {
-    animation: none;
+@media (max-width: 640px) {
+  .door-grid,
+  .parts-index {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
 @media (forced-colors: active) {
-  .book-entry:focus-visible .book-volume {
-    outline-color: Highlight;
-  }
-
-  .cover-face,
-  .book-pages,
-  .book-back-cover {
-    border: 2px solid CanvasText;
-  }
-
-  .cover-plate img {
-    opacity: 0.3;
+  .door,
+  .part-row,
+  .entrance-utility a,
+  .entrance-utility button,
+  .entrance-utility kbd {
+    border-color: CanvasText;
+    background: Canvas;
   }
 }
 </style>
