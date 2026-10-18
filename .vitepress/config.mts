@@ -1,3 +1,4 @@
+import type { HeadConfig } from 'vitepress'
 import { withMermaid } from 'vitepress-plugin-mermaid'
 import bookManifest from '../book.manifest.json'
 
@@ -35,6 +36,22 @@ const sidebarEN = sidebarFor('en')
 const sidebarJA = sidebarFor('ja')
 const firstChapterLink = (locale: Locale) => routeLink(parts[0].chapters[0].route, locale)
 
+const SITE_URL = 'https://design.babushkai.com'
+const SHARE_IMAGE = `${SITE_URL}/art/systems-constellation-960.webp`
+
+/**
+ * One canonical URL per page so a shared chapter, a `?highlight=` search hand-off, and a
+ * tracked link all resolve to the same entry in the index. Directory pages keep the
+ * trailing slash because that is the form the host actually serves.
+ */
+const canonicalHref = (relativePath: string) => {
+  const clean = relativePath.replace(/\.md$/, '')
+  if (/(^|\/)index$/.test(clean)) {
+    return clean === 'index' ? `${SITE_URL}/` : `${SITE_URL}/${clean.replace(/\/index$/, '')}/`
+  }
+  return `${SITE_URL}/${clean}`
+}
+
 export default withMermaid({
   title: 'System Design Patterns',
   description: 'An architecture fieldbook for reliable distributed, data, ML, and AI systems',
@@ -54,10 +71,27 @@ export default withMermaid({
     ['meta', { name: 'theme-color', content: '#151411', media: '(prefers-color-scheme: dark)' }],
     ['meta', { name: 'color-scheme', content: 'light dark' }],
     ['meta', { property: 'og:type', content: 'website' }],
-    ['meta', { property: 'og:title', content: 'System Design Patterns' }],
     ['meta', { property: 'og:description', content: 'An architecture fieldbook for reliable distributed, data, ML, and AI systems.' }],
+    ['meta', { property: 'og:image', content: SHARE_IMAGE }],
+    ['meta', { property: 'og:image:alt', content: 'Constellation diagram of the systems covered by the fieldbook.' }],
     ['meta', { name: 'twitter:card', content: 'summary' }],
+    ['meta', { name: 'twitter:image', content: SHARE_IMAGE }],
   ],
+
+  // Chapter titles, canonical URLs, and share cards are per page, not site-wide constants.
+  transformHead({ pageData }) {
+    if (pageData.relativePath === '404.md') return []
+
+    const url = canonicalHref(pageData.relativePath)
+    const tags: HeadConfig[] = [
+      ['link', { rel: 'canonical', href: url }],
+      ['meta', { property: 'og:url', content: url }]
+    ]
+    if (pageData.title) {
+      tags.push(['meta', { property: 'og:title', content: pageData.title }])
+    }
+    return tags
+  },
 
   locales: {
     root: {
