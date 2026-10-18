@@ -255,6 +255,56 @@ If apply capacity merely equals incoming rate, the follower remains perpetually 
 
 ---
 
+## Product Knob Map
+
+The settings that decide this chapter's contract sit on three machines that three different reviews approve: the primary's commit path, each follower's replay path, and the coordinator that grants the write epoch. Audits read the first and inherit the rest. Read every value below off the running cluster before relying on it, because the shipped default of every product named here is asynchronous replication with unbounded log retention.
+
+| Product and scope | Knob | Invariant it enforces | Default and how it misleads |
+| --- | --- | --- | --- |
+| PostgreSQL primary | `synchronous_commit`, `synchronous_standby_names` | a commit acknowledged to a client survives loss of the primary | streaming replication is asynchronous by default: `synchronous_commit` reads `on` while an empty standby list makes nothing wait for a follower, and `remote_apply`, `remote_write`, and `local` all collapse to the local-flush level of `on`. Loss at failover is proportional to replication delay. Set the name list first, then read who is synchronous. |
+| PostgreSQL primary | `FIRST (num_sync)` versus `ANY (num_sync)` in the standby list | commits wait for a declared count of standbys, with named substitutes that can take over | FIRST waits until WAL reaches that many highest-priority members, so naming three zones and asking for two makes commit latency the second-fastest follower. Only directly connected followers count, so a cascaded standby added for bandwidth adds zero durability while looking like a synchronous candidate in configuration. |
+| PostgreSQL primary | `max_wal_senders`, `max_replication_slots` | every consumer has a sender and a reservation | both default to 10 and both are start-time only. Lowering slots below the number of existing slots prevents the server from starting, so an inventory cleanup applied in a maintenance window can leave the primary unbootable. An abrupt client disconnect can hold a sender slot until timeout, which is why the documented advice is to sit slightly above the expected client count. |
+| PostgreSQL primary | `max_slot_wal_keep_size`, `wal_keep_size`, `idle_replication_slot_timeout` | log retention has a byte bound and abandoned consumers expire | shipped values are -1 (a slot may retain unlimited WAL), no floor, and 0 (expiry disabled), which is the disk-full failure written into the default file. `wal_keep_size` is only a minimum and does not rein in a slot. The pair that actually bounds risk is a per-slot byte cap plus an idle timeout with a named owner who is paged on invalidation. |
+| PostgreSQL follower | `hot_standby_feedback` | long-running standby queries are not cancelled by primary cleanup | default off, so analytics on the follower die when the primary recovers dead tuples; turning it on moves that cost to the primary as bloat and passes feedback upstream through every cascade. Feedback is sent no more often than `wal_receiver_status_interval`, so raising that interval delays both symptoms in each direction. |
+| PostgreSQL follower | `max_worker_processes` | a follower can run the queries it is routed | default 8, start-time only, and a standby must be at least the primary's value or queries are not allowed on it at all. A fleet template that sizes this per node role therefore produces followers that accept connections and refuse reads, and the same pool is what logical decoding and parallel work later borrow from. |
+| PostgreSQL standby | `recovery_min_apply_delay` | a known-bad change stays reversible for a declared window | default zero. A delayed follower reports lag equal to the delay by design, so freshness alerts need an explicit exception or they page continuously, and the protection only covers what a human notices inside the window. It complements archived-log point-in-time recovery; it does not replace it. |
+| MySQL 8.4 source | `rpl_semi_sync_source_enabled`, `_wait_point`, `_timeout` | an acknowledged transaction is durable somewhere else before the ack | the plugin ships disabled, so a "semi-sync" deployment is asynchronous until both ends load and enable it. After `_timeout` (default 10000 ms) with too few replicas replying, the source reverts to async and keeps serving commits; `Rpl_semi_sync_source_no_tx` counts what lost the guarantee, so downgrade duration belongs on the pager next to commit latency. |
+| MySQL 8.4 | `innodb_flush_log_at_trx_commit`, `sync_binlog` | an acknowledged transaction survives an operating-system crash | both default to 1, one flush and one sync per commit. Any relaxed combination is a documented loss window on crash that no cross-site setting can cover: relaxing either locally makes a zero-RPO claim describe only the network hop. |
+| Failover controller (Patroni-style) | `ttl`, `loop_wait`, `retry_timeout`, `maximum_lag_on_failover` | only a candidate within a declared log distance takes the epoch, and one holder has it at a time | reference values are ttl 30 s with loop and retry at 10 s. Raise `loop_wait` or `retry_timeout` without raising `ttl` and the lease expires while the controller believes it holds it. The shipped lag cap is 1048576 bytes, so one bulk load disqualifies every candidate and the next operator reads "no failover" as controller failure. |
+
+```bash
+# PostgreSQL primary: who is synchronous, and where each follower actually is
+psql -X -Atc "SELECT application_name, state, sync_state, sent_lsn, write_lsn,
+                     flush_lsn, replay_lsn,
+                     pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn) AS replay_backlog
+              FROM pg_stat_replication ORDER BY application_name;"
+# which consumer pins WAL, and how much of it
+psql -X -Atc "SELECT slot_name, slot_type, active, restart_lsn,
+                     COALESCE(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn), 0) AS retained
+              FROM pg_replication_slots ORDER BY retained DESC;"
+psql -X -Atc "SHOW synchronous_commit; SHOW synchronous_standby_names;
+              SHOW max_slot_wal_keep_size; SHOW idle_replication_slot_timeout;
+              SHOW wal_keep_size; SHOW max_wal_senders; SHOW max_replication_slots;
+              SHOW max_worker_processes;"
+# follower's own view: receive and replay positions are different numbers
+psql "$FOLLOWER_DSN" -X -Atc "SELECT pg_is_in_recovery(),
+                                     pg_last_wal_receive_lsn(), pg_last_wal_replay_lsn();"
+
+# MySQL 8.4: semi-sync participation, the downgrade counter, and the local durability pair
+mysql -NBe "SHOW GLOBAL STATUS LIKE 'Rpl_semi_sync%';"
+mysql -NBe "SELECT @@global.rpl_semi_sync_source_enabled AS enabled,
+                   @@global.rpl_semi_sync_source_wait_point AS wait_point,
+                   @@global.rpl_semi_sync_source_timeout   AS timeout_ms,
+                   @@global.sync_binlog                    AS sync_binlog,
+                   @@global.innodb_flush_log_at_trx_commit AS trx_commit;"
+
+# controller policy: lease durations and the lag cap that disqualifies candidates
+curl -s localhost:8008/patroni | jq '{role, timeline, optime, tags}'
+grep -E "ttl|loop_wait|retry_timeout|maximum_lag_on_failover" /etc/patroni.yml
+```
+
+---
+
 ## Topology and Capacity
 
 ### Primary fanout
@@ -345,6 +395,32 @@ Preserve promotion decisions, candidate coordinates/history, coordinator epoch, 
 
 ---
 
+## Incident Playbook
+
+Almost every single-leader incident is a disagreement between two numbers that a dashboard treats as the same number: sent versus applied, lag versus delay, eligible candidate versus healthy node. Establish which coordinate each claim rests on before changing configuration, because the durable actions in this subsystem are taken by whoever is trying to make replication look healthy fastest.
+
+### Commit latency doubled right after a replica or policy change
+
+Read `sync_state` and the standby list from the same query before touching either: a `FIRST (2 ...)` clause naming members of which only one is streaming makes every commit wait on an absent participant, so the p99 jump is waiting rather than slower storage. Confirm the missing member was ever eligible at all, because a cascaded standby never counts toward the synchronous set no matter what the topology diagram claims. Bound the change to the session or role that needs the durability level instead of moving the whole cluster's setting, and record the synchronous set size next to the latency sample so the next reviewer can see cause. Do not raise `num_sync` to "use the standbys we have", and do not set `synchronous_commit` off cluster-wide to make the dashboard quiet: both change the durability promise that applications were written against. Verify by watching commit latency return with the set size unchanged, and by confirming a test write still reports the acknowledgment level the service contract claims.
+
+### A follower's receive coordinate is current while its reads are stale
+
+The signature is `write_lsn` and `flush_lsn` advancing with `replay_lsn` frozen: the network is innocent and replay is blocked, usually by a long reader whose snapshot forces the standby to delay cleanup or by replay work starved of CPU and I/O. Freshness routing keyed on receive position is now sending reads to state that is old by an unmeasured amount, so move those reads first and diagnose second. Separate the two causes before choosing an action: a conflicting reader is a workload decision, a starved applier is a capacity decision, and adding another follower fixes neither. Do not enable `hot_standby_feedback` as a reflex, because it trades standby cancellations for primary bloat across every cascade, and do not restart the follower to unstick replay: it re-enters recovery from its own position and inherits the same blocker. Verify by watching `replay_lsn` advance inside one status interval and confirming stale-read fallbacks return to zero before restoring traffic.
+
+### Primary free space is falling and one slot owns the difference
+
+Rank slots by retained bytes against the free-space slope, then name the owner; a decommissioned consumer or an abandoned test subscription is the usual holder. Before releasing anything, prove that a base backup plus a continuous archive covers that slot's restart position, because that proof is what turns a dropped reservation from data loss into a rebuild. If continuity holds, invalidate the slot and let the owner catch up from archive; if it does not, buy time with an explicit byte cap, an expiry, and a throttled write path, and say out loud which of the two risks the team accepted. Do not delete the slot to reclaim space before archive continuity is confirmed, do not raise unlimited retention "until the release settles", and do not expect a restart to help: reservations are durable objects, not connections. Verify by re-measuring retained bytes and the free-space slope, and by actually starting the rebuild from archive rather than assuming it is possible.
+
+### Failover did not happen even though a healthy replica exists
+
+Get the controller's stated reason before promoting anything: lag cap, history or timeline mismatch, lost quorum in the lease store, or fencing that could not be confirmed are four different incidents with different fixes, and only the first two look like a broken controller. A one-megabyte lag cap refusing to promote a follower that is a terabyte behind is the configuration protecting acknowledged writes. Once eligibility is settled, the work is confirming the old epoch stopped accepting writes on every ingress path, including direct-address scheduled jobs that never consult routing. Do not force a promotion to end the page, do not widen the lag cap and promote in the same breath, and do not restart the old primary before fencing: each of those converts a recoverable outage into permanent divergence. Verify by recording which candidate was eligible on ancestry and lag, and by observing zero accepted writes attributed to the previous epoch after routing converges.
+
+### After a failover an application read a value it had already overwritten
+
+This is a violated session contract: routing moved to a node whose applied position does not dominate the coordinate the client last saw, so the read is legal for that node and wrong for that user. Decide per operation class rather than globally: reads that must follow a write wait on the applied coordinate or go to the writable epoch, and reads that tolerate staleness get an explicit bound plus a visible fallback. The evidence to keep is the token, the route's position at read time, and whether the wait expired, because without those three the report is indistinguishable from a lost write. Do not insert fixed client-side sleeps, and do not relax freshness for every reader because one flow cannot absorb the wait; that turns an incident into an unannounced product change. Verify by replaying the recorded token against the current route in a test run and confirming the fallback returns a declared "state unavailable" instead of a silently stale value.
+
+---
+
 ## Migration and Verification
 
 ### Introducing a follower
@@ -417,6 +493,8 @@ For each deployment, write down:
 - PostgreSQL, [Log-Shipping Standby Servers](https://www.postgresql.org/docs/current/warm-standby.html), current documentation.
 - MySQL, [Replication](https://dev.mysql.com/doc/refman/8.4/en/replication.html), 8.4 Reference Manual.
 - MySQL, [Replication with Global Transaction Identifiers](https://dev.mysql.com/doc/refman/8.4/en/replication-gtids.html), 8.4 Reference Manual.
+- PostgreSQL, [Write Ahead Log](https://www.postgresql.org/docs/current/runtime-config-wal.html), current documentation.
+- PostgreSQL, [Replication](https://www.postgresql.org/docs/current/runtime-config-replication.html), current documentation.
 - Diego Ongaro and John Ousterhout, [*In Search of an Understandable Consensus Algorithm*](https://raft.github.io/raft.pdf), USENIX ATC, 2014.
 - Barbara Liskov and James Cowling, [*Viewstamped Replication Revisited*](https://pmg.csail.mit.edu/papers/vr-revisited.pdf), 2012.
 - M. R. Eltabakh et al., [*Zephyr: Live Migration in Shared Nothing Databases for Elastic Cloud Platforms*](https://www.cs.purdue.edu/homes/csjgwang/pubs/SIGMOD2011_Zephyr.pdf), SIGMOD, 2011.

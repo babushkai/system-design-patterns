@@ -186,6 +186,63 @@ Store stack traces and raw exceptions separately with redaction; they may contai
 
 Discard is an explicit terminal outcome with reason, authority, affected business identity, and reconciliation. TTL expiry is not silent discard. Before expiry, notify owner and apply policy: archive, extend under approval, repair, or record irreversible loss.
 
+## Product Knob Map
+
+A quarantine is configured in two places and only one of them is the dead-letter queue: the delivery path decides when a record is classified as poison, while the quarantine's own retention decides how long anyone has to do something about it. Teams audit the first and inherit the second from a template. Read both ends off the running platform before trusting this table, because the defaults were chosen for queues that were never meant to hold evidence.
+
+| Product and scope | Knob | Invariant it enforces | Default and how it misleads |
+| --- | --- | --- | --- |
+| Amazon SQS source queue with a redrive policy | `maxReceiveCount`, `VisibilityTimeout` | a record leaves the hot path after a bounded number of deliveries | default ten, and it counts retrievals rather than failures, so a handler whose visibility timeout expires is charged a delivery it never completed and a "retry three times" policy becomes one retry under latency. Set visibility above p99 handler duration before trusting the number, and read `ApproximateReceiveCount` off a real message instead of inferring it. |
+| Amazon SQS dead-letter queue | `MessageRetentionPeriod` on the quarantine itself | evidence outlives the investigation window | a dead-letter queue is an ordinary queue and inherits the four-day default, so Friday's poison record is deleted Tuesday with no error emitted anywhere. Fourteen days is the maximum, so any retention objective longer than two weeks needs exported evidence in durable storage. Derive the value from oldest-untriaged age plus holiday cover, never from the source queue's value. |
+| Amazon SQS redrive | `MaxNumberOfMessagesPerSecond`, `CancelMessageMoveTask` | replay runs at a declared rate and stops when told | left blank, the service chooses the rate from backlog size and varies it while the task runs; 500 messages/s is the ceiling you can declare. Only one movement task per queue is active at a time, so a second operator's task fails instead of queueing. Cancelling does not revert messages already moved, so the destination holds an unmarked partial set and consumer-side idempotency still has to hold. |
+| RabbitMQ quorum queue | `x-delivery-limit` with `x-dead-letter-exchange` | poison is removed after a bounded number of acknowledgement attempts | delivery limits exist only on quorum queues; a classic queue dead-letters on reject, TTL expiry, and max-length eviction but never counts attempts, so an infinite requeue loop looks like a healthy queue. Changing queue type silently changes the quarantine contract. |
+| RabbitMQ dead-letter exchange | `default-requeue-rejected`, `x-first-death-reason` headers | the failure cause survives the hop into quarantine | requeue-on-reject defaults on, so a nack without explicit requeue=false returns the record to the same consumer forever. TTL expiry and max-length eviction land in the same queue as failures, so "dead-lettered" is not a synonym for "failed" and triage must read the death header. |
+| Google Cloud Pub/Sub subscription | `deadLetterPolicy.maxDeliveryAttempts` | exhausted deliveries stop consuming subscriber budget | between five and one hundred, default five, counted as one plus NACKs plus ack-deadline overruns, and honored on a best-effort basis: the tracked count can reset to zero, most often on pull subscriptions with inactive subscribers, so poison is delivered well past the maximum. Attempts are counted only when the Pub/Sub service account holds publisher and subscriber roles on the dead-letter topic, granted after that topic exists; without them nothing forwards and no error surfaces. |
+| Google Cloud Pub/Sub dead-letter topic | `messageRetentionDuration` plus a subscription attached to it | quarantined payloads survive long enough to be triaged | topic retention is unset by default, which hands the decision to subscriptions; the subscription you attach defaults to seven days measured from publish time, bounded between ten minutes and thirty-one days. A message published to a topic with no subscription is dropped, so an unattached dead-letter topic is a silent delete. Forwarding wraps the payload in a new message with new identity, so replay means republishing and the original `messageId` is already gone. |
+| AWS Lambda async invocations and event-source mappings | `MaximumRetryAttempts`, `MaximumRecordAgeInSeconds`, `OnFailure` destination | a failed record survives retry exhaustion somewhere queryable | for stream sources both limits default to -1, infinite, so the default policy retries a poison batch forever and blocks its shard instead of dead-lettering it, and destinations fire only for records those limits discard. The quiet trap is reserved concurrency set to zero: the poller idles, source backlog grows, and the function reports zero failures while nothing reaches the destination. |
+| Azure Service Bus queue or subscription | `MaxDeliveryCount`, `DefaultMessageTimeToLive` | poison leaves the delivery path after bounded redelivery | default ten, incremented by an abandoned message or an expired lock rather than by a processing failure, and the behavior cannot be disabled, only raised. Expiry-driven and failure-driven quarantining land in the same place with different reason codes, so triage has to read the reason. The quarantine is a sub-queue of the entity, so recreating that entity in infrastructure code discards it while active-depth metrics stay flat. |
+| Kafka Streams / Kafka Connect | `default.deserialization.exception.handler`; `errors.tolerance` plus dead-letter topic settings | one unreadable record cannot halt a topology or connector | the default fail handler stops the task, which is usually right. Log-and-continue and `errors.tolerance=all` advance the committed position after writing the dead-letter copy, so replay needs an explicit offset reset or a re-import from the dead-letter topic, and that topic is the only surviving copy of payload and headers once source retention moves on. Context headers are copied only when explicitly enabled. |
+
+```bash
+# read-only: prove what both ends of the path will actually do, before the incident
+aws sqs get-queue-attributes --queue-url "$SOURCE_URL" \
+  --attribute-names RedrivePolicy MessageRetentionPeriod VisibilityTimeout
+aws sqs get-queue-attributes --queue-url "$DLQ_URL" \
+  --attribute-names MessageRetentionPeriod ApproximateNumberOfMessages \
+  --query 'Attributes.{retention:MessageRetentionPeriod,depth:ApproximateNumberOfMessages}'
+# deliveries already spent by what sits in quarantine; zero visibility hides nothing
+aws sqs receive-message --queue-url "$DLQ_URL" --max-number-of-messages 10 \
+  --visibility-timeout 0 --message-attribute-names All \
+  --query 'Messages[].{id:MessageId,deaths:MessageAttributes."aws:deadLetterQueue.RedriveCount".StringValue}'
+# redrive is rate-limited and cancellable; the last ten tasks are the audit trail
+aws sqs list-message-move-tasks --source-arn "$DLQ_ARN" --max-results 10 \
+  --query 'MessageMoveTasks[].{status:Status,rate:MaxNumberOfMessagesPerSecond,moved:NumMovedMessages}'
+
+rabbitmqctl list_queues name type arguments policy
+rabbitmqctl list_policies -p orders
+
+gcloud pubsub subscriptions describe orders-worker \
+  --format 'value(topic,deadLetterPolicy,ackDeadlineSeconds,messageRetentionDuration)'
+gcloud pubsub topics describe orders-dlq --format 'value(name,messageRetentionDuration)'
+# attempts are counted only if the service account holds both roles on the dead-letter topic
+gcloud pubsub topics get-iam-policy orders-dlq \
+  --query 'bindings[?role!=null].{role:role,members:members}'
+
+aws lambda get-function --function-name billing-provision \
+  --query 'Configuration.{reserved:ReservedConcurrentExecutions,state:State}'
+aws lambda get-function-event-invoke-config --function-name billing-provision \
+  --query '{retries:MaximumRetryAttempts,age:MaximumRecordAgeInSeconds,onFailure:DestinationConfig.OnFailure.Destination}'
+aws lambda list-event-source-mappings --function-name billing-provision \
+  --query 'EventSourceMappings[].{state:State,retries:MaximumRetryAttempts,age:MaximumRecordAgeInSeconds,failureDestination:DestinationConfig.OnFailure.Destination}'
+
+curl -s "$CONNECT_BASE/connectors/orders-sink/config" \
+  | jq '{tolerance:."errors.tolerance",dlq:."errors.deadletterqueue.topic.name",retry:."errors.retry.timeout"}'
+kafka-get-offsets.sh --bootstrap-server "$BROKERS" --topic orders-dlq
+
+az servicebus queue show --name orders --namespace-name "$NS" \
+  --query '{maxDelivery:maxDeliveryCount,ttl:defaultMessageTimeToLive,deadLetters:countDetails.deadLetterMessageCount}'
+```
+
 ## Capacity and Cost Model
 
 Illustrative platform:
@@ -229,6 +286,30 @@ Alert on rate change and age, not merely “DLQ non-empty.” A nonempty quarant
 
 Runbooks cover schema poison, bad release cohort, external ambiguity, ordered-key blockage, missing payload/key, quarantine-store outage, privacy deletion, and runaway redrive.
 
+## Incident Playbook
+
+Quarantine incidents are about evidence more often than throughput: the records are already out of the hot path, and the only question is whether what survives can explain them and be replayed safely. Establish what is provably recoverable before touching a redrive tool, because the irreversible actions in this subsystem are usually taken by an operator trying to make a dashboard go green.
+
+### The dead-letter queue is non-empty and nobody owns it
+
+Read age and fingerprint cardinality before depth: ten thousand records sharing one error class seen in the last hour is a release, while forty records across twenty classes with the oldest nine days old is an ownership failure. Route by error class and tenant to a named owner, and if no route matches then the missing route is the defect rather than the messages being defective. Where the platform exposes no owner field, attach ownership in the quarantine record so it survives redeliveries. Verify by watching oldest-unowned-age return to zero and confirming every active error class resolves to a team. Do not purge to silence the page, and do not alert on non-empty depth as the SLO: a flat nonzero queue holding one unowned week-old financial event is worse than a large spike someone is actively working.
+
+### Records bounce between the main queue and the quarantine
+
+The signature is a redrive that completes and then refills the dead-letter queue at nearly the same count within minutes, with redelivery counters climbing monotonically across passes. That means the poison condition is still present (unrolled release, missing schema adapter, degraded dependency) or the redrive re-entered with fresh identities so dedup cannot see the earlier attempts. Stop redriving, fix the consumer or isolate the cohort, then prove it on a deterministic canary of ten records and watch attempt counters stay flat. Do not raise `maxReceiveCount` or delivery limits to give the record "a few more chances", and do not strip message attributes so it looks new: both convert a bounded quarantine into an unbounded loop that consumes worker capacity indefinitely.
+
+### A bad release is dead-lettering most of traffic
+
+Treat this as one incident with millions of rows rather than millions of incidents, and confirm correlation first: same release digest, same normalized fingerprint, first-seen timestamp aligned to the deploy time. Open the circuit or pause delivery for that consumer cohort, roll the release back, and preserve source retention and checkpoints so replay reads immutable retained history instead of copies; record a range manifest of partitions, position bounds, and checksums rather than materializing payloads. After rollback, replay one bounded generation under an explicit rate budget and confirm quarantine ratio returns to baseline. Do not let the platform copy twenty-five million records into quarantine just because the redrive policy says to: you will spend the incident on storage and index pressure, and the copies are worse evidence than the retained source, which still carries original position and ordering.
+
+### A redrive is saturating downstream or duplicating effects
+
+Judge a running move by destination saturation and duplicate-detection counters, not by how fast the quarantine is draining; a fast drain into a saturated consumer is the failure mode, not progress. Stop conditions in the manifest exist to be triggered, so cancel early rather than negotiating. Before resuming at a smaller budget, check whether quarantined records have outlived the consumer inbox retention that made replay idempotent: past that horizon a redrive is a new effect rather than a safe retry and needs reconciliation against downstream state first. Verify by sampling entity state against the authoritative source instead of counting move successes. Do not finish a move because it is already half done; a partial redrive is recoverable, while a complete redrive of identity-expired records produces duplicate effects that no later run can undo.
+
+### A record can never be repaired
+
+The evidence is gone rather than the will: payload reference expired, encryption key destroyed, schema registry version pruned, or the upstream system that could reissue it decommissioned. Ask the domain whether the business intent still has to happen; if it does, reconstruct from the authoritative source as a new event with explicit causal lineage instead of pretending to replay the original. If reconstruction is impossible, record irreversible loss with named authority, affected business identity, and reconciliation of dependent totals while the inputs are still legible. Verify by confirming the loss is visible wherever the successful equivalent would have been counted, so downstream sums reconcile rather than merely differing. Do not let TTL force the decision into a silent DISCARDED: expiry without authority and a reconciliation note is how a handful of lost events becomes an unexplainable month-end difference.
+
 ## Security and Isolation
 
 Separate permissions to quarantine automatically, inspect metadata, reveal payload, upload repair transforms, approve redrive, change destination/rate, discard, and alter retention. Use least privilege and immutable audit.
@@ -270,6 +351,12 @@ Before enabling a dead-letter path:
 - [Apache Kafka Connect: Error Handling and Dead Letter Queues](https://kafka.apache.org/documentation/#connectconfigs_errors.deadletterqueue.topic.name)
 - [CloudEvents Specification](https://github.com/cloudevents/spec)
 - [NIST SP 800-61 Rev. 3: Incident Response Recommendations and Considerations](https://csrc.nist.gov/pubs/sp/800/61/r3/final)
+- [Amazon SQS: StartMessageMoveTask](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_StartMessageMoveTask.html)
+- [RabbitMQ: Quorum Queue Dead Lettering and Delivery Limits](https://www.rabbitmq.com/docs/quorum-queues#dead-lettering)
+- [Apache Kafka Connect: Dead Letter Queue Error Collector](https://kafka.apache.org/documentation/#connect_ref_errorcollector_deadletterqueue)
+- [Google Cloud Pub/Sub: Handling Failures](https://cloud.google.com/pubsub/docs/handling-failures): best-effort attempt counting and the IAM roles that dead-lettering silently depends on
+- [AWS Lambda: Asynchronous Invocation Destinations](https://docs.aws.amazon.com/lambda/latest/dg/invocation-async.html)
+- [Azure Service Bus: Dead-Letter and Other In-Queue Messages](https://learn.microsoft.com/en-us/azure/service-bus-messaging/service-bus-dead-letter-queues)
 
 ---
 

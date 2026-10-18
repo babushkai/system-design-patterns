@@ -171,6 +171,39 @@ Bloom filters can avoid some negative lookups but cannot be the correctness auth
 
 Expiry is a semantic event. After 72 hours, the same ID can repeat unless the effect itself has a durable natural uniqueness constraint. Document this in replay tooling and disaster-recovery plans.
 
+## Product Knob Map
+
+Guarantee settings are spread across producer, broker, coordinator, and the downstream endpoint, and no single product surface shows the composed contract. The rows below name the knob whose default was picked for throughput or compatibility, together with the guarantee it silently decides. Treat every default as unverified until you read it from your own deployment, because managed offerings differ by region and API version.
+
+| Product and scope | Knob | Invariant it enforces | Default and how it misleads |
+| --- | --- | --- | --- |
+| Apache Kafka producer and topic | `acks=all` with `min.insync.replicas` | an acknowledged append survives the loss of any in-sync replica except the last | `min.insync.replicas` defaults to 1, so `acks=all` degrades to "written to the leader" and one broker loss discards acknowledged records. Set both together and assert them at deploy time. |
+| Apache Kafka transactions | `transactional.id`, `transaction.timeout.ms`, `transaction.state.log.replication.factor` | only one live session per transactional identity can commit, and coordinator loss preserves that fact | the internal transaction state topic is functional at a replication factor of 1 with in-sync minimum 1, so an environment sized on defaults can lose coordinator state and fence nothing. Raising the client timeout past the broker ceiling also lengthens how long read-committed consumers wait for a stable watermark. |
+| Apache Kafka consumer group | `enable.auto.commit`, commit ordering | progress advances only over effects that are durable | background time-based commit runs independently of your handler, so a rebalance loses the in-flight window; committing after a batch that partially failed skips the failed members. Commit an explicit contiguous prefix after the effect commits. |
+| Amazon SQS | `VisibilityTimeout`, `RedrivePolicy`, FIFO `ContentBasedDeduplication` | retry is bounded and same-intent retries collapse | FIFO deduplication covers a short identity window, so it removes an immediate retry storm and not a replay issued days later; the redrive counter bounds delivery attempts rather than outcomes, and standard queues suppress only best-effort duplicates. |
+| RabbitMQ classic mirrored versus quorum queues | publisher confirms plus queue type | a confirm means the record survived the failure domains you claim | a confirm on a classic mirrored queue is issued by the primary alone, so failover can drop confirmed publishes; quorum queues confirm after a quorum write. The acknowledgement semantics are identical, which is why the migration looks risk-free in tests. |
+| RabbitMQ AMQP channel transactions | `select_transaction` scope | local consumption and publication commit together | the transaction covers only broker operations on that channel, never your database or external call, and it serialises throughput. Reaching for it usually means the boundary belongs in an outbox. |
+| Amazon SNS and Lambda asynchronous invocation | endpoint retry policy, function event-invoke destinations | a failed delivery is retained somewhere queryable | retries stop at the configured ceiling and, without an on-failure destination, the payload is discarded rather than quarantined; the retry counter is per invocation, so fan-out multiplies it across protocols. |
+| Google Cloud Pub/Sub exactly-once delivery | `enableExactlyOnceDelivery` with ordering keys and storage policy | at most one outstanding delivery per ordering key in a region | the guarantee is scoped per ordering key and per region rather than globally; a global or topic-mapped topic can hold one outstanding delivery in each region, so "exactly once" needs its scope named out loud. It also raises the minimum acknowledge deadline and lowers throughput ceilings. |
+
+```bash
+# read-only: assemble the end-to-end contract from live settings
+kafka-configs.sh --bootstrap-server "$BROKERS" --describe --all \
+  --entity-type topics --entity-name orders \
+  | grep -E 'min.insync.replicas|unclean|retention.ms'
+kafka-topics.sh --bootstrap-server "$BROKERS" --describe \
+  --topic __transaction_state | tr ',' '\n' | grep -E 'ReplicationFactor|Isr'
+rg -n 'acks|enable\.idempotence|transactional\.id|delivery\.timeout\.ms|enable\.auto\.commit' config/
+aws sqs get-queue-attributes --queue-url "$QUEUE_URL" \
+  --attribute-names VisibilityTimeout RedrivePolicy FifoQueue ContentBasedDeduplication
+aws lambda get-function-event-invoke-config --function-name charges \
+  --query '{retries:MaximumRetryAttempts,maxAge:MaximumEventAgeInSeconds,destinations:DestinationConfig}'
+gcloud pubsub subscriptions describe billing-worker \
+  --format 'config(enableMessageOrdering,exactlyOnceDeliveryConfig,retryPolicy,deadLetterPolicy)'
+psql -c "SELECT min(received_at) AS oldest_identity,
+                now() - max(retire_before) AS horizon_slack FROM inbox"
+```
+
 ## Capacity and Latency Model
 
 Illustrative broker path:
@@ -208,6 +241,30 @@ Track each boundary:
 - dedup storage bytes, oldest identity, expiry, and replay horizon mismatch.
 
 Runbooks cover producer timeout ambiguity, broker data loss, replay beyond dedup horizon, downstream idempotency outage, stuck broker transaction, and inconsistent disaster restore.
+
+## Incident Playbook
+
+Guarantee incidents are rarely caused by a broker silently dropping data; they are caused by two components holding different ideas of what an acknowledgement meant. Each entry below names the evidence that closes that ambiguity first, because the tempting action in these moments usually destroys the evidence needed for repair.
+
+### Effects repeated after failover or restore
+
+Compare recovery points before you compare code: the broker archive watermark, the inbox's oldest retained identity, and the replay start position. Repetition requires that replay began below the dedup floor, which happens when components are restored independently even though every individual restore reported success. Contain by pausing consumers, enumerating affected effects from natural business references, reconciling the overlap window, then advancing the checkpoint deliberately through it. Do not truncate the inbox to make redelivery converge: that turns a bounded duplicate window into unbounded uncertainty about which effects ever ran, and removes the only evidence reconciliation had.
+
+### A publish timed out and you do not know whether it landed
+
+Treat the timeout as a durable `UNKNOWN` state rather than a failure to retry, then resolve it by identity: look the stable event or intent id up in the broker, in the relay position, or at the downstream status endpoint. Retry with the same identity only when the lookup is unavailable or inconclusive, and bound that loop with an absolute deadline so one ambiguous record cannot hold a partition hostage. Escalate to reconciliation when the lookup itself is down. Do not mint a fresh identity to "get it through", because two logical intents are exactly what the business contract forbids, and the second copy surfaces in a finance review rather than in your dashboards.
+
+### A transactional pipeline stalls after a coordinator change
+
+Read transactional state first: open transaction age against `transaction.timeout.ms`, producer fencing errors, and whether the coordinator's own state topic has replication and in-sync minimums worth trusting. A stuck transaction holds the stable watermark back, so consumers look starved rather than slow; a fenced zombie writer appears as client churn to anyone reading only consumer logs. Contain by aborting the specific transactional identity rather than raising the timeout globally, since a longer timeout silently adds latency for every read-committed consumer. Do not restart consumers repeatedly hoping for a clean election; record the coordinator epoch and member id first, then verify healing by watching the stable watermark advance while open-transaction bytes fall.
+
+### Redelivery climbs in lockstep with throughput
+
+A duplicate ratio that tracks volume points at lease arithmetic rather than a poison message: compare the acknowledgement deadline or visibility timeout against handler p99 including queueing behind a busy dependency, and check whether batch commits advance past individual failures. Contain by shrinking the unit of work per poll and extending the lease for the affected class only, since global changes reach unrelated consumers that were healthy. Verify by watching redelivery rate fall while completion rate holds, not by watching lag alone. Do not disable retries or restart the group from the newest position as relief: that discards retained history and reappears as missing work instead of duplicate work.
+
+### Downstream idempotency expires before your replay horizon does
+
+Put both horizons in one view: broker retention plus maximum acceptable lag on one side, and the partner API's key window or your inbox partition's expiry on the other. The mismatch is silent until the incident you most need it for, because a restored region replays further back than a live system ever chooses to. Prefer a natural unique constraint in the effect store, which outlives any TTL; otherwise route the affected window to quarantine and reconcile against the partner's own statement of record. Do not treat a longer dedup TTL as the whole fix while the replay horizon still exceeds the partner's retention: that moves the mismatch instead of closing it, and the next restore repeats it at greater scale.
 
 ## Security and Abuse Resistance
 
@@ -250,6 +307,9 @@ Use at-most-once only when loss is cheaper than duplication. Use at-least-once w
 - [RabbitMQ: Consumer Acknowledgements and Publisher Confirms](https://www.rabbitmq.com/docs/confirms)
 - [Amazon SQS: At-Least-Once Delivery](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/standard-queues-at-least-once-delivery.html)
 - [Martin Kleppmann et al.: Online Event Processing: Achieving Consistency Where Distributed Transactions Have Failed](https://doi.org/10.1145/3329672.3329679)
+- [Google Cloud Pub/Sub: Exactly-Once Delivery](https://cloud.google.com/pubsub/docs/exactly-once-delivery)
+- [AWS Lambda: Asynchronous Invocation and Failure Destinations](https://docs.aws.amazon.com/lambda/latest/dg/invocation-async.html)
+- [Amazon SQS: Idempotency Tokens](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/using-idempotency-tokens.html)
 ---
 
 ## Related Chapters

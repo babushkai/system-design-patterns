@@ -171,6 +171,40 @@ Producer repartitioning is harder because moving a key between sequencers can in
 
 Dual-producing without a barrier creates two incomparable total orders. Migration testing must include delayed producers holding the old map.
 
+## Product Knob Map
+
+Order is produced by client configuration more often than by broker configuration, which is why an ordering incident is usually a diff of effective producer settings rather than a server log review. The knobs below are the ones that decide whether a sequence exists at all, who may assign it, and what happens to a key's history when topology changes. Read them off the running clients and brokers before trusting this table or a design document.
+
+| Product and scope | Knob | Invariant it enforces | Default and how it misleads |
+| --- | --- | --- | --- |
+| Apache Kafka producer, keyed records | `partitioner.adaptive.partitioning.enable` | records for one key are appended in the order the application produced them | enabled. Batching across partitions raises throughput and can reorder same-key records when retries are in flight; disable it wherever per-key order is the contract, accepting the throughput cost explicitly. |
+| Apache Kafka producer | `enable.idempotence` with `acks` and `max.in.flight.requests.per.connection` | a retried batch cannot duplicate or reorder within a producer session | idempotence requires `acks=all`; an override to `acks=1` disables it without a startup error in some clients, so a latency tuning change silently removes the retry-ordering guarantee. Up to five in-flight requests stay ordered only while idempotent. |
+| Apache Kafka consumer | `isolation.level` | consumers apply committed transaction prefixes only | `read_committed`. Switching to `read_uncommitted` for latency exposes aborted and not-yet-committed records, which appears downstream as phantom state rather than as a config error. |
+| Apache Kafka topic and broker | `min.insync.replicas`, `unclean.leader.election.enable` | an accepted prefix is never truncated away by a leader change | `min.insync.replicas` defaults to 1, and unclean election is off in current releases but shipped on by default for years, so an inherited broker config can keep the lossy behavior: assert it per cluster rather than assuming. Enabling it for availability discards the tail that consumers already applied, so the sequence shrinks and every consumer must treat the gap as history loss. |
+| Amazon SQS FIFO queue | `MessageGroupId`, `FIFOThroughputLimit` | one group is processed by at most one consumer at a time in receive order | throughput limit defaults to per-queue, which serializes unrelated groups behind the busiest key; sequence numbers are monotonic but explicitly not gap-free, so contiguity checks produce false alarms. |
+| Google Cloud Pub/Sub subscription | `enableMessageOrdering`, exactly-once delivery | records sharing an ordering key are delivered in publish order to one attempt at a time | off by default, and it applies per storage partition rather than globally. A publisher that omits the ordering key on some messages gets unordered best-effort delivery for exactly those messages. Ordered delivery also raises the minimum acknowledge deadline. |
+| Amazon Kinesis stream after a split | shard parent/child graph, `SequenceNumberForOrdering` | a partition key's history is read oldest shard first | the service preserves order across a split only if the consumer traverses parent to child itself. Nothing stops a parallel reader from starting the child shard while the parent still has records for that key. |
+| RabbitMQ quorum queue / NATS JetStream consumer | single active consumer; `max_ack_pending` | one lane applies a scope without interleaved redelivery | single active consumer is off by default and does not create per-key order across publishers; an in-flight acknowledgement window above one means redelivered records can be applied after newer ones. |
+| PostgreSQL logical decoding / Debezium | one replication slot per publication | the change stream carries one source log sequence number order | a single slot is one ordered lane, so throughput is bounded by that lane and its restart position; snapshot-phase rows and streaming-phase changes need explicit sequencing or the initial load lands after the changes it precedes. |
+
+```bash
+# read-only: prove which ordering contract the deployment is actually running
+kafka-configs.sh --bootstrap-server "$BROKERS" --describe --all \
+  --entity-type topics --entity-name orders \
+  | grep -E 'min.insync.replicas|cleanup.policy|unclean'
+rg -n 'enable\.idempotence|acks|partitioner\.adaptive|max\.in\.flight' config/producer.properties
+aws sqs get-queue-attributes --queue-url "$QUEUE_URL" \
+  --attribute-names FifoQueue ContentBasedDeduplication FIFOThroughputLimit \
+    MessageGroupId DeduplicationScope
+gcloud pubsub subscriptions describe orders-auditor \
+  --format 'value(enableMessageOrdering,exactlyOnceDeliveryConfig.enableExactlyOnceDelivery)'
+aws kinesis list-shards --stream-name orders \
+  --query 'Shards[].{id:ShardId,parent:ParentShardId,range:[SequenceNumberRange.StartingSequenceNumber,SequenceNumberRange.EndingSequenceNumber]}'
+psql -c "SELECT slot_name, restart_lsn, confirmed_flush_lsn,
+                pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)) AS retained
+         FROM pg_replication_slots"
+```
+
 ## Capacity and Cost Model
 
 Illustrative ordered stream:
@@ -208,6 +242,30 @@ Track by ordered scope, partition, writer epoch, assignment, and consumer:
 - batch completion latency and open transaction bytes.
 
 Runbooks cover stale producer epoch, permanent gap, hot key, consumer checkpoint regression, incomplete batch, and reshard rollback. Logs retain event ID, scope, epoch, sequence, partition, assignment generation, source version, and trace correlation without exposing payloads.
+
+## Incident Playbook
+
+Each entry below starts from the evidence that separates the plausible causes, because ordering symptoms are heavily aliased: a stale writer, a lost prefix, and a config regression all look like "old data came back". Order matters while a strict scope is blocked, since every minute of waiting widens the reorder buffer and the eventual repair.
+
+### A gap will not close
+
+Classify whether the missing sequence should exist before you fetch anything: publisher abort, an attribute filter that skipped it, retention that already reclaimed it, and a genuinely delayed delivery all present as the same blocked prefix. Compare the requested range against the log start offset or stream first position; if the missing record is below the retained floor, replay cannot help and only an authoritative source snapshot plus suffix can. Keep applying nothing later in that scope while you decide, then record the outcome as a named policy (repaired, rebuilt, or skipped with approval). Do not "wait thirty seconds and continue" on a ledger scope, and do not let a generic retry loop become the gap policy: it converts a bounded repair into silent eventual divergence that no test reproduces.
+
+### State for one key moved backward
+
+Read the epoch and routing generation attached to the two writes before touching application logic. Two healthy partitions each internally ordered is the signature of a cutover without a barrier: the key was writable under two assignment generations at once. Confirm by checking whether producers hold stale maps (routing-generation age) and whether consumers accepted records whose epoch is older than the current authoritative one. Contain by fencing the old generation at acceptance so late writes are rejected rather than applied, then repair from the authoritative source version. Do not "fix" it by rewriting sequence numbers or bumping a counter to outrun the stale write; that destroys the audit trail that tells you which consumer lane leaked, and the next reshard repeats the incident.
+
+### Reorder buffer grows while throughput looks healthy
+
+Separate one wedged scope from broad reordering by charting buffered bytes against the oldest gap age per scope. A single high-value entity pinned at a nonzero gap with everything else draining is a routing or sequencer problem for that key; uniform growth across scopes usually means a producer far ahead of a slow consumer lane, or a batch/transaction marker that never arrives. Check hot-key share next: if one key owns most of the serial demand, buffering more is not a fix because the lane cannot drain faster than its sequencer. Decide explicitly among coalescing state-setting events, splitting the invariant into subkeys, or admitting less work for that key. Do not raise the buffer ceiling as the response; it moves the failure from a stall to an out-of-memory kill and hides the scope that is blocked.
+
+### Reordering appeared after a client or config change
+
+Diff effective producer configuration against the previous deployment rather than reading the intended values: idempotence disabled by an `acks` override, adaptive partitioning enabled, retries raised above the in-flight ceiling, or a library upgrade that changed the default partitioner are all ordering regressions with healthy-looking brokers. Prove it by replaying one keyed session and comparing append order to production order, then roll the config back before adding consumer-side defenses. Verify recovery by watching duplicate-and-reorder counters return to baseline on new traffic only, not over the whole window. Do not add a downstream sort or timestamp-based reconciliation to absorb it; timestamps are not causality, and you will be carrying that reconciler after the config is fixed.
+
+### A reshard left two readable positions for one key
+
+Establish the pivot explicitly: the sealed last position in the old assignment and the first epoch/position in the new one, then confirm which consumers can still observe both. For shard-graph products, walk parent to child per partition key rather than per shard, and gate the child on the parent reaching its end iterator. Translate cursors using retained metadata for as long as any consumer may replay across the boundary; if translation is gone, rebuild affected state from a snapshot instead of stitching two orders. Do not dual-produce to both sides "until consumers catch up": that creates two incomparable total orders and guarantees every consumer picks a different one under failure.
 
 ## Security and Integrity
 
@@ -253,6 +311,9 @@ Then answer:
 - [Apache Kafka: Message Delivery and Ordering](https://kafka.apache.org/documentation/#semantics)
 - [Apache Kafka Protocol: Control Plane and Leader Epochs](https://kafka.apache.org/protocol.html)
 - [CloudEvents Specification](https://github.com/cloudevents/spec)
+- [Apache Kafka: Producer Configuration](https://kafka.apache.org/documentation/#producerconfigs)
+- [Google Cloud Pub/Sub: Message Ordering](https://cloud.google.com/pubsub/docs/ordering)
+- [Amazon Kinesis Data Streams: Completing a Resharding Action](https://docs.aws.amazon.com/streams/latest/dev/kinesis-using-sdk-java-after-resharding.html)
 
 ---
 

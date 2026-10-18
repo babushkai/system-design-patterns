@@ -187,6 +187,35 @@ Relay changes use generations:
 
 Changing partition keys requires the barrier protocol in [Message Ordering](03-message-ordering.md).
 
+## Product Knob Map
+
+An outbox is small enough that its settings look incidental, and they are not: they decide whether an unpublished intent can still be published after a stall, and whether a stalled consumer can damage the primary. The knobs below are grouped by the failure each one bounds. Read them from the live instance before trusting a runbook written for another version.
+
+| Product and scope | Knob | Invariant it enforces | Default and how it misleads |
+| --- | --- | --- | --- |
+| PostgreSQL logical replication slot | `max_slot_wal_keep_size`, `max_replication_slots` | a stalled reader cannot silently consume the primary's disk | unbounded by default, so a connector down for days pins WAL until the primary fills; set a ceiling and accept that exceeding it invalidates the slot, which is a correctness event requiring backfill rather than a warning to silence. |
+| Debezium PostgreSQL connector | `slot.drop.on.stop`, `snapshot.mode`, publication auto-create behaviour | restarting a relay resumes from its source position instead of rewriting history | dropping the slot on shutdown turns a routine redeploy into a fresh snapshot, and a table created after the publication was defined may not be published at all, so events for the new aggregate simply never appear while the connector reports running. |
+| PostgreSQL polling relay | partial index on eligibility plus `SKIP LOCKED`, `idle_in_transaction_session_timeout` | claim cost stays bounded and no transaction outlives its network call | without a partial index every poll scans published rows; holding the transaction open across broker I/O pins the oldest xmin, so autovacuum cannot reclaim deleted rows and, sustained long enough, drives the cluster toward xid wraparound. Claim, commit, then do network I/O. |
+| Apache Kafka producer used as the relay | `max.block.ms`, `buffer.memory`, `delivery.timeout.ms`, `linger.ms` | broker backpressure surfaces as relay latency, not lost or unbounded blocking work | a full buffer blocks the caller for up to `max.block.ms`, which is harmless only if that call is outside a database transaction; `delivery.timeout.ms` ends retries silently, so the relay must record the failure rather than assume eventual success. |
+| Kafka Connect or similar relay runtime | `errors.tolerance`, `errors.limit`, dead-letter topic settings | a rejected record is retained with its source position | tolerance defaults to none, so one bad record parks the task and everything behind it; teams respond by enabling tolerance without a dead-letter topic, which converts a loud stall into records that vanish with only a log line as evidence. |
+| DynamoDB Streams or similar time-bounded change feeds | stream retention horizon (a fixed 24 hours for DynamoDB Streams) | the relay can resume from any outage shorter than the recovery objective | the feed expires on a clock regardless of your consumer's health, so an outage past the horizon means a full authoritative rescan, not a resume. A relay designed as "just restart it" fails quietly exactly once per incident. |
+| Cleanup job against the outbox table or partitions | delete batch size, partition detach-and-drop, vacuum/autovacuum settings, undo history limits | reclamation never competes with production traffic for the primary | a single large `DELETE` by age produces a WAL and lock burst, replica lag spike, and purge/vacuum backlog that outlasts the incident; time-range partitions detached concurrently are what make reclamation boring. Age is also the wrong predicate: it says nothing about publication evidence. |
+| Inbox table on the consumer side | unique `(consumer_name, event_id)` with request digest, `ON CONFLICT` handling, time-partitioned retention | a duplicate proves a committed local transaction and never masks a different payload | `ON CONFLICT DO NOTHING` returns "no row inserted" for every conflict including same-id-different-content, so bind and compare a digest instead of trusting the absence of an error. Dropping old inbox partitions before the redrive and disaster-recovery horizon reopens duplicates that were already considered settled. |
+
+```bash
+# read-only: can this outbox still honor its recovery window?
+psql "$SOURCE_DB" -c "SELECT slot_name, active, restart_lsn,
+                             pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)) AS retained
+                      FROM pg_replication_slots"
+psql "$SOURCE_DB" -c "SELECT max(age(datfrozenxid)) AS max_xid_age FROM pg_database"
+psql "$SOURCE_DB" -c "SELECT status, count(*) AS rows, now() - min(created_at) AS oldest
+                      FROM outbox GROUP BY status ORDER BY oldest DESC"
+psql "$SOURCE_DB" -c "SELECT indexdef FROM pg_indexes WHERE tablename = 'outbox'"
+curl -s "$KAFKA_CONNECT/connectors/orders-outbox/config" \
+  | jq '{tolerance:."errors.tolerance", dlq:."errors.deadletterqueue.topic.name", limit:."errors.limit"}'
+mysql -e "SHOW ENGINE INNODB STATUS\G" | grep -i 'History list length'   # purge backlog
+```
+
 ## Capacity and Cost Model
 
 Illustrative producer database:
@@ -227,6 +256,30 @@ Track by source DB/shard, destination, relay generation, event type, consumer, a
 - claim-check missing/orphaned objects and deletion progress.
 
 Runbooks cover relay outage, broker ambiguity, database overload, stuck claims, CDC slot/log loss, schema rejection, duplicate storm, cleanup error, and replay beyond inbox retention.
+
+## Incident Playbook
+
+Outbox incidents split into two very different problems: unpublished intent that still exists somewhere recoverable, and intent whose only evidence has been reclaimed. Determine which one you have before taking any action, because the recovery for the first is a throughput decision and the second is a reconstruction project.
+
+### Backlog grows while the database looks healthy
+
+Check relay concurrency against the ordering constraint before adding workers: per-aggregate order means rows for one aggregate cannot be published out of version order, so a relay that appears idle may be deliberately serialized behind one hot aggregate. Read claim expiries and attempt counts next; expiring leases mean relays are losing work rather than failing to find it, which points at broker latency or lease duration shorter than the p99 publish path. Compute drain time as backlog divided by surplus relay capacity and post the number, then raise concurrency only if the saturated resource is the relay process itself. Do not delete or reset claims to "unstick" rows: leases must expire on their own, and forcing them lets two relays publish the same row while discarding the attempt history you need to explain duplicates downstream.
+
+### A broker outage ended and duplicates appeared
+
+This is the designed outcome of publish-then-mark, so verify the safety net rather than hunting a bug: confirm relay retries preserved `event_id`, that consumers rejected duplicates at the inbox rather than suppressing them with a filter, and that the duplicate rate decays as in-flight rows are marked. Then check the second-order effects, because a duplicate storm still consumes broker, lookup, and transaction capacity even when effects converge. Do not regenerate event identities to "clean" the window: consumers key their own state on those ids, and minting new ones converts an idempotent replay into a fresh set of effects, which is the one outcome this design exists to prevent.
+
+### A CDC slot was lost or invalidated and a window is missing
+
+Stop every downstream claim of completeness first, then bound the hole precisely: last committed source position plus timestamp, current position, and whether outbox rows for the gap still exist. If they do, republish through a controlled backfill with the original deterministic ids; if they do not, reconstruct from the authoritative domain or event store, because a new slot started at the current log position publishes the future and silently abandons the past. Announce the affected range to consumers so their reconciliation can act on it. Do not treat "connector is green again" as recovery, and do not let a re-snapshot stand in for the missing window without checking whether consumers can absorb historical rows: re-reading current table state emits one event per row today, which is neither the deleted set nor its ordering.
+
+### Primary storage is filling although replication reports healthy
+
+Look for an inactive or orphaned slot and retained WAL rather than data growth; a slot that is retained but not consumed keeps the log alive indefinitely and reports as active replication to anyone reading only connector status. Compare retained bytes against disk reserve and the configured ceiling, then make an explicit choice: raise the ceiling with storage headroom and an owner, or drop the slot and schedule the backfill it implies. Check transaction ID age at the same time, since slots that hold a xmin also block freeze progress. Do not drop the slot to relieve disk pressure without recording its restart position and confirming archive coverage; you are choosing data loss over downtime, and that trade belongs to an incident decision with a name attached rather than to a disk alarm.
+
+### Cleanup removed rows that were never published
+
+Establish what is provably unpublished: reconcile domain transitions requiring events against broker-recorded identities, since comparing row counts cannot see an omission hidden by a duplicate. Recover from the authoritative store using stable deterministic ids and publish through a bounded backfill with consumer-visible provenance. Then fix the predicate: the cleanup watermark must advance on durable publication evidence plus an expired claim window, never on row age alone. Prevention is the periodic reconciliation itself, run as a scheduled job whose failures page; do not rebuild trust by pausing cleanup permanently, because an unbounded outbox eventually becomes the primary's problem rather than the broker's.
 
 ## Security and Privacy
 
@@ -269,6 +322,9 @@ Choose relay and consumer design by answering:
 - [PostgreSQL: Replication Slots](https://www.postgresql.org/docs/current/warm-standby.html#STREAMING-REPLICATION-SLOTS)
 - [AWS Prescriptive Guidance: Transactional Outbox Pattern](https://docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/transactional-outbox.html)
 - [Martin Kleppmann et al.: Online Event Processing: Achieving Consistency Where Distributed Transactions Have Failed](https://doi.org/10.1145/3329672.3329679)
+- [PostgreSQL: Replication and WAL Retention Settings](https://www.postgresql.org/docs/current/runtime-config-replication.html)
+- [Debezium: PostgreSQL Connector Configuration](https://debezium.io/documentation/reference/stable/connectors/postgresql.html)
+- [Amazon DynamoDB: Change Data Capture with Streams](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Streams.html)
 
 ---
 

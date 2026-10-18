@@ -126,6 +126,52 @@ B was offline longer than tombstone retention. A deletion replicated among the r
 
 A deploys a required new field and emits version 9. B’s applier understands only version 8, quarantines event 501, but incorrectly advances through event 502. B now advertises progress while permanently missing state. Schema gates must precede producer rollout, and sequence frontiers must expose (not skip) the blocked record.
 
+## Product Knob Map
+
+Multi-leader systems fail on settings that each look like a local preference: which operations a stream carries, what identifies a row at the far end, whether a resume point survives a promotion, and which site is allowed to accept writes today. None of them are visible in an architecture diagram, and every one of them has been the root cause of a cross-region divergence review. Read the values from each writable site rather than from the deployment template, because topology changes are exactly when these drift.
+
+| Product and scope | Knob | Invariant it enforces | Default and how it misleads |
+| --- | --- | --- | --- |
+| PostgreSQL publisher | publication `publish`, row filters, column lists | every site receives the operation set its resolver can handle | the documented default publishes all DML, and that default has changed across major versions, so assert the effective list per publication instead of remembering it. A row filter or column list has no effect on `TRUNCATE`: a publication that looks scoped to one tenant still emits table-wide truncation to a subscriber that was never designed to merge it. |
+| PostgreSQL publisher and subscriber | `REPLICA IDENTITY` | an update or delete resolves to a specific row at the far end | the identity is the primary key by default, and a published table whose identity is `NOTHING`, `DEFAULT` without a primary key, or a dropped `USING INDEX` cannot replicate updates or deletes: those operations error on the publisher while inserts keep flowing, so the site silently diverges on exactly the mutations that matter. A non-`FULL` publisher identity requires an identity of the same or fewer columns on the subscriber; `FULL` avoids the error and makes far-end row lookup scan-heavy. |
+| PostgreSQL subscriber | `origin` | a change cannot loop forever through a ring or mesh | default `any` replays changes regardless of where they were written, so an A-to-B-to-A pair forwards each other's rows in perpetuity; `none` accepts only changes with no recorded origin, which breaks the loop but also drops legitimate third-site changes that a mesh expects to arrive. Loop control is a per-subscription decision made once and then invisible. |
+| PostgreSQL subscriber | `slot_name`, `create_slot`, `failover`, `synchronized_standby_slots` | the resume point survives a rename, and survives a promotion | `create_slot` defaults true and the slot name defaults to the subscription name; setting `slot_name` to `NONE` leaves no reservation, so recreation restarts from a chosen position or skips changes. `failover` defaults false, so after the publisher is promoted its logical slots do not exist on the new primary and downstream cannot resume: durability across failover needs the slot synced to standbys and the matching physical slot listed for the logical sender to wait on. |
+| MySQL 8.4 every site | `gtid_mode`, `SOURCE_AUTO_POSITION=1` | a writer can be re-pointed after failover without anyone guessing file coordinates | auto-position needs GTIDs enabled at the source, and the documented migration steps every server through `OFF_PERMISSIVE` then `ON_PERMISSIVE` before `ON`. Assert `@@global.gtid_mode` per site: a fleet that half-completed that procedure produces transactions with and without identifiers, which is precisely the state in which re-pointing a writer loses or duplicates history. |
+| MySQL 8.4 writable sites | `auto_increment_increment`, `auto_increment_offset` | two writable sites never mint the same surrogate key | increment ships at 1, the single-writer assumption. Staggering offsets per site works until a site is added, a backup is promoted, or a restored master resets its counter, and the ceiling is 65535; it also prevents only key collisions, never the logical double-entry that two accepted commands represent. Generating identifiers above the storage layer removes a coupling that has no upside. |
+| MySQL 8.4 non-writable site | `super_read_only` | a site that must not accept writes cannot, including for privileged clients | default off. Setting it on also sets `read_only`, blocks clients holding `SUPER` (unlike plain `read_only`), and still exempts replication applier threads, which is the exact asymmetry a multi-leader topology wants: enforcement lives in the server rather than in routing that a scheduled job can bypass. |
+| MySQL 8.4 source | `rpl_semi_sync_source_wait_point`, `_timeout` | an acknowledged write is visible at a peer before the client is told | `AFTER_SYNC` is the wait point that removes the window where the source has committed and applied but no peer holds the row; with the plugin enabled, a timeout (default 10000 ms) of too few replying replicas switches the source to asynchronous and keeps serving commits, so cross-region durability degrades while latency recovers. `Rpl_semi_sync_source_no_tx` counts the transactions that lost it. |
+| MySQL 8.4 applier | `replica_parallel_workers`, `replica_preserve_commit_order` | cross-site apply is parallel without breaking the order a session token depends on | four workers by default, commit order preserved by default; throughput comes from parallelism while ordering holds, and the two shipped values reflect that. Disabling order preservation to drain a backlog destroys read-your-writes and monotonic reads for every region that trusts this site, and the failure surfaces as another region's bug report rather than an alert here. |
+| MySQL 8.4 source | `binlog_format`, `binlog_row_image` | a downstream consumer can reconstruct both the before and after image | row format and full row images are the defaults, and `binlog_format` is deprecated but still session-settable in 8.4, so one tool's session can change what the next year of history contains. `MINIMAL` shrinks cross-region egress by logging a primary-key equivalent before image and only changed columns, which breaks any consumer needing the before image; `NOBLOB` omits blob columns when unchanged. |
+| CouchDB replicator | `new_edits` on bulk writes, `_local/{id}` replication log | the target stores the revision decided elsewhere and can resume where it stopped | replication always sends `new_edits=false`, so the target records the supplied `_rev` instead of minting a new one; resume depends on that local document's session id and recorded sequences picking the latest common point. A pruned or restored database without its local log re-replicates from the beginning, which is correct behavior that looks like a stall. |
+
+```bash
+# PostgreSQL publisher: what each publication actually carries, and what can identify a row
+psql "$PUB_DSN" -X -c "SELECT pubname, puballtables, pubinsert, pubupdate, pubdelete,
+                              pubtruncate, pubviaroot FROM pg_publication ORDER BY 1;"
+# replica identity per table: d default, p primary key, f full, n nothing
+psql "$PUB_DSN" -X -c "SELECT relname, relreplident FROM pg_class
+                       WHERE relkind = 'r' AND relreplident <> 'p' ORDER BY 1;"
+psql "$PUB_DSN" -X -c "SELECT slot_name, slot_type, active, restart_lsn FROM pg_replication_slots;"
+# subscriber: definition plus live state (columns move between versions, so select star)
+psql "$SUB_DSN" -X -c '\drn+'
+psql "$SUB_DSN" -X -c 'SELECT * FROM pg_stat_subscription;'
+
+# MySQL 8.4, run on every writable site: identity, authority, ordering, and image shape
+mysql -NBe "SELECT @@global.gtid_mode, @@global.auto_increment_increment,
+                   @@global.auto_increment_offset, @@global.read_only,
+                   @@global.super_read_only, @@global.binlog_format,
+                   @@global.binlog_row_image, @@global.replica_parallel_workers,
+                   @@global.replica_preserve_commit_order,
+                   @@global.rpl_semi_sync_source_wait_point,
+                   @@global.rpl_semi_sync_source_timeout\G"
+mysql -NBe "SHOW GLOBAL STATUS LIKE 'Rpl_semi_sync%';"
+mysql -e "SHOW REPLICA STATUS\G" | grep -Ei "Auto_Position|Source_Host|Running|Received|Executed|Last_Error"
+
+# CouchDB: what is replicating now, and where it believes it stopped
+curl -s "$COUCH/_scheduler/jobs" | jq '.jobs[] | {id, database, source, target, doc_failures}'
+curl -s "$COUCH/$DB/_local/$REPLICATION_ID" | jq '{session_id, history: (.history | map(keys) )}'
+```
+
 ## Capacity and Cost Model
 
 Let global accepted mutation rate be `W` events/s, mean encoded event size `B`, writable regions `M`, retained-log time `T`, and mean apply CPU `c_apply` seconds/event. In a direct fan-out design:
@@ -153,6 +199,30 @@ The primary dashboard is a matrix of `origin -> destination`, showing durable-re
 
 Test histories, not just APIs: crash at every local-commit/outbox/inbox/apply boundary; duplicate, drop, delay, and reorder batches; partition one direction only; roll clocks; reuse a restored origin counter; hold a site offline past retention; mix schema and resolver versions; and inject a hot tenant. Property tests should assert convergence after delivering the same event set, replay idempotence, monotonic frontiers, and preservation of each declared business invariant.
 
+## Incident Playbook
+
+Multi-leader incidents rarely announce themselves as replication failures: they arrive as a customer whose accepted edit vanished, a reconciliation report that will not close, or a region whose dashboards are green because every metric it publishes is about itself. The route below assumes the topology is healthy and asks what each site can currently prove. Record the frontier coordinates before any remediation, because most fixes move state in one direction and destroy the only evidence of what was missing.
+
+### An acknowledged write exists in only one region
+
+Compare the origin's durable commit coordinate with that origin's durable-receive frontier at every destination: a gap that never drains for one site means the capture step, not the transport, is losing events, typically because acknowledgement and enqueue are two separate actions and the process died between them. Confirm before acting by taking a row or range digest of the affected window on the origin and matching it against each destination rather than trusting queue depth. Remediation is a targeted re-ship from the origin's own log or a bounded re-snapshot of the affected key range, applied under the normal resolver so provenance stays intact. Do not hand-copy rows from a query result, do not replay from application logs that lack version metadata, and do not silence it by widening the destination's conflict window. Verify by re-running the digest on the repaired window and by killing a canary write at each boundary until one path proves that acknowledgement cannot outrun durable capture.
+
+### Conflicts jumped after a resolver or schema change
+
+The count rises before any user complains, and the shape of the new conflicts is the diagnosis: same entities as before means the change did not take effect, while previously-stable entities appearing for the first time means in-flight events written under old semantics are being merged by new rules. Freeze the resolver version per merge decision rather than per process, drain or translate queued events, and only then retire the old encoding path. Compare convergence on a captured event set replayed at rest before touching production history. Do not rewrite stored versions to match the new policy in place, because a rewritten history cannot be re-merged correctly by any future resolver, and do not treat a rising conflict count as noise simply because the merge succeeds: a successful merge of two intent-bearing commands is still double-entry. Verify by replaying the frozen set under both resolver versions and confirming the diff is the intended semantic change and nothing else.
+
+### One region's applied frontier is frozen while its stream looks connected
+
+A connected-but-not-applying matrix cell has three causes with different owners: one direction of the partition is down so the return path is starved, a single unreadable event is blocking an ordered applier, or schema rejects parked the batch in quarantine. Test each direction independently, then read oldest-unapplied age next to quarantine count: age climbing with a flat quarantine points at ordering and head-of-line blocking, while age climbing in step with quarantine points at a contract the destination can no longer decode. Unblock by moving the offending event into a durable quarantine with its identity and failure reason, letting healthy events proceed behind it. Do not disable commit-order preservation to drain a backlog, which quietly voids every cross-region read-your-writes promise, and do not skip an event without recording it, since a skipped event is divergence that no later repair can distinguish from an unreplicated one. Verify by watching oldest-unapplied age fall with quarantine count held constant, and by reconciling one sampled entity end to end rather than counting applied events.
+
+### A site rejoined after a long outage and its history no longer lines up
+
+The replication log's resume point is older than the retained history at the peer, so there is nothing to replay from; this is the contract expiring rather than a failure of it. Re-onboard through the topology state machine: consistent snapshot at a fresh frontier, catch up past it, validate range digests, serve read-only, then re-enable writes once every existing site recognizes the origin epoch and has a return path. Keep the retired origin identity visible through the rejoin window so late events from the old incarnation are rejected with an explicit reason instead of merged. Do not resume from a stale or restored replication log, do not reuse the old origin identity for the rebuilt site, and do not accept writes on the "read-only" step because a local operator needs a fix now: that write has no path anywhere. Verify by comparing key-range digests at the frontier before enabling writes and confirming the drained queue is empty at the moment routing changes.
+
+### Both sites accepted the same business command
+
+Two regions each returned success for one reservation, transfer, or withdrawal, so the defect predates the page: either a single-writer lease per aggregate never existed, or the dedup horizon at each site is shorter than the worst-case replication delay and an idempotency key expired before its twin arrived. Decide ownership explicitly, then reconcile against the business invariant rather than choosing a survivor by timestamp; the losing region must record an explicit reversal event so both histories contain the same story. Where isolation is expected to be routine, move the decision to one authority per aggregate and make other sites forward rather than accept. Do not fix this with a wider auto-increment stagger or a bigger UUID space, which prevents key collisions while leaving two accepted intents intact, and do not let last-writer-wins arbitrate a quantity that must never be overwritten. Verify by reconciling counts against the invariant for the incident window in both regions and confirming each duplicate resolves to exactly one recorded reversal.
+
 ## Decision Framework
 
 Use multi-leader replication when local or offline write acceptance is a product requirement, cross-site latency is material, and every concurrently writable command has a defensible reconciliation or ownership rule. Prefer [single-leader replication](./01-single-leader-replication.md) when writes can tolerate one authority and operational simplicity matters. Prefer consensus per partition when a single current value or cross-writer invariant must be decided synchronously. Prefer asynchronous replicas or CDC-fed views when only read locality is needed.
@@ -166,6 +236,9 @@ The decisive review question is: **what user-visible promise can two isolated si
 - Saito, Y., and Shapiro, M. [Optimistic Replication](https://doi.org/10.1145/1057977.1057980). ACM Computing Surveys, 2005.
 - Apache CouchDB. [Replication Protocol](https://docs.couchdb.org/en/stable/replication/protocol.html).
 - MySQL. [Group Replication](https://dev.mysql.com/doc/refman/8.4/en/group-replication.html).
+- PostgreSQL. [Publication](https://www.postgresql.org/docs/current/logical-replication-publication.html).
+- PostgreSQL. [CREATE SUBSCRIPTION](https://www.postgresql.org/docs/current/sql-createsubscription.html).
+- MySQL. [Server System Variables](https://dev.mysql.com/doc/refman/8.4/en/server-system-variables.html), 8.4 Reference Manual.
 - Amazon DynamoDB. [Global tables: multi-active, multi-Region replication](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/GlobalTables.html).
 
 ---
