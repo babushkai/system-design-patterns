@@ -598,3 +598,4 @@ Do not call an architecture zero trust merely because it uses a mesh, proxy, VPN
 - [Cryptographic Key and Data-Protection Architecture](06-encryption.md): mTLS proves little without key custody, rotation, and a revocation path that works under failure
 - [Service Mesh Data and Control Planes](../12-service-mesh/03-sidecar-pattern.md): the mesh is where most teams deploy this enforcement point while leaving the decision logic unspecified
 - [Multi-Tenant Isolation and Tenant Lifecycle Architecture](../06-scaling/12-multi-tenancy.md): segmentation and tenant isolation converge on the same failure: one shared path with shared credentials
+- [Third-Party Dependency and Supply Chain Architecture](../20-production-readiness/03-third-party-dependencies-and-supply-chain.md): a vendored library is a principal inside your boundary that never completed enrollment and cannot be rotated

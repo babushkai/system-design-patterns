@@ -569,3 +569,4 @@ Keep golden encoded events for every schema and verify the exact redacted repres
 - [Incident Command and Learning](07-incident-management.md): what a responder actually reads, under time pressure and against a retention policy
 - [Metrics Systems and Monitoring](02-metrics-monitoring.md): a log-derived metric is an aggregate waiting for someone to write the parser
 - [Workflow Observability and Replay](../18-workflow-job-systems/09-workflow-observability-replay.md): structured logs as replay input, where the log becomes workflow state
+- [Data Retention and Compliance Engineering](../20-production-readiness/05-data-retention-and-compliance-engineering.md): the ceiling on log volume is a legal constraint as often as a budget one, and it has to be enforced at emit
