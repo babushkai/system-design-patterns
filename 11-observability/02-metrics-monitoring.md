@@ -531,3 +531,4 @@ Use a synthetic canary that emits known counter, gauge, and histogram patterns w
 - [SLOs and Error-Budget Control](05-slos-error-budgets.md): the aggregation that decides whether an objective was met and who gets paged
 - [Alert Evaluation and Notification](04-alerting.md): a metric becomes an alert when someone picks a threshold and an owner
 - [FinOps and Cost Engineering](06-finops-cost-engineering.md): cardinality is a bill before it is a query plan
+- [Performance Engineering and Profiling](08-performance-engineering-and-profiling.md): histogram buckets and profile attribution answer different halves of the same tail question

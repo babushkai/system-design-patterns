@@ -538,3 +538,4 @@ A credible delivery platform makes releases smaller and routine because identity
 - [Disaster Recovery and Data Reconstruction](05-disaster-recovery.md): a control plane you cannot reconcile is a region you cannot rebuild
 - [Verification and Governance for Agentic Change](../19-compound-engineering/05-quality-engineering-with-ai-agents.md): when agents open pull requests, the pipeline becomes where review is actually enforced
 - [Model Registry and ML Metadata](../16-ml-systems/13-model-registry-metadata.md): promotion for artifacts whose meaning is weights plus an evaluation history
+- [Compute Platform and Scheduling Architecture](07-compute-platform-scheduling.md): resource requests, limits, and disruption budgets are cluster state that reconciliation must converge

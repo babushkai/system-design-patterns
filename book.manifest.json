@@ -161,7 +161,8 @@
         {"route": "10-security/04-api-security", "title": {"en": "API Threat Boundaries", "ja": "APIセキュリティ"}},
         {"route": "10-security/05-zero-trust-architecture", "title": {"en": "Zero-Trust Workload Architecture", "ja": "ゼロトラストアーキテクチャ"}},
         {"route": "10-security/06-encryption", "title": {"en": "Cryptographic Key Architecture", "ja": "暗号化"}},
-        {"route": "10-security/07-authorization-patterns", "title": {"en": "Authorization at Scale", "ja": "認可パターン"}}
+        {"route": "10-security/07-authorization-patterns", "title": {"en": "Authorization at Scale", "ja": "認可パターン"}},
+        {"route": "10-security/08-threat-modeling-and-abuse-cases", "title": {"en": "Threat Modeling & Abuse Cases", "ja": "脅威モデリングと悪用ケース"}}
       ]
     },
     {
@@ -175,7 +176,9 @@
         {"route": "11-observability/04-alerting", "title": {"en": "Alert Evaluation & Notification", "ja": "アラート"}},
         {"route": "11-observability/05-slos-error-budgets", "title": {"en": "SLOs & Error-Budget Control", "ja": "SLOとエラーバジェット"}},
         {"route": "11-observability/06-finops-cost-engineering", "title": {"en": "FinOps & Cost Engineering", "ja": "FinOpsとコスト工学"}},
-        {"route": "11-observability/07-incident-management", "title": {"en": "Incident Command & Learning", "ja": "インシデント管理"}}
+        {"route": "11-observability/07-incident-management", "title": {"en": "Incident Command & Learning", "ja": "インシデント管理"}},
+        {"route": "11-observability/08-performance-engineering-and-profiling", "title": {"en": "Performance Engineering & Profiling", "ja": "パフォーマンス工学とプロファイリング"}},
+        {"route": "11-observability/09-resilience-testing-and-fault-injection", "title": {"en": "Resilience Testing & Fault Injection", "ja": "耐障害性テストとフォールトインジェクション"}}
       ]
     },
     {
@@ -222,7 +225,8 @@
         {"route": "15-deployment/03-database-migrations", "title": {"en": "Database Migrations", "ja": "DBマイグレーション"}},
         {"route": "15-deployment/04-cicd-gitops", "title": {"en": "Delivery Control Planes & GitOps", "ja": "CI/CDとGitOps"}},
         {"route": "15-deployment/05-disaster-recovery", "title": {"en": "Disaster Recovery & Reconstruction", "ja": "ディザスタリカバリ"}},
-        {"route": "15-deployment/06-migration-strategies", "title": {"en": "Service & Platform Migration", "ja": "マイグレーション戦略"}}
+        {"route": "15-deployment/06-migration-strategies", "title": {"en": "Service & Platform Migration", "ja": "マイグレーション戦略"}},
+        {"route": "15-deployment/07-compute-platform-scheduling", "title": {"en": "Compute Platform & Scheduling", "ja": "計算基盤とスケジューリング"}}
       ]
     },
     {

@@ -424,3 +424,4 @@ Rollback of a capacity-model change means restoring decision authority to the pr
 - [FinOps and Cost Engineering](../11-observability/06-finops-cost-engineering.md): the same arithmetic priced, and reviewed after the fact instead of before
 - [ML Capacity and Cost Planning](../16-ml-systems/14-ml-capacity-cost-planning.md): the method restated for accelerators, where memory rather than traffic sets utilization
 - [Cell-Based Architecture and Shuffle Sharding](../06-scaling/11-cell-based-architecture.md): how to carve one capacity plan into blast radii that fail separately
+- [Performance Engineering and Profiling](../11-observability/08-performance-engineering-and-profiling.md): turns capacity estimates into measured service times and a defensible headroom claim

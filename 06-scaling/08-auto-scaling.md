@@ -423,3 +423,4 @@ Choose the simplest stable controller whose signal leads the objective and whose
 - [Horizontal vs Vertical Scaling](02-horizontal-vertical.md): what the loop is actually allowed to add, and at what granularity
 - [Metrics Systems and Monitoring](../11-observability/02-metrics-monitoring.md): sampling interval, clock skew, and signal causality decide the control loop
 - [FinOps and Cost Engineering](../11-observability/06-finops-cost-engineering.md): capacity bought and unused is the cost side of the same decision
+- [Compute Platform and Scheduling Architecture](../15-deployment/07-compute-platform-scheduling.md): placement constraints and headroom decide whether the scale-up can actually be scheduled

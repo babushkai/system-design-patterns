@@ -644,3 +644,4 @@ Use double-entry-style reconciliation properties: every published allocated amou
 - [Metrics Systems and Monitoring](02-metrics-monitoring.md): the metric that makes a cost spike visible before the invoice does
 - [Multi-Tenant Isolation and Tenant Lifecycle Architecture](../06-scaling/12-multi-tenancy.md): cost allocation is a tenancy feature, and without it every tenant blames the platform
 - [ML Capacity and Cost Planning](../16-ml-systems/14-ml-capacity-cost-planning.md): accelerators bend the cost curve, where idle capacity is brutal and memory caps utilization
+- [Compute Platform and Scheduling Architecture](../15-deployment/07-compute-platform-scheduling.md): packing efficiency and phantom reservations are where a billing line actually gets decided

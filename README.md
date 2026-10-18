@@ -234,6 +234,7 @@ Each case study starts from a product you can use today and works back to the me
 - [Zero-Trust Service and Workload Architecture](10-security/05-zero-trust-architecture.md)
 - [Cryptographic Key and Data-Protection Architecture](10-security/06-encryption.md)
 - [Authorization at Scale](10-security/07-authorization-patterns.md)
+- [Threat Modeling and Abuse Case Engineering](10-security/08-threat-modeling-and-abuse-cases.md)
 
 ### Part 11: Observability and Operations
 - [Distributed Tracing and Telemetry Pipelines](11-observability/01-distributed-tracing.md)
@@ -243,6 +244,8 @@ Each case study starts from a product you can use today and works back to the me
 - [SLOs and Error-Budget Control](11-observability/05-slos-error-budgets.md)
 - [FinOps and Cost Engineering](11-observability/06-finops-cost-engineering.md)
 - [Incident Command and Learning](11-observability/07-incident-management.md)
+- [Performance Engineering and Profiling](11-observability/08-performance-engineering-and-profiling.md)
+- [Resilience Testing and Fault Injection](11-observability/09-resilience-testing-and-fault-injection.md)
 
 ### Part 12: Service Connectivity and APIs
 - [Service Discovery and Control-Plane State](12-service-mesh/01-service-discovery.md)
@@ -270,6 +273,7 @@ Each case study starts from a product you can use today and works back to the me
 - [Software Delivery Control Planes and GitOps Reconciliation](15-deployment/04-cicd-gitops.md)
 - [Disaster Recovery and Data Reconstruction](15-deployment/05-disaster-recovery.md)
 - [Service and Platform Migration](15-deployment/06-migration-strategies.md)
+- [Compute Platform and Scheduling Architecture](15-deployment/07-compute-platform-scheduling.md)
 
 ### Part 16: ML Systems
 - [ML System Fundamentals](16-ml-systems/01-ml-system-fundamentals.md)

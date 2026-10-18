@@ -666,3 +666,4 @@ The architecture is incomplete if it demonstrates only an SDK call returning `tr
 - [JOSE and JSON Web Token Verification](03-jwt-tokens.md): putting a decision in a token buys latency and pays for it in revocation
 - [Authentication Systems](01-authentication-fundamentals.md): who the caller is stays upstream; what they may do starts here
 - [Cache Invalidation and Coherence](../04-caching/02-cache-invalidation.md): an authorization cache is cache invalidation with a privilege boundary attached
+- [Threat Modeling and Abuse Case Engineering](08-threat-modeling-and-abuse-cases.md): elevation-of-privilege paths are authorization graphs read from the attacker's side

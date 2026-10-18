@@ -576,3 +576,4 @@ A resilience design is incomplete if its failure story ends at “retry, fail ov
 - [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md): detection turns into traffic: a timeout decides how fast ambiguity becomes load
 - [Leases, Heartbeats, and Recovery](../18-workflow-job-systems/08-leases-heartbeats-recovery.md): the recovery boundary drawn around a worker that may already be dead
 - [Write-Ahead Logging](../03-storage-engines/04-write-ahead-logging.md): crash consistency, where the log decides which half of an interruption survives
+- [Resilience Testing and Fault Injection](../11-observability/09-resilience-testing-and-fault-injection.md): the tier where each failure semantic gets executed instead of merely described
