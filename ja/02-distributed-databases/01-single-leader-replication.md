@@ -1,6 +1,6 @@
 # シングルリーダーレプリケーション
 
-> この記事は英語版から翻訳されました。最新版は[英語版](/02-distributed-databases/01-single-leader-replication.md)をご覧ください。
+> **翻訳の状態:** この日本語版は英語版の以前の版に基づいており、現行の[英語版](../../02-distributed-databases/01-single-leader-replication.md)とは構成や内容が異なります。最新の内容は英語版を参照してください。
 
 ## TL;DR
 
@@ -452,7 +452,7 @@ graph LR
         LocalWAL[("Local WAL<br/>+ Startup Replay")]
         WR -->|writes to| LocalWAL
     end
-    WS -->|replication protocol<br/>(streaming walsender)| WR
+    WS -->|"replication protocol<br/>(streaming walsender)"| WR
 ```
 
 これはプッシュベースのモデルです。プライマリはWALを生成時にプッシュします。レプリカはポーリングしません。レプリカが遅延した場合、WAL senderは保持されたWALセグメントからキャッチアップします。

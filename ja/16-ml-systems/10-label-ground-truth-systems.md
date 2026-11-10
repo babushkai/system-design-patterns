@@ -1,6 +1,6 @@
 # ラベルとグラウンドトゥルースのシステム
 
-> **翻訳についての注記:** 本ドキュメントは英語原文 `16-ml-systems/10-label-ground-truth-systems.md` を日本語に翻訳したものです。コードブロック、YAML、Mermaidダイアグラムは原文のまま維持しています。
+> **翻訳の状態:** 現行の[英語版](../../16-ml-systems/10-label-ground-truth-systems.md)からの翻訳です。
 
 ## TL;DR
 
@@ -436,10 +436,10 @@ weekly random-audit sample completed within 7 days
 ## 参考文献
 
 1. [Hidden Technical Debt in Machine Learning Systems](https://proceedings.neurips.cc/paper_files/paper/2015/file/86df7dcfd896fcaf2674f757a2463eba-Paper.pdf) — Sculley et al., 2015
-2. [Data Cascades in High-Stakes AI](https://research.google/pubs/data-cascades-in-high-stakes-ai/) — Sambasivan et al., CHI 2021
+2. [Data Cascades in High-Stakes AI](https://research.google/pubs/everyone-wants-to-do-the-model-work-not-the-data-work-data-cascades-in-high-stakes-ai/) — Sambasivan et al., CHI 2021
 3. [Datasheets for Datasets](https://arxiv.org/abs/1803.09010) — Gebru et al., 2018
 4. [Model Cards for Model Reporting](https://arxiv.org/abs/1810.03993) — Mitchell et al., 2019
 5. [Snorkel: Rapid Training Data Creation with Weak Supervision](https://arxiv.org/abs/1711.10160) — Ratner et al., VLDB 2017
 6. [Learning from Delayed Outcomes via Proxies with Applications to Recommender Systems](https://arxiv.org/abs/2010.08942) — 遅延フィードバックとプロキシラベルの枠組み
 7. [Selective Labels and Deferential Fairness](https://arxiv.org/abs/1809.05699) — 高リスク意思決定システムにおける選択的ラベル
-8. [Trustworthy Online Controlled Experiments](https://www.cambridge.org/core/books/trustworthy-online-controlled-experiments/6A3B263E7114E81B95669A95B219C1D8) — Kohavi, Tang & Xu, 2020
+8. [Trustworthy Online Controlled Experiments](https://doi.org/10.1017/9781108653985) — Kohavi, Tang & Xu, 2020

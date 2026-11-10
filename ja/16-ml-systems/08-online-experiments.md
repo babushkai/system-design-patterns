@@ -1,5 +1,7 @@
 # オンライン実験
 
+> **翻訳の状態:** この日本語版は英語版の以前の版に基づいており、現行の[英語版](../../16-ml-systems/08-online-experiments.md)とは構成や内容が異なります。最新の内容は英語版を参照してください。
+
 ## TL;DR
 
 オンライン実験は、ライブトラフィック上で因果的な影響を測ります。オフラインML指標と実際のプロダクト成果をつなぐ仕組みです。良い実験基盤は、割当、表示ログ、メトリクス計算、ガードレール、サンプル比率チェック、セグメント分析、ローンチ判断を管理します。
@@ -150,7 +152,7 @@ flowchart TD
 
 ## 参考文献
 
-1. [Trustworthy Online Controlled Experiments](https://www.cambridge.org/core/books/trustworthy-online-controlled-experiments/6A3B263E7114E81B95669A95B219C1D8)
-2. [Controlled Experiments on the Web](https://ai.stanford.edu/~ronnyk/2009controlledExperimentsOnTheWebSurvey.pdf)
+1. [Trustworthy Online Controlled Experiments](https://doi.org/10.1017/9781108653985)
+2. [Controlled Experiments on the Web](https://doi.org/10.1007/s10618-008-0114-1)
 3. [Overlapping Experiment Infrastructure](https://research.google/pubs/overlapping-experiment-infrastructure-more-better-faster-experimentation/)
 4. [CUPED](https://www.exp-platform.com/Documents/2013-02-CUPED-ImprovingSensitivityOfControlledExperiments.pdf)

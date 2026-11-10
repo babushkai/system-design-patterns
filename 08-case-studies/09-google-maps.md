@@ -315,3 +315,4 @@ For model changes, pin feature schema, preprocessing code, graph version range, 
 - [CDN Architecture](../06-scaling/04-cdn-architecture.md): a versioned tile is the ideal cache object until a re-render invalidates a region
 - [Typeahead and Autocomplete](../14-search-systems/06-typeahead-autocomplete.md): typeahead over a planet-scale place index, under a keystroke latency budget
 - [Dataset Management and Versioning](../16-ml-systems/11-dataset-management-versioning.md): routing and ETA are models, so map data needs versions and evaluation like any dataset
+- [Geospatial Indexing](../14-search-systems/05-geospatial-indexing.md): how regions become key ranges, and why the index is only ever a filter

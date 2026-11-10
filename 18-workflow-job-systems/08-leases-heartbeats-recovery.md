@@ -385,7 +385,7 @@ If any protected effect has neither an enforceable epoch nor a stable deduplicat
 2. [The Chubby Lock Service for Loosely-Coupled Distributed Systems](https://www.usenix.org/legacy/events/osdi06/tech/full_papers/burrows/burrows.pdf): Burrows, OSDI 2006; sequencers illustrate effect-side stale-owner rejection.
 3. [ZooKeeper: Wait-free Coordination for Internet-scale Systems](https://www.usenix.org/legacy/event/atc10/tech/full_papers/Hunt.pdf): Hunt et al., USENIX ATC 2010; sessions, versions, and ordered coordination state.
 4. [etcd API guarantees](https://etcd.io/docs/latest/learning/api_guarantees/) and [etcd lease API](https://etcd.io/docs/latest/learning/api/#lease-api): official guarantees distinguish revisions, transactions, and lease TTL.
-5. [Temporal Java SDK ActivityExecutionContext](https://javadoc.io/static/io.temporal/temporal-sdk/1.32.0/io/temporal/activity/ActivityExecutionContext.html): official SDK contract for activity heartbeat details and retry resume data.
+5. [Temporal Java SDK ActivityExecutionContext](https://www.javadoc.io/doc/io.temporal/temporal-sdk/latest/io/temporal/activity/ActivityExecutionContext.html): official SDK contract for activity heartbeat details and retry resume data.
 
 ---
 

@@ -252,3 +252,4 @@ The index data structure matters, but production correctness comes from the stat
 - [Lexical Query Execution](02-full-text-search.md): the query plane that reads the segments this chapter maintains
 - [SSTables and Compaction](../03-storage-engines/03-sstables-compaction.md): immutable segments and merges are a compaction argument with a scorer attached
 - [Change Data Capture](../13-data-pipelines/04-change-data-capture.md): the feed that keeps a derived index in step with its authoritative table
+- [Web Crawler](../21-reference-designs/03-web-crawler.md): where the documents come from, and why their freshness is bounded by politeness

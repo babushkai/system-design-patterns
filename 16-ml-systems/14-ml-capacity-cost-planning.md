@@ -636,7 +636,7 @@ A plan that cannot answer these is not capacity planning; it is hoping the cloud
 6. [FinOps and Cost Engineering](../11-observability/06-finops-cost-engineering.md)
 7. [Distributed Training Internals](./15-distributed-training-internals.md)
 8. [Roofline: An Insightful Visual Performance Model for Multicore Architectures](https://dl.acm.org/doi/10.1145/1498765.1498785): Williams, Waterman & Patterson, 2009
-9. [Autopilot: Workload Autoscaling at Google](https://research.google/pubs/autopilot-workload-autoscaling-at-google/): Rzadca et al., 2020
+9. [Autopilot: Workload Autoscaling at Google Scale](https://research.google/pubs/autopilot-workload-autoscaling-at-google-scale/): Rzadca et al., 2020
 
 ---
 

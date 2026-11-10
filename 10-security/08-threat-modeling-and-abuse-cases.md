@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-A threat model is the only security artifact that can exist before the code does, which is exactly why teams skip it and exactly why it pays. The deliverable is not a diagram and not a spreadsheet of scary possibilities; it is an ordered list of specific ways this system can be misused, each with a named owner, a named control or a written acceptance, and a test that fails when the control disappears. **Documented**: the recurring failure in post-incident reviews is not that a class of attack was unknown to the industry but that it was unknown to the person who made the decision, usually because nobody wrote down who could reach what.
+A threat model is the only security artifact that can exist before the code does, which is exactly why teams skip it and exactly why it pays. The deliverable is not a diagram and not a spreadsheet of scary possibilities; it is an ordered list of specific ways this system can be misused, each with a named owner, a named control or a written acceptance, and a test that fails when the control disappears. **Inference**: the recurring failure in post-incident reviews is not that a class of attack was unknown to the industry but that it was unknown to the person who made the decision, usually because nobody wrote down who could reach what.
 
 Two practices carry most of the value. The first is enumerating threats against structure rather than imagination: name the data-flow elements and trust boundaries, then walk one standard taxonomy (STRIDE, or the equivalent for your environment) across them, so that coverage is a property of the method instead of the seniority in the room. The second is converting each accepted threat into an abuse case written as an executable test - actor, budget, goal, path, expected control, evidence - which turns "we thought about security" into something a reviewer can run and a regression cannot silently undo.
 
@@ -277,17 +277,16 @@ Reject a model that cannot change a decision. If nothing in the artifact will al
 
 ## References
 
-- Shostack, A. "Threat Modeling: Designing for Security." Wiley, 2011. The four-question loop, element-by-element enumeration (the source of STRIDE's application method), and micro-hardening around high-value assets.
-- Swiderski, F., and Snyder, W. "Threat Modeling." Microsoft Press, 2004. Practical integration of modeling into a development schedule with artifacts teams can actually maintain.
-- Schneier, B. "Attack Trees: A Method for Constructing Security Models." Dr. Dobb's Journal, 1999; extended in ACM Transactions on Information and System Security, 2000. AND/OR decomposition and cost propagation from goal to leaves.
-- Howard, J., and LeBlanc, D. "Writing Secure Code," 2nd ed. Microsoft Press, 2003. STRIDE as a classification of the eight properties trust claims depend on.
-- Anderson, R. "Security Engineering: A Guide to Building Dependable Distributed Systems," 3rd ed. Wiley, 2020. Adversary economics, why controls must be cheaper than attacks, and human factors in perimeter design.
-- Chua, T.-L. "A Philosophy of Software Security." 2023. Why security work should be organized around preventing specific bad outcomes rather than accumulating best-practice badges.
-- MITRE ATT&CK knowledge base. Tactical coverage matrix used here for phase coverage, not scoring.
-- OWASP Application Security Verification Standard (ASVS) 5.0 and OWASP Web Security Testing Guide. Requirement catalogs that map well onto abuse-case acceptance criteria.
-- NIST SP 800-161r1, "Cybersecurity Supply Chain Risk Management Practices for Systems and Organizations." 2022. Supplier and component trust assumptions as first-class model entries.
-- NIST SP 800-189, "Resilient Computer System Design." 2020. Availability-oriented framing of adversarial and accidental failure as one design problem.
-- Katz, D., Reddy, S., Barkovich, B., Chojnacki, D., Lu, L., Srivatsan, D., et al. "BBox: Applying Security Chaos Engineering to Serverless Execution Context Creation." ACM CCS 2020. Executable security testing of isolation claims rather than argument about them.
+- [Shostack, *Threat Modeling: Designing for Security* (Wiley, 2014)](https://shostack.org/books/threat-modeling-book). The four-question loop and element-by-element enumeration, the source of STRIDE's application method.
+- [*Threat Modeling Manifesto* (2020)](https://www.threatmodelingmanifesto.org/). The values and anti-patterns practitioners agreed on, including the preference for findings over artifacts.
+- [Schneier, *Attack Trees* (Dr. Dobb's Journal, 1999)](https://www.schneier.com/academic/archives/1999/12/attack_trees.html). AND/OR decomposition and cost propagation from goal to leaves.
+- [Microsoft, *Threat Modeling Tool threats*](https://learn.microsoft.com/en-us/azure/security/develop/threat-modeling-tool-threats). STRIDE as six threat categories, each the negation of a security property.
+- [Anderson, *Security Engineering: A Guide to Building Dependable Distributed Systems*, 3rd ed. (Wiley, 2020)](https://www.cl.cam.ac.uk/~rja14/book.html). Adversary economics, why controls must be cheaper than attacks, and human factors in perimeter design.
+- [MITRE ATT&CK knowledge base](https://attack.mitre.org/). Tactical coverage matrix used here for phase coverage, not scoring.
+- [OWASP Application Security Verification Standard (ASVS)](https://owasp.org/www-project-application-security-verification-standard/). A requirement catalog that maps well onto abuse-case acceptance criteria.
+- [OWASP Web Security Testing Guide](https://owasp.org/www-project-web-security-testing-guide/). Test procedures for the same requirements.
+- [NIST SP 800-161 Rev. 1, *Cybersecurity Supply Chain Risk Management Practices for Systems and Organizations* (2022)](https://csrc.nist.gov/pubs/sp/800/161/r1/upd1/final). Supplier and component trust assumptions as first-class model entries.
+- [NIST SP 800-160 Vol. 2 Rev. 1, *Developing Cyber-Resilient Systems: A Systems Security Engineering Approach* (2021)](https://csrc.nist.gov/pubs/sp/800/160/v2/r1/final). Availability-oriented framing of adversarial and accidental failure as one design problem.
 
 ---
 

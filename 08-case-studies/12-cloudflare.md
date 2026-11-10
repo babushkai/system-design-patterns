@@ -261,3 +261,4 @@ Cells and a homogeneous fleet are not opposites at every layer. Cloudflare can e
 - [Multi-Tenant Isolation and Tenant Lifecycle Architecture](../06-scaling/12-multi-tenancy.md): running many tenants on one host is a tenancy design, not a CDN feature you can switch on
 - [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md): edge retries are dangerous because the origin may already have committed the effect
 - [SLOs and Error-Budget Control](../11-observability/05-slos-error-budgets.md): a public status page is an objective that customers enforce using your own measurements
+- [DDoS Defense Architecture](../10-security/09-ddos-defense.md): the defense model an anycast edge exists to implement

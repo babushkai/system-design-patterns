@@ -292,7 +292,7 @@ Autocomplete quality is inseparable from publication governance. A fast prefix l
 - [Jan Daciuk et al.: Incremental Construction of Minimal Acyclic Finite-State Automata](https://aclanthology.org/J00-1002/)
 - [Apache Lucene: FST Package](https://lucene.apache.org/core/10_1_0/core/org/apache/lucene/util/fst/package-summary.html)
 - [Surajit Chaudhuri and Raghav Kaushik: Extending Autocompletion to Tolerate Errors](https://doi.org/10.1145/1376616.1376705)
-- [Holger Bast and Ingmar Weber: Type Less, Find More: Fast Autocompletion Search with a Succinct Index](https://doi.org/10.1145/1148170.1148248)
+- [Holger Bast and Ingmar Weber: Type Less, Find More: Fast Autocompletion Search with a Succinct Index](https://doi.org/10.1145/1148170.1148234)
 - [NIST: Privacy Framework](https://www.nist.gov/privacy-framework)
 - [W3C: WAI-ARIA Authoring Practices, Combobox Pattern](https://www.w3.org/WAI/ARIA/apg/patterns/combobox/)
 - [Unicode Standard Annex #15: Unicode Normalization Forms](https://unicode.org/reports/tr15/)

@@ -1,12 +1,12 @@
 # 耐障害性テストとフォールトインジェクション
 
-> **翻訳についての注記:** 本ドキュメントは英語原文 `11-observability/09-resilience-testing-and-fault-injection.md` を日本語に翻訳したものです。コードブロックおよびMermaidダイアグラムは原文のまま維持しています。
+> **翻訳の状態:** 現行の[英語版](../../11-observability/09-resilience-testing-and-fault-injection.md)からの翻訳です。
 
 ## TL;DR
 
 障害時の挙動は、テストするか発見するかのどちらかでしか手に入らない仕様である。この本のすべてのシステムは、作者が意図しなかった仕方で失敗する。そして5つの9の制御平面を出すチームと、フェイルオーバーのバグを顧客チケットで知るチームの違いは、ほぼ完全に「誰かが顧客より先にその障害を実行したか」だけだ。耐障害性テストが生む主張は狭く、そして検証可能である: 障害Fを期間D・範囲Sで加えたとき、エラーバジェットの燃焼率Bを超えず、復旧は人間の操作なしに、または氏名の決まったオンコールエンジニアが過去に1度実行した手順書で完了する。
 
-忠実度の階層は3つあり、互いに置き換えはきかない。**文書化済み事実**: 設計層での決定論的シミュレーションは、ステージングのトラフィックではいくら流しても再現できないインターリーブ を見つける。FoundationDBはデプロイ前にCPU年単位で測られる正確性バグをシミュレーションで検出したと報告し、MACEのフォールトインジェクション研究は、テスト対象より小さいハーネスでKafka・Cassandra・ZooKeeperの実バグを数十件見つけた。モデル検査はプロトコルレベルの「不可能」を見つける。本番のフォールトインジェクションは本番にしか存在しない障害を見つける — 誤設定のDNSリゾルバ、誰も更新しなかった証明書、隣接チームと共有しているクォータ。3段目だけをやるチームは1・2段目に永遠に驚かれ、1段目だけのチームは現実に驚かれる。
+忠実度の階層は3つあり、互いに置き換えはきかない。**文書化済み事実**: 設計層での決定論的シミュレーションは、ステージングのトラフィックではいくら流しても再現できないインターリーブ を見つける。FoundationDBはすべての変更を決定論的シミュレーションに通すことを主要な正確性テストとしている。Yuanらは、Cassandra・HBase・HDFS・MapReduce・Redisでユーザーが報告した198件の障害を調べ、壊滅的な障害のほぼすべてが、ソフトウェア自身がすでに通知していたエラーの扱い誤りから生じ、そのほとんどが3ノード以下で再現できることを示した。モデル検査はプロトコルレベルの「不可能」を見つける。本番のフォールトインジェクションは本番にしか存在しない障害を見つける — 誤設定のDNSリゾルバ、誰も更新しなかった証明書、隣接チームと共有しているクォータ。3段目だけをやるチームは1・2段目に永遠に驚かれ、1段目だけのチームは現実に驚かれる。
 
 「わざと壊す」とこれを分けるのは2つの規律だ。すべての実験は、走る*前*に合格条件と中断条件を備えた仮説を持つ。定常状態は「ダッシュボードが緑」ではなくエラーバジェットの燃焼率で定義する。そしてすべての発見は恒久的なリグレッションになる: シミュレータの自動化テストか、訓練スクリプトか、その障害クラスを消すアーキテクチャ変更のいずれかだ。**推論**: 多くのチームで最初の四半期の最高収益は、風変わりなカオス道具ではなく、リストア訓練・リーダ殺害の自動化・時計とディスクの障害シミュレーション・そして深刻パス1本あたりの誠実なゲームデー1回である。
 
@@ -63,7 +63,7 @@
 4. **縮小**。シードが失敗したら、自動リデューサが最小シーケンスが見つかるまでイベントを削除する。4行の再現は修正できる。4万イベントのトレースは1週の読解だ
 5. **カバレッジ誘導**。乱択シードは長い尾の組合せを見つけ、どの分岐と障害クラスを実行したか記録する計装が「分布が狭すぎる」と知らせる。深い状態空間での純粋なランダム探索は浅い部分ばかり探すでるため両方が必要だ
 
-**文書化済み事実**: FoundationDBチームは正確性シミュレーションを連続実行し、シミュレーションで見つかったバグを障害ではなく日常業務として扱うと説明してきた。Appleの"Deterministic Simulation 2.0"は、より高いレベルでシミュレートし過去の実行を再利用することで1テストあたりのコストを桁で下げた。実務的な教訓は、*手法ではなく1回あたりのコスト*が、チームが本当に回すかを決めるということだ。
+**文書化済み事実**: FoundationDBのドキュメントは、シミュレーションをこのデータベースの主要なテスト手段として説明している。実コードを単一の決定論的プロセスで走らせて障害を注入し、累計でおよそ1兆CPU時間相当のシミュレーションを実行したと見積もっている。実務的な教訓は、*手法ではなく1回あたりのコスト*が、チームが本当に回すかを決めるということだ。数秒で済む1時間分のシミュレーションなら、変更のたびに回せる。
 
 シミュレーションにできないこと: OSのTCPバッファ挙動、trimでEIOを返す特定のディスクファームウェア、2つのサービスが同一の接続追跡テーブルを共有している事実。そして間違った対象をモデル化することから救ってくれない — 仕様が「リトライは冪等」と書き本番でそうでなければ、シミュレータは欠陥のない空想に同意する。この隙間を埋めるために本番階層が存在する。
 
@@ -95,7 +95,7 @@
 4. **立会人と時計を持って実行**。中断できる人、入力していない人、そしていつ何を入れたかの書きられたタイムライン。変更フリーズ中・リリース中・ピークイベント中の実験は、誰も信じない結果と不要な障害を生む
 5. **結論を設計上の決定として記録**。システムが主張どおりに動けば(その主張はテスト付きの文書化された挙動になる)、そうでなければ(発見はバグと同じキューに入る。深刻度は「実験が証明した顧客影響」から導く)
 
-**文書化済み事実**: カオスエンジニアリングの原論文(Basiri et al., ICSE-SEIP 2017)はこれを正確に枠付けする — 定常状態を計測可能な挙動として表現し、現実世界のイベントを変え、本番で実行し、爆発半径を最小化するよう自動化する。そして「長期連続実験」の重要性に明示的に触れている。週次で変わるシステムに対して1回のゲームデーがほとんど何も証明しないからだ。
+**文書化済み事実**: カオスエンジニアリングの原論文(Basiri et al., IEEE Software 2016)はこれを正確に枠付けする。定常状態の挙動について仮説を立て、現実世界のイベントを変化させ、本番で実験し、実験を自動化して継続的に走らせる。現在も保守されている「カオスエンジニアリングの原則」は、爆発半径の最小化を加えている。継続的な自動化へのこだわりが要点だ。週次で変わるシステムに対して1回のゲームデーがほとんど何も証明しないからだ。
 
 実験ではなくプログラムの失敗モードを2つ挙げておく。**劇場としての実験**は、アーキテクチャがすでに処理済みの障害を注入し(レプリカ5つのステートレスPodを1つ殺す)、成功と報告する。無価値ではない — ハーネスの検証にはなる — が、壊れうる障害へ段階を上げる計画が必要だ。**上限のない実験**は「安全だと分かっている」ため自動中断なしに注入し、安全議論の穴がまさに実験が突こうとした場所にあることを発見する。
 
@@ -243,8 +243,16 @@
 
 ## 参考文献
 
-- Basiri, A., Behnam, N., de Oca, S. M., et al. "Chaos Engineering." ICSE-SEIP 2017 — 定常状態の計測、現実イベントの変調、本番実行、自動化、爆発半径最小化という5原則
-- Alvaro P. ら "Deterministic Simulation" 系の議論、Apple "Deterministic Simulation 2.0" — 1テストあたりのコストを桁で下げた実務
-- Hunt P. ら "Jepsen" — 実デプロイへ障害を注入し履歴から異常を検査する手法
-- Heland J. et al. "MACE: Model-independent ... fault injection"(OSDI 2010) — 対象より小さいハーネスで分散システムのバグを見つける
-- FoundationDB の開発ログ — 正確性シミュレーションを連続実行し、そこで出たバグを日常として扱う運用
+- [Basiri et al., *Chaos Engineering* (IEEE Software, 2016)](https://arxiv.org/abs/1702.05843)
+- [*Principles of Chaos Engineering*](https://principlesofchaos.org/)
+- [Basiri et al., *Automating Chaos Experiments in Production* (ICSE-SEIP 2019)](https://arxiv.org/abs/1905.04648)
+- [Yuan et al., *Simple Testing Can Prevent Most Critical Failures* (OSDI 2014)](https://www.usenix.org/conference/osdi14/technical-sessions/presentation/yuan)
+- [Alvaro, Rosen, and Hellerstein, *Lineage-driven Fault Injection* (SIGMOD 2015)](https://people.ucsc.edu/~palvaro/molly.pdf)
+- [Zhou et al., *FoundationDB: A Distributed Unbundled Transactional Key Value Store* (SIGMOD 2021)](https://www.foundationdb.org/files/fdb-paper.pdf)
+- [FoundationDB documentation, *Simulation and Testing*](https://apple.github.io/foundationdb/testing.html)
+- [Wilson, *Testing Distributed Systems w/ Deterministic Simulation* (Strange Loop 2014)](https://www.youtube.com/watch?v=4fFDFbi3toc)
+- [Lamport, *Specifying Systems: The TLA+ Language and Tools for Hardware and Software Engineers* (Addison-Wesley, 2002)](https://lamport.azurewebsites.net/tla/book.html)
+- [Herlihy and Wing, *Linearizability: A Correctness Condition for Concurrent Objects* (ACM TOPLAS, 1990)](https://doi.org/10.1145/78969.78972)
+- [Kingsbury, *Jepsen analyses*](https://jepsen.io/analyses)
+- [Beyer, Jones, Petoff, and Murphy (eds.), *Site Reliability Engineering: How Google Runs Production Systems* (O'Reilly Media, 2016)](https://sre.google/sre-book/table-of-contents/)
+- [Beyer, Murphy, Rensin, Kawahara, and Thorne (eds.), *The Site Reliability Workbook* (O'Reilly Media, 2018)](https://sre.google/workbook/table-of-contents/)

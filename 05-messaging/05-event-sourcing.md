@@ -315,7 +315,7 @@ Answer:
 
 - [Martin Fowler: Event Sourcing](https://martinfowler.com/eaaDev/EventSourcing.html)
 - [Pat Helland: Immutability Changes Everything](https://www.cidrdb.org/cidr2015/Papers/CIDR15_Paper16.pdf)
-- [EventStoreDB: Expected Version and Optimistic Concurrency](https://developers.eventstore.com/clients/grpc/appending-events.html)
+- [KurrentDB (formerly EventStoreDB) documentation: appending events with an expected revision](https://docs.kurrent.io/)
 - [Microsoft: CQRS Journey](https://learn.microsoft.com/en-us/previous-versions/msp-n-p/jj554200(v=pandp.10))
 - [CloudEvents Specification](https://github.com/cloudevents/spec)
 - [NIST SP 800-92: Guide to Computer Security Log Management](https://csrc.nist.gov/pubs/sp/800/92/final)
@@ -332,3 +332,4 @@ Answer:
 - [Message Ordering](03-message-ordering.md): replay is correct only if the log is append-only and ordered per aggregate
 - [Workload-Driven Data Modeling and Derived Projections](../02-distributed-databases/10-data-modeling.md): the current-state table reappears as a projection with its own publication contract
 - [Service and Platform Migration](../15-deployment/06-migration-strategies.md): events are immutable, so schema evolution must stay additive for as long as you keep them
+- [Order Matching Engine](../21-reference-designs/06-order-matching-engine.md): a journal replayed into a deterministic engine, the strictest form of this pattern

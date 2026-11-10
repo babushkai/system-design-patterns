@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-An organization's architecture is the output of its decision rights, not of its diagrams. Whatever is not explicitly assigned gets decided by whoever speaks first, cares most, or is on call when it breaks, and those are exactly the decisions that later cost a quarter to reverse. **Documented**: DORA research has repeatedly found that requiring sign-off from an external change-approval body predicts worse delivery throughput and higher change failure rates, while small batches and informal design conversation predict the opposite. The finding is not an argument against review; it is an argument about placement. Reviewing *what* to build early is cheap and high-yield, approving *whether this particular deploy may proceed* late is a tax that buys little, because by then every cheaper option has already been spent.
+An organization's architecture is the output of its decision rights, not of its diagrams. Whatever is not explicitly assigned gets decided by whoever speaks first, cares most, or is on call when it breaks, and those are exactly the decisions that later cost a quarter to reverse. **Documented**: DORA research has repeatedly found that requiring sign-off from an external change-approval body predicts slower delivery (longer lead times, lower deployment frequency, slower restoration) without the lower change failure rate it is meant to buy, while lightweight peer review predicts better delivery performance. The finding is not an argument against review; it is an argument about placement. Reviewing *what* to build early is cheap and high-yield, approving *whether this particular deploy may proceed* late is a tax that buys little, because by then every cheaper option has already been spent.
 
 Two distinctions carry most of the value here. The first is between review and decision rights: a review that cannot decide anything is education (valuable, and it should say so), while an authority that can never be overridden is a queue with opinions attached. Name which ceremony you are running, because the dominant failure in both directions comes from participants believing they are in the other one. The second is between standards and guardrails: a standard is text that decays at exactly the rate of your hiring, and a guardrail is code that fails a build, and only one of them requires anyone to remember it during an incident.
 
@@ -51,7 +51,7 @@ The economic case for separating them is that each defect class has exactly one 
 | No rollback path for a schema change | Readiness review | Emergency change window at 3 a.m. | Extended write outage while a table is rebuilt |
 | Retry amplification under failover | Resilience test before launch | Config change plus retest | Cascading self-inflicted outage |
 
-**Documented**: Google publishes its production readiness review as a checklist owned by the reviewing team and explicitly scoped to what may block a launch, precisely so that the review cannot quietly expand into a design critique of choices already made. The accompanying guidance in the Site Reliability literature is that reviewers should be from outside the owning team, and that the outcome is a set of follow-up items with owners rather than a binary "approved" stamp.
+**Documented**: Google's SRE book describes the production readiness review as a precondition for an SRE team to accept operational responsibility for a service, not as a design approval. SREs from outside the owning team run it against a checklist adapted to the specific service, and its output is a list of improvements that developers and SREs prioritize together before onboarding rather than a binary "approved" stamp. Scoping the review to production behavior is what keeps it from quietly expanding into a critique of design choices already made.
 
 ## Why Review Boards Fail
 
@@ -176,17 +176,17 @@ Two stop rules keep the machinery honest. Delete any control that has blocked no
 
 ## References
 
-- Conway, M. "How Do Committees Invent?." *Datamation*, 1968. The original matching of system structure to communication structure, and the reason decision rights are an architectural input.
-- Forsgren, N., Humble, J., and Kim, G. *Accelerate: The Science of Lean Software and DevOps*. IT Revolution Press, 2018. Survey evidence separating external change approval from design quality, and its correlation with delivery performance.
-- DORA (Google Cloud). *Accelerate State of DevOps Reports*, 2019 onward. Repeated findings on change approval processes, deployment frequency, and where review helps or hurts.
-- Beyer, B., Jones, C., Petoff, J., and Murphy, N. (eds). *Site Reliability Engineering: How Google Runs Production Systems*. O'Reilly Media, 2016. Error budgets as an explicit decision mechanism, and production readiness review guidance.
-- Sharma, T., Bosworth, A., Zaharia, M., and Chakraborty, A. (eds). *Software Engineering at Google*. O'Reilly Media, 2020. Design document culture, readability as a governance mechanism, and review responsibilities.
-- Ford, N., Richards, M., Tolbert, N., and West, M. *Building Evolutionary Architectures*. O'Reilly Media, 2017. Fitness functions and guided, testable evolution instead of periodic approval.
-- Skelton, M., and Pais, S. *Team Topologies*. IT Revolution Press, 2019. Interaction modes, cognitive load, and loose coupling as the goal that governance either serves or undermines.
-- Nygard, M. "Where Is the Architecture?." 2018. A working architect's critique of review boards that produce verdicts but no constraints.
-- Bezos, J. Amazon shareholder letters, 2015 and 2016. Reversible versus irreversible decisions as the basis for deciding what deserves escalation.
-- Thoughtworks. *Technology Radar*. An ongoing public example of ring-based technology inventories as a governance artifact.
-- ISO/IEC/IEEE 42010:2022, "Systems and software engineering - Architecture description." Stakeholders, concerns, and viewpoints as the required content of an architecture description.
+- [Conway, *How Do Committees Invent?* (Datamation, 1968)](https://www.melconway.com/Home/Committees_Paper.html). The original matching of system structure to communication structure, and the reason decision rights are an architectural input.
+- [Forsgren, Humble, and Kim, *Accelerate: The Science of Lean Software and DevOps* (IT Revolution Press, 2018)](https://itrevolution.com/product/accelerate/). Survey evidence that approval by an external body slows delivery without lowering change failure rate.
+- [DORA, *Streamlining Change Approval*](https://dora.dev/capabilities/streamlining-change-approval/). The research program's standing summary of where change review helps and where it only adds queueing.
+- [Beyer, Jones, Petoff, and Murphy (eds.), *Site Reliability Engineering*, chapter 32, "The Evolving SRE Engagement Model" (O'Reilly Media, 2016)](https://sre.google/sre-book/evolving-sre-engagement-model/). The production readiness review as a precondition for operational ownership, with its engagement, analysis, improvement, and onboarding phases.
+- [*Site Reliability Engineering*, appendix E, "Launch Coordination Checklist"](https://sre.google/sre-book/launch-checklist/). A published example of a launch checklist scoped to production behavior.
+- [Winters, Manshreck, and Wright (eds.), *Software Engineering at Google* (O'Reilly Media, 2020)](https://abseil.io/resources/swe-book). Design document culture, readability as a governance mechanism, and review responsibilities.
+- [Ford, Parsons, and Kua, *Building Evolutionary Architectures* (O'Reilly Media, 2017)](https://www.thoughtworks.com/insights/books/building-evolutionary-architectures). Fitness functions and guided, testable evolution instead of periodic approval.
+- [Skelton and Pais, *Team Topologies* (IT Revolution Press, 2019)](https://teamtopologies.com/book). Interaction modes, cognitive load, and loose coupling as the goal that governance either serves or undermines.
+- [Bezos, *2016 Letter to Shareholders* (Amazon, 2017)](https://www.aboutamazon.com/news/company-news/2016-letter-to-shareholders). Reversible two-way-door decisions versus irreversible ones as the basis for deciding what deserves escalation, restating the Type 1 and Type 2 distinction from the 2015 letter.
+- [Thoughtworks, *Technology Radar*](https://www.thoughtworks.com/radar). An ongoing public example of ring-based technology inventories as a governance artifact.
+- [ISO/IEC/IEEE 42010:2022, *Software, systems and enterprise: Architecture description*](https://www.iso.org/standard/74393.html). Stakeholders, concerns, and viewpoints as the required content of an architecture description.
 
 ---
 

@@ -342,9 +342,9 @@ Finally, bind operations to inference. Safety guardrails may stop at any time. A
 
 ## References
 
-1. [Trustworthy Online Controlled Experiments: A Practical Guide to A/B Testing](https://www.cambridge.org/core/books/trustworthy-online-controlled-experiments/6A3B263E7114E81B95669A95B219C1D8): Kohavi, Tang & Xu, 2020
-2. [Controlled Experiments on the Web: Survey and Practical Guide](https://ai.stanford.edu/~ronnyk/2009controlledExperimentsOnTheWebSurvey.pdf): Kohavi et al., 2009
-3. [Diagnosing Sample Ratio Mismatch in Online Controlled Experiments](https://www.exp-platform.com/Documents/2019_KDD_SampleRatioMismatch.pdf): Fabijan et al., KDD 2019
+1. [Trustworthy Online Controlled Experiments: A Practical Guide to A/B Testing](https://doi.org/10.1017/9781108653985): Kohavi, Tang & Xu, 2020
+2. [Controlled Experiments on the Web: Survey and Practical Guide](https://doi.org/10.1007/s10618-008-0114-1): Kohavi et al., 2009
+3. [Diagnosing Sample Ratio Mismatch in Online Controlled Experiments](https://doi.org/10.1145/3292500.3330722): Fabijan et al., KDD 2019
 4. [Overlapping Experiment Infrastructure: More, Better, Faster Experimentation](https://research.google/pubs/overlapping-experiment-infrastructure-more-better-faster-experimentation/): Tang et al., Google, 2010
 5. [Improving the Sensitivity of Online Controlled Experiments by Utilizing Pre-Experiment Data (CUPED)](https://www.exp-platform.com/Documents/2013-02-CUPED-ImprovingSensitivityOfControlledExperiments.pdf): Deng et al., 2013
 6. [Always Valid Inference: Continuous Monitoring of A/B Tests](https://arxiv.org/abs/1512.04922): Johari, Pekelis & Walsh, 2017

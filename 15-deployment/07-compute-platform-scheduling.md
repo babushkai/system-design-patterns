@@ -110,7 +110,7 @@ Take an API at 2,000 RPS per region with a 40 ms mean response time, an async se
 
 Utilization is a budget decision, not a virtue. Three curves trade against each other:
 
-- **Packing efficiency** rises with tighter placement and looser spread constraints. Every point of wasted capacity is money at scale; Google reported that fleet-wide profiling and placement work recovered resources large enough to justify the effort of instrumenting everything.
+- **Packing efficiency** rises with tighter placement and looser spread constraints. Every point of wasted capacity is money at scale; Google's Autopilot paper reports that automatically sized jobs ran with 23% slack (requested but unused resources) against 46% for manually sized ones, which is the size of the prize for getting requests right.
 - **Failure headroom** falls with packing. A cluster at 90% steady utilization cannot absorb a node-pool loss, a bad deploy needing 30% extra capacity, or a rebalance after an AZ failure - which is when capacity is most expensive and slowest to obtain.
 - **Recovery speed** determines how much headroom you can safely give back. If new nodes appear in three minutes and pods become ready in two, a burst needs less standing reserve than it does on a platform that takes twenty-five minutes to provision a GPU-backed node.
 
@@ -173,15 +173,25 @@ Prove the platform contract with evidence rather than with a diagram:
 
 ## References
 
-- Verma, A., Pedrosa, L., Korupolu, M., et al. "Large-Scale Cluster Management at Google with Borg." EuroSys 2015. Admission control against reservations, packing versus fairness tension, eviction and priority classes at datacenter scale.
-- Verma, A., et al. "Cluster Management with Homogeneous Clusters." EuroSys 2015. Why homogeneous machines plus constraint-aware placement beat ad hoc sizing.
-- Kubernetes documentation: "Manage Resources for Containers", "Pod Quality of Class", "Pod Lifecycle and Termination", "Eviction API", "Pod Disruption Budgets", "Topology Manager", and "Scheduling Framework".
-- Linux kernel documentation: Control Group v2 (cpu.max, cpu.weight, memory.high, memory.max, pids controller) and "Complete Load Balancer"/CFS bandwidth control notes describing quota periods and throttling statistics.
-- Kubernetes documentation: "Horizontal Pod Autoscaler" behavior policies (scale-down stabilization window) and "Runtime Class".
-- AWS documentation: "Rebalance recommendations" and Spot Instance interruption notices (two-minute reclamation notice); Elastic Load Balancing "Connection draining" defaults.
-- Google Cloud documentation: Preemptible VM termination notice window and node autopilot sizing semantics.
-- Dean, G., and Barroso, L. A. "The Tail at Scale." Communications of the ACM 2013. Why per-request latency depends on shared-resource interference.
-- Cummins, J., et al. "Profiling a Datacenter." SIGMETRICS 2021. Fleet-scale evidence that resource accounting pays for itself.
+- [Verma et al., *Large-scale Cluster Management at Google with Borg* (EuroSys 2015)](https://research.google/pubs/large-scale-cluster-management-at-google-with-borg/). Quota-based admission control, packing versus fairness tension, and preemption across priority bands at datacenter scale.
+- [Burns, Grant, Oppenheimer, Brewer, and Wilkes, *Borg, Omega, and Kubernetes* (ACM Queue, 2016)](https://queue.acm.org/detail.cfm?id=2898444). What a decade of cluster managers taught their authors about containers, labels, and reconciliation.
+- [Rzadca et al., *Autopilot: Workload Autoscaling at Google Scale* (EuroSys 2020)](https://research.google/pubs/autopilot-workload-autoscaling-at-google-scale/). Automatic vertical sizing, and the measured gap in slack between hand-sized and machine-sized jobs.
+- [Kubernetes documentation, *Resource Management for Pods and Containers*](https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/). Requests, limits, and how each is enforced.
+- [Kubernetes documentation, *Pod Quality of Service Classes*](https://kubernetes.io/docs/concepts/workloads/pods/pod-qos/). Guaranteed, Burstable, and BestEffort, and what each means under pressure.
+- [Kubernetes documentation, *Pod Lifecycle*](https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/). Termination sequence, grace period, and hooks.
+- [Kubernetes documentation, *Node-pressure Eviction*](https://kubernetes.io/docs/concepts/scheduling-eviction/node-pressure-eviction/). Hard and soft eviction thresholds for memory, disk, and PID signals.
+- [Kubernetes documentation, *API-initiated Eviction*](https://kubernetes.io/docs/concepts/scheduling-eviction/api-eviction/) and [*Disruptions*](https://kubernetes.io/docs/concepts/workloads/pods/disruptions/). Voluntary disruption and the budgets that bound it.
+- [Kubernetes documentation, *Scheduling Framework*](https://kubernetes.io/docs/concepts/scheduling-eviction/scheduling-framework/). Filter and score extension points behind every placement decision.
+- [Kubernetes documentation, *Topology Manager*](https://kubernetes.io/docs/tasks/administer-cluster/topology-manager/). NUMA-aware alignment of CPU and device allocations.
+- [Kubernetes documentation, *Horizontal Pod Autoscaling*](https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/). Behavior policies and the scale-down stabilization window.
+- [Kubernetes documentation, *Runtime Class*](https://kubernetes.io/docs/concepts/containers/runtime-class/). Selecting a sandboxed or alternative container runtime per workload.
+- [Linux kernel documentation, *Control Group v2*](https://docs.kernel.org/admin-guide/cgroup-v2.html). `cpu.max`, `cpu.weight`, `memory.high`, `memory.max`, and the pids controller.
+- [Linux kernel documentation, *CFS Bandwidth Control*](https://docs.kernel.org/scheduler/sched-bwc.html). Quota periods and the throttling statistics that expose them.
+- [AWS documentation, *Spot Instance interruption notices*](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/spot-instance-termination-notices.html). The two-minute reclamation notice.
+- [AWS documentation, *EC2 instance rebalance recommendations*](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/rebalance-recommendations.html). The earlier, weaker signal that an interruption is likely.
+- [AWS documentation, *Edit target group attributes*](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/edit-target-group-attributes.html). Deregistration delay, the load-balancer half of connection draining.
+- [Google Cloud documentation, *Spot VMs*](https://cloud.google.com/compute/docs/instances/spot). Preemption notice and termination behavior.
+- [Dean and Barroso, *The Tail at Scale* (Communications of the ACM, 2013)](https://research.google/pubs/the-tail-at-scale/). Why per-request latency depends on shared-resource interference.
 
 ---
 

@@ -242,7 +242,7 @@ sequenceDiagram
     Note over A: long pause
     C->>B: lease 42
     B->>S: write(value, fence=42)
-    S-->>B: accepted; highest=42
+    S-->>B: accepted, highest=42
     A->>S: late write(value, fence=41)
     S-->>A: rejected as stale
 ```

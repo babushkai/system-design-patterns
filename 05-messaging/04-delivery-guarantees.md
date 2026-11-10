@@ -306,7 +306,7 @@ Use at-most-once only when loss is cheaper than duplication. Use at-least-once w
 - [Apache Kafka: Transactions](https://kafka.apache.org/documentation/#transactions)
 - [RabbitMQ: Consumer Acknowledgements and Publisher Confirms](https://www.rabbitmq.com/docs/confirms)
 - [Amazon SQS: At-Least-Once Delivery](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/standard-queues-at-least-once-delivery.html)
-- [Martin Kleppmann et al.: Online Event Processing: Achieving Consistency Where Distributed Transactions Have Failed](https://doi.org/10.1145/3329672.3329679)
+- [Martin Kleppmann et al.: Online Event Processing: Achieving Consistency Where Distributed Transactions Have Failed](https://doi.org/10.1145/3317287.3321612)
 - [Google Cloud Pub/Sub: Exactly-Once Delivery](https://cloud.google.com/pubsub/docs/exactly-once-delivery)
 - [AWS Lambda: Asynchronous Invocation and Failure Destinations](https://docs.aws.amazon.com/lambda/latest/dg/invocation-async.html)
 - [Amazon SQS: Idempotency Tokens](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/using-idempotency-tokens.html)

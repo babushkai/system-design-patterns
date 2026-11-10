@@ -1,6 +1,6 @@
 # データセット管理とバージョニング
 
-> **翻訳についての注記:** 本ドキュメントは英語原文 `16-ml-systems/11-dataset-management-versioning.md` を日本語に翻訳したものです。コードブロック、YAML、SQL、Mermaidダイアグラムは原文のまま維持しています。
+> **翻訳の状態:** 現行の[英語版](../../16-ml-systems/11-dataset-management-versioning.md)からの翻訳です。
 
 ## TL;DR
 

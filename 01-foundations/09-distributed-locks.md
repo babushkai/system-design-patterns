@@ -73,7 +73,7 @@ sequenceDiagram
     participant R as Protected resource
 
     C->>L: acquire(resource, incarnation, request_id, deadline)
-    L->>L: serialize grant; allocate generation 84
+    L->>L: serialize grant, allocate generation 84
     L-->>C: HELD(resource, generation 84, lease evidence)
     C->>R: mutate(command, generation 84, operation_id)
     R->>R: atomically compare fence and apply

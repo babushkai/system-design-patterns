@@ -497,7 +497,7 @@ For each deployment, write down:
 - PostgreSQL, [Replication](https://www.postgresql.org/docs/current/runtime-config-replication.html), current documentation.
 - Diego Ongaro and John Ousterhout, [*In Search of an Understandable Consensus Algorithm*](https://raft.github.io/raft.pdf), USENIX ATC, 2014.
 - Barbara Liskov and James Cowling, [*Viewstamped Replication Revisited*](https://pmg.csail.mit.edu/papers/vr-revisited.pdf), 2012.
-- M. R. Eltabakh et al., [*Zephyr: Live Migration in Shared Nothing Databases for Elastic Cloud Platforms*](https://www.cs.purdue.edu/homes/csjgwang/pubs/SIGMOD2011_Zephyr.pdf), SIGMOD, 2011.
+- M. R. Eltabakh et al., [*Zephyr: Live Migration in Shared Nothing Databases for Elastic Cloud Platforms*](https://doi.org/10.1145/1989323.1989356), SIGMOD, 2011.
 
 ---
 

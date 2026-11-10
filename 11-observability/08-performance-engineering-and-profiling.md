@@ -93,9 +93,9 @@ Pick the tool by the question, not by availability. Each row names the failure m
 | Is a specific request slow? | Traces with spans, sampled at a rate that keeps rare traces available | Aggregate cost; tracing samples too sparsely for arithmetic |
 | What changed in the fleet? | Continuous always-on profiles per service and version, retained for weeks | Nothing fundamental; it is expensive to run badly |
 
-**Documented**: Google reported continuous profiling of all production jobs at less than 2% of total datacenter resources (SIGMETRICS 2021, "Profiling a Datacenter"), which is the number that ended the argument that profiling had to be an incident-time activity. Always-on profiles are how you find the service whose regression cost four percent of a fleet's cores in a Tuesday deploy nobody watched.
+**Documented**: Google's Google-Wide Profiling paper describes profiling production continuously by sampling across machines and over time, at an overhead its authors call negligible, which is the result that ended the argument that profiling had to be an incident-time activity. Always-on profiles are how you find the service whose regression cost four percent of a fleet's cores in a Tuesday deploy nobody watched.
 
-Sampling semantics deserve a paragraph because they mislead smart people. A CPU profile at 10 ms resolution assigns samples to whatever frame is on top of the stack, so inlined functions and tail calls move work onto neighbors; that is why profilers need frame pointers or unwinding data. **Documented**: Go enabled frame pointers by default on linux/amd64 and linux/arm64 in Go 1.24, which made kernel-based (eBPF) unwinding of Go stacks practical without DWARF decoding. Allocation profiles are biased toward the allocating site unless corrected: sampling every Kth allocated byte tells you where bytes were created, not what is live now, and only live-heap profiling with dominator or retention analysis identifies a leak's owner.
+Sampling semantics deserve a paragraph because they mislead smart people. A CPU profile at 10 ms resolution assigns samples to whatever frame is on top of the stack, so inlined functions and tail calls move work onto neighbors; that is why profilers need frame pointers or unwinding data. **Documented**: Go has maintained frame pointers by default on x86-64 since Go 1.7 and on 64-bit ARM on all operating systems since Go 1.17, which makes kernel-based (eBPF) unwinding of Go stacks practical without DWARF decoding. Allocation profiles are biased toward the allocating site unless corrected: sampling every Kth allocated byte tells you where bytes were created, not what is live now, and only live-heap profiling with dominator or retention analysis identifies a leak's owner.
 
 ## Reading Profiles Without Lying to Yourself
 
@@ -210,16 +210,22 @@ An optimization is done when the evidence would convince a skeptic who did not w
 
 ## References
 
-- Dean, G., and Barroso, L. A. "The Tail at Scale." Communications of the ACM 56(2), 2013. Fan-out tail amplification, hedged requests, and deadline propagation.
-- Cummins, J., et al. "Profiling a Datacenter." SIGMETRICS 2021. Fleet-wide continuous profiling reported at under 2% of total datacenter resources, with case studies of the savings it produced.
-- Curtsinger, C., and Berger, E. D. "MemProf: Sampling Allocator Profiling Done Right." USENIX ATC 2012. Why naive allocation sampling misattributes memory cost.
-- Gregg, B. *Systems Performance: Enterprise and the Cloud*, 2nd ed. Addison-Wesley, 2020. Service time versus wait time, off-CPU analysis, USE method.
-- Gregg, B. "Differential Flame Graphs" and "Flame Scope" (performance-analytics.com). Reading regressions as profile differences.
-- Tene, G. "How NOT to Measure Latency." Strange Loop 2015. Coordinated omission, percentile misuse, and the HDR histogram method.
-- Kingman, J. F. C. "On Queues in Heavy Traffic." Mathematical Proceedings of the Cambridge Philosophical Society, 1962. The diffusion approximation behind variance-scaled queueing delay.
-- Go project documentation: `runtime/pprof`, garbage collector tuning guide, and the Go 1.24 release notes on frame pointers by default.
-- Linux kernel documentation: Control Group v2 (cpu.max bandwidth control periods and quota) and block/IO accounting.
-- Amazon EKS / Kubernetes documentation: container CPU limits, `container_cpu_cfs_throttled_periods_total`, and memory QoS classes.
+- [Dean and Barroso, *The Tail at Scale* (Communications of the ACM, 2013)](https://research.google/pubs/the-tail-at-scale/). Fan-out tail amplification, hedged requests, and deadline propagation.
+- [Ren et al., *Google-Wide Profiling: A Continuous Profiling Infrastructure for Data Centers* (IEEE Micro, 2010)](https://research.google/pubs/pub36575/). Fleet-wide continuous profiling by sampling across machines and time, at an overhead the authors describe as negligible.
+- [Kanev et al., *Profiling a Warehouse-Scale Computer* (ISCA 2015)](https://research.google/pubs/profiling-a-warehouse-scale-computer/). What fleet profiles show once collected: a large share of cycles spent in common low-level functions rather than in application logic.
+- [Curtsinger and Berger, *Coz: Finding Code that Counts with Causal Profiling* (SOSP 2015)](https://arxiv.org/abs/1608.03676). Why the function with the most samples is not always the one whose speedup would improve end-to-end performance.
+- [TCMalloc documentation, *How sampling in TCMalloc works*](https://google.github.io/tcmalloc/sampling.html). Byte-interval allocation sampling and how samples are scaled back into estimates.
+- [Gregg, *Systems Performance: Enterprise and the Cloud*, 2nd ed. (Addison-Wesley, 2020)](https://www.brendangregg.com/systems-performance-2nd-edition-book.html). Service time versus wait time and methodology for attributing either.
+- [Gregg, *The USE Method*](https://www.brendangregg.com/usemethod.html). Utilization, saturation, and errors per resource as a first-pass checklist.
+- [Gregg, *Off-CPU Analysis*](https://www.brendangregg.com/offcpuanalysis.html). Finding time spent blocked, which on-CPU profiles cannot show.
+- [Gregg, *Differential Flame Graphs* (2014)](https://www.brendangregg.com/blog/2014-11-09/differential-flame-graphs.html). Reading regressions as profile differences.
+- [Tene, *How NOT to Measure Latency*](https://www.infoq.com/presentations/latency-response-time/). Coordinated omission, percentile misuse, and the HDR histogram method.
+- [Kingman, *The Single Server Queue in Heavy Traffic* (Mathematical Proceedings of the Cambridge Philosophical Society, 1961)](https://doi.org/10.1017/S0305004100036094). The approximation behind variance-scaled queueing delay.
+- [Go documentation, *Diagnostics*](https://go.dev/doc/diagnostics) and [*A Guide to the Go Garbage Collector*](https://go.dev/doc/gc-guide). Profiling, tracing, and collector tuning for one widely deployed runtime.
+- [Go 1.7 release notes](https://go.dev/doc/go1.7) and [Go 1.17 release notes](https://go.dev/doc/go1.17). Frame pointers maintained by default on x86-64, then on 64-bit ARM on all operating systems.
+- [Linux kernel documentation, *Control Group v2*](https://docs.kernel.org/admin-guide/cgroup-v2.html). `cpu.max` bandwidth control and I/O accounting.
+- [Linux kernel documentation, *CFS Bandwidth Control*](https://docs.kernel.org/scheduler/sched-bwc.html). Quota, period, and the throttling counters.
+- [Kubernetes documentation, *Resource Management for Pods and Containers*](https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/). How container CPU and memory limits map onto those kernel controls.
 
 ---
 

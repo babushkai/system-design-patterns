@@ -318,3 +318,4 @@ The reusable lessons are:
 - [Secondary Indexes in Distributed Databases](../02-distributed-databases/06-secondary-indexes.md): finding nearby drivers is a geospatial index with an update rate attached
 - [Message Ordering](../05-messaging/03-message-ordering.md): dispatch, acceptance, and arrival must be ordered per ride or the state machine lies
 - [Database Schema Migrations](../15-deployment/03-database-migrations.md): a schema change at this scale is a capacity event scheduled in advance
+- [Geospatial Indexing](../14-search-systems/05-geospatial-indexing.md): the cell and tree structures behind proximity search, separated from the product

@@ -1,0 +1,26 @@
+name: Check External Links
+
+# Reference links rot independently of the repository, so they are checked on a schedule
+# instead of on pull requests: a publisher's outage must not block an unrelated change.
+on:
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  links:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Check external links
+        run: python scripts/check_external_links.py

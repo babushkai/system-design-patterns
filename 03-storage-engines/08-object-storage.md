@@ -89,8 +89,8 @@ flowchart LR
     SCRUB --> FD3
     LIFE[Lifecycle / replication / retention control] --> META
     META --> EV[Event notification plane]
-    OBS[(Usage, audit, durability telemetry)] <-- FE
-    OBS <-- SCRUB
+    FE --> OBS[(Usage, audit, durability telemetry)]
+    SCRUB --> OBS
 ```
 
 The **front end** authenticates, authorizes, validates conditions and sizes, applies quotas, and routes requests. The **metadata plane** maps `(bucket, key, version)` to object state and physical layout, orders single-key mutations, implements list indexes, and exposes conditional operations. The **data plane** stores chunks/shards and serves ranges. The **durability plane** scrubs integrity, detects missing/corrupt shards, and repairs them. Lifecycle and replication are asynchronous control systems with their own backlogs and failure modes.

@@ -508,3 +508,4 @@ Do not choose by origin story, vendor acquisition, or a claim that every engine 
 - [Batch Execution](01-batch-processing.md): who rewrites the data files, and what a rerun is allowed to publish
 - [Change Data Capture](04-change-data-capture.md): the feed that turns row changes into table commits
 - [Distributed Transactions](../02-distributed-databases/07-distributed-transactions.md): optimistic concurrency control with a metadata pointer instead of a lock table
+- [Analytical Query Engines](./03-analytical-query-engines.md): the reader whose pruning and planning depend on this table metadata

@@ -307,7 +307,7 @@ Then answer:
 ## References
 
 - [Leslie Lamport: Time, Clocks, and the Ordering of Events in a Distributed System](https://lamport.azurewebsites.net/pubs/time-clocks.pdf)
-- [Colin J. Fidge: Timestamps in Message-Passing Systems That Preserve the Partial Ordering](https://doi.org/10.5555/647342.724880)
+- Colin J. Fidge, *Timestamps in Message-Passing Systems That Preserve the Partial Ordering* (Proceedings of the 11th Australian Computer Science Conference, 1988)
 - [Apache Kafka: Message Delivery and Ordering](https://kafka.apache.org/documentation/#semantics)
 - [Apache Kafka Protocol: Control Plane and Leader Epochs](https://kafka.apache.org/protocol.html)
 - [CloudEvents Specification](https://github.com/cloudevents/spec)

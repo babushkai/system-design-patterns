@@ -519,7 +519,7 @@ A benchmark on a warm, healthy, single node proves none of these properties.
 - [Redis key eviction](https://redis.io/docs/latest/develop/reference/eviction/)
 - [Redis server-assisted client-side caching](https://redis.io/docs/latest/develop/reference/client-side-caching/)
 - [Memcached performance and efficiency](https://docs.memcached.org/serverguide/performance/)
-- [Consistent Hashing and Random Trees, Karger et al.](https://people.csail.mit.edu/karger/Papers/ConsistentHashing.pdf)
+- [Consistent Hashing and Random Trees, Karger et al.](https://doi.org/10.1145/258533.258660)
 - [A Fast, Minimal Memory, Consistent Hash Algorithm](https://arxiv.org/abs/1406.2294)
 - [Scaling Memcache at Facebook, NSDI 2013](https://www.usenix.org/conference/nsdi13/technical-sessions/presentation/nishtala)
 

@@ -1,6 +1,6 @@
 # 分散データベースにおけるセカンダリインデックス
 
-> **注:** この記事は英語版 `02-distributed-databases/06-secondary-indexes.md` の日本語翻訳です。
+> **翻訳の状態:** この日本語版は英語版の以前の版に基づいており、現行の[英語版](../../02-distributed-databases/06-secondary-indexes.md)とは構成や内容が異なります。最新の内容は英語版を参照してください。
 
 ## TL;DR
 
@@ -112,7 +112,7 @@ graph LR
         P2[("Partition 2<br/>user_id 1001-2000")]
         P3[("Partition 3<br/>user_id 2001-3000")]
     end
-    subgraph Index Partitions — by email hash
+    subgraph "Index Partitions: by email hash"
         IP1["Index Partition 1 (a-m)<br/>alice@x → user_id=5<br/>bob@x → user_id=1500<br/>carol@x → user_id=2500"]
         IP2["Index Partition 2 (n-z)<br/>ned@x → user_id=42<br/>zoe@x → user_id=999"]
     end

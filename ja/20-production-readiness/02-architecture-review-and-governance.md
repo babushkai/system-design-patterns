@@ -1,10 +1,10 @@
 # アーキテクチャレビューと技術ガバナンス
 
-> **翻訳についての注記:** 本ドキュメントは英語原文 `20-production-readiness/02-architecture-review-and-governance.md` を日本語に翻訳したものです。コードブロックおよびMermaidダイアグラムは原文のまま維持しています。
+> **翻訳の状態:** 現行の[英語版](../../20-production-readiness/02-architecture-review-and-governance.md)からの翻訳です。
 
 ## TL;DR
 
-組織のアーキテクチャは図の産物ではなく、決定権の産物だ。明示的に割り当てられていないことは、最初に声の大きい人・最も気にしている人・壊れたときにオンコールだった人が決める。そして後になって1四半期の巻き戻しコストを請求するのは、まさにそのような決定だ。**文書化済み**: DORAの調査は繰り返し、外部の変更承認機関による署名を必須にすることが、より低い提供スループットと高い変更失敗率を予測すると突き止めてきた。小さなバッチとインフォーマルな設計対話は逆を予測する。この知見はレビュー不要論ではない。配置に関する議論だ。何を作るかを早期にレビューするのは安く見返りが多い。特定のデプロイを進めてよいかを遅れて承認するのは、ほぼ何も買えない税金になる。その頃にはより安い選択肢はすべて使い終わっている。
+組織のアーキテクチャは図の産物ではなく、決定権の産物だ。明示的に割り当てられていないことは、最初に声の大きい人・最も気にしている人・壊れたときにオンコールだった人が決める。そして後になって1四半期の巻き戻しコストを請求するのは、まさにそのような決定だ。**文書化済み**: DORAの調査は繰り返し、外部の変更承認機関による署名を必須にすることが、提供を遅くする(リードタイムの延長、デプロイ頻度の低下、復旧の遅れ)一方で、狙いであるはずの変更失敗率の低下にはつながらないと突き止めてきた。軽量なピアレビューは、より高い提供パフォーマンスを予測する。この知見はレビュー不要論ではない。配置に関する議論だ。何を作るかを早期にレビューするのは安く見返りが多い。特定のデプロイを進めてよいかを遅れて承認するのは、ほぼ何も買えない税金になる。その頃にはより安い選択肢はすべて使い終わっている。
 
 価値の大半は2つの区別が担う。1つ目はレビューと決定権の区別だ。何も決められないレビューは教育であり(価値はあるのでそう書くべき)、一度も覆せない権限は意見付きのキューにすぎない。自分がどの儀式にいるのかを名指ししよう。両方向の主たる失敗は、参加者が別の儀式にいると信じていることから生まれる。2つ目は標準とガードレールの区別だ。標準は採用速度ちょうどで腐るテキストであり、ガードレールはビルドを失敗させるコードで、インシデント中に誰かの記憶を必要としないのは後者だけだ。
 
@@ -53,7 +53,7 @@ Conwayの法則は通常、システム境界とコミュニケーション構�
 | スキーマ変更のロールバック経路なし | 準備状況レビュー | 午前3時の緊急変更ウィンドウ | テーブル再構築中の長時間の書き込み停止 |
 | フェイルオーバー時のリトライ増幅 | ローンチ前のレジリエンステスト | 設定変更と再テスト | 自爆的な連鎖障害 |
 
-**文書化済み**: Googleの本番準備レビューは、レビュー側チームが所有するチェックリストとして公開され、ローンチを止めうるものへ明示的にスコープされている。すでに決まった設計批判へ静かに拡大できないようにするためだ。サイト・リアビリティの文献における付随ガイダンスは、レビュアーは所有チームの外から招き、結果は「承認」の二値スタンプではなく、担当者付きのフォローアップ項目の集合であるべきというものである。
+**文書化済み**: GoogleのSRE本は、本番準備レビューを設計の承認としてではなく、SREチームがサービスの運用責任を引き受けるための前提条件として説明している。所有チームの外のSREが、そのサービスに合わせたチェックリストに沿って実施し、成果物は「承認」の二値スタンプではなく、オンボーディング前に開発者とSREが優先順位を決めて取り組む改善項目のリストだ。レビューの範囲を本番での挙動に限ることで、すでに決まった設計選択への批評へ静かに拡大するのを防いでいる。
 
 ## レビュー委員会が失敗する理由
 
@@ -114,7 +114,7 @@ Conwayの法則は通常、システム境界とコミュニケーション構�
 | 是正的 | キルスイッチ付き自動修復 | 保持ポリシーの再適用、オーバーライドの巻き戻し | オンコールを驚かせる自動修正 |
 | 助言的 | プルリクエストへのコメント | 無制限バッファより境界付きキューを推奨 | 何でも検知した瞬間に無視される |
 
-GitOps の収束ループ(『ソフトウェア提供とデプロイの設計』の章)は、ドリフト検査を定期実行ではなく不変条件として実装する。つまり望ましい状態が宣言であり、逸脱は復元対象であって議論の対象ではない。この区別こそ「コンプライアンス」が監査前にスクリーンショットを撮る活動から、継続的に証明されるシステム性質へ変わる地点だ。
+GitOps の収束ループ([CI/CDとGitOps](../15-deployment/04-cicd-gitops.md))は、ドリフト検査を定期実行ではなく不変条件として実装する。つまり望ましい状態が宣言であり、逸脱は復元対象であって議論の対象ではない。この区別こそ「コンプライアンス」が監査前にスクリーンショットを撮る活動から、継続的に証明されるシステム性質へ変わる地点だ。
 
 ## 機構のサイズ設定
 
@@ -176,10 +176,14 @@ GitOps の収束ループ(『ソフトウェア提供とデプロイの設計』
 
 ## 参考文献
 
-- Forsgren, D., Storey, N. A., Thurnes, C., and Wagner, D. "Integrating Lean and Agile Practice with the Assessment of Software Team Dynamics: An Ethnographic Investigation." CHI, 2013 — 承認ゲートと変更失敗率の関係を調査したDORA研究系の源流
-- Farnham, A., and DeStefano, S. "Designed for Developers: Why Structures Matter." Addison-Wesley Professional, 2017 — 合意形成・権限・調整コストを設計問題として扱う組織デザイン
-- Galbraith, J. R. "Designing Complex Organizations." Addison-Wesley, 1971 — 意思決定負荷と、それを減らすために組織が使えるレバーの理論
-- Fowler, M. "Technology Radar." 2016 onward — adopt/trial/assess/hold の4リングと、リングが「何をすべきか」を定義する重要性
-- Helffstein, T., and Wignall, J. "Software Engineering Self-Service with Platform Teams." IEEE ICSE-SEIP, 2019 — ゴールデンパスを自己サービスとして提供するときの摩擦と採用パターン
-- Google SRE Book の Production Readiness Review と launch review の章 — 範囲を明示したチェックリストと、所有チーム外のレビュアーという運用
-- Small, D. "From Architecture to Governance: A Guide for the Perplexed." 2019 — レビュー・標準・権限の区別を明確にするための実務ガイダンス
+- [Conway, *How Do Committees Invent?* (Datamation, 1968)](https://www.melconway.com/Home/Committees_Paper.html)
+- [Forsgren, Humble, and Kim, *Accelerate: The Science of Lean Software and DevOps* (IT Revolution Press, 2018)](https://itrevolution.com/product/accelerate/)
+- [DORA, *Streamlining Change Approval*](https://dora.dev/capabilities/streamlining-change-approval/)
+- [Beyer, Jones, Petoff, and Murphy (eds.), *Site Reliability Engineering*, chapter 32, "The Evolving SRE Engagement Model" (O'Reilly Media, 2016)](https://sre.google/sre-book/evolving-sre-engagement-model/)
+- [*Site Reliability Engineering*, appendix E, "Launch Coordination Checklist"](https://sre.google/sre-book/launch-checklist/)
+- [Winters, Manshreck, and Wright (eds.), *Software Engineering at Google* (O'Reilly Media, 2020)](https://abseil.io/resources/swe-book)
+- [Ford, Parsons, and Kua, *Building Evolutionary Architectures* (O'Reilly Media, 2017)](https://www.thoughtworks.com/insights/books/building-evolutionary-architectures)
+- [Skelton and Pais, *Team Topologies* (IT Revolution Press, 2019)](https://teamtopologies.com/book)
+- [Bezos, *2016 Letter to Shareholders* (Amazon, 2017)](https://www.aboutamazon.com/news/company-news/2016-letter-to-shareholders)
+- [Thoughtworks, *Technology Radar*](https://www.thoughtworks.com/radar)
+- [ISO/IEC/IEEE 42010:2022, *Software, systems and enterprise: Architecture description*](https://www.iso.org/standard/74393.html)

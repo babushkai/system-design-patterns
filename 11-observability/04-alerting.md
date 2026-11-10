@@ -499,3 +499,4 @@ Replay historical incidents and quiet periods through candidate rules. Compare p
 - [Metrics Systems and Monitoring](02-metrics-monitoring.md): the query, the cardinality behind it, and the staleness that delays a page
 - [Incident Command and Learning](07-incident-management.md): an alert is an incident without an owner yet, so routing beats coverage
 - [Model Monitoring](../16-ml-systems/04-model-monitoring.md): alerts for failures with no error code and only a drifting distribution
+- [Notification Delivery Platform](../21-reference-designs/02-notification-delivery.md): the end-user counterpart, where consent and provider semantics replace on-call routing

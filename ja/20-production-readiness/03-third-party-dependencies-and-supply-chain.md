@@ -1,10 +1,10 @@
 # サードパーティ依存とサプライチェーン設計
 
-> **翻訳についての注記:** 本ドキュメントは英語原文 `20-production-readiness/03-third-party-dependencies-and-supply-chain.md` を日本語に翻訳したものです。コードブロックおよびMermaidダイアグラムは原文のまま維持しています。
+> **翻訳の状態:** 現行の[英語版](../../20-production-readiness/03-third-party-dependencies-and-supply-chain.md)からの翻訳です。
 
 ## TL;DR
 
-依存グラフこそ、実際に動いているアーキテクチャだ。ウェアハウスの図には12のサービスが描かれている。しかし `cargo tree`、`pip freeze`、ロックファイルの差分は4000のコンポーネントを示す。その1つひとつに失敗セマンティクス、アップグレード義務、遅延への寄与、データフロー上の義務、そして誰かが火曜日にエンジニアリングの外で変更できる法的条件が付いてくる。**文書化済み**: この領域を定義したインシデントはすべて、遠隔地で起きた可用性か完全性の障害だ。2016年、たった1人で保守されていた left-pad が npm から消えたことでインターネット全体のビルドが止まった。event-stream(2018)と ua-parser-js(2021)は、広くインストールされたパッケージの中で、アカウント乗っ取りが標的型のペイロード生成に至ることを示した。Log4Shell(2021)は、推移的依存経由で到達できるログライブラリが、直接インストールしたこともないソフトウェアで組織をインシデント対応に引きずり込めることを証明した。SolarWinds(2020)は攻撃をベンダーのビルドパイプラインへ移し、xz-utils のバックドア未遂(2024)は sshd がリンクする圧縮ライブラリを狙った複数年にわたるソーシャルエンジニアリングを実見した。
+依存グラフこそ、実際に動いているアーキテクチャだ。ウェアハウスの図には12のサービスが描かれている。しかし `cargo tree`、`pip freeze`、ロックファイルの差分は4000のコンポーネントを示す。その1つひとつに失敗セマンティクス、アップグレード義務、遅延への寄与、データフロー上の義務、そして誰かが火曜日にエンジニアリングの外で変更できる法的条件が付いてくる。**文書化済み**: この領域を定義したインシデントはすべて、遠隔地で起きた可用性か完全性の障害だ。2016年、たった1人で保守されていた left-pad が npm から消えたことでインターネット全体のビルドが止まった。event-stream(2018)と ua-parser-js(2021)は、広くインストールされたパッケージの中で、アカウント乗っ取りが標的型のペイロード生成に至ることを示した。Log4Shell(2021)は、推移的依存経由で到達できるログライブラリが、直接インストールしたこともないソフトウェアで組織をインシデント対応に引きずり込めることを証明した。SolarWinds(2020)は攻撃をベンダーのビルドパイプラインへ移し、xz-utils のバックドア未遂(2024)は 複数のLinuxディストリビューションで sshd が間接的に読み込む圧縮ライブラリを狙った複数年にわたるソーシャルエンジニアリングを実見した。
 
 これらの失敗クラスに奇抜なものはない。だからこそ依存の選択はプルリクエストの差分ではなく設計レビューに属する。**推論**: サードパーティ製コンポーネントをファーストパーティより構造的に難しくするのは3つの性質だ。失敗モードを、そのランブックなしに継承する。アップグレード周期がこちらのリリース計画と無相関である。そして可用性目標は、公表されていても「利用可能」の定義がこちらの尾の遅延も依存先の依存先も含んでいない形で測られている。
 
@@ -49,13 +49,13 @@
 
 | ロックインの種類 | 機構 | 最も安い緩和策 |
 |---|---|---|
-| データ形式 | 独自ストレージ形式、論理状態のエクスポート不可、または忠実性を失うエクスポート | 自分が所有する正準表現を保ち、ベンダーのストアをプロジェクションとして扱う(導出プロジェクションの章) |
+| データ形式 | 独自ストレージ形式、論理状態のエクスポート不可、または忠実性を失うエクスポート | 自分が所有する正準表現を保ち、ベンダーのストアをプロジェクションとして扱う([CQRS（コマンドクエリ責務分離）](../05-messaging/06-cqrs.md)) |
 | APIの形 | ベンダーのリクエスト/レスポンスタイプがビジネスロジック中に散在 | シームでポートする。自分のインターフェース、相手のアダプタ |
 | 運用 | 特定プロバイダでしか使えないツール・ダッシュボード・ランブック | プロバイダをパラメータとして名指す宣言的定義から生成する |
 | 経済 | エグレス料金、リクエスト単価、保持を推奨するストレージクラス | 導入前にトラフィック10倍のコストをモデル化し、エグレスを設計レビューのチェックリストへ入れる |
 | スキルと人員配置 | チーム全員が一つの独自システムに認定されている | スキが希少で長持ちするなら意図的に受け入れる。SQLのラッパーなら抵抗する |
 
-**文書化済み**: 過去10年のインフラ系ライセンス紛争で繰り返されたパターン(オープンコア検索・可観測性・データベースのプロジェクトが宽松ライセンスから source-available やサーバ側条件へ移行し、フォークが続いた)は、ライセンスリスクが法的カレンダーを持つアーキテクチャリスクだと教えている。技術的優位性だけで下した依存決定も、こちらの遅延バジェットに無関係な当事者によって覆されうる。
+**文書化済み**: 過去10年のインフラ系ライセンス紛争で繰り返されたパターン(オープンコア検索・可観測性・データベースのプロジェクトが寛容なライセンスから source-available やサーバ側条件へ移行し、フォークが続いた)は、ライセンスリスクが法的カレンダーを持つアーキテクチャリスクだと教えている。技術的優位性だけで下した依存決定も、こちらの遅延バジェットに無関係な当事者によって覆されうる。
 
 そこから生むべき規律は安い。重要な依存先ごとに**出口ノート**を1つ置き、代替候補、移動すべきデータ、変更が必要なインターフェースを3文で書く。出口ノートは優れた設計レビューの成果物でもある。「シームを名指しできない」はどんな抽象化論より速いシグナルだ。
 
@@ -110,13 +110,13 @@ runtime           no registry credentials, minimal egress, seccomp/AppArmor prof
 
 - **とにかくタイムアウトを最初に。** 自分の締切より短い回次タイムアウトを設定し、キャンセルを伝播させる。既定が「なし」では、ベンダーの遅延スパイクがスレッドプール枯渇に変わる。相手の遅さが原因の自社障害だ。
 - **境界付きリトライおよびジッタおよびリトライバジェット。** ベンダー側も内部でリトライしている可能性と調整する。無調整の方針が2つ重なると、部分的な劣化を全面的な劣化へ変える文書化済みのレシピになる。
-- **ベンダー別のバルクヘッド。** 依存先ごとに接続プール・ワーカープール・セマフォ上限を分離し、遅いベンダーは共有プールではなく自分の容量だけを消費する。サーキットブレーカ(依存状態の章)はそのとき境界付きリソースに対して働く。
+- **ベンダー別のバルクヘッド。** 依存先ごとに接続プール・ワーカープール・セマフォ上限を分離し、遅いベンダーは共有プールではなく自分の容量だけを消費する。サーキットブレーカ([サーキットブレーカー](../06-scaling/06-circuit-breakers.md))はそのとき境界付きリソースに対して働く。
 - **古い値が許容される場所では積極的にキャッシュ。** 権限ルックアップと商品メタデータには否定キャッシュ、明示的な stale-if-error 経路を置き、キャッシュ失効が一斉なサンダリングヘルドへ同期しないようにする。
 - **変更系呼び出しには必ず冪等性キー。** ベンダーのタイムアウトは書き込み失敗ではない。操作IDがなければ重複を受け入れるか照合作業を作るはめになる。後者を選ぶことになる。
 - **Webフックは攻撃者由来の入力として扱う。** 署名検証、リプレイ防御付きのタイムスタンプ許容範囲、冪等なハンドラ、スキーマ検証に失敗したイベントは誰も読まないデッドレターではなく検疫へ。
 - **健全性はベンダーのステータスページではなく挙動で定義する。** ベンダー別の成功率・遅延ヒストグラム・レート制限拒否を第一級の信号として追跡する。ステータスページは連絡路であって指標ではない。
 
-クリティカルパス上のコンポーネントについて、「第2のプロバイダがある」は本番トラフィックで試されるまで仮説にすぎない。実際のフェイルオーバ設計には、設定で切り替えられるルーティング、事前にプロビジョニングされたベンダー別の認証情報とクォータ、両ベンダーに対するコントラクトテストで確認された機能同等性、そしてプライマリを実際に遮断するゲームデーが必要だ(レジリエンステストの章)。コストかセマンティクスのせいでフェイルオーバーが不可能なら、文書でそう述べ、補償統制を記録する。劣化モード、境界付きバックログでのキューおよびリトライ、あるいは明示的な顧客可視エラー状態だ。
+クリティカルパス上のコンポーネントについて、「第2のプロバイダがある」は本番トラフィックで試されるまで仮説にすぎない。実際のフェイルオーバ設計には、設定で切り替えられるルーティング、事前にプロビジョニングされたベンダー別の認証情報とクォータ、両ベンダーに対するコントラクトテストで確認された機能同等性、そしてプライマリを実際に遮断するゲームデーが必要だ([耐障害性テストとフォールトインジェクション](../11-observability/09-resilience-testing-and-fault-injection.md))。コストかセマンティクスのせいでフェイルオーバーが不可能なら、文書でそう述べ、補償統制を記録する。劣化モード、境界付きバックログでのキューおよびリトライ、あるいは明示的な顧客可視エラー状態だ。
 
 ## 常設プログラムとしてのアップグレード
 
@@ -131,9 +131,9 @@ runtime           no registry credentials, minimal egress, seccomp/AppArmor prof
 | 削除を第一級のタスクにする | 依存先削除は追加と同じ見積もりを当てる | 誰も触れないゾンビ統合 |
 | ベンダーに対するコントラクトテスト | レスポンス形状・エラー分類・レート制限ヘッダについて消費側の主張 | 顧客によって発見される静かな挙動変更 |
 
-**文書化済み**: 大規模な依存障害の大半の背景にあるのは目新しい攻撃ではなく、誰も所有していなかった未保守のコンポーネントだ。実務で所有者台帳がスキャニングツールに勝つ理由がこれだ。スキャナは指摘を出し、所有者のいない指摘は1四半期でバックグラウンドノイズになる。
+**推論**: 大規模な依存障害の大半の背景にあるのは目新しい攻撃ではなく、誰も所有していなかった未保守のコンポーネントだ。実務で所有者台帳がスキャニングツールに勝つ理由がこれだ。スキャナは指摘を出し、所有者のいない指摘は1四半期でバックグラウンドノイズになる。
 
-社内プラットフォームでも同じ論理が、より高い賭け金で適用される。こちらの依存先は他チームのコードだからだ。プラットフォームのコンポーネントには、日付付きの廃止ポリシー、アップグレードウィンドウ、可能なら移行を自動で行うツールが必要だ。消費者が移行する速さ以上で破壊的変更を出すプラットフォームチームは、プラットフォームを作ったのではなく自分の仕事を全消費チームへ同時に外注したことになる(移行戦略の章)。
+社内プラットフォームでも同じ論理が、より高い賭け金で適用される。こちらの依存先は他チームのコードだからだ。プラットフォームのコンポーネントには、日付付きの廃止ポリシー、アップグレードウィンドウ、可能なら移行を自動で行うツールが必要だ。消費者が移行する速さ以上で破壊的変更を出すプラットフォームチームは、プラットフォームを作ったのではなく自分の仕事を全消費チームへ同時に外注したことになる([マイグレーション戦略](../15-deployment/06-migration-strategies.md))。
 
 ## 購入したコンポーネントの失敗モード
 
@@ -163,13 +163,25 @@ runtime           no registry credentials, minimal egress, seccomp/AppArmor prof
 
 ## 参考文献
 
-- Hindle, A., Barr, E., Su, Z., Gabel, M., and Devanbu, P. "On the Naturalness of Software." ICSE 2012 — ソースコーパスの反復性。挙動が既知の広く使われるコンポーネントを推奨する根拠
-- Ralph, L. "A Leftpad Retrospective." npm blog, 2016 — 推移的依存リスクを主流の議論に変えた可用性インシデント
-- Unit 42, Palo Alto Networks. "Log4Shell: The Story So Far." 2021 — ライブラリを直接参照していないシステムまで到達する推移的脆弱性の解剖
-- Mandiant. "Highly Evasive Attacker Leveled SolarWinds Customer." 2020 — 局所ではなく全身的な失敗としてのビルドパイプライン侵害
-- Freund, A. xz/liblzma バックドア未遂の公開情報. 2024 — システムデーモンから到達できる上流ライブラリを狙った複数年のソーシャルエンジニアリング
-- OpenSSF. *SLSA: Supply-chain Levels for Software Artifacts* specification — 来歴要求、ビルド完全性レベル、成果物の段階的な保証モデル
-- Cloud Native Computing Foundation Technical Advisory Committee. *Supply Chain Security Whitepaper*. 2021 — ソースからランタイムまでのサプライチェーンの脅威分類
-- Executive Order 14028, "Improving the Nation's Cybersecurity." 2021 と CISA Secure Software Development Attestation guidance — 来歴とSBOMを任意から契約条件へ変えた規制の転回
-- Evans, E. *Domain-Driven Design: Tackling Complexity in the Heart of Software*. Addison-Wesley, 2003 — 外部モデルを構造的に隔離するアンチコロプション層
-- Cockburn, A. "Hexagonal Architecture." 2005 — ベンダーのインターフェースをドメインの外に保つシームとしてのポートとアダプタ
+- [Schlueter, *kik, left-pad, and npm* (npm blog, 2016)](https://blog.npmjs.org/post/141577284765/kik-left-pad-and-npm)
+- [npm, *Details about the event-stream incident* (2018)](https://blog.npmjs.org/post/180565383195/details-about-the-event-stream-incident)
+- [GitHub Advisory Database, GHSA-pjwm-rvh2-c87w, *Embedded malware in ua-parser-js* (2021)](https://github.com/advisories/GHSA-pjwm-rvh2-c87w)
+- [Cyber Safety Review Board, *Review of the December 2021 Log4j Event* (2022)](https://www.cisa.gov/sites/default/files/publications/CSRB-Report-on-Log4-July-11-2022_508.pdf)
+- [FireEye (now Mandiant), *Highly Evasive Attacker Leverages SolarWinds Supply Chain to Compromise Multiple Global Victims With SUNBURST Backdoor* (2020)](https://cloud.google.com/blog/topics/threat-intelligence/evasive-attacker-leverages-solarwinds-supply-chain-compromises-with-sunburst-backdoor)
+- [Freund, *backdoor in upstream xz/liblzma leading to ssh server compromise* (oss-security, 2024)](https://www.openwall.com/lists/oss-security/2024/03/29/4)
+- [Ohm, Plate, Sykosch, and Meier, *Backstabber's Knife Collection: A Review of Open Source Software Supply Chain Attacks* (DIMVA 2020)](https://arxiv.org/abs/2005.09535)
+- [OpenSSF, *Scorecard*](https://github.com/ossf/scorecard)
+- [OpenSSF, *SLSA: Supply-chain Levels for Software Artifacts*, specification v1.0](https://slsa.dev/spec/v1.0/)
+- [in-toto project documentation](https://in-toto.io/)
+- [CNCF TAG Security, *Software Supply Chain Best Practices* (2021)](https://github.com/cncf/tag-security/blob/main/community/working-groups/supply-chain-security/supply-chain-security-paper/CNCF_SSCP_v1.pdf)
+- [SPDX specifications](https://spdx.dev/use/specifications/)
+- [OWASP CycloneDX specification](https://cyclonedx.org/specification/overview/)
+- [Executive Order 14028, *Improving the Nation's Cybersecurity* (2021)](https://www.federalregister.gov/documents/2021/05/17/2021-10460/improving-the-nations-cybersecurity)
+- [NIST SP 800-218, *Secure Software Development Framework (SSDF) Version 1.1* (2022)](https://csrc.nist.gov/pubs/sp/800/218/final)
+- [CISA, *Secure Software Development Attestation Form*](https://www.cisa.gov/secure-software-attestation-form)
+- [MongoDB, *Server Side Public License FAQ*](https://www.mongodb.com/legal/licensing/server-side-public-license/faq)
+- [Elastic, licensing change announcement (2021)](https://www.elastic.co/blog/licensing-change)
+- [AWS, *Introducing OpenSearch* (2021)](https://aws.amazon.com/blogs/opensource/introducing-opensearch/)
+- [Redis, *Redis Adopts Dual Source-Available Licensing* (2024)](https://redis.io/blog/redis-adopts-dual-source-available-licensing/)
+- [Evans, *Domain-Driven Design: Tackling Complexity in the Heart of Software* (Addison-Wesley, 2003)](https://www.domainlanguage.com/ddd/)
+- [Cockburn, *Hexagonal Architecture* (2005)](https://alistair.cockburn.us/hexagonal-architecture/)

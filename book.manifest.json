@@ -46,7 +46,9 @@
         {"route": "03-storage-engines/05-bloom-filters", "title": {"en": "Bloom Filters", "ja": "ブルームフィルタ"}},
         {"route": "03-storage-engines/06-column-storage", "title": {"en": "Column Storage", "ja": "カラムストレージ"}},
         {"route": "03-storage-engines/07-data-encoding", "title": {"en": "Data Encoding", "ja": "データエンコーディング"}},
-        {"route": "03-storage-engines/08-object-storage", "title": {"en": "Object Storage & Commit Protocols", "ja": "オブジェクトストレージ"}}
+        {"route": "03-storage-engines/08-object-storage", "title": {"en": "Object Storage & Commit Protocols", "ja": "オブジェクトストレージ"}},
+        {"route": "03-storage-engines/09-time-series-storage", "title": {"en": "Time-Series Storage Engines", "ja": "時系列ストレージエンジン"}},
+        {"route": "03-storage-engines/10-probabilistic-sketches", "title": {"en": "Probabilistic Sketches", "ja": "確率的スケッチ"}}
       ]
     },
     {
@@ -162,7 +164,8 @@
         {"route": "10-security/05-zero-trust-architecture", "title": {"en": "Zero-Trust Workload Architecture", "ja": "ゼロトラストアーキテクチャ"}},
         {"route": "10-security/06-encryption", "title": {"en": "Cryptographic Key Architecture", "ja": "暗号化"}},
         {"route": "10-security/07-authorization-patterns", "title": {"en": "Authorization at Scale", "ja": "認可パターン"}},
-        {"route": "10-security/08-threat-modeling-and-abuse-cases", "title": {"en": "Threat Modeling & Abuse Cases", "ja": "脅威モデリングと悪用ケース"}}
+        {"route": "10-security/08-threat-modeling-and-abuse-cases", "title": {"en": "Threat Modeling & Abuse Cases", "ja": "脅威モデリングと悪用ケース"}},
+        {"route": "10-security/09-ddos-defense", "title": {"en": "DDoS Defense Architecture", "ja": "DDoS防御アーキテクチャ"}}
       ]
     },
     {
@@ -199,6 +202,7 @@
       "chapters": [
         {"route": "13-data-pipelines/01-batch-processing", "title": {"en": "Batch Execution", "ja": "バッチ処理"}},
         {"route": "13-data-pipelines/02-stream-processing", "title": {"en": "Stream Execution", "ja": "ストリーム処理"}},
+        {"route": "13-data-pipelines/03-analytical-query-engines", "title": {"en": "Analytical Query Engines", "ja": "分析クエリエンジン"}},
         {"route": "13-data-pipelines/04-change-data-capture", "title": {"en": "CDC: Snapshot, Tail & Repair", "ja": "チェンジデータキャプチャ"}},
         {"route": "13-data-pipelines/05-lakehouse-table-formats", "title": {"en": "Lakehouse Table Formats", "ja": "レイクハウス"}}
       ]
@@ -212,6 +216,7 @@
         {"route": "14-search-systems/02-full-text-search", "title": {"en": "Lexical Query Execution", "ja": "字句クエリ実行"}},
         {"route": "14-search-systems/03-vector-search", "title": {"en": "Vector Retrieval Systems", "ja": "ベクトル検索システム"}},
         {"route": "14-search-systems/04-ranking-algorithms", "title": {"en": "Ranking & Evaluation", "ja": "ランキングと評価"}},
+        {"route": "14-search-systems/05-geospatial-indexing", "title": {"en": "Geospatial Indexing", "ja": "地理空間インデックス"}},
         {"route": "14-search-systems/06-typeahead-autocomplete", "title": {"en": "Typeahead & Autocomplete", "ja": "タイプアヘッド"}}
       ]
     },
@@ -309,6 +314,19 @@
         {"route": "20-production-readiness/03-third-party-dependencies-and-supply-chain", "title": {"en": "Third-Party & Supply Chain", "ja": "サードパーティ依存とサプライチェーン設計"}},
         {"route": "20-production-readiness/04-verification-strategy-for-distributed-systems", "title": {"en": "Verification Strategy", "ja": "分散システムの検証戦略"}},
         {"route": "20-production-readiness/05-data-retention-and-compliance-engineering", "title": {"en": "Data Retention & Compliance", "ja": "データ保持とコンプライアンス設計"}}
+      ]
+    },
+    {
+      "number": 21,
+      "dir": "21-reference-designs",
+      "title": {"en": "Reference Designs", "ja": "リファレンス設計"},
+      "chapters": [
+        {"route": "21-reference-designs/01-url-shortener", "title": {"en": "URL Shortener", "ja": "URL短縮サービス"}},
+        {"route": "21-reference-designs/02-notification-delivery", "title": {"en": "Notification Delivery Platform", "ja": "通知配信プラットフォーム"}},
+        {"route": "21-reference-designs/03-web-crawler", "title": {"en": "Web Crawler", "ja": "Webクローラ"}},
+        {"route": "21-reference-designs/04-ad-click-aggregation", "title": {"en": "Ad Click Aggregation", "ja": "広告クリック集計"}},
+        {"route": "21-reference-designs/05-ticketing-inventory-reservation", "title": {"en": "Ticketing & Inventory Reservation", "ja": "チケット販売と在庫予約"}},
+        {"route": "21-reference-designs/06-order-matching-engine", "title": {"en": "Order Matching Engine", "ja": "注文マッチングエンジン"}}
       ]
     }
   ]

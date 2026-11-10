@@ -572,7 +572,7 @@ The best slice is not automatically the least important feature. Choose one that
 - [Martin Fowler: Branch by Abstraction](https://martinfowler.com/bliki/BranchByAbstraction.html)
 - [Stripe Engineering: Online Migrations at Scale](https://stripe.com/blog/online-migrations)
 - [GitHub Scientist](https://github.com/github/scientist)
-- [AWS Prescriptive Guidance: Strangler Fig Pattern](https://docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/strangler-fig.html)
+- [AWS Prescriptive Guidance: Strangler Fig Pattern](https://docs.aws.amazon.com/prescriptive-guidance/latest/modernization-decomposing-monoliths/strangler-fig.html)
 - [PostgreSQL: Logical Decoding Concepts](https://www.postgresql.org/docs/current/logicaldecoding-explanation.html)
 - [Google SRE Book: Data Integrity](https://sre.google/sre-book/data-integrity/)
 

@@ -44,8 +44,6 @@ FENCE_RE = re.compile(r"^\s*(```|~~~)")
 LEGACY_NUMBER_GAPS: dict[str, tuple[int, ...]] = {
     "01-foundations": (7,),
     "07-real-time": (2, 3, 4),
-    "13-data-pipelines": (3,),
-    "14-search-systems": (5,),
 }
 
 

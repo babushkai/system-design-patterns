@@ -381,17 +381,19 @@ The same "prepaid negative answer" pattern recurs anywhere a cheap check can vet
 
 ## References
 
-- Bloom, B. H. (1970). *Space/Time Trade-offs in Hash Coding with Allowable Errors*. CACM.
-- Broder, A., & Mitzenmacher, M. (2004). *Network Applications of Bloom Filters: A Survey*. Internet Mathematics.
-- Kirsch, A., & Mitzenmacher, M. (2006). *Less Hashing, Same Performance: Building a Better Bloom Filter*. ESA.
-- Putze, F., Sanders, P., & Singler, J. (2007). *Cache-, Hash- and Space-Efficient Bloom Filters*. WEA.
-- Bose, P., et al. (2008). *On the False-Positive Rate of Bloom Filters*. Information Processing Letters.
-- Fan, B., Andersen, D., Kaminsky, M., & Mitzenmacher, M. (2014). *Cuckoo Filter: Practically Better Than Bloom*. CoNEXT.
-- Maggs, B., & Sitaraman, R. (2015). *Algorithmic Nuggets in Content Delivery*. ACM SIGCOMM CCR. (One-hit wonders / cache admission.)
-- Dayan, N., Athanassoulis, M., & Idreos, S. (2017). *Monkey: Optimal Navigable Key-Value Store*. SIGMOD.
-- Graf, T. M., & Lemire, D. (2020). *Xor Filters: Faster and Smaller Than Bloom and Cuckoo Filters*. ACM JEA; and (2022) *Binary Fuse Filters*.
-- RocksDB Wiki: *RocksDB Bloom Filter* (format_version 5 fast local bloom) and *Ribbon Filter*.
-- BIP-37 (Connection Bloom Filtering) and BIP-158 (Compact Block Filters): Bitcoin Improvement Proposals.
+- [Bloom, *Space/Time Trade-offs in Hash Coding with Allowable Errors* (Communications of the ACM, 1970)](https://doi.org/10.1145/362686.362692)
+- [Broder and Mitzenmacher, *Network Applications of Bloom Filters: A Survey* (Internet Mathematics, 2004)](https://doi.org/10.1080/15427951.2004.10129096)
+- [Kirsch and Mitzenmacher, *Less Hashing, Same Performance: Building a Better Bloom Filter* (ESA 2006)](https://doi.org/10.1007/11841036_42)
+- [Putze, Sanders, and Singler, *Cache-, Hash- and Space-Efficient Bloom Filters* (WEA 2007)](https://doi.org/10.1007/978-3-540-72845-0_9)
+- [Bose et al., *On the False-Positive Rate of Bloom Filters* (Information Processing Letters, 2008)](https://doi.org/10.1016/j.ipl.2008.05.018)
+- [Fan, Andersen, Kaminsky, and Mitzenmacher, *Cuckoo Filter: Practically Better Than Bloom* (CoNEXT 2014)](https://www.cs.cmu.edu/~dga/papers/cuckoo-conext2014.pdf)
+- [Maggs and Sitaraman, *Algorithmic Nuggets in Content Delivery* (ACM SIGCOMM CCR, 2015)](https://doi.org/10.1145/2805789.2805800)
+- [Dayan, Athanassoulis, and Idreos, *Monkey: Optimal Navigable Key-Value Store* (SIGMOD 2017)](https://doi.org/10.1145/3035918.3064054)
+- [Graf and Lemire, *Xor Filters: Faster and Smaller Than Bloom and Cuckoo Filters* (2019)](https://arxiv.org/abs/1912.08258)
+- [Graf and Lemire, *Binary Fuse Filters: Fast and Smaller Than Xor Filters* (2022)](https://arxiv.org/abs/2201.01174)
+- [RocksDB Wiki, *RocksDB Bloom Filter*](https://github.com/facebook/rocksdb/wiki/RocksDB-Bloom-Filter)
+- [BIP-37, *Connection Bloom filtering*](https://github.com/bitcoin/bips/blob/master/bip-0037.mediawiki)
+- [BIP-158, *Compact Block Filters for Light Clients*](https://github.com/bitcoin/bips/blob/master/bip-0158.mediawiki)
 
 ---
 
@@ -401,3 +403,4 @@ The same "prepaid negative answer" pattern recurs anywhere a cheap check can vet
 - [SSTables and Compaction](03-sstables-compaction.md): filters are rebuilt per run, so compaction policy sets their size and staleness
 - [Secondary Indexes in Distributed Databases](../02-distributed-databases/06-secondary-indexes.md): the cheapest index there is, valuable exactly where a lookup is going to miss
 - [Vector Retrieval Systems](../14-search-systems/03-vector-search.md): a different probabilistic shortcut: bounded work instead of an exact answer
+- [Probabilistic Sketches](./10-probabilistic-sketches.md): the same memory-for-error trade applied to counting, frequency, and quantiles

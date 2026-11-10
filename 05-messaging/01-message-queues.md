@@ -274,3 +274,4 @@ Choose the queue design by answering:
 - [Delivery Guarantees and Effect Boundaries](04-delivery-guarantees.md): what a broker can promise about one message, and what it leaves to you
 - [Backpressure](../06-scaling/07-backpressure.md): a queue is a buffer with an opinion: what happens when it fills
 - [Background Jobs and Worker Pools](../18-workflow-job-systems/02-background-jobs-worker-pools.md): the consumer side, where a queue becomes a work system with retries and leases
+- [Notification Delivery Platform](../21-reference-designs/02-notification-delivery.md): queues per stage and per channel applied to an irreversible external effect

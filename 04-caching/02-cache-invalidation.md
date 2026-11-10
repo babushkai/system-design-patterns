@@ -521,3 +521,4 @@ Each SLO needs a measurement source and a declared response when telemetry is mi
 - [Transactional Outbox, Inbox, and CDC Publication](../05-messaging/07-outbox-pattern.md): making the invalidation signal commit with the write instead of shortly after it
 - [TAO](../09-whitepapers/05-tao.md): an entity cache with associations, where dependency graphs stop being hypothetical
 - [Authorization at Scale](../10-security/07-authorization-patterns.md): a cached decision is still a decision, and revocation is an invalidation problem
+- [URL Shortener](../21-reference-designs/01-url-shortener.md): revocation deadlines across browser and edge caches in one small complete design

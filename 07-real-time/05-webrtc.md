@@ -58,7 +58,7 @@ sequenceDiagram
     M-->>S: answer + candidates
     S-->>C: answer + candidates
     C->>I: candidate gathering and connectivity checks
-    C->>M: nominate candidate pair; complete DTLS
+    C->>M: nominate candidate pair, complete DTLS
     M-->>C: bidirectional SRTP / SCTP established
     C-->>S: track published / subscribed
 ```

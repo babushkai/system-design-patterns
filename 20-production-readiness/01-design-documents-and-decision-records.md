@@ -128,7 +128,7 @@ Documentation rot is not a discipline problem, it is an incentives problem: the 
 
 The failure mode this replaces is the invisible fork: three documents describing one system, each correct about a different quarter. When the fork is discovered, delete the losers explicitly and leave a pointer; silently keeping the newest is how the next engineer finds the wrong one first.
 
-**Documented**: postmortems are the highest-yield source of missing records. Where an incident's root cause was an undocumented assumption, the corrective action is a record plus a test where possible, not a wiki page that restates the incident. Assumptions that cannot be written down are usually the ones that break.
+**Inference**: postmortems are the highest-yield source of missing records. Where an incident's root cause was an undocumented assumption, the corrective action is a record plus a test where possible, not a wiki page that restates the incident. Assumptions that cannot be written down are usually the ones that break.
 
 ## Review Mechanics
 
@@ -192,18 +192,18 @@ Directional signals only, and none of them belongs on a dashboard for individual
 
 ## References
 
-- Parnas, D., and Clements, P. "A Rational Design Process: How and Why to Fake It." IEEE Transactions on Software Engineering, 1986. The original argument that design proceeds by iterative guessing and that the documented rational structure is a deliberately constructed artifact.
-- Parnas, D. "On the Criteria To Be Used in Decomposing Systems into Modules." Communications of the ACM, 1972. Information hiding as the reason module boundaries are decisions worth recording.
-- Nygard, M. "Documenting Architecture Decisions." 2011. The decision-record format that most ADR tooling descends from: context, decision, consequences, and immutability by supersession.
-- ISO/IEC/IEEE 42010:2022, "Systems and software engineering - Architecture description." Stakeholders, concerns, viewpoints, and the requirement that an architecture description state which of each it addresses.
-- Brown, S. "The C4 Model for Visualising Software Architecture." 2011 onward. Altitudes for diagrams, and why one drawing cannot answer questions at three scales.
-- Starke, G., and Reif, H. "arc42 - template for software architecture documentation." A fixed section set that keeps architecture descriptions comparable across teams.
-- Bryar, W., and Carr, B. "Working Backwards: Insights, Stories, and Secrets from Inside Amazon." St. Martin's Press, 2021. Narrative memos instead of slide decks, and the six-page structure that forces the argument to be written in prose.
-- Sharma, T., Bosworth, A., Zaharia, M., and Chakraborty, A. (eds). "Software Engineering at Google." O'Reilly Media, 2020. Design documents, code review norms, and documentation engineering as maintained artifacts with owners.
-- Google Engineering Practices documentation. Public guidance on review responsibilities, comment severity, and resolving disagreement without escalation theater.
-- Ousterhout, J. "A Philosophy of Software Design." 2nd ed. Yaknyam Press, 2021. Complexity as the thing design decisions either pay down or accumulate, and comments as documentation of intent rather than behavior.
-- Brooks, F. "The Design of Design: Essays from a Computer Scientist." Addison-Wesley, 2010. Design processes, iterative sketches, and why the representation used for a design changes what can be noticed in it.
-- Skelton, M., and Pais, S. "Team Topologies." IT Revolution Press, 2019. Interaction modes and cognitive load as reasons decisions need an owning team rather than a committee.
+- [Parnas and Clements, *A Rational Design Process: How and Why to Fake It* (IEEE Transactions on Software Engineering, 1986)](https://doi.org/10.1109/TSE.1986.6312940). The original argument that design proceeds by iterative guessing and that the documented rational structure is a deliberately constructed artifact.
+- [Parnas, *On the Criteria To Be Used in Decomposing Systems into Modules* (Communications of the ACM, 1972)](https://doi.org/10.1145/361598.361623). Information hiding as the reason module boundaries are decisions worth recording.
+- [Nygard, *Documenting Architecture Decisions* (2011)](https://cognitect.com/blog/2011/11/15/documenting-architecture-decisions). The decision-record format that most ADR tooling descends from: context, decision, consequences, and immutability by supersession.
+- [ISO/IEC/IEEE 42010:2022, *Software, systems and enterprise: Architecture description*](https://www.iso.org/standard/74393.html). Stakeholders, concerns, viewpoints, and the requirement that an architecture description state which of each it addresses.
+- [Brown, *The C4 Model for Visualising Software Architecture*](https://c4model.com/). Altitudes for diagrams, and why one drawing cannot answer questions at three scales.
+- [Starke and Hruschka, *arc42: Template for Architecture Communication and Documentation*](https://arc42.org/overview). A fixed section set that keeps architecture descriptions comparable across teams.
+- [Bryar and Carr, *Working Backwards: Insights, Stories, and Secrets from Inside Amazon* (St. Martin's Press, 2021)](https://www.workingbackwards.com/). Narrative memos instead of slide decks, and the six-page structure that forces the argument to be written in prose.
+- [Winters, Manshreck, and Wright (eds.), *Software Engineering at Google* (O'Reilly Media, 2020)](https://abseil.io/resources/swe-book). Design documents, code review norms, and documentation as maintained artifacts with owners.
+- [Ubl, *Design Docs at Google* (2020)](https://www.industrialempathy.com/posts/design-docs-at-google/). A first-hand description of the context, goals, non-goals, alternatives, and cross-cutting-concern sections, and of when a design document is not worth writing.
+- [Google, *Engineering Practices Documentation*](https://google.github.io/eng-practices/). Public guidance on review responsibilities, comment severity, and resolving disagreement without escalation theater.
+- [Ousterhout, *A Philosophy of Software Design*, 2nd ed. (Yaknyam Press, 2021)](https://web.stanford.edu/~ouster/cgi-bin/aposd.php). Complexity as the thing design decisions either pay down or accumulate, and comments as documentation of intent rather than behavior.
+- [Skelton and Pais, *Team Topologies* (IT Revolution Press, 2019)](https://teamtopologies.com/book). Interaction modes and cognitive load as reasons decisions need an owning team rather than a committee.
 
 ---
 

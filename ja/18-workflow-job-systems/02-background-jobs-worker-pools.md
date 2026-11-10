@@ -1,6 +1,6 @@
 # バックグラウンドジョブとワーカープール
 
-> この記事は英語版から翻訳されました。最新版は[英語版](/18-workflow-job-systems/02-background-jobs-worker-pools)をご覧ください。
+> **翻訳の状態:** この日本語版は英語版の以前の版に基づいており、現行の[英語版](../../18-workflow-job-systems/02-background-jobs-worker-pools.md)とは構成や内容が異なります。最新の内容は英語版を参照してください。
 
 ## TL;DR
 

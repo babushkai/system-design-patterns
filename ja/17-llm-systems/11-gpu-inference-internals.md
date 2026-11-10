@@ -1,6 +1,6 @@
 # GPU推論の内部構造
 
-> **注:** この記事は英語版からの翻訳です。コードブロックおよびMermaidダイアグラムは原文のまま保持しています。
+> **翻訳の状態:** 現行の[英語版](../../17-llm-systems/11-gpu-inference-internals.md)からの翻訳です。
 
 ## TL;DR
 
@@ -249,14 +249,17 @@ KV転送がエンジニアリングの核心です: 長いプロンプトあた�
 
 ## 参考文献
 
-- Williams, Waterman & Patterson — *Roofline: An Insightful Visual Performance Model* (2009)
-- Dao et al. — *FlashAttention* (2022), *FlashAttention-2* (2023); Shah et al. — *FlashAttention-3* (2024)
-- Kwon et al. — *Efficient Memory Management for LLM Serving with PagedAttention* (vLLM, 2023)
-- Zhong et al. — *DistServe: Disaggregating Prefill and Decoding* (2024)
-- Qin et al. — *Mooncake: A KVCache-centric Disaggregated Architecture* (2024)
-- DeepSeek-AI — *DeepSeek-V3 Technical Report* (2024)
-- Leviathan et al. — *Fast Inference via Speculative Decoding* (2023)
-- Dong et al. — *XGrammar: Flexible and Efficient Structured Generation* (2024)
+- [Williams, Waterman, and Patterson, *Roofline: An Insightful Visual Performance Model for Multicore Architectures* (Communications of the ACM, 2009)](https://doi.org/10.1145/1498765.1498785)
+- [Dao et al., *FlashAttention: Fast and Memory-Efficient Exact Attention with IO-Awareness* (2022)](https://arxiv.org/abs/2205.14135)
+- [Dao, *FlashAttention-2: Faster Attention with Better Parallelism and Work Partitioning* (2023)](https://arxiv.org/abs/2307.08691)
+- [Shah et al., *FlashAttention-3: Fast and Accurate Attention with Asynchrony and Low-precision* (2024)](https://arxiv.org/abs/2407.08608)
+- [Kwon et al., *Efficient Memory Management for Large Language Model Serving with PagedAttention* (SOSP 2023)](https://arxiv.org/abs/2309.06180)
+- [Zhong et al., *DistServe: Disaggregating Prefill and Decoding for Goodput-optimized Large Language Model Serving* (OSDI 2024)](https://arxiv.org/abs/2401.09670)
+- [Qin et al., *Mooncake: A KVCache-centric Disaggregated Architecture for LLM Serving* (2024)](https://arxiv.org/abs/2407.00079)
+- [DeepSeek-AI, *DeepSeek-V3 Technical Report* (2024)](https://arxiv.org/abs/2412.19437)
+- [Leviathan, Kalman, and Matias, *Fast Inference from Transformers via Speculative Decoding* (ICML 2023)](https://arxiv.org/abs/2211.17192)
+- [Dong et al., *XGrammar: Flexible and Efficient Structured Generation Engine for Large Language Models* (2024)](https://arxiv.org/abs/2411.15100)
+- [MLCommons, *MLPerf Inference: Datacenter* results](https://mlcommons.org/benchmarks/inference-datacenter/)
+- [vLLM documentation](https://docs.vllm.ai/)
 - NVIDIA H100/H200/B200 データシート; NVIDIA Dynamo アーキテクチャドキュメント
-- MLPerf Inference 結果 (mlcommons.org); vLLM、SGLang、TensorRT-LLM ドキュメント
 - [Attentionとトランスフォーマー](../09-whitepapers/15-attention-transformers.md) — この章が仕えるアーキテクチャ

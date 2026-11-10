@@ -215,7 +215,7 @@ Property tests should prove range coverage with no gaps/overlaps, deterministic 
 
 ## References
 
-- [Karger et al., *Consistent Hashing and Random Trees* (STOC 1997)](https://www.akamai.com/site/en/documents/research-paper/consistent-hashing-and-random-trees-distributed-caching-protocols-for-relieving-hot-spots-on-the-world-wide-web.pdf)
+- [Karger et al., *Consistent Hashing and Random Trees* (STOC 1997)](https://doi.org/10.1145/258533.258660)
 - [DeCandia et al., *Dynamo: Amazon's Highly Available Key-value Store* (SOSP 2007)](https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf)
 - [Chang et al., *Bigtable: A Distributed Storage System for Structured Data* (OSDI 2006)](https://storage.googleapis.com/gweb-research2023-media/pubtools/4443.pdf)
 - [Curino et al., *Schism: a Workload-Driven Approach to Database Replication and Partitioning* (VLDB 2010)](https://www.vldb.org/pvldb/vol3/R76.pdf)
