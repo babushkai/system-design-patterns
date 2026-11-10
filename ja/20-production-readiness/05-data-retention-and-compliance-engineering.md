@@ -1,10 +1,10 @@
 # データ保持とコンプライアンス設計
 
-> **翻訳についての注記:** 本ドキュメントは英語原文 `20-production-readiness/05-data-retention-and-compliance-engineering.md` を日本語に翻訳したものです。コードブロックおよびMermaidダイアグラムは原文のまま維持しています。
+> **翻訳の状態:** 現行の[英語版](../../20-production-readiness/05-data-retention-and-compliance-engineering.md)からの翻訳です。
 
 ## TL;DR
 
-削除はモダンなシステムで最も難しい書き込みだ。事実のすべてのコピーに届く必要があり、そこには変更不能になるよう設計されたものまで含まれるから。作成の一文が及ぶのは、自社で所有するコードを経由する数か所だけだ。一方の削除は、一次テーブル、読み取りレプリカ、古いレコードが独自の保持クロックを持つログエントリになっている変更データキャプチャトピック、検索インデックス、キャッシュ、スナップショットコピーを保持するアナリティクスのレイク、フィーチャストア、前四半期に凍結された学習データセット、そこから導出した埋め込みベクトル、顧客へメールを送るベンダー、そして90日分のバックアップに届かねばならない。**文書化済み**: 消去義務が機構ではなく方針文書で満たされることがこれほど多い理由がここにある。規制当局は分散プロトコルを要求しなかった。権利を要求し、多くの組織はチケットキューとインターンで答えた。
+削除はモダンなシステムで最も難しい書き込みだ。事実のすべてのコピーに届く必要があり、そこには変更不能になるよう設計されたものまで含まれるから。作成の一文が及ぶのは、自社で所有するコードを経由する数か所だけだ。一方の削除は、一次テーブル、読み取りレプリカ、古いレコードが独自の保持クロックを持つログエントリになっている変更データキャプチャトピック、検索インデックス、キャッシュ、スナップショットコピーを保持するアナリティクスのレイク、フィーチャストア、前四半期に凍結された学習データセット、そこから導出した埋め込みベクトル、顧客へメールを送るベンダー、そして90日分のバックアップに届かねばならない。**推論**: 消去義務が機構ではなく方針文書で満たされることがこれほど多い理由がここにある。規制当局は分散プロトコルを要求しなかった。権利を要求し、多くの組織はチケットキューとインターンで答えた。
 
 保持を法務の問題ではなくアーキテクチャの関心事にする性質は2つある。第一に、保持は*書き込み経路の機能*だ。削除が可能かどうかを決める判断は、データモデル・イベントスキーマ・ストレージレイアウトを選ぶ瞬間になされ、後から安価に後付けできない。第二に、保持には上下2つの境界があり、どちらも高コストで失敗する。上限が高すぎれば規制上の露出と発見対象とストレージコストを生み、下限が低すぎれば、デバッグし、チャージバックに反論し、顧客との会話を再現し、監査人に答える能力そのものを破壊する。**推論**: 現実世界で最も多い失敗は、すべてを過剰に保持することではない。コピーごとに保持が不揃いになることだ。各ストアが、自分のエンジンがたまたま簡単にできる方法を採る。
 
@@ -162,10 +162,14 @@ reconciliation sweep: sample subjects per copy class -> assert absence
 
 ## 参考文献
 
-- Regulation (EU) 2016/679 (GDPR)、第5条1項(e)の保存制限、第17条の消去される権利、第28条の処理者の義務、第30条の処理の記録、第44条以下の移転。多くの保持・所在設計の法的な前提
-- カリフォルニア州消費者プライバシー法(CPRAによる改正後)。削除の権利と収集時の通知義務を含む。同じ工学的表面に対して別の機構を持つ第二の法域
-- PCI Security Standards Council. *PCI DSS v4.x*、保存する口座データの保護と最小化に関する要求3。不要になったデータの削除を命じる標準として最も明快な例
-- ISO/IEC 27001附属書Aの統制と、論理・物理アクセスに関するSOC 2信頼サービス基準のCC6カテゴリ。たいていの監査依頼が実際にはこの管理番号で書かれる2つの枠組み
-- NIST SP 800-88 Rev. 1, *Guidelines for Media Sanitization*, NIST, 2014 — clear、purge、destroyの最も明快な公開分類と、その違いが設計判断である理由
-- van Oorschot, P. C. and Wiener, M. K., "On Streaming Encryption and Key Management," Selected Areas in Cryptography, 1998。Rosenzweig, P., "Skipjack, Key Escrow, and Split-Key Cryptography," IEEE Annals of the History of Computing, 1997 — データが見つからないならキーを破壊するという鍵破棄による消去の学術的基礎
-- HIPAAセキュリティ規則、45 CFR 164.316(b)(2)(i)。6年間の文書保存を求める項目。注意して読む価値がある。法令永続の義務は患者データそのものではなく、自社統制に関する文書にかかる
+- [Regulation (EU) 2016/679 (GDPR)](https://eur-lex.europa.eu/eli/reg/2016/679/oj)
+- [California Consumer Privacy Act, as amended by the CPRA](https://oag.ca.gov/privacy/ccpa)
+- [PCI Security Standards Council, document library (*PCI DSS v4.x*)](https://www.pcisecuritystandards.org/document_library/)
+- [ISO/IEC 27001:2022](https://www.iso.org/standard/27001)
+- [AICPA, *SOC 2* and the Trust Services Criteria](https://www.aicpa-cima.com/topic/audit-assurance/audit-and-assurance-greater-than-soc-2)
+- [NIST SP 800-88 Rev. 1, *Guidelines for Media Sanitization* (2014)](https://csrc.nist.gov/pubs/sp/800/88/r1/final)
+- [NIST SP 800-88 Rev. 2, *Guidelines for Media Sanitization*](https://csrc.nist.gov/pubs/sp/800/88/r2/final)
+- [Boneh and Lipton, *A Revocable Backup System* (USENIX Security 1996)](https://www.usenix.org/conference/6th-usenix-security-symposium/revocable-backup-system)
+- [Reardon, Basin, and Capkun, *SoK: Secure Data Deletion* (IEEE Symposium on Security and Privacy, 2013)](https://doi.org/10.1109/SP.2013.28)
+- [Google Cloud, *Data deletion on Google Cloud*](https://cloud.google.com/docs/security/deletion)
+- [HIPAA Security Rule, 45 CFR 164.316](https://www.ecfr.gov/current/title-45/subtitle-A/subchapter-C/part-164/subpart-C/section-164.316)

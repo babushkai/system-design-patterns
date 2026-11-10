@@ -1,6 +1,6 @@
 # WebRTC
 
-> この記事は英語版から翻訳されました。最新版は[英語版](/07-real-time/05-webrtc.md)をご覧ください。
+> **翻訳の状態:** この日本語版は英語版の以前の版に基づいており、現行の[英語版](../../07-real-time/05-webrtc.md)とは構成や内容が異なります。最新の内容は英語版を参照してください。
 
 ## TL;DR
 
@@ -50,7 +50,7 @@ sequenceDiagram
     S->>A: 4. Forward Answer
     A->>B: 5. ICE Candidate
     B->>A: ICE Candidate
-    A<==>B: 6. Direct P2P Connection Established
+    A->>B: 6. Direct P2P Connection Established (both directions)
 ```
 
 ---
@@ -493,17 +493,17 @@ setInterval(() => {
 
 ```mermaid
 graph LR
-    subgraph Scenario 1 — Direct P2P
+    subgraph "Scenario 1: Direct P2P"
         PA1["Peer A<br/>(Public)"] <==> PB1["Peer B<br/>(Public)"]
     end
 
-    subgraph Scenario 2 — STUN
+    subgraph "Scenario 2: STUN"
         PA2[Peer A] --- NATA[NAT A] <==> NATB[NAT B] --- PB2[Peer B]
         NATA --> STUN[STUN Server<br/>Discovers public IP/port]
         NATB --> STUN
     end
 
-    subgraph Scenario 3 — TURN required
+    subgraph "Scenario 3: TURN required"
         PA3[Peer A] --- SNATA[Symmetric NAT A] --> TURN[TURN Server<br/>Relays traffic]
         PB3[Peer B] --- SNATB[Symmetric NAT B] --> TURN
     end

@@ -275,3 +275,4 @@ These principles apply to inventory reservation, order fulfillment, cloud provis
 - [Distributed Transactions](../02-distributed-databases/07-distributed-transactions.md): the money-moving invariant, and what it costs to hold across services
 - [SLOs and Error-Budget Control](../11-observability/05-slos-error-budgets.md): an error budget measured in merchant outcomes rather than user sessions
 - [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.md): a timeout on a charge is an unresolved question, and hedging makes it worse
+- [Ticketing and Inventory Reservation](../21-reference-designs/05-ticketing-inventory-reservation.md): the inventory side of a purchase, where a late payment meets an expired hold

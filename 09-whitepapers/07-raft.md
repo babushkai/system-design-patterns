@@ -140,7 +140,7 @@ What should be retained from the paper is the review method: enumerate persisten
 
 ## References
 
-- [Ongaro and Ousterhout, *In Search of an Understandable Consensus Algorithm* (USENIX ATC 2014), official PDF](https://www.usenix.org/system/files/conference/atc14/atc14-paper-ongaro.pdf)
+- [Ongaro and Ousterhout, *In Search of an Understandable Consensus Algorithm* (USENIX ATC 2014), official PDF](https://www.usenix.org/sites/default/files/cdn/atc14-paper-ongaro.pdf)
 - [USENIX publication and presentation page](https://www.usenix.org/conference/atc14/technical-sessions/presentation/ongaro)
 - [Ongaro and Ousterhout, extended Raft technical report](https://raft.github.io/raft.pdf)
 - [Ongaro, *Consensus: Bridging Theory and Practice* (Stanford dissertation, 2014)](https://web.stanford.edu/~ouster/cgi-bin/papers/OngaroPhD.pdf)

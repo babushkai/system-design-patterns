@@ -1,6 +1,6 @@
 # ブルームフィルタ
 
-> この記事は英語版から翻訳されました。最新版は[英語版](/03-storage-engines/05-bloom-filters.md)をご覧ください。コードブロック・数式・図は原文のまま維持しています。
+> **翻訳の状態:** 現行の[英語版](../../03-storage-engines/05-bloom-filters.md)からの翻訳です。
 
 ## TL;DR
 
@@ -387,14 +387,16 @@ Ribbonと同じ静的な体制で、異なる構築法（ハイパーグラフ�
 
 ## 参考文献
 
-- Bloom, B. H. (1970). *Space/Time Trade-offs in Hash Coding with Allowable Errors*. CACM. — 偽陽性を許す確率的集合表現を定式化した原論文。
-- Broder, A., & Mitzenmacher, M. (2004). *Network Applications of Bloom Filters: A Survey*. Internet Mathematics. — ネットワーク用途と設計上の意味論を整理したサーベイ。
-- Kirsch, A., & Mitzenmacher, M. (2006). *Less Hashing, Same Performance: Building a Better Bloom Filter*. ESA. — 2つの基底ハッシュから複数プローブを生成する手法の根拠。
-- Putze, F., Sanders, P., & Singler, J. (2007). *Cache-, Hash- and Space-Efficient Bloom Filters*. WEA. — キャッシュ局所性を考慮したblocked構成の基礎。
-- Bose, P., et al. (2008). *On the False-Positive Rate of Bloom Filters*. Information Processing Letters. — 有限サイズでの偽陽性率近似を補正する解析。
-- Fan, B., Andersen, D., Kaminsky, M., & Mitzenmacher, M. (2014). *Cuckoo Filter: Practically Better Than Bloom*. CoNEXT. — 削除可能なフィルタの負荷率、挿入失敗、性能特性を評価。
-- Maggs, B., & Sitaraman, R. (2015). *Algorithmic Nuggets in Content Delivery*. ACM SIGCOMM CCR. — one-hit wonderを除外するキャッシュアドミッションの事例。
-- Dayan, N., Athanassoulis, M., & Idreos, S. (2017). *Monkey: Optimal Navigable Key-Value Store*. SIGMOD. — LSM階層ごとに偽陽性予算を不均等配分する設計。
-- Graf, T. M., & Lemire, D. (2020). *Xor Filters: Faster and Smaller Than Bloom and Cuckoo Filters*. ACM JEA; および (2022) *Binary Fuse Filters*. — 静的集合向け構築法と空間・検索性能の比較。
-- RocksDB Wiki: *RocksDB Bloom Filter* と *Ribbon Filter*. — `format_version=5` の高速ローカルBloomとRibbonの実装上の選択肢。
-- BIP-37 (Connection Bloom Filtering) と BIP-158 (Compact Block Filters). — フィルタ公開によるプライバシー問題と、異なる問い合わせモデルを示すBitcoin改善提案。
+- [Bloom, *Space/Time Trade-offs in Hash Coding with Allowable Errors* (Communications of the ACM, 1970)](https://doi.org/10.1145/362686.362692): ブルームフィルタの原論文
+- [Broder and Mitzenmacher, *Network Applications of Bloom Filters: A Survey* (Internet Mathematics, 2004)](https://doi.org/10.1080/15427951.2004.10129096)
+- [Kirsch and Mitzenmacher, *Less Hashing, Same Performance: Building a Better Bloom Filter* (ESA 2006)](https://doi.org/10.1007/11841036_42)
+- [Putze, Sanders, and Singler, *Cache-, Hash- and Space-Efficient Bloom Filters* (WEA 2007)](https://doi.org/10.1007/978-3-540-72845-0_9)
+- [Bose et al., *On the False-Positive Rate of Bloom Filters* (Information Processing Letters, 2008)](https://doi.org/10.1016/j.ipl.2008.05.018)
+- [Fan, Andersen, Kaminsky, and Mitzenmacher, *Cuckoo Filter: Practically Better Than Bloom* (CoNEXT 2014)](https://www.cs.cmu.edu/~dga/papers/cuckoo-conext2014.pdf)
+- [Maggs and Sitaraman, *Algorithmic Nuggets in Content Delivery* (ACM SIGCOMM CCR, 2015)](https://doi.org/10.1145/2805789.2805800)
+- [Dayan, Athanassoulis, and Idreos, *Monkey: Optimal Navigable Key-Value Store* (SIGMOD 2017)](https://doi.org/10.1145/3035918.3064054)
+- [Graf and Lemire, *Xor Filters: Faster and Smaller Than Bloom and Cuckoo Filters* (2019)](https://arxiv.org/abs/1912.08258)
+- [Graf and Lemire, *Binary Fuse Filters: Fast and Smaller Than Xor Filters* (2022)](https://arxiv.org/abs/2201.01174)
+- [RocksDB Wiki, *RocksDB Bloom Filter*](https://github.com/facebook/rocksdb/wiki/RocksDB-Bloom-Filter)
+- [BIP-37, *Connection Bloom filtering*](https://github.com/bitcoin/bips/blob/master/bip-0037.mediawiki)
+- [BIP-158, *Compact Block Filters for Light Clients*](https://github.com/bitcoin/bips/blob/master/bip-0158.mediawiki)

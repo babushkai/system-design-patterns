@@ -691,7 +691,7 @@ Exercise the socio-technical system, not only a failover command. Include missin
 ## References
 
 - [NIST SP 800-61 Rev. 3: Incident Response Recommendations](https://csrc.nist.gov/pubs/sp/800/61/r3/final): incident response integrated with cybersecurity risk management
-- [CISA Federal Government Cybersecurity Incident and Vulnerability Response Playbooks](https://www.cisa.gov/news-events/news/cisa-releases-cybersecurity-incident-and-vulnerability-response-playbooks): standardized preparation, coordination, response, and recovery actions
+- [CISA Federal Government Cybersecurity Incident and Vulnerability Response Playbooks](https://www.cisa.gov/resources-tools/resources/federal-government-cybersecurity-incident-and-vulnerability-response-playbooks): standardized preparation, coordination, response, and recovery actions
 - [Google SRE Workbook: Incident Response](https://sre.google/workbook/incident-response/): command roles, structure, and response practice
 - [Google SRE Workbook: Postmortem Culture](https://sre.google/workbook/postmortem-culture/): blameless learning, review, and action tracking
 - [Google SRE Book: Managing Incidents](https://sre.google/sre-book/managing-incidents/): incident command system and communications

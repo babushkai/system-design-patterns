@@ -1,5 +1,7 @@
 # MLリスクとガバナンス
 
+> **翻訳の状態:** この日本語版は英語版の以前の版に基づいており、現行の[英語版](../../16-ml-systems/09-ml-risk-governance.md)とは構成や内容が異なります。最新の内容は英語版を参照してください。
+
 ## TL;DR
 
 MLガバナンスとは、モデルの意思決定を監査可能で、説明責任を果たせ、可逆的なものにする*強制される制御*のシステムです。ガバナンスの中心的な失敗は、それを文書として扱ってしまうこと——Wikiに置いたモデルカード、ポリシーのPDF、一度きりの公平性レビュー——であり、デプロイ経路に組み込まれた機構として扱わないことです。何かを止めない制御は見せかけにすぎません。誰もゲートにしない公平性しきい値、レジストリが強制しないリネージ要件、モデルがすでにトラフィックを処理した後に行われる承認、などです。効果的なガバナンスとは、*システム*が自動的に強制する制御の集合です——リネージのない成果物を拒否するレジストリ、未レビューの高リスクモデルを止める昇格ゲート、あらゆる意思決定を事後に再構成できるほど密度の高い監査ログ。このファイルのすべては一つの原則から導かれます。**意図ではなくインフラを通じてガバナンスせよ。**
@@ -187,7 +189,7 @@ MLシステムのガバナンスを設計またはレビューすることは、
 
 ## 参考文献
 
-1. [SR 11-7: Guidance on Model Risk Management](https://www.federalreserve.gov/supervisionreg/srletters/sr1107.htm) — US Federal Reserve / OCC, 2011
+1. [SR 11-7: Guidance on Model Risk Management](https://www.federalreserve.gov/boarddocs/srletters/2011/sr1107.htm) — US Federal Reserve / OCC, 2011
 2. [EU AI Act — Official Text and Risk Classification](https://artificialintelligenceact.eu/) — adopted 2024, phased into 2026–2027
 3. [GDPR Article 22 — Automated Individual Decision-Making](https://gdpr-info.eu/art-22-gdpr/)
 4. [NIST AI Risk Management Framework](https://www.nist.gov/itl/ai-risk-management-framework)

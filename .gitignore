@@ -9,6 +9,7 @@ node_modules/
 
 # Build artifacts
 dist/
+build/
 
 # Editor directories
 .idea/

@@ -1,6 +1,6 @@
 # コーディングエージェントのツール設計
 
-> この記事は英語版から翻訳されました。最新版は[英語版](/19-compound-engineering/02-coding-agent-tool-design)をご覧ください。
+> **翻訳の状態:** この日本語版は英語版の以前の版に基づいており、現行の[英語版](../../19-compound-engineering/02-coding-agent-tool-design.md)とは構成や内容が異なります。最新の内容は英語版を参照してください。
 
 ## TL;DR
 

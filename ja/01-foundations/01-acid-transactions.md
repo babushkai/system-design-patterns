@@ -1,6 +1,6 @@
 # ACIDトランザクション
 
-> この記事は英語版から翻訳されました。最新版は[英語版](/01-foundations/01-acid-transactions)をご覧ください。
+> **翻訳の状態:** 現行の[英語版](../../01-foundations/01-acid-transactions.md)からの翻訳です。
 
 ## TL;DR
 

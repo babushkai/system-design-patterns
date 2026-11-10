@@ -1,6 +1,6 @@
 # サイドカーパターン
 
-> **注:** この記事は英語版からの翻訳です。コードブロックおよびMermaidダイアグラムは原文のまま保持しています。
+> **翻訳の状態:** この日本語版は英語版の以前の版に基づいており、現行の[英語版](../../12-service-mesh/03-sidecar-pattern.md)とは構成や内容が異なります。最新の内容は英語版を参照してください。
 
 ## TL;DR
 
@@ -323,19 +323,19 @@ graph TD
     end
 
     subgraph Data Plane
-        subgraph Envoy Sidecar
+        subgraph ENVOY["Envoy Sidecar"]
             SD2[Service Discovery]
             TR[Traffic Routing]
             MT[mTLS]
             OB[Observability]
         end
         APP[Application]
-        Envoy Sidecar --- APP
+        ENVOY --- APP
     end
 
-    P -->|xDS API| Envoy Sidecar
-    C -->|Certificates| Envoy Sidecar
-    G -->|Config| Envoy Sidecar
+    P -->|xDS API| ENVOY
+    C -->|Certificates| ENVOY
+    G -->|Config| ENVOY
 ```
 
 ### Istioトラフィック管理

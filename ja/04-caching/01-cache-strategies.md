@@ -1,6 +1,6 @@
 # キャッシュ戦略
 
-> **注:** この記事は英語版からの翻訳です。コードブロックおよびMermaidダイアグラムは原文のまま維持しています。
+> **翻訳の状態:** この日本語版は英語版の以前の版に基づいており、現行の[英語版](../../04-caching/01-cache-strategies.md)とは構成や内容が異なります。最新の内容は英語版を参照してください。
 
 ## TL;DR
 
@@ -261,7 +261,7 @@ Cons:
 ```mermaid
 graph LR
     Client["Client"] -->|Write directly| DB[("Database")]
-    Client -.->|Read (cache-aside)| Cache[("Cache")]
+    Client -.->|"Read (cache-aside)"| Cache[("Cache")]
     Cache -.->|Miss| DB
 ```
 

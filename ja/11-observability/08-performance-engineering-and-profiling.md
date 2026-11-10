@@ -1,6 +1,6 @@
 # パフォーマンス工学とプロファイリング
 
-> **翻訳についての注記:** 本ドキュメントは英語原文 `11-observability/08-performance-engineering-and-profiling.md` を日本語に翻訳したものです。コードブロックおよびMermaidダイアグラムは原文のまま維持しています。
+> **翻訳の状態:** 現行の[英語版](../../11-observability/08-performance-engineering-and-profiling.md)からの翻訳です。
 
 ## TL;DR
 
@@ -103,9 +103,9 @@ p99目標120msの検索APIの実例:
 |特定のリクエストが遅いのは? | まれなトレースが残るレートでサンプリングしたトレース | 集約コスト。トレーシングは算数には疎すぎる |
 | フリートで何が変わった? | サービスとバージョン単位の常時プロファイル。週単位で保持 | 根本的な見逃しはない。雑に運用すると高い |
 
-**文書化済み事実**: Googleは本番ジョブ全体の常時プロファイリングをデータセンター総資源の2%未満で実施したと報告している(SIGMETRICS 2021、"Profiling a Datacenter")。プロファイリングは障害中の活動でなければならないという議論を終らせた数字だ。常時プロファイルこそが、「誰も見ていなかった火曜日のデプロイでフリートの4%のコアを奪ったサービス」を見つける方法である。
+**文書化済み事実**: GoogleのGoogle-Wide Profiling論文は、マシンと時間の両方にわたるサンプリングで本番を常時プロファイルし、そのオーバーヘッドは無視できる程度だと述べている。プロファイリングは障害中の活動でなければならないという議論を終わらせた結果だ。常時プロファイルこそが、「誰も見ていなかった火曜日のデプロイでフリートの4%のコアを奪ったサービス」を見つける方法である。
 
-サンプリングのセマンティクスは、賢い人を誤誘導するので1段落分の価値がある。解像度10msのCPUプロファイルはサンプルをスタックの最上部のフレームに割り当てるため、インライン化された関数とテールコールは隣へ仕事を移す。だからこそプロファイラはフレームポインタかアンワインド情報を必要とする。**文書化済み事実**: Goは1.24でlinux/amd64とlinux/arm64のフレームポインタを既定有効にし、DWARFデコードなしにカーネルベース(eBPF)でのGoスタック追跡を実用にした。アロケーションプロファイルは補正しない限り確保サイトへ偏る: Kバイトごとに1回サンプリングするのは「どこで作られたか」を語り、「いま生きている何」ではない。リークの所有者を特定するのは、支配木か保持解析を伴うライブヒープ・プロファイリングだけだ。
+サンプリングのセマンティクスは、賢い人を誤誘導するので1段落分の価値がある。解像度10msのCPUプロファイルはサンプルをスタックの最上部のフレームに割り当てるため、インライン化された関数とテールコールは隣へ仕事を移す。だからこそプロファイラはフレームポインタかアンワインド情報を必要とする。**文書化済み事実**: GoはGo 1.7以降x86-64で、Go 1.17以降はすべてのOSの64ビットARMで、フレームポインタを既定で維持している。これによりDWARFデコードなしにカーネルベース(eBPF)でGoスタックを追跡できる。アロケーションプロファイルは補正しない限り確保サイトへ偏る: Kバイトごとに1回サンプリングするのは「どこで作られたか」を語り、「いま生きている何」ではない。リークの所有者を特定するのは、支配木か保持解析を伴うライブヒープ・プロファイリングだけだ。
 
 ---
 
@@ -242,10 +242,19 @@ p99目標120msの検索APIの実例:
 
 ## 参考文献
 
-- Dean, G., and Barroso, L. A. "The Tail at Scale." Communications of the ACM 56(2), 2013 — ファンアウトによる尾の増幅、ヘッジドリクエスト、デッドライン伝播
-- Cummins, J., et al. "Profiling a Datacenter." SIGMETRICS 2021 — データセンター総資源の2%未満で実施されたフリート規模の常時プロファイリング
-- Gregg, B. *Systems Performance: Enterprise and the Cloud*, 2nd ed. Addison-Wesley, 2020 — サービス時間と待ち時間、オフCPU解析、USEメソッド
-- Tene, G. "How NOT to Measure Latency." Strange Loop 2015 — 協調的省略、パーセンタイルの誤用、HDRヒストグラム
-- Kingman, J. F. C. "On Queues in Heavy Traffic." 1962 — 分散でスケールする待ち行列遅延の背後の拡散近似
-- Goプロジェクトドキュメント: `runtime/pprof`、GCチューニングガイド、フレームポインタ既定有効化のGo 1.24リリースノート
-- Linuxカーネルドキュメント: Control Group v2(cpu.maxの帯域制御周期とクォータ)、block/IO会計
+- [Dean and Barroso, *The Tail at Scale* (Communications of the ACM, 2013)](https://research.google/pubs/the-tail-at-scale/)
+- [Ren et al., *Google-Wide Profiling: A Continuous Profiling Infrastructure for Data Centers* (IEEE Micro, 2010)](https://research.google/pubs/pub36575/)
+- [Kanev et al., *Profiling a Warehouse-Scale Computer* (ISCA 2015)](https://research.google/pubs/profiling-a-warehouse-scale-computer/)
+- [Curtsinger and Berger, *Coz: Finding Code that Counts with Causal Profiling* (SOSP 2015)](https://arxiv.org/abs/1608.03676)
+- [TCMalloc documentation, *How sampling in TCMalloc works*](https://google.github.io/tcmalloc/sampling.html)
+- [Gregg, *Systems Performance: Enterprise and the Cloud*, 2nd ed. (Addison-Wesley, 2020)](https://www.brendangregg.com/systems-performance-2nd-edition-book.html)
+- [Gregg, *The USE Method*](https://www.brendangregg.com/usemethod.html)
+- [Gregg, *Off-CPU Analysis*](https://www.brendangregg.com/offcpuanalysis.html)
+- [Gregg, *Differential Flame Graphs* (2014)](https://www.brendangregg.com/blog/2014-11-09/differential-flame-graphs.html)
+- [Tene, *How NOT to Measure Latency*](https://www.infoq.com/presentations/latency-response-time/)
+- [Kingman, *The Single Server Queue in Heavy Traffic* (Mathematical Proceedings of the Cambridge Philosophical Society, 1961)](https://doi.org/10.1017/S0305004100036094)
+- [Go documentation, *Diagnostics*](https://go.dev/doc/diagnostics)、[*A Guide to the Go Garbage Collector*](https://go.dev/doc/gc-guide)
+- [Go 1.7 release notes](https://go.dev/doc/go1.7)、[Go 1.17 release notes](https://go.dev/doc/go1.17)
+- [Linux kernel documentation, *Control Group v2*](https://docs.kernel.org/admin-guide/cgroup-v2.html)
+- [Linux kernel documentation, *CFS Bandwidth Control*](https://docs.kernel.org/scheduler/sched-bwc.html)
+- [Kubernetes documentation, *Resource Management for Pods and Containers*](https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/)

@@ -500,7 +500,7 @@ Finally, test the controls themselves. Exercise rollback and authorization revoc
 
 ## References
 
-1. [SR 11-7: Guidance on Model Risk Management](https://www.federalreserve.gov/supervisionreg/srletters/sr1107.htm): US Federal Reserve / OCC, 2011
+1. [SR 11-7: Guidance on Model Risk Management](https://www.federalreserve.gov/boarddocs/srletters/2011/sr1107.htm): US Federal Reserve / OCC, 2011
 2. [Regulation (EU) 2024/1689: Artificial Intelligence Act](https://eur-lex.europa.eu/eli/reg/2024/1689/oj): official text
 3. [European Commission AI Act Implementation Timeline](https://ai-act-service-desk.ec.europa.eu/en/ai-act/eu-ai-act-implementation-timeline): verify current application dates
 4. [Regulation (EU) 2016/679: GDPR, Article 22 and Recital 71](https://eur-lex.europa.eu/eli/reg/2016/679/oj): official text

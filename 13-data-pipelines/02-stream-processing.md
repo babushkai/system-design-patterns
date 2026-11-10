@@ -443,3 +443,4 @@ Select a runtime after these answers. Benchmark the complete path with checkpoin
 - [Backpressure](../06-scaling/07-backpressure.md): the overload mechanism that stops state from becoming an unbounded queue
 - [LSM Trees](../03-storage-engines/02-lsm-trees.md): state backends are a storage-engine argument about write amplification and restore time
 - [Lakehouse Table Formats](05-lakehouse-table-formats.md): where results land, and what snapshot isolation costs an exactly-once claim
+- [Ad Click Aggregation](../21-reference-designs/04-ad-click-aggregation.md): watermarks, lateness, and idempotent sinks in a pipeline whose output is billed

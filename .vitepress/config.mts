@@ -1,6 +1,8 @@
 import type { HeadConfig } from 'vitepress'
 import { withMermaid } from 'vitepress-plugin-mermaid'
 import bookManifest from '../book.manifest.json'
+// Shared with scripts/build_book_sources.py so site and PDF/EPUB diagrams use one palette.
+import mermaidTheme from './mermaid-theme.json'
 
 /**
  * Part and chapter order lives in `book.manifest.json`, the same file that drives the
@@ -174,18 +176,7 @@ export default withMermaid({
 
   lastUpdated: true,
   cleanUrls: true,
-mermaid: {
-  theme: 'base',
-  themeVariables: {
-    primaryColor: '#8A4B37',
-    primaryTextColor: '#FFFDF8',
-    primaryBorderColor: '#653427',
-    lineColor: '#47675E',
-    secondaryColor: '#E9E0D1',
-    tertiaryColor: '#F2E6CF',
-    fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
-  },
-},
+mermaid: mermaidTheme,
 mermaidPlugin: {
   class: 'mermaid',
 },

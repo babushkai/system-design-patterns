@@ -652,7 +652,7 @@ The architecture is incomplete if it demonstrates only an SDK call returning `tr
 - [Zanzibar: Google's Consistent, Global Authorization System](https://research.google/pubs/zanzibar-googles-consistent-global-authorization-system/): relation tuples, userset rewrites, consistency tokens, and global serving architecture
 - [NIST Role-Based Access Control project](https://csrc.nist.gov/projects/role-based-access-control): formal RBAC models and constraints
 - [NIST SP 800-162: Guide to Attribute Based Access Control](https://csrc.nist.gov/pubs/sp/800/162/upd2/final): ABAC concepts and enterprise considerations
-- [Cedar policy language specification](https://docs.cedarpolicy.com/) and [Cedar design and formal analysis](https://www.cedarpolicy.com/en/science): analyzable authorization-policy semantics
+- [Cedar policy language specification](https://docs.cedarpolicy.com/) and [Cedar design and formal analysis](https://arxiv.org/abs/2403.04651): analyzable authorization-policy semantics
 - [Open Policy Agent documentation](https://www.openpolicyagent.org/docs/latest/): policy decision APIs, bundles, and partial evaluation
 - [SpiceDB documentation](https://authzed.com/docs) and [OpenFGA documentation](https://openfga.dev/docs): production implementations of relationship-based authorization
 - [PostgreSQL row security policies](https://www.postgresql.org/docs/current/ddl-rowsecurity.html): database-level row predicate enforcement

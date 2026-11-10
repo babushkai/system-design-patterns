@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-The dependency graph is the architecture that actually runs. The diagram on the wiki shows twelve services; `cargo tree`, `pip freeze`, or a lockfile diff shows four thousand components, and every one of them carries failure semantics, an upgrade obligation, a latency contribution, a data-flow obligation, and a legal term that somebody outside engineering can change on a Tuesday. **Documented**: the incidents that define this area are all availability or integrity failures at a distance. A single maintained-by-one-person left-pad package disappearing from npm took down builds across the internet in 2016. event-stream (2018) and ua-parser-js (2021) showed account takeover producing targeted payloads inside widely-installed packages. Log4Shell (2021) demonstrated that a logging library reachable through transitive dependencies could put an organization into incident response for software it never installed directly. SolarWinds (2020) moved the attack into the vendor build pipeline, and the xz-utils backdoor attempt (2024) showed a years-long social engineering campaign aimed at a compression library that sshd links against.
+The dependency graph is the architecture that actually runs. The diagram on the wiki shows twelve services; `cargo tree`, `pip freeze`, or a lockfile diff shows four thousand components, and every one of them carries failure semantics, an upgrade obligation, a latency contribution, a data-flow obligation, and a legal term that somebody outside engineering can change on a Tuesday. **Documented**: the incidents that define this area are all availability or integrity failures at a distance. A single maintained-by-one-person left-pad package disappearing from npm took down builds across the internet in 2016. event-stream (2018) and ua-parser-js (2021) showed account takeover producing targeted payloads inside widely-installed packages. Log4Shell (2021) demonstrated that a logging library reachable through transitive dependencies could put an organization into incident response for software it never installed directly. SolarWinds (2020) moved the attack into the vendor build pipeline, and the xz-utils backdoor attempt (2024) showed a years-long social engineering campaign aimed at a compression library that sshd loads indirectly on several Linux distributions.
 
 None of those failure classes are exotic, which is why dependency choices belong in design review rather than in a pull request diff. **Inference**: three properties make third-party components structurally harder than first-party ones. You inherit their failure modes without inheriting their runbook. Their upgrade cadence is uncorrelated with your release schedule. And their availability objective, if published at all, is measured against a definition of "available" that does not include your tail latency or your dependency's own dependencies.
 
@@ -48,7 +48,7 @@ Lock-in is not emotional discomfort about switching; it is exit cost, and exit c
 
 | Lock-in type | Mechanism | Cheapest mitigation |
 |---|---|---|
-| Data format | Proprietary storage format, no export of logical state, or export that loses fidelity | Keep a canonical representation you own; treat the vendor store as a projection (chapter on derived projections) |
+| Data format | Proprietary storage format, no export of logical state, or export that loses fidelity | Keep a canonical representation you own; treat the vendor store as a projection ([CQRS and Projection Architecture](../05-messaging/06-cqrs.md)) |
 | API shape | Vendor request and response types spread through business logic | Port at the seam: your interface, their adapter |
 | Operational | Custom tooling, dashboards, and runbooks only valid for one provider | Generate them from declarative definitions that name the provider as a parameter |
 | Economic | Egress pricing, per-request billing, or storage classes that reward retention | Model cost at 10x traffic before adopting; put egress on the design-review checklist |
@@ -108,13 +108,13 @@ Containment is a specific set of mechanisms, all of which are cheap and all of w
 
 - **Timeouts first, always.** Set a per-call timeout below your own deadline, and propagate cancellation. A default timeout of "none" converts a vendor latency spike into thread-pool exhaustion, which is an outage of your service caused by their slowness.
 - **Bounded retries with jitter and a retry budget**, coordinated with the fact that the vendor may also be retrying internally. Retry amplification across two uncoordinated policies is a documented recipe for turning a partial degradation into a full one.
-- **Bulkheads per vendor.** Separate connection pools, worker pools, or semaphore limits per dependency, so that one slow vendor consumes its own capacity rather than the shared pool. Circuit breaking (chapter on dependency state) then operates on a bounded resource instead of an unbounded one.
+- **Bulkheads per vendor.** Separate connection pools, worker pools, or semaphore limits per dependency, so that one slow vendor consumes its own capacity rather than the shared pool. Circuit breaking ([Circuit Breakers](../06-scaling/06-circuit-breakers.md)) then operates on a bounded resource instead of an unbounded one.
 - **Cache aggressively where staleness is acceptable**, with negative caching for permission lookups and product metadata, and an explicit stale-if-error path so cache expiry does not synchronize into a thundering herd against the vendor.
 - **Idempotency keys on every mutating call.** Vendor timeouts are not failed writes; without an operation identity you must either accept duplicates or build a reconciliation job, and the second option is what you will do anyway.
 - **Webhooks treated as attacker-supplied input**: signature verification, timestamp tolerance with replay protection, idempotent handlers, and quarantine for events that fail schema validation rather than a dead letter that nobody reads.
 - **Health defined by behaviour, not vendor status pages.** Track per-vendor success ratio, latency histogram, and rate-limit rejection as first-class signals; the vendor's status page is a communication channel, not an indicator.
 
-For components on the critical path, "we have a second provider" is a hypothesis until it has been tested in production traffic. A real failover design needs routing that can be switched by configuration, per-vendor credentials and quotas provisioned in advance, feature parity verified by contract tests against both vendors, and a game day where the primary is actually cut off (chapter on resilience testing). Where failover is genuinely impossible because of cost or semantics, say so in writing and record the compensating control: degraded mode, queue-and-retry with a bounded backlog, or an explicit customer-visible error state.
+For components on the critical path, "we have a second provider" is a hypothesis until it has been tested in production traffic. A real failover design needs routing that can be switched by configuration, per-vendor credentials and quotas provisioned in advance, feature parity verified by contract tests against both vendors, and a game day where the primary is actually cut off ([Resilience Testing and Fault Injection](../11-observability/09-resilience-testing-and-fault-injection.md)). Where failover is genuinely impossible because of cost or semantics, say so in writing and record the compensating control: degraded mode, queue-and-retry with a bounded backlog, or an explicit customer-visible error state.
 
 ## Upgrades as a Standing Program
 
@@ -129,9 +129,9 @@ Upgrade debt behaves like any other debt: it compounds, and the interest rate ri
 | Removal as a first-class task | Deleting a dependency gets the same estimate as adding one | Zombie integrations that nobody dares to touch |
 | Contract tests against vendors | Consumer-side assertions about response shape, error taxonomy, and rate-limit headers | Silent vendor behaviour changes discovered by customers |
 
-**Documented**: the pattern behind most large-scale dependency failures is not a novel attack but an unmaintained component that nobody owned. This is why ownership registers outperform scanning tools in practice: a scanner produces findings, and findings without owners become background noise within a quarter.
+**Inference**: the pattern behind most large-scale dependency failures is not a novel attack but an unmaintained component that nobody owned. This is why ownership registers outperform scanning tools in practice: a scanner produces findings, and findings without owners become background noise within a quarter.
 
-For internal platforms the same logic applies with higher stakes, because your dependencies are other teams' code. Platform components need published deprecation policies with dates, upgrade windows, and tooling that does the migration automatically where possible. A platform team that ships breaking changes faster than its consumers can migrate has not built a platform; it has outsourced its work to every consuming team simultaneously (chapter on migrations).
+For internal platforms the same logic applies with higher stakes, because your dependencies are other teams' code. Platform components need published deprecation policies with dates, upgrade windows, and tooling that does the migration automatically where possible. A platform team that ships breaking changes faster than its consumers can migrate has not built a platform; it has outsourced its work to every consuming team simultaneously ([Service and Platform Migration](../15-deployment/06-migration-strategies.md)).
 
 ## Failure Modes of Bought Components
 
@@ -161,21 +161,28 @@ For internal platforms the same logic applies with higher stakes, because your d
 
 ## References
 
-- Hindle, A., Barr, E., Su, Z., Gabel, M., and Devanbu, P. "On the Naturalness of Software." ICSE 2012. Repetition in source corpora, the underlying evidence for preferring widely-used components whose behaviour is already known.
-- Rauber, R., and Rüsch, A. "Choice of Third-Party Components and Its Impact on the Security of Open Source Software." Companion Proceedings of ICSE 2013. Empirical link between component selection criteria and downstream security exposure.
-- Ralph, L. "A Leftpad Retrospective." npm blog, 2016. The availability incident that made transitive dependency risk a mainstream engineering conversation.
-- Unit 42, Palo Alto Networks. "Log4Shell: The Story So Far." 2021. Anatomy of a transitive vulnerability reaching systems that never referenced the library directly.
-- Mandiant. "Highly Evasive Attacker Leveled SolarWinds Customer Using Various Tactics, Techniques, and Procedures." 2020. Build-pipeline compromise as a systemic rather than local failure.
-- Freund, A. Public disclosure of the xz/liblzma backdoor attempt. 2024. Multi-year social engineering aimed at an upstream compression library reachable from a system daemon.
-- npm and GitHub security advisories for the event-stream and ua-parser-js incidents, 2018 and 2021. Compromised maintainer accounts producing targeted payloads inside widely-installed packages.
-- OpenSSF. *Scorecard* project documentation. Heuristic signals for open source project security practices, and their documented limits as an adoption filter.
-- OpenSSF. *SLSA: Supply-chain Levels for Software Artifacts* specification. Provenance requirements, build-integrity levels, and the graduated assurance model for artifacts.
-- in-toto project documentation. Attestation format and verification model for delegating and recording supply chain steps.
-- Cloud Native Computing Foundation Technical Advisory Committee. *Supply Chain Security Whitepaper*. 2021. Threat taxonomy for the software supply chain from source to runtime.
-- SPDX specification and OWASP CycloneDX specification. Bill-of-materials exchange formats used as procurement and incident-response evidence.
-- Executive Order 14028, "Improving the Nation's Cybersecurity." 2021, and CISA Secure Software Development Attestation guidance. The regulatory turn that made provenance and SBOMs contractual rather than optional.
-- Evans, E. *Domain-Driven Design: Tackling Complexity in the Heart of Software*. Addison-Wesley, 2003. Anti-corruption layers as structural isolation of an external model.
-- Cockburn, A. "Hexagonal Architecture." 2005. Ports and adapters as the seam that keeps a vendor's interface out of the domain.
+- [Schlueter, *kik, left-pad, and npm* (npm blog, 2016)](https://blog.npmjs.org/post/141577284765/kik-left-pad-and-npm). The registry operator's account of the unpublish that made transitive dependency risk a mainstream engineering conversation.
+- [npm, *Details about the event-stream incident* (2018)](https://blog.npmjs.org/post/180565383195/details-about-the-event-stream-incident). A handed-over package receiving a targeted payload through a new transitive dependency.
+- [GitHub Advisory Database, GHSA-pjwm-rvh2-c87w, *Embedded malware in ua-parser-js* (2021)](https://github.com/advisories/GHSA-pjwm-rvh2-c87w). A compromised maintainer account publishing malicious versions of a widely installed package.
+- [Cyber Safety Review Board, *Review of the December 2021 Log4j Event* (2022)](https://www.cisa.gov/sites/default/files/publications/CSRB-Report-on-Log4-July-11-2022_508.pdf). Why organizations could not tell where a transitive logging library was deployed, and what that cost in response time.
+- [FireEye (now Mandiant), *Highly Evasive Attacker Leverages SolarWinds Supply Chain to Compromise Multiple Global Victims With SUNBURST Backdoor* (2020)](https://cloud.google.com/blog/topics/threat-intelligence/evasive-attacker-leverages-solarwinds-supply-chain-compromises-with-sunburst-backdoor). Build-pipeline compromise as a systemic rather than local failure.
+- [Freund, *backdoor in upstream xz/liblzma leading to ssh server compromise* (oss-security, 2024)](https://www.openwall.com/lists/oss-security/2024/03/29/4). The disclosure of a multi-year social engineering campaign against an upstream compression library.
+- [Ohm, Plate, Sykosch, and Meier, *Backstabber's Knife Collection: A Review of Open Source Software Supply Chain Attacks* (DIMVA 2020)](https://arxiv.org/abs/2005.09535). A dataset-backed taxonomy of how malicious packages are injected and triggered.
+- [OpenSSF, *Scorecard*](https://github.com/ossf/scorecard). Heuristic signals for open source project security practices, and their documented limits as an adoption filter.
+- [OpenSSF, *SLSA: Supply-chain Levels for Software Artifacts*, specification v1.0](https://slsa.dev/spec/v1.0/). Provenance requirements, build-integrity levels, and the graduated assurance model for artifacts.
+- [in-toto project documentation](https://in-toto.io/). Attestation format and verification model for delegating and recording supply chain steps.
+- [CNCF TAG Security, *Software Supply Chain Best Practices* (2021)](https://github.com/cncf/tag-security/blob/main/community/working-groups/supply-chain-security/supply-chain-security-paper/CNCF_SSCP_v1.pdf). Threat taxonomy and controls for the software supply chain from source to runtime.
+- [SPDX specifications](https://spdx.dev/use/specifications/). One of the two bill-of-materials exchange formats used as procurement and incident-response evidence.
+- [OWASP CycloneDX specification](https://cyclonedx.org/specification/overview/). The other, with first-class vulnerability and service metadata.
+- [Executive Order 14028, *Improving the Nation's Cybersecurity* (2021)](https://www.federalregister.gov/documents/2021/05/17/2021-10460/improving-the-nations-cybersecurity). The regulatory turn that made provenance and SBOMs contractual rather than optional.
+- [NIST SP 800-218, *Secure Software Development Framework (SSDF) Version 1.1* (2022)](https://csrc.nist.gov/pubs/sp/800/218/final). The practice catalog that the attestation requirements reference.
+- [CISA, *Secure Software Development Attestation Form*](https://www.cisa.gov/secure-software-attestation-form). What a supplier to the United States government is asked to sign.
+- [MongoDB, *Server Side Public License FAQ*](https://www.mongodb.com/legal/licensing/server-side-public-license/faq). The 2018 relicensing that set the pattern for source-available infrastructure terms.
+- [Elastic, licensing change announcement (2021)](https://www.elastic.co/blog/licensing-change). A search and observability stack moving off a permissive license.
+- [AWS, *Introducing OpenSearch* (2021)](https://aws.amazon.com/blogs/opensource/introducing-opensearch/). The fork that followed, as an example of what a license change costs downstream users in migration work.
+- [Redis, *Redis Adopts Dual Source-Available Licensing* (2024)](https://redis.io/blog/redis-adopts-dual-source-available-licensing/). The same move in a cache nearly every architecture diagram contains.
+- [Evans, *Domain-Driven Design: Tackling Complexity in the Heart of Software* (Addison-Wesley, 2003)](https://www.domainlanguage.com/ddd/). Anti-corruption layers as structural isolation of an external model.
+- [Cockburn, *Hexagonal Architecture* (2005)](https://alistair.cockburn.us/hexagonal-architecture/). Ports and adapters as the seam that keeps a vendor's interface out of the domain.
 
 ---
 

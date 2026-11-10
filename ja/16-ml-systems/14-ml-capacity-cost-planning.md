@@ -1,6 +1,6 @@
 # MLキャパシティとコストプランニング
 
-> **翻訳についての注記:** 本ドキュメントは英語原文 `16-ml-systems/14-ml-capacity-cost-planning.md` を日本語に翻訳したものです。コードブロック、YAML、表内の技術用語は原文のまま維持しています。
+> **翻訳の状態:** 現行の[英語版](../../16-ml-systems/14-ml-capacity-cost-planning.md)からの翻訳です。
 
 ## TL;DR
 

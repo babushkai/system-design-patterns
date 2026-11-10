@@ -1,6 +1,6 @@
 # ゼロトラストアーキテクチャ
 
-> **Note:** This article was translated from English to Japanese. The original version is available at [`10-security/05-zero-trust-architecture.md`](../../10-security/05-zero-trust-architecture.md).
+> **翻訳の状態:** この日本語版は英語版の以前の版に基づいており、現行の[英語版](../../10-security/05-zero-trust-architecture.md)とは構成や内容が異なります。最新の内容は英語版を参照してください。
 
 ## TL;DR
 

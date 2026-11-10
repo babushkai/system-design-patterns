@@ -226,7 +226,7 @@ Test process pauses longer than leases, clock steps and monotonic-clock behavior
 - [Chandra and Toueg, *Unreliable Failure Detectors for Reliable Distributed Systems* (JACM 1996)](https://www.cs.cornell.edu/courses/cs734/2000FA/cached%20papers/ct96.pdf)
 - [Burrows, *The Chubby Lock Service for Loosely-Coupled Distributed Systems* (OSDI 2006)](https://research.google.com/archive/chubby-osdi06.pdf)
 - [Hunt et al., *ZooKeeper: Wait-free Coordination for Internet-scale Systems* (USENIX ATC 2010)](https://www.usenix.org/legacy/event/atc10/tech/full_papers/Hunt.pdf)
-- [Ongaro and Ousterhout, *In Search of an Understandable Consensus Algorithm* (USENIX ATC 2014)](https://www.usenix.org/system/files/conference/atc14/atc14-paper-ongaro.pdf)
+- [Ongaro and Ousterhout, *In Search of an Understandable Consensus Algorithm* (USENIX ATC 2014)](https://www.usenix.org/conference/atc14/technical-sessions/presentation/ongaro)
 
 ---
 

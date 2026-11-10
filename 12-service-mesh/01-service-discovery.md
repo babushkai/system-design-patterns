@@ -275,7 +275,7 @@ sequenceDiagram
     E->>R: publish draining with incarnation
     R-->>C: new revision: no new assignment
     C->>C: stop creating connections and new streams
-    E->>E: reject new work; finish or checkpoint admitted work
+    E->>E: reject new work, finish or checkpoint admitted work
     E->>C: protocol drain signal where supported
     E->>R: not-serving or drain deadline reached
     R-->>C: endpoint removed

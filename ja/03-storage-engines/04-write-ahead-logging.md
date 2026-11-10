@@ -1,6 +1,6 @@
 # Write-Ahead Logging（WAL）
 
-> この記事は英語版から翻訳されました。最新版は[英語版](/03-storage-engines/04-write-ahead-logging.md)をご覧ください。コードブロック・数式・図は原文のまま維持しています。
+> **翻訳の状態:** 現行の[英語版](../../03-storage-engines/04-write-ahead-logging.md)からの翻訳です。
 
 ## TL;DR
 
@@ -307,10 +307,13 @@ Synchronous replication couples commit latency to the network:
 
 ## 参考文献
 
-- Mohan, C., et al. (1992). *ARIES: A Transaction Recovery Method Supporting Fine-Granularity Locking and Partial Rollbacks Using Write-Ahead Logging*. TODS.
-- Gray, J., & Reuter, A. (1992). *Transaction Processing: Concepts and Techniques*.（永続性/ロギングの基礎。）
-- Hellerstein, Stonebraker & Hamilton (2007). *Architecture of a Database System*.（文脈の中のログマネージャとリカバリ。）
-- PostgreSQL documentation: *WAL Configuration*, *Reliability* (fsync/FPW discussion), *Logical Decoding*, `pg_stat_wal`.
-- MySQL documentation: *InnoDB Redo Log*, *Doublewrite Buffer*.
-- Rebello, A., et al. (2020). *Can Applications Recover from fsync Failures?* USENIX ATC — fsyncgateの体系的なフォローアップ。
-- LWN: *PostgreSQL's fsync() surprise* (2018) — fsyncgateの解説記事。
+- [Mohan et al., *ARIES: A Transaction Recovery Method Supporting Fine-Granularity Locking and Partial Rollbacks Using Write-Ahead Logging* (ACM TODS, 1992)](https://doi.org/10.1145/128765.128770): ARIES方式の原論文。ログ先行書き込みによるリカバリの基準点
+- Gray and Reuter, *Transaction Processing: Concepts and Techniques* (Morgan Kaufmann, 1992)
+- [Hellerstein, Stonebraker, and Hamilton, *Architecture of a Database System* (Foundations and Trends in Databases, 2007)](https://dsf.berkeley.edu/papers/fntdb07-architecture.pdf)
+- [PostgreSQL documentation, *WAL Configuration*](https://www.postgresql.org/docs/current/wal-configuration.html)
+- [PostgreSQL documentation, *Reliability*](https://www.postgresql.org/docs/current/wal-reliability.html)
+- [PostgreSQL documentation, *Logical Decoding*](https://www.postgresql.org/docs/current/logicaldecoding.html)
+- [MySQL documentation, *Redo Log*](https://dev.mysql.com/doc/refman/8.4/en/innodb-redo-log.html)
+- [MySQL documentation, *Doublewrite Buffer*](https://dev.mysql.com/doc/refman/8.4/en/innodb-doublewrite-buffer.html)
+- [Rebello et al., *Can Applications Recover from fsync Failures?* (USENIX ATC 2020)](https://www.usenix.org/conference/atc20/presentation/rebello)
+- [LWN, *PostgreSQL's fsync() surprise* (2018)](https://lwn.net/Articles/752063/)

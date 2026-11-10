@@ -92,7 +92,7 @@ sequenceDiagram
     participant L as Durable log
     C->>G: GET /events?after=1842&wait=25s
     G->>L: read after 1842
-    L-->>G: empty; register wake-up
+    L-->>G: empty, register wake-up
     Note over G: wait, but keep request cancellable
     L-->>G: position 1843 available
     G-->>C: 200 [event 1843], next=1843

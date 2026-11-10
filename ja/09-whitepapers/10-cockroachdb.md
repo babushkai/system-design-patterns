@@ -1,6 +1,6 @@
 # CockroachDB: The Resilient Geo-Distributed SQL Database
 
-> **注:** この記事は英語の原文を日本語に翻訳したものです。コードブロック、Mermaidダイアグラム、論文タイトル、システム名、技術用語は原文のまま保持しています。
+> **翻訳の状態:** この日本語版は英語版の以前の版に基づいており、現行の[英語版](../../09-whitepapers/10-cockroachdb.md)とは構成や内容が異なります。最新の内容は英語版を参照してください。
 
 ## TL;DR
 

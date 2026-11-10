@@ -1,6 +1,6 @@
 # AI ネイティブアーキテクチャ
 
-> この記事は英語版から翻訳されました。[English version](../../19-compound-engineering/04-ai-native-software-architecture.md)
+> **翻訳の状態:** この日本語版は英語版の以前の版に基づいており、現行の[英語版](../../19-compound-engineering/04-ai-native-software-architecture.md)とは構成や内容が異なります。最新の内容は英語版を参照してください。
 
 > AIエージェントによる変更に最適化されたソフトウェアシステムの設計 — パフォーマンス、セキュリティ、保守性と並ぶアーキテクチャ品質属性として、エージェントフレンドリーさを扱います。
 

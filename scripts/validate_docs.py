@@ -10,6 +10,8 @@ from urllib.parse import unquote
 # Part/chapter structure lives in book.manifest.json; scripts/book_structure.py owns
 # the checks that keep the sidebars, book build, and README contents in step with it.
 from book_structure import validate as validate_book_structure
+# Japanese chapters state whether they track the current English text; see the module.
+from translation_status import validate as validate_translation_status
 
 ROOT = Path(__file__).resolve().parents[1]
 IGNORED_DIRS = {
@@ -1035,6 +1037,34 @@ def validate_homepage_html_links(errors: list[str]) -> None:
                     )
 
 
+# A reference a reader cannot follow cannot be checked, and an unchecked reference list is
+# where invented citations survive: every fabricated source this book has shipped sat in a
+# chapter whose references had no links at all. Requiring links does not prove a citation
+# is right, but it makes each one a thirty-second check for a reviewer and a target for
+# scripts/check_external_links.py. Paper analyses study one source, so one link is enough.
+MIN_REFERENCE_LINKS = 3
+SINGLE_SOURCE_SECTIONS = {Path("09-whitepapers")}
+EXTERNAL_LINK_RE = re.compile(r"\]\(https?://[^)\s]+\)")
+
+
+def validate_reference_links(errors: list[str]) -> None:
+    for relative in sorted(article_paths()):
+        path = ROOT / relative
+        text = strip_fenced_code(path.read_text(encoding="utf-8"))
+        match = re.search(
+            r"^## References\n(.*?)(?=^## Related Chapters|\Z)", text, re.DOTALL | re.MULTILINE
+        )
+        if not match:
+            continue
+        required = 1 if relative.parent in SINGLE_SOURCE_SECTIONS else MIN_REFERENCE_LINKS
+        found = len(EXTERNAL_LINK_RE.findall(match.group(1)))
+        if found < required:
+            errors.append(
+                f"{rel(path)}: '## References' links {found} external source(s); at least "
+                + f"{required} must be linked so a reader can check them"
+            )
+
+
 def main() -> int:
     errors: list[str] = []
 
@@ -1050,6 +1080,7 @@ def main() -> int:
     validate_chapter_contract(errors)
     validate_related_chapters(errors)
     validate_chapter_synthesis_section(errors)
+    validate_reference_links(errors)
     validate_markdown_layout(errors)
     validate_reading_graph(errors)
     validate_english_dash_style(errors)
@@ -1057,6 +1088,7 @@ def main() -> int:
     validate_portable_math_delimiters(errors)
     validate_dollar_math_delimiters(errors)
     validate_book_structure(errors)
+    validate_translation_status(errors)
     validate_vitepress_workflow_links(errors)
     validate_generated_assets(errors)
     validate_homepage_html_links(errors)

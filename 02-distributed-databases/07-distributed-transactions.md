@@ -249,3 +249,4 @@ Crash the coordinator and each participant immediately before and after prepare 
 - [CockroachDB](../09-whitepapers/10-cockroachdb.md): transactions and geo-partitioning argued as the primitive replicas should not have to negotiate
 - [FoundationDB](../09-whitepapers/13-foundationdb.md): a single serializable key space, and the workload evidence behind that bet
 - [Stripe](../08-case-studies/06-stripe.md): money movement, where an ambiguous commit becomes a reconciliation project instead of a bug
+- [Ticketing and Inventory Reservation](../21-reference-designs/05-ticketing-inventory-reservation.md): holds and conditional writes as the practical alternative to a cross-service transaction

@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-Deletion is the hardest write in a modern system, because it has to reach every copy of a fact including the ones that were designed to be immutable. A create statement fans out to a handful of places through code you own. A delete has to reach the primary table, the read replicas, the change-data-capture topic where old records are log entries with their own retention clock, the search index, the cache, the analytics lake holding snapshot copies, the feature store, the training dataset that was frozen last quarter, the embeddings derived from it, the vendor that emails your customers, and ninety days of backups. **Documented**: this is why erasure obligations are so routinely satisfied by policy documents rather than by mechanisms. Regulators did not ask for a distributed protocol; they asked for a right, and most organizations answered with a ticket queue and an intern.
+Deletion is the hardest write in a modern system, because it has to reach every copy of a fact including the ones that were designed to be immutable. A create statement fans out to a handful of places through code you own. A delete has to reach the primary table, the read replicas, the change-data-capture topic where old records are log entries with their own retention clock, the search index, the cache, the analytics lake holding snapshot copies, the feature store, the training dataset that was frozen last quarter, the embeddings derived from it, the vendor that emails your customers, and ninety days of backups. **Inference**: this is why erasure obligations are so routinely satisfied by policy documents rather than by mechanisms. Regulators did not ask for a distributed protocol; they asked for a right, and most organizations answered with a ticket queue and an intern.
 
 Two properties make retention an architectural concern instead of a legal one. First, retention is a *write path feature*: the decision that determines whether deletion is possible at all is made when the data model, the event schema, and the storage layout are chosen, and it cannot be retrofitted cheaply afterwards. Second, retention has two boundaries and both fail expensively: a ceiling that is too high creates regulatory exposure, discovery surface, and storage cost, while a floor that is too low destroys your ability to debug, defend a chargeback, reproduce a customer conversation, or answer an auditor. **Inference**: the most common real-world failure is not over-retention of everything; it is inconsistent retention per copy, where each store keeps what its own engine happens to make easy.
 
@@ -36,7 +36,7 @@ Retention cannot be decided per query, so it has to be declared per field at sch
 
 Two implementation choices matter more than the taxonomy itself. **Declare it in code**, next to the column: an annotation or schema directive that a linter can read means a new field without a class fails a check, which is the only enforcement that survives a deadline. A retention policy that lives in a wiki is a statement of intent; one that generates the expiry job and the audit query is a mechanism. **Classify at ingest, not at query time**, because anything computed later requires scanning everything, and the scan is where projects die.
 
-The second-order benefit is discoverability: a machine-readable classification makes it possible to answer "which stores hold regulated field X" in minutes rather than in a quarter of interviews. That question is the same one threat modeling asks (chapter on abuse cases), and the same inventory answers both.
+The second-order benefit is discoverability: a machine-readable classification makes it possible to answer "which stores hold regulated field X" in minutes rather than in a quarter of interviews. That question is the same one threat modeling asks ([Threat Modeling and Abuse Cases](../10-security/08-threat-modeling-and-abuse-cases.md)), and the same inventory answers both.
 
 ## TTL Mechanics Across Storage Engines
 
@@ -81,7 +81,7 @@ reconciliation sweep: sample subjects per copy class -> assert absence
 
 Three design rules carry most of the weight. **Make application idempotent**, because retries, redeliveries, and replays are guaranteed and a second delete must be a no-op rather than an error or a cascade. **Keep receipts**, so that "did this actually happen in the lake" is a query rather than an argument; a receipt ledger with copy, status, and timestamp turns an audit into a report. **Set and measure a propagation service level**, for example: ninety-nine percent of copies converged within twenty-four hours, worst copy within thirty days for vendors, and any copy that cannot meet the contract gets removed from the architecture or documented as accepted risk in a decision record.
 
-Backups deserve their own rule because they are where correct systems quietly violate retention: never attempt to edit a backup (that destroys its integrity guarantees and is usually impossible), instead expire backups on a clock shorter than the maximum ceiling, and treat every restore as an event that must re-apply the erasure log accumulated since the backup point. **Inference**: if the erasure ledger were not durable and complete, restores would silently resurrect deleted data, which means the retention mechanism and the disaster recovery design (chapter on reconstruction) are one system, not two.
+Backups deserve their own rule because they are where correct systems quietly violate retention: never attempt to edit a backup (that destroys its integrity guarantees and is usually impossible), instead expire backups on a clock shorter than the maximum ceiling, and treat every restore as an event that must re-apply the erasure log accumulated since the backup point. **Inference**: if the erasure ledger were not durable and complete, restores would silently resurrect deleted data, which means the retention mechanism and the disaster recovery design ([Disaster Recovery and Reconstruction](../15-deployment/05-disaster-recovery.md)) are one system, not two.
 
 ## Backups, Legal Hold, and Restore Correctness
 
@@ -97,10 +97,10 @@ Data residency turns retention into placement: some datasets may only be stored 
 
 The mechanics that hold up:
 
-- **Partition by jurisdiction from the start.** Region becomes part of the routing key (chapter on multi-region), so control-plane lookups stay global only for data that may be global: tenant id, plan, region tag.
+- **Partition by jurisdiction from the start.** Region becomes part of the routing key ([Multi-Region Architecture](../06-scaling/09-multi-region-architecture.md)), so control-plane lookups stay global only for data that may be global: tenant id, plan, region tag.
 - **Enumerate what counts as an export.** Replication, cross-region read replicas, log shipping, telemetry with user identifiers, support tooling access, and vendor subprocessors are all exports under most readings of the rule, and each needs either a regional instance or a documented lawful transfer mechanism.
 - **Watch secondary indexes and caches.** A global search index built from regional data is a residency violation that no schema review will catch; index and cache tiers need their own placement constraints and their own tests.
-- **Expect capacity consequences.** Per-region pools mean per-region headroom, dedicated instance families in some regions, and failover plans that cannot assume global spare capacity (chapter on compute platform scheduling). Cell-based isolation (chapter on cells) gives you the same property with a smaller blast radius.
+- **Expect capacity consequences.** Per-region pools mean per-region headroom, dedicated instance families in some regions, and failover plans that cannot assume global spare capacity ([Compute Platform and Scheduling](../15-deployment/07-compute-platform-scheduling.md)). Cell-based isolation ([Cell-Based Architecture](../06-scaling/11-cell-based-architecture.md)) gives you the same property with a smaller blast radius.
 - **Encode placement as policy-as-code.** A deploy or a schema migration that would write regulated data into an out-of-region bucket should fail a check, not fail an audit eighteen months later.
 
 ## Compliance as a Testable Property
@@ -126,10 +126,10 @@ Two standards dominate these conversations, and both are more tractable once exp
 Derived artifacts are where retention programs go to quietly fail, because their lifecycle belongs to nobody. Three rules keep the surface manageable:
 
 - **Aggregates**: retain when they cannot be traced back to an individual at current cardinality, which usually means a minimum cell size plus suppression of rare categories; document the threshold rather than assuming anonymity survives future joins.
-- **Feature stores and indexes**: derive from source with a keyed delete path so that erasure propagates (chapter on feature stores), and record the freshness contract so that a stale feature is not mistaken for a live one.
-- **Datasets, embeddings, and weights**: freeze datasets with an explicit snapshot date and classification (chapter on dataset management), then treat deletion as a retraining input rather than pretending a frozen snapshot can be edited. Exact unlearning inside trained weights remains expensive and imprecise; the honest engineering answer is bounded training windows, consent and deletion signals carried through to the next training run, and documented risk acceptance for the interim.
+- **Feature stores and indexes**: derive from source with a keyed delete path so that erasure propagates ([Feature Stores](../16-ml-systems/02-feature-stores.md)), and record the freshness contract so that a stale feature is not mistaken for a live one.
+- **Datasets, embeddings, and weights**: freeze datasets with an explicit snapshot date and classification ([Dataset Management and Versioning](../16-ml-systems/11-dataset-management-versioning.md)), then treat deletion as a retraining input rather than pretending a frozen snapshot can be edited. Exact unlearning inside trained weights remains expensive and imprecise; the honest engineering answer is bounded training windows, consent and deletion signals carried through to the next training run, and documented risk acceptance for the interim.
 
-Log and telemetry retention deserves its own note because it is the largest volume in most estates: redact at emit rather than filtering later, cap cardinality of identifiers, and separate the short high-resolution window from the long low-resolution one. Retention decisions here are also cost decisions (chapter on FinOps), which is the rare case where the compliance ceiling and the budget ceiling point the same way.
+Log and telemetry retention deserves its own note because it is the largest volume in most estates: redact at emit rather than filtering later, cap cardinality of identifiers, and separate the short high-resolution window from the long low-resolution one. Retention decisions here are also cost decisions ([FinOps and Cost Engineering](../11-observability/06-finops-cost-engineering.md)), which is the rare case where the compliance ceiling and the budget ceiling point the same way.
 
 ## Failure Modes of Retention Design
 
@@ -142,7 +142,7 @@ Log and telemetry retention deserves its own note because it is the largest volu
 | Unbounded derived retention | A 2021 training snapshot still contains erased subjects | Snapshot classification plus retrain-on-threshold policy |
 | Ceiling below the floor | Chargeback or safety investigation with no evidence available | Durable-by-law class separated from operational data, with hold semantics |
 | Crypto-shredding without key inventory | Key destroyed, plaintext still readable elsewhere, or unrecoverable data lost | Key hierarchy documented per class; drill the shred before relying on it |
-| Vendor without a deletion API | Erasure request closes when the ticket closes | Deletion SLA in the contract, or remove the vendor from that data path (chapter on dependencies) |
+| Vendor without a deletion API | Erasure request closes when the ticket closes | Deletion SLA in the contract, or remove the vendor from that data path ([Third-Party Dependencies and Supply Chain](./03-third-party-dependencies-and-supply-chain.md)) |
 | Timezone and boundary bugs | Records expire a day early or late depending on ingest versus event time | One clock convention per class, tested at the boundary explicitly |
 
 ## Key Takeaways
@@ -160,13 +160,17 @@ Log and telemetry retention deserves its own note because it is the largest volu
 
 ## References
 
-- Regulation (EU) 2016/679 (GDPR), Article 5(1)(e) storage limitation, Article 17 right to erasure, Article 28 processor obligations, Article 30 records of processing, Articles 44 onward on transfers. The legal text behind most retention and residency engineering work.
-- California Consumer Privacy Act as amended by the CPRA, including the right to delete and notice-at-collection requirements. A second jurisdiction with different mechanics over the same engineering surface.
-- PCI Security Standards Council. *PCI DSS v4.x*, requirement 3 on protecting and minimizing stored account data. The clearest example of a standard that obliges deletion when data is no longer needed.
-- ISO/IEC 27001 Annex A controls and SOC 2 Trust Services Criteria category CC6 on logical and physical access. The two frameworks whose control ids most audit requests are actually phrased in.
-- NIST SP 800-88 Rev. 1, *Guidelines for Media Sanitization*, NIST, 2014. The clearest published taxonomy of clear, purge, and destroy, and why the difference is a design choice.
-- van Oorschot, P. C. and Wiener, M. K., "On Streaming Encryption and Key Management," Selected Areas in Cryptography, 1998; Rosenzweig, P., "Skipjack, Key Escrow, and Split-Key Cryptography," IEEE Annals of the History of Computing, 1997. The academic basis for crypto-shredding: destroy the key when you cannot find the data.
-- HIPAA Security Rule, 45 CFR 164.316(b)(2)(i), which requires documentation retained for six years. Worth reading closely: the durable-by-law obligation attaches to documents about your controls, not to the patient data itself.
+- [Regulation (EU) 2016/679 (GDPR)](https://eur-lex.europa.eu/eli/reg/2016/679/oj). Article 5(1)(e) storage limitation, Article 17 right to erasure, Article 28 processor obligations, Article 30 records of processing, and Articles 44 onward on transfers: the legal text behind most retention and residency engineering work.
+- [California Consumer Privacy Act, as amended by the CPRA](https://oag.ca.gov/privacy/ccpa). The right to delete and notice-at-collection requirements: a second jurisdiction with different mechanics over the same engineering surface.
+- [PCI Security Standards Council, document library (*PCI DSS v4.x*)](https://www.pcisecuritystandards.org/document_library/). Requirement 3 on protecting and minimizing stored account data, the clearest example of a standard that obliges deletion when data is no longer needed.
+- [ISO/IEC 27001:2022](https://www.iso.org/standard/27001). Annex A controls, one of the two frameworks whose control ids most audit requests are phrased in.
+- [AICPA, *SOC 2* and the Trust Services Criteria](https://www.aicpa-cima.com/topic/audit-assurance/audit-and-assurance-greater-than-soc-2). The other, including the CC6 criteria on logical and physical access.
+- [NIST SP 800-88 Rev. 1, *Guidelines for Media Sanitization* (2014)](https://csrc.nist.gov/pubs/sp/800/88/r1/final). The clearest published taxonomy of clear, purge, and destroy, and why the difference is a design choice.
+- [NIST SP 800-88 Rev. 2, *Guidelines for Media Sanitization*](https://csrc.nist.gov/pubs/sp/800/88/r2/final). The current revision; check which one your auditor cites.
+- [Boneh and Lipton, *A Revocable Backup System* (USENIX Security 1996)](https://www.usenix.org/conference/6th-usenix-security-symposium/revocable-backup-system). The early statement of crypto-shredding: make a backup unreadable by destroying its key when you cannot reach the media.
+- [Reardon, Basin, and Capkun, *SoK: Secure Data Deletion* (IEEE Symposium on Security and Privacy, 2013)](https://doi.org/10.1109/SP.2013.28). A systematic comparison of deletion approaches by layer, adversary, and guarantee.
+- [Google Cloud, *Data deletion on Google Cloud*](https://cloud.google.com/docs/security/deletion). A published deletion pipeline with stated time bounds for active systems and backups, useful as a template for what a deletion claim has to specify.
+- [HIPAA Security Rule, 45 CFR 164.316](https://www.ecfr.gov/current/title-45/subtitle-A/subchapter-C/part-164/subpart-C/section-164.316). Paragraph (b)(2)(i) requires documentation retained for six years. Worth reading closely: the durable-by-law obligation attaches to documents about your controls, not to the patient data itself.
 
 ---
 

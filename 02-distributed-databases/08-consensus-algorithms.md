@@ -217,7 +217,7 @@ Use model checking or specification for ballot/log/membership invariants, implem
 - [Fischer, Lynch, and Paterson, *Impossibility of Distributed Consensus with One Faulty Process* (JACM 1985)](https://groups.csail.mit.edu/tds/papers/Lynch/jacm85.pdf)
 - [Lamport, *Paxos Made Simple* (2001)](https://lamport.azurewebsites.net/pubs/paxos-simple.pdf)
 - [Oki and Liskov, *Viewstamped Replication: A New Primary Copy Method to Support Highly-Available Distributed Systems* (PODC 1988)](https://doi.org/10.1145/62546.62549)
-- [Ongaro and Ousterhout, *In Search of an Understandable Consensus Algorithm* (USENIX ATC 2014)](https://www.usenix.org/system/files/conference/atc14/atc14-paper-ongaro.pdf)
+- [Ongaro and Ousterhout, *In Search of an Understandable Consensus Algorithm* (USENIX ATC 2014)](https://www.usenix.org/conference/atc14/technical-sessions/presentation/ongaro)
 - [Howard, Malkhi, and Spiegelman, *Flexible Paxos: Quorum Intersection Revisited* (2016)](https://arxiv.org/abs/1608.06696)
 - [Ongaro, *Consensus: Bridging Theory and Practice* (Stanford dissertation, 2014)](https://web.stanford.edu/~ouster/cgi-bin/papers/OngaroPhD.pdf)
 ---
@@ -229,3 +229,4 @@ Use model checking or specification for ballot/log/membership invariants, implem
 - [Raft](../09-whitepapers/07-raft.md): the protocol written to be implemented, read against the designs it replaced
 - [Distributed Time](../01-foundations/05-distributed-time.md): the timing assumptions a consensus argument quietly depends on
 - [Multi-Region Architecture](../06-scaling/09-multi-region-architecture.md): quorums across regions, where latency rather than fault tolerance picks the topology
+- [Order Matching Engine](../21-reference-designs/06-order-matching-engine.md): a replicated state machine with one thread, where commit must precede every output

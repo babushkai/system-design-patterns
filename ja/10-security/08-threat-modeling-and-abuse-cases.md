@@ -1,10 +1,10 @@
 # 脅威モデリングとアビュースケース設計
 
-> **翻訳についての注記:** 本ドキュメントは英語原文 `10-security/08-threat-modeling-and-abuse-cases.md` を日本語に翻訳したものです。コードブロックおよびMermaidダイアグラムは原文のまま維持しています。
+> **翻訳の状態:** 現行の[英語版](../../10-security/08-threat-modeling-and-abuse-cases.md)からの翻訳です。
 
 ## TL;DR
 
-コードより先に存在できる唯一のセキュリティ成果物が脅威モデルであり、それは同時にチームがスキップする理由であり、見返りが大きい理由でもある。成果物は図でも、怖い可能性を並べただけのスプレッドシートでもなく、「このシステムが誤用される具体的な方法」の順序付きリストだ。各項目には名前のある担当者と、名前のある制御または文書化された受け入れ、そして制御が消えたときに落ちるテストが必要になる。**文書化済み**: 障害後レビューで繰り返される失敗は、その攻撃クラスが業界に知られていなかったことではない。意思決定をした本人に知られていなかっただけで、通常は誰が何に到達できるかを誰も書き残さなかったことが原因だ。
+コードより先に存在できる唯一のセキュリティ成果物が脅威モデルであり、それは同時にチームがスキップする理由であり、見返りが大きい理由でもある。成果物は図でも、怖い可能性を並べただけのスプレッドシートでもなく、「このシステムが誤用される具体的な方法」の順序付きリストだ。各項目には名前のある担当者と、名前のある制御または文書化された受け入れ、そして制御が消えたときに落ちるテストが必要になる。**推論**: 障害後レビューで繰り返される失敗は、その攻撃クラスが業界に知られていなかったことではない。意思決定をした本人に知られていなかっただけで、通常は誰が何に到達できるかを誰も書き残さなかったことが原因だ。
 
 価値の大半は2つの実践が担う。1つ目は想像力ではなく構造に対して列挙すること。データフロー要素と信頼境界を命名し、そこへ1つの標準的な分類法(STRIDE、またはその環境での同等物)を横断させる。これでカバレッジは「部屋にいる人の経験値」ではなく手法の性質になる。2つ目は、受け入れた各脅威を実行可能なテストとしてのアビュースケースへ変換すること。アクター・予算・目標・経路・対象となる制御・証拠。これが「セキュリティは考えた」を、レビュアーが実行できリグレッションが黙って消せないものに変える。
 
@@ -281,14 +281,13 @@ risk = P(exploitability) x detectability x blast radius x remediation cost
 
 ## 参考文献
 
-- Shostack, A. "Threat Modeling: Designing for Security." Wiley, 2011 — 4つの問いのループ、要素単位の列挙(STRIDEの適用法の源)、価値ある資産の周囲のマイクロハーデニング
-- Swiderski, F., and Snyder, W. "Threat Modeling." Microsoft Press, 2004 — 開発スケジュールへのモデリング組み込みを、チームが維持できる成果物として実践する方法
-- Schneier, B. "Attack Trees: A Method for Constructing Security Models." Dr. Dobb's Journal, 1999 — AND/OR分解と目標から葉へのコスト伝播
-- Howard, J., and LeBlanc, D. "Writing Secure Code," 2nd ed. Microsoft Press, 2003 — 信頼の主張が依存する8つの性質の分類としてのSTRIDE
-- Anderson, R. "Security Engineering: A Guide to Building Dependable Distributed Systems," 3rd ed. Wiley, 2020 — 攻撃者の経済学、制御が攻撃より安くなければならない理由、境界設計の人間要因
-- Chua, T.-L. "A Philosophy of Software Security." 2023 — セキュリティ活動をベストプラクティスの収集ではなく、具体的な悪い結果の防止として組織する理由
-- MITRE ATT&CK knowledge base — フェーズの網羅性のために使う戦術表。スコアリングには使わない
-- OWASP Application Security Verification Standard (ASVS) 5.0 と OWASP Web Security Testing Guide — アビュースケースの受け入れ基準へ写しやすい要求カタログ
-- NIST SP 800-161r1, "Cybersecurity Supply Chain Risk Management Practices for Systems and Organizations." 2022 — サプライヤーとコンポーネントの信頼仮定を第一級のモデル項目として扱う
-- NIST SP 800-189, "Resilient Computer System Design." 2020 — 敵対的障害と偶発的障害を1つの設計問題として扱う枠組み
-- Katz, D., Reddy, S., Barkovich, B., Chojnacki, D., Lu, L., Srivatsan, D., et al. "BBox: Applying Security Chaos Engineering to Serverless Execution Context Creation." ACM CCS 2020 — 分離の主張を議論ではなく実行可能なテストで検証する
+- [Shostack, *Threat Modeling: Designing for Security* (Wiley, 2014)](https://shostack.org/books/threat-modeling-book)
+- [*Threat Modeling Manifesto* (2020)](https://www.threatmodelingmanifesto.org/)
+- [Schneier, *Attack Trees* (Dr. Dobb's Journal, 1999)](https://www.schneier.com/academic/archives/1999/12/attack_trees.html)
+- [Microsoft, *Threat Modeling Tool threats*](https://learn.microsoft.com/en-us/azure/security/develop/threat-modeling-tool-threats)
+- [Anderson, *Security Engineering: A Guide to Building Dependable Distributed Systems*, 3rd ed. (Wiley, 2020)](https://www.cl.cam.ac.uk/~rja14/book.html)
+- [MITRE ATT&CK knowledge base](https://attack.mitre.org/)
+- [OWASP Application Security Verification Standard (ASVS)](https://owasp.org/www-project-application-security-verification-standard/)
+- [OWASP Web Security Testing Guide](https://owasp.org/www-project-web-security-testing-guide/)
+- [NIST SP 800-161 Rev. 1, *Cybersecurity Supply Chain Risk Management Practices for Systems and Organizations* (2022)](https://csrc.nist.gov/pubs/sp/800/161/r1/upd1/final)
+- [NIST SP 800-160 Vol. 2 Rev. 1, *Developing Cyber-Resilient Systems: A Systems Security Engineering Approach* (2021)](https://csrc.nist.gov/pubs/sp/800/160/v2/r1/final)

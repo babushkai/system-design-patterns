@@ -475,7 +475,7 @@ If those answers are unclear, the flag is adding uncertainty rather than control
 - [OpenFeature Specification: Provider Lifecycle](https://openfeature.dev/specification/sections/flag-evaluation#requirement-17-provider-lifecycle-management)
 - [Martin Fowler: Feature Toggles](https://martinfowler.com/articles/feature-toggles.html)
 - [Google SRE Workbook: Canarying Releases](https://sre.google/workbook/canarying-releases/)
-- [AWS Prescriptive Guidance: Feature Flags](https://docs.aws.amazon.com/prescriptive-guidance/latest/micro-frontends-aws/feature-flags.html)
+- [AWS AppConfig: Creating a feature flag configuration profile](https://docs.aws.amazon.com/appconfig/latest/userguide/appconfig-creating-configuration-and-profile-feature-flags.html)
 - [CNCF OpenFeature: Multi-Provider Specification](https://openfeature.dev/specification/appendix-a/)
 
 ---

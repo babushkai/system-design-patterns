@@ -27,7 +27,20 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y pandoc texlive-xetex texlive-fonts-recommended texlive-fonts-extra latexmk
+          sudo apt-get install -y pandoc texlive-xetex texlive-fonts-recommended texlive-fonts-extra latexmk fonts-dejavu
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Mermaid CLI
+        env:
+          # Diagrams are rendered with the runner's Chrome instead of a second download.
+          PUPPETEER_SKIP_DOWNLOAD: "true"
+        run: |
+          mkdir -p build/tools
+          npm install --prefix build/tools --no-audit --no-fund @mermaid-js/mermaid-cli@10.9.1
 
       - name: Generate Book Files
         run: |
@@ -70,6 +83,11 @@ jobs:
           documentclass: report
           papersize: a4
           fontsize: 11pt
+          # Code blocks use arrows, box-drawing characters, and Greek letters that the
+          # default Latin Modern fonts do not carry; DejaVu covers all of them.
+          mainfont: "DejaVu Serif"
+          sansfont: "DejaVu Sans"
+          monofont: "DejaVu Sans Mono"
           geometry:
             - margin=1in
           toc: true
@@ -94,15 +112,32 @@ jobs:
           test -s build/chapters.txt
           echo "Collected $(wc -l < build/chapters.txt | tr -d ' ') chapters"
 
+      - name: Prepare Book Sources
+        run: |
+          # Renders Mermaid diagrams to images, turns chapter links into in-book
+          # anchors, and adds part divider pages. See scripts/build_book_sources.py.
+          # --check-locale also renders the Japanese edition's diagrams, so a syntax
+          # error there fails this job instead of shipping a broken figure to the site.
+          CHROME="$(command -v google-chrome || command -v chromium-browser || command -v chromium)"
+          test -n "$CHROME"
+          PUPPETEER_EXECUTABLE_PATH="$CHROME" python3 scripts/build_book_sources.py \
+            --chapter-list build/chapters.txt \
+            --out build/src \
+            --mmdc "$PWD/build/tools/node_modules/.bin/mmdc" \
+            --check-locale ja \
+            --require-diagrams > build/sources.txt
+          test -s build/sources.txt
+
       - name: Build PDF
         run: |
-          # Build an argument array with ../ prefixes for paths relative to build/.
-          mapfile -t CHAPTER_FILES < <(sed 's|^|../|' build/chapters.txt)
+          # Source paths in build/sources.txt are relative to build/.
+          mapfile -t CHAPTER_FILES < build/sources.txt
           
           cd build
           pandoc \
             --from=markdown+tex_math_dollars \
             --to=pdf \
+            --resource-path=. \
             --output=system-design-patterns.pdf \
             --pdf-engine=xelatex \
             --metadata-file=metadata.yaml \
@@ -119,18 +154,19 @@ jobs:
 
       - name: Build EPUB
         run: |
-          # Build an argument array with ../ prefixes for paths relative to build/.
-          mapfile -t CHAPTER_FILES < <(sed 's|^|../|' build/chapters.txt)
+          # Source paths in build/sources.txt are relative to build/.
+          mapfile -t CHAPTER_FILES < build/sources.txt
           
           cd build
           pandoc \
             --from=markdown+tex_math_dollars \
             --to=epub \
+            --resource-path=. \
             --output=system-design-patterns.epub \
             --metadata-file=metadata.yaml \
             --toc \
             --toc-depth=2 \
-            --epub-chapter-level=1 \
+            --split-level=1 \
             --highlight-style=tango \
             front-matter.md \
             "${CHAPTER_FILES[@]}"

@@ -1,6 +1,6 @@
 # 設計文書とアーキテクチャ決定記録
 
-> **翻訳についての注記:** 本ドキュメントは英語原文 `20-production-readiness/01-design-documents-and-decision-records.md` を日本語に翻訳したものです。コードブロックおよびMermaidダイアグラムは原文のまま維持しています。
+> **翻訳の状態:** 現行の[英語版](../../20-production-readiness/01-design-documents-and-decision-records.md)からの翻訳です。
 
 ## TL;DR
 
@@ -130,7 +130,7 @@ Alternatives rejected: CDC directly from WAL (no schema coupling but no transact
 
 これが置き換える失敗モードは「不可視の分岐」だ。1つのシステムについて3つの文書があり、それぞれ別の四半期について正しい。分岐を発見したら、負けた側は明示的に削除してポインターを残す。新しいものだけを静かに残すと、次のエンジニアが間違った方に最初に出会う。
 
-**文書化済み**: ポストモーテムは、欠落した記録の最大の供給源だ。インシデントの根本原因が文書化されていない前提だったなら、是正処置は可能な限り「記録とテスト」であり、インシデントをなぞらえ直すウェアハウスページではない。書き下せない前提こそ壊れる。
+**推論**: ポストモーテムは、欠落した記録の最大の供給源だ。インシデントの根本原因が文書化されていない前提だったなら、是正処置は可能な限り「記録とテスト」であり、インシデントをなぞらえ直すウェアハウスページではない。書き下せない前提こそ壊れる。
 
 ## レビューの機構
 
@@ -194,11 +194,15 @@ Alternatives rejected: CDC directly from WAL (no schema coupling but no transact
 
 ## 参考文献
 
-- Parnas, D., and Clements, P. "A Rational Design Process: How and Why to Fake It." IEEE Transactions on Software Engineering, 1986 — 設計は反復的な推測で進み、記録された合理的構造は意図的に構築される成果物だという元の議論
-- Nygard, M. "Documenting Architecture Decisions." 2011 — ほぼすべてのADRツールの子孫となった書式。文脈・決定・帰結、そして置き換えによる変更不可性
-- ISO/IEC/IEEE 42010:2022, "Systems and software engineering - Architecture description." — ステークホルダー、関心事、ビューポイントと、そのどれを対象とするかを記述に要求する規則
-- Brown, S. "The C4 Model for Visualising Software Architecture." 2011 onward — 図の高度設定と、1枚の図が3つのスケールの問いに答えられない理由
-- Bryar, W., and Carr, B. "Working Backwards." St. Martin's Press, 2021 — スライドではなくナラティブメモ、論を散文で書かせる6ページ構成
-- Sharma, T., Bosworth, A., Zaharia, M., and Chakraborty, A. (eds). "Software Engineering at Google." O'Reilly Media, 2020 — 設計文書、コードレビューの規範、担当者を持つ成果物としての文書工学
-- Ousterhout, J. "A Philosophy of Software Design." 2nd ed. Yaknyam Press, 2021 — 設計決定が返済するか積み上げるかの対象としての複雑性、挙動ではなく意図の記録としてのコメント
-- Skelton, M., and Pais, S. "Team Topologies." IT Revolution Press, 2019 — 決定に委員会ではなく所有チームが必要であることを示す相互作用モードと認知負荷
+- [Parnas and Clements, *A Rational Design Process: How and Why to Fake It* (IEEE Transactions on Software Engineering, 1986)](https://doi.org/10.1109/TSE.1986.6312940)
+- [Parnas, *On the Criteria To Be Used in Decomposing Systems into Modules* (Communications of the ACM, 1972)](https://doi.org/10.1145/361598.361623)
+- [Nygard, *Documenting Architecture Decisions* (2011)](https://cognitect.com/blog/2011/11/15/documenting-architecture-decisions)
+- [ISO/IEC/IEEE 42010:2022, *Software, systems and enterprise: Architecture description*](https://www.iso.org/standard/74393.html)
+- [Brown, *The C4 Model for Visualising Software Architecture*](https://c4model.com/)
+- [Starke and Hruschka, *arc42: Template for Architecture Communication and Documentation*](https://arc42.org/overview)
+- [Bryar and Carr, *Working Backwards: Insights, Stories, and Secrets from Inside Amazon* (St. Martin's Press, 2021)](https://www.workingbackwards.com/)
+- [Winters, Manshreck, and Wright (eds.), *Software Engineering at Google* (O'Reilly Media, 2020)](https://abseil.io/resources/swe-book)
+- [Ubl, *Design Docs at Google* (2020)](https://www.industrialempathy.com/posts/design-docs-at-google/)
+- [Google, *Engineering Practices Documentation*](https://google.github.io/eng-practices/)
+- [Ousterhout, *A Philosophy of Software Design*, 2nd ed. (Yaknyam Press, 2021)](https://web.stanford.edu/~ouster/cgi-bin/aposd.php)
+- [Skelton and Pais, *Team Topologies* (IT Revolution Press, 2019)](https://teamtopologies.com/book)

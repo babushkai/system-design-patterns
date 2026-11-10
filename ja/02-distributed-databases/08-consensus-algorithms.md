@@ -1,6 +1,6 @@
 # コンセンサスアルゴリズム
 
-> **注:** この記事は英語版 `02-distributed-databases/08-consensus-algorithms.md` の日本語翻訳です。
+> **翻訳の状態:** この日本語版は英語版の以前の版に基づいており、現行の[英語版](../../02-distributed-databases/08-consensus-algorithms.md)とは構成や内容が異なります。最新の内容は英語版を参照してください。
 
 ## TL;DR
 

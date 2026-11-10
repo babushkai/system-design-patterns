@@ -467,13 +467,13 @@ The trust boundary is the snapshot manifest. It pins the label contract and reso
 ## References
 
 1. [Hidden Technical Debt in Machine Learning Systems](https://proceedings.neurips.cc/paper_files/paper/2015/file/86df7dcfd896fcaf2674f757a2463eba-Paper.pdf): Sculley et al., 2015
-2. [Data Cascades in High-Stakes AI](https://research.google/pubs/data-cascades-in-high-stakes-ai/): Sambasivan et al., CHI 2021
+2. [Data Cascades in High-Stakes AI](https://research.google/pubs/everyone-wants-to-do-the-model-work-not-the-data-work-data-cascades-in-high-stakes-ai/): Sambasivan et al., CHI 2021
 3. [Datasheets for Datasets](https://arxiv.org/abs/1803.09010): Gebru et al., 2018
 4. [Model Cards for Model Reporting](https://arxiv.org/abs/1810.03993): Mitchell et al., 2019
 5. [Snorkel: Rapid Training Data Creation with Weak Supervision](https://arxiv.org/abs/1711.10160): Ratner et al., VLDB 2017
 6. [Learning from Delayed Outcomes via Proxies with Applications to Recommender Systems](https://arxiv.org/abs/2010.08942): delayed feedback and proxy-label framing
 7. [Selective Labels and Deferential Fairness](https://arxiv.org/abs/1809.05699): selective labels in high-stakes decision systems
-8. [Trustworthy Online Controlled Experiments](https://www.cambridge.org/core/books/trustworthy-online-controlled-experiments/6A3B263E7114E81B95669A95B219C1D8): Kohavi, Tang & Xu, 2020
+8. [Trustworthy Online Controlled Experiments](https://doi.org/10.1017/9781108653985): Kohavi, Tang & Xu, 2020
 9. [Maximum Likelihood Estimation of Observer Error-Rates Using the EM Algorithm](https://www.jstor.org/stable/2346806): Dawid & Skene, 1979
 10. [Survival Analysis: A Self-Learning Text](https://link.springer.com/book/10.1007/978-1-4419-6646-9): Kleinbaum & Klein; censoring foundations
 

@@ -279,3 +279,4 @@ Partial query metadata is part of correctness. A graph that silently omits an un
 - [Cell-Based Architecture and Shuffle Sharding](../06-scaling/11-cell-based-architecture.md): celling the monitoring database is how one region overload stops being a global outage
 - [Partitioning Strategies](../02-distributed-databases/05-partitioning-strategies.md): sharding by metric and series is where hot partitions and skewed tenants show up first
 - [SLOs and Error-Budget Control](../11-observability/05-slos-error-budgets.md): partial results are acceptable until they are not, which makes the objective explicit
+- [Time-Series Storage Engines](../03-storage-engines/09-time-series-storage.md): the general engine design that Monarch specializes for in-memory, regional operation

@@ -1,6 +1,6 @@
 # 計算基盤とスケジューリングのアーキテクチャ
 
-> **翻訳についての注記:** 本ドキュメントは英語原文 `15-deployment/07-compute-platform-scheduling.md` を日本語に翻訳したものです。コードブロックおよびMermaidダイアグラムは原文のまま維持しています。
+> **翻訳の状態:** 現行の[英語版](../../15-deployment/07-compute-platform-scheduling.md)からの翻訳です。
 
 ## TL;DR
 
@@ -122,7 +122,7 @@
 
 ユーティライゼーションは美徳ではなく予算の決定である。3つの曲線がトレードオフになる。
 
-- **パッキング効率**は、より詰まった配置とより緩い分散制約で上がる。無駄になった容量の1ポイントは大規模では金になる。Googleはフリート全体のプロファイリングと配置の改善で、計装のコストを正当化できるだけのリソースを回収したと報告している
+- **パッキング効率**は、より詰まった配置とより緩い分散制約で上がる。無駄になった容量の1ポイントは大規模では金になる。GoogleのAutopilot論文は、自動でサイズ調整されたジョブのスラック(要求したが使われない資源)が23%だったのに対し、手動調整のジョブでは46%だったと報告している。requestを正しく設定することで得られる利得はこの大きさだ
 - **障害headroom**は充填とともに減る。定常使用率90%のクラスタは、ノードプールの喪失にも、30%の追加容量を必要とする失敗したデプロイにも、AZ障害後のリバランスにも耐えられない — まさにそのとき、容量は最も高く、最も遅い
 - **復旧速度**は、安全に返却できるheadroomの量を決める。新しいノードが3分で現れPodが2分でreadyになるなら、GPUノードのプロビジョニングに25分かかる基盤より、常時待機させる予備は少なくてすむ
 
@@ -196,9 +196,22 @@
 
 ## 参考文献
 
-- Verma, A., Pedrosa, L., Korupolu, M. ら "Large-Scale Cluster Management at Google with Borg." EuroSys 2015 — 予約に対するアドミッション制御、充填と公平性の緊張、データセンター規模での退避と優先度クラス
-- Kubernetesドキュメント: "Manage Resources for Containers"、"Pod Quality of Class"、"Pod Lifecycle and Termination"、"Pod Disruption Budgets"、"Topology Manager"、"Scheduling Framework"
-- Linuxカーネルドキュメント: Control Group v2(`cpu.max`、`cpu.weight`、`memory.high`、`memory.max`、pidsコントローラ)とCFS帯域制御の説明
-- AWSドキュメント: Spotインスタンスの割り込み通知(回収2分前)とElastic Load Balancingの接続ドレインの既定値
-- Dean, G., Barroso, L. A. "The Tail at Scale." Communications of the ACM 2013 — 共有資源の干渉がリクエスト単位のレイテンシを決める理由
-- Cummins, J. ら "Profiling a Datacenter." SIGMETRICS 2021 — リソース計算が費用対効果を持つというフリート規模の証拠
+- [Verma et al., *Large-scale Cluster Management at Google with Borg* (EuroSys 2015)](https://research.google/pubs/large-scale-cluster-management-at-google-with-borg/)
+- [Burns, Grant, Oppenheimer, Brewer, and Wilkes, *Borg, Omega, and Kubernetes* (ACM Queue, 2016)](https://queue.acm.org/detail.cfm?id=2898444)
+- [Rzadca et al., *Autopilot: Workload Autoscaling at Google Scale* (EuroSys 2020)](https://research.google/pubs/autopilot-workload-autoscaling-at-google-scale/)
+- [Kubernetes documentation, *Resource Management for Pods and Containers*](https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/)
+- [Kubernetes documentation, *Pod Quality of Service Classes*](https://kubernetes.io/docs/concepts/workloads/pods/pod-qos/)
+- [Kubernetes documentation, *Pod Lifecycle*](https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/)
+- [Kubernetes documentation, *Node-pressure Eviction*](https://kubernetes.io/docs/concepts/scheduling-eviction/node-pressure-eviction/)
+- [Kubernetes documentation, *API-initiated Eviction*](https://kubernetes.io/docs/concepts/scheduling-eviction/api-eviction/)、[*Disruptions*](https://kubernetes.io/docs/concepts/workloads/pods/disruptions/)
+- [Kubernetes documentation, *Scheduling Framework*](https://kubernetes.io/docs/concepts/scheduling-eviction/scheduling-framework/)
+- [Kubernetes documentation, *Topology Manager*](https://kubernetes.io/docs/tasks/administer-cluster/topology-manager/)
+- [Kubernetes documentation, *Horizontal Pod Autoscaling*](https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/)
+- [Kubernetes documentation, *Runtime Class*](https://kubernetes.io/docs/concepts/containers/runtime-class/)
+- [Linux kernel documentation, *Control Group v2*](https://docs.kernel.org/admin-guide/cgroup-v2.html)
+- [Linux kernel documentation, *CFS Bandwidth Control*](https://docs.kernel.org/scheduler/sched-bwc.html)
+- [AWS documentation, *Spot Instance interruption notices*](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/spot-instance-termination-notices.html)
+- [AWS documentation, *EC2 instance rebalance recommendations*](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/rebalance-recommendations.html)
+- [AWS documentation, *Edit target group attributes*](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/edit-target-group-attributes.html)
+- [Google Cloud documentation, *Spot VMs*](https://cloud.google.com/compute/docs/instances/spot)
+- [Dean and Barroso, *The Tail at Scale* (Communications of the ACM, 2013)](https://research.google/pubs/the-tail-at-scale/)

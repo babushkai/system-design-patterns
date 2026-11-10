@@ -1,6 +1,6 @@
 # Attention Is All You Need: Transformer
 
-> **翻訳についての注記:** 本ドキュメントは英語原文 `09-whitepapers/15-attention-transformers.md` を日本語に翻訳したものです。コードブロックおよびMermaidダイアグラムは原文のまま維持しています。
+> **翻訳の状態:** この日本語版は英語版の以前の版に基づいており、現行の[英語版](../../09-whitepapers/15-attention-transformers.md)とは構成や内容が異なります。最新の内容は英語版を参照してください。
 
 ## TL;DR
 

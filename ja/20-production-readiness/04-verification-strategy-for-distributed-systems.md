@@ -1,10 +1,10 @@
 # 分散システムの検証戦略
 
-> **翻訳についての注記:** 本ドキュメントは英語原文 `20-production-readiness/04-verification-strategy-for-distributed-systems.md` を日本語に翻訳したものです。コードブロックおよびMermaidダイアグラムは原文のまま維持しています。
+> **翻訳の状態:** 現行の[英語版](../../20-production-readiness/04-verification-strategy-for-distributed-systems.md)からの翻訳です。
 
 ## TL;DR
 
-テストはバグの存在を示せるだけで、分散システムで最も高価なバグはクラッシュではなく挙動だ。同じ書き込みが2回確定応答される、200ミリ秒あいだリーダーが2人いる、インデックスがテーブルと黙って食い違う、リトライが顧客に2回課金する。**文書化済み**: 本番との接触を大規模で生き延びたシステムは、同じ3要素の答えに収束した。FoundationDBは開発時間の大半をユニットテストではなく決定論的シミュレーションに費やしたと公表している。1つのプロセスで多数のマシンを模擬し、仮想クロックを使い、障害を注入するので、失敗はシードから再現できる。MicrosoftのIronFleetは著者自身のシステムから設計バグと実装バグの両方を見つけ、同じモデルから導出したランタイムモニタを残した。Jepsenの看板の下で公表された分析は繰り返し、独自の機能テストを通過済みの実在の合意・ストレージ系システムに履歴の異常を見つけた。これはどのチームが不注意だったかではなく、どの性質をテストし忘れるのかという証拠だ。
+テストはバグの存在を示せるだけで、分散システムで最も高価なバグはクラッシュではなく挙動だ。同じ書き込みが2回確定応答される、200ミリ秒あいだリーダーが2人いる、インデックスがテーブルと黙って食い違う、リトライが顧客に2回課金する。**文書化済み**: 本番との接触を大規模で生き延びたシステムは、同じ3要素の答えに収束した。FoundationDBは開発時間の大半をユニットテストではなく決定論的シミュレーションに費やしたと公表している。1つのプロセスで多数のマシンを模擬し、仮想クロックを使い、障害を注入するので、失敗はシードから再現できる。MicrosoftのIronFleetは、Paxosベースの複製ステートマシンライブラリとシャード化キーバリューストアが仕様を満たすことを機械的に証明した。この手法の到達点と、証明労力という代価の両方を示す例だ。Jepsenの看板の下で公表された分析は繰り返し、独自の機能テストを通過済みの実在の合意・ストレージ系システムに履歴の異常を見つけた。これはどのチームが不注意だったかではなく、どの性質をテストし忘れるのかという証拠だ。
 
 戦略的な洞察は「もっとテストせよ」ではない。検証の質は次の3つで上限が決まる。**決定論性**(失敗をシードから再現できるか)、**インターリービング空間のカバレッジ**(スケジュールと障害タイミングを探る仕組みがあるのか、正常系だけなのか)、**アサーションの強さ**(不変条件を検査しているのか、例外が投げられなかっただけを確認しているのか)。**推論**: だからこそカバレッジ率はほぼ無意味になる。リーダー選出モジュールの全行を通過するテストスイートが、コミットと応答のあいだでパーティションを一度もスケジュールしていないことがある。面白いバグはまさにそこに住む。
 
@@ -25,7 +25,7 @@
 | 性能エンベロープ | 現実的なカードラリティでの負荷とプロファイリング | 機能テスト、いくつあっても |
 | テナント分離 | 悪意ある識別子を使った悪用ケーステスト | 味方によるコードレビュー |
 
-**文書化済み**: 産業界で形式手法を導入した運用から繰り返し出る知見は、仕様化の労力は設計時にバグを、実装時のテストよりはるかに安価に見つけるというものだ。Amazonが公表したTLA+活用例は、コードを書く前に拾った設計誤りを説明し、アクセスポリシー分析の自動推論の仕事は、従来型テストではポリシ空間を列挙できないサービスで潜伏問題を発見したと報告している。MicrosoftのIronFleetは設計バグと実装バグの両方を報告し、さらに不変条件から導出したランタイムモニタを本番の恒久チェックとして残した。この系統で最も移植できるアイデアがこれだ: 怠ってコード化しなかった不変条件は、2回破られる。
+**文書化済み**: 産業界で形式手法を導入した運用から繰り返し出る知見は、仕様化の労力は設計時にバグを、実装時のテストよりはるかに安価に見つけるというものだ。Amazonが公表したTLA+活用例は、S3、DynamoDB、EBSなどでテストとレビューが見逃した微妙な設計誤りを見つけたと報告している。同社のZelkovaは、テストではポリシー空間を列挙できないため、アクセスポリシーの問いにSMTソルバで答える。S3のShardStoreチームはより軽い道を選んだ。実行可能な参照モデルを用意し、変更のたびにプロパティベーステストで実装と突き合わせる。この系統で最も移植できるアイデアがこれだ: 怠ってコード化しなかった不変条件は、2回破られる。
 
 ## 検証レイヤーの経済学
 
@@ -44,7 +44,7 @@
 
 これを誠実に保つ3つの規則がある。ロジックは決定論的な核へ押し込み、安い層から到達できるようにする。判断を検証するためにクラスタを起動しなければならないなら、それはテストの問題ではなく設計の臭いだ。エンドツーエンドのカバレッジは狭く*シナリオの形*に保つ(誰かを起こすであろうユーザージャーニーにつき1テスト)。あの層で幅を買ってもフレークあたりの見返りがゼロだからだ。そしてフレークは将来のすべての変更に対する税として扱う。フレーク2パーセントのスイートは全員にもう一度実行させ、実質的にスイート全体のコストが倍になり、人は黙って赤を無視し始める。
 
-**文書化済み**: 大手技術企業はこの理由で選択的テスト実行について広く公表している。リポジトリの全スイートが遅すぎるとき、組織は依存グラフに基づくテスト選択に投資し、変更は観測しうるテストだけを走らせる。暗黙の帰結として、フィードバック遅延は検証戦略の一級の指標だ。40分かかるチェックは、回避を許可する方針が存在しなくても人間によって回避される。
+**文書化済み**: GoogleとMetaはこの理由で選択的テスト実行について論文を公表している([Memon et al.](https://research.google/pubs/taming-google-scale-continuous-testing/)、[Machalica et al.](https://arxiv.org/abs/1810.05286))。リポジトリの全スイートが遅すぎるとき、組織は依存グラフや学習に基づくテスト選択に投資し、変更はそれを観測しそうなテストだけを走らせる。暗黙の帰結として、フィードバック遅延は検証戦略の一級の指標だ。40分かかるチェックは、回避を許可する方針が存在しなくても人間によって回避される。
 
 ## 決定論性が最も希少な資源
 
@@ -112,7 +112,7 @@ failure: reproduce with one argument, then shrink to the minimal case
 
 シミュレーションはステートフルな分散システムで使える最も強い道具で、その理由は魔術ではなく機械的な事実にある。実システムのコードを1つのプロセスの中で動かし、ネットワーク、クロック、ディスク、スケジューラをすべて模擬コンポーネントにする。すると(1)スレッドの非決定性のない制御可能な並行性、(2)仮想時間により1時間タイムアウトのシナリオが数秒で走る、(3)すべての操作での安価な障害注入、(4)シードからの再現性が手に入る。
 
-FoundationDBの公表した説明が正準的な例だ。同じコードパスを実インフラに対しても、1プロセス内の模擬クラスタに対しても走らせる。ワークロード生成器と不変条件チェックが継続的に走るため、テストはリリース工程ではなく恒久的な背景活動になる。TigerBeetleのアプローチは決定論的シミュレーションと、すべての応答を独立に検証する別プロセスの検証者を組み合わせている(「嘘検知器は不要」)。これはランタイムモニタと差分チェックとして表現された同じアイデアだ。CockroachDBとTiKVはいずれも、シミュレーション型のカオスリグと、実クラスタ上で長時間走る混在ワークロードと正しさのアサーションを組み合わせている。シミュレーションがすべてを覆えないからだ(ハードウェア挙動、カーネルとの相互作用、サードパーティドライバ)。
+FoundationDBの公表した説明が正準的な例だ。同じコードパスを実インフラに対しても、1プロセス内の模擬クラスタに対しても走らせる。ワークロード生成器と不変条件チェックが継続的に走るため、テストはリリース工程ではなく恒久的な背景活動になる。TigerBeetleのVOPRシミュレータは、ネットワーク・プロセス・ストレージの障害を注入しながらクラスタ全体を1プロセスで走らせ、実行中にレプリカを安全性の不変条件と照合する。検査器をハーネスに組み込んだ同じアイデアだ。シミュレーションを前提に設計されなかったシステムは、代わりにJepsen型の履歴検査と、実クラスタ上で長時間走る障害注入ワークロードに頼る。シミュレーション可能なシステムにもそれらは必要だ。シミュレーションがすべてを覆えないからだ(ハードウェア挙動、カーネルとの相互作用、サードパーティドライバ)。
 
 シミュレーションは無料ではない。システムのI/Oがインターセプト可能で、時間が注入可能で、不変条件が書き下されていなければならない。これは初期のアーキテクチャ決定であり、「シミュレーションは後で足す」が大抵「二度とやらない」を意味する理由だ。コストと便益の境界はおおよそ次の通り。システムが永続状態を所有し、顧客のデータを失いかねないなら投資は正当化される。他社データベースを呼ぶステートレスなサービスなら、レジリエンステストとコントラクトテストと段階的ロールアウトで価値の大半を、コスト一握りで得られる。
 
@@ -126,7 +126,7 @@ FoundationDBの公表した説明が正準的な例だ。同じコードパス�
 
 **検証の一部としての修復。** 修復ツールのないチェックはバックログを生む。すべての不変条件は、その修復パス(信頼できる情報源から再発行、プロジェクション再構築、隔離の再駆動)と冪等性の説明と共に提供すべきだ。これはまさにアウトボックスとインボックスの規律を、自分自身の整合性保証に適用したものだ。
 
-FacebookのParagon系の仕事はこのアイデア最強の実例だ。オフライン分析エンジンが本番の設定とデータを全スケールで走らせ、ロールアウト前に潜伏する違反を探す。ある種の欠陥は本番のカードラリティにしか存在せず、合成できないからだ。ファンアウトを持つもの(ルーティングテーブル、権限グラフ、キャッシュキー)を運用しているなら、実状態に対するオフライン分析機は投入収益が最も高い投資先に入る。
+実際の設定に対するオフライン分析は、このアイデアの最も強い形だ。Batfishは実機のデバイス設定からネットワークのモデルを組み立て、変更をデプロイする前に到達性の問いに答える。AWSのZelkovaはアクセスポリシーに対して同じことをソルバで行う。どちらも、ある種の欠陥は本番のカーディナリティにしか現れず、テスト環境では合成できないから存在する。ファンアウトを持つもの(ルーティングテーブル、権限グラフ、キャッシュキー)を運用しているなら、実状態に対するオフライン分析機は投入収益が最も高い投資先に入る。
 
 ## 本番で走る検証
 
@@ -186,16 +186,22 @@ FacebookのParagon系の仕事はこのアイデア最強の実例だ。オフ�
 
 ## 参考文献
 
-- Lamport, L. *Specifying Systems: The TLA+ Language and Tools for Hardware and Software Engineers*. Addison-Wesley, 2002 — 並行プロトコルを実装前に網羅的に仕様化する
-- Newcombe, T., Velthuis, T., et al. "How Amazon Web Services Uses Formal Methods." *Communications of the ACM*, 2015 — 本番サービスでの設計時のモデル検査と、それが見つけた欠陥クラス
-- Hawblitzel, C., et al. "IronFleet: Proving Practical Distributed Systems Correct." Proceedings of SOSP, 2015 — モデル検査された実装と、同じ不変条件から導出したランタイムモニタ
-- Padon, O., et al. "Verdi: A Framework for Implementing Fault-Tolerant Distributed Systems." PLDI 2017 — モデルだけでなく実装自体の機械検証
-- Claessen, K., and Hughes, J. "QuickCheck: A Lightweight Tool for Random Testing of Haskell Programs." ICFP 2000 — 生成と縮約。現代のプロパティテストフレームワークの機構
-- Böhme, M. "Coverage-Based Greybox Fuzzing." ACM CCS 2017 — 信頼できない入力を扱うコードでファジングを実用にしたフィードバックループ
-- Kingsbury, C. Jepsenプロジェクトの報告とElleトランザクション検査ライブラリ — 実分散システムの線形性と一貫性の異常に関する公開分析と、履歴異常の分類
-- FoundationDB の決定論的シミュレーションテストに関する技術文書 — 継続生成ワークロード、仮想時間、1プロセス内の障害注入
-- Apple. "Testing Distributed Systems with Deterministic Simulation." 2021 — シミュレーションパターンがデータベースベンダーの外へも移転することの独立した確認
-- TigerBeetle の決定論的シミュレーションと独立実装された検証プロセスに関するプロジェクト文書
-- Meta Platforms の本番設定のオフライン/増分分析に関するインフラ公開資料(ParagonとQuicksandの系統) — ロールアウト前に実状態を全カードラリティで検査する
-- Beyer, B., Jones, C., Petoff, J., and Murphy, N. (eds). *Site Reliability Engineering: How Google Runs Production Systems*. O'Reilly Media, 2016 — カナリア、ダークローンチ、本番トラフィックの不在ではなく本番トラフィックによる検証
-- Sharma, T., Bosworth, A., Zaharia, M., and Chakraborty, A. (eds). *Software Engineering at Google*. O'Reilly Media, 2020 — テスト選択、密閉性、フレーク管理、リポジトリ規模における遅いフィードバックの実測コスト
+- [Lamport, *Specifying Systems: The TLA+ Language and Tools for Hardware and Software Engineers* (Addison-Wesley, 2002)](https://lamport.azurewebsites.net/tla/book.html)
+- [Newcombe, Rath, Zhang, Munteanu, Brooker, and Deardeuff, *How Amazon Web Services Uses Formal Methods* (Communications of the ACM, 2015)](https://lamport.azurewebsites.net/tla/formal-methods-amazon.pdf)
+- [Bornholt et al., *Using Lightweight Formal Methods to Validate a Key-Value Storage Node in Amazon S3* (SOSP 2021)](https://www.amazon.science/publications/using-lightweight-formal-methods-to-validate-a-key-value-storage-node-in-amazon-s3)
+- [Backes et al., *Semantic-based Automated Reasoning for AWS Access Policies using SMT* (FMCAD 2018)](https://www.amazon.science/publications/semantic-based-automated-reasoning-for-aws-access-policies-using-smt)
+- [Hawblitzel et al., *IronFleet: Proving Practical Distributed Systems Correct* (SOSP 2015)](https://www.microsoft.com/en-us/research/publication/ironfleet-proving-practical-distributed-systems-correct/)
+- [Wilcox et al., *Verdi: A Framework for Implementing and Formally Verifying Distributed Systems* (PLDI 2015)](https://homes.cs.washington.edu/~mernst/pubs/verify-distsystem-pldi2015.pdf)
+- [Claessen and Hughes, *QuickCheck: A Lightweight Tool for Random Testing of Haskell Programs* (ICFP 2000)](https://www.cs.tufts.edu/~nr/cs257/archive/john-hughes/quick.pdf)
+- [Böhme, Pham, and Roychoudhury, *Coverage-based Greybox Fuzzing as Markov Chain* (ACM CCS 2016)](https://mboehme.github.io/paper/CCS16.pdf)
+- [Kingsbury, *Jepsen analyses*](https://jepsen.io/analyses)
+- [Kingsbury and Alvaro, *Elle: Inferring Isolation Anomalies from Experimental Observations* (VLDB 2020)](https://www.vldb.org/pvldb/vol14/p268-alvaro.pdf)
+- [FoundationDB documentation, *Simulation and Testing*](https://apple.github.io/foundationdb/testing.html)
+- [Wilson, *Testing Distributed Systems w/ Deterministic Simulation* (Strange Loop 2014)](https://www.youtube.com/watch?v=4fFDFbi3toc)
+- [TigerBeetle documentation, *VOPR*](https://github.com/tigerbeetle/tigerbeetle/blob/main/docs/internals/vopr.md)
+- [Fogel et al., *A General Approach to Network Configuration Analysis* (NSDI 2015)](https://www.usenix.org/conference/nsdi15/technical-sessions/presentation/fogel)
+- [Memon et al., *Taming Google-Scale Continuous Testing* (ICSE-SEIP 2017)](https://research.google/pubs/taming-google-scale-continuous-testing/)
+- [Machalica, Samylkin, Porth, and Chandra, *Predictive Test Selection* (ICSE-SEIP 2019)](https://arxiv.org/abs/1810.05286)
+- [Yuan et al., *Simple Testing Can Prevent Most Critical Failures* (OSDI 2014)](https://www.usenix.org/conference/osdi14/technical-sessions/presentation/yuan)
+- [Beyer, Jones, Petoff, and Murphy (eds.), *Site Reliability Engineering: How Google Runs Production Systems* (O'Reilly Media, 2016)](https://sre.google/sre-book/table-of-contents/)
+- [Winters, Manshreck, and Wright (eds.), *Software Engineering at Google* (O'Reilly Media, 2020)](https://abseil.io/resources/swe-book)

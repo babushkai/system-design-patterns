@@ -1,6 +1,6 @@
 # 分散ロックとリース
 
-> **翻訳についての注記:** 本ドキュメントは英語原文 `01-foundations/09-distributed-locks.md` を日本語に翻訳したものです。コードブロックおよびMermaidダイアグラムは原文のまま維持しています。
+> **翻訳の状態:** この日本語版は英語版の以前の版に基づいており、現行の[英語版](../../01-foundations/09-distributed-locks.md)とは構成や内容が異なります。最新の内容は英語版を参照してください。
 
 ## TL;DR
 
@@ -87,7 +87,7 @@ sequenceDiagram
 
     C1->>L: acquire
     L-->>C1: granted, token=33
-    Note over C1: long pause; lease expires
+    Note over C1: long pause, lease expires
     C2->>L: acquire
     L-->>C2: granted, token=34
     C2->>S: write(token=34) ✓ (34 ≥ 34)

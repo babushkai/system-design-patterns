@@ -1,6 +1,6 @@
 # CRDTと共同編集
 
-> **翻訳についての注記:** 本ドキュメントは英語原文 `07-real-time/07-crdts-collaborative-editing.md` を日本語に翻訳したものです。コードブロックおよびMermaidダイアグラムは原文のまま維持しています。
+> **翻訳の状態:** この日本語版は英語版の以前の版に基づいており、現行の[英語版](../../07-real-time/07-crdts-collaborative-editing.md)とは構成や内容が異なります。最新の内容は英語版を参照してください。
 
 ## TL;DR
 
@@ -32,7 +32,7 @@ sequenceDiagram
 
     A->>S: insert("s", pos=5)
     B->>S: insert("the ", pos=0)
-    Note over S: accepts Alice first;<br/>transforms Bob's op? no —<br/>transforms Alice's for Bob & vice versa
+    Note over S: accepts Alice first,<br/>transforms Bob's op? no —<br/>transforms Alice's for Bob & vice versa
     S->>B: insert("s", pos=5+4=9)  ← shifted past "the "
     S->>A: insert("the ", pos=0)
     Note over A,B: both converge on "the colors"

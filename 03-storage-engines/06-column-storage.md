@@ -240,7 +240,7 @@ Fault tests should interrupt multipart upload, footer write, snapshot publicatio
 - [Boncz, Zukowski, and Nes, *MonetDB/X100: Hyper-Pipelining Query Execution* (CIDR 2005)](https://www.cidrdb.org/cidr2005/papers/P19.pdf)
 - [Abadi, Myers, DeWitt, and Madden, *Materialization Strategies in a Column-Oriented DBMS* (ICDE 2007), author-hosted PDF](https://www.cs.umd.edu/~abadi/papers/abadiicde2007.pdf)
 - [Melnik et al., *Dremel: Interactive Analysis of Web-Scale Datasets* (VLDB 2010)](https://storage.googleapis.com/gweb-research2023-media/pubtools/3293.pdf)
-- [Google, *Capacitor: Columnar Storage for the Cloud* (VLDB 2016)](https://research.google/pubs/capacitor-columnar-storage-for-the-cloud/)
+- [Google Cloud, *Inside Capacitor, BigQuery's next-generation columnar storage format* (2016)](https://cloud.google.com/blog/products/bigquery/inside-capacitor-bigquerys-next-generation-columnar-storage-format)
 - [Apache Parquet, official file-format specification](https://parquet.apache.org/docs/file-format/)
 - [Apache Arrow, official columnar-format specification](https://arrow.apache.org/docs/format/Columnar.html)
 
@@ -252,3 +252,4 @@ Fault tests should interrupt multipart upload, footer write, snapshot publicatio
 - [SSTables and Compaction](03-sstables-compaction.md): the same immutable-file tradeoff, with row groups where the LSM has runs
 - [Lakehouse Table Formats](../13-data-pipelines/05-lakehouse-table-formats.md): the commit protocol that turns columnar files into a table with history and rollback
 - [LSM Trees](02-lsm-trees.md): how updates and deletes arrive in a layout designed to avoid them
+- [Analytical Query Engines](../13-data-pipelines/03-analytical-query-engines.md): the distributed engine that plans, prunes, and joins over these files

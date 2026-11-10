@@ -305,13 +305,16 @@ Log archival extends the same stream through time instead of space. Shipping clo
 
 ## References
 
-- Mohan, C., et al. (1992). *ARIES: A Transaction Recovery Method Supporting Fine-Granularity Locking and Partial Rollbacks Using Write-Ahead Logging*. TODS.
-- Gray, J., & Reuter, A. (1992). *Transaction Processing: Concepts and Techniques*. (The durability/logging foundations.)
-- Hellerstein, Stonebraker & Hamilton (2007). *Architecture of a Database System*. (Log manager and recovery in context.)
-- PostgreSQL documentation: *WAL Configuration*, *Reliability* (fsync/FPW discussion), *Logical Decoding*, `pg_stat_wal`.
-- MySQL documentation: *InnoDB Redo Log*, *Doublewrite Buffer*.
-- Rebello, A., et al. (2020). *Can Applications Recover from fsync Failures?* USENIX ATC: the systematic follow-up to fsyncgate.
-- LWN: *PostgreSQL's fsync() surprise* (2018): the fsyncgate write-up.
+- [Mohan et al., *ARIES: A Transaction Recovery Method Supporting Fine-Granularity Locking and Partial Rollbacks Using Write-Ahead Logging* (ACM TODS, 1992)](https://doi.org/10.1145/128765.128770)
+- Gray and Reuter, *Transaction Processing: Concepts and Techniques* (Morgan Kaufmann, 1992)
+- [Hellerstein, Stonebraker, and Hamilton, *Architecture of a Database System* (Foundations and Trends in Databases, 2007)](https://dsf.berkeley.edu/papers/fntdb07-architecture.pdf)
+- [PostgreSQL documentation, *WAL Configuration*](https://www.postgresql.org/docs/current/wal-configuration.html)
+- [PostgreSQL documentation, *Reliability*](https://www.postgresql.org/docs/current/wal-reliability.html)
+- [PostgreSQL documentation, *Logical Decoding*](https://www.postgresql.org/docs/current/logicaldecoding.html)
+- [MySQL documentation, *Redo Log*](https://dev.mysql.com/doc/refman/8.4/en/innodb-redo-log.html)
+- [MySQL documentation, *Doublewrite Buffer*](https://dev.mysql.com/doc/refman/8.4/en/innodb-doublewrite-buffer.html)
+- [Rebello et al., *Can Applications Recover from fsync Failures?* (USENIX ATC 2020)](https://www.usenix.org/conference/atc20/presentation/rebello)
+- [LWN, *PostgreSQL's fsync() surprise* (2018)](https://lwn.net/Articles/752063/)
 
 ---
 

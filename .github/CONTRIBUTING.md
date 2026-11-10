@@ -2,7 +2,7 @@
 
 Every chapter is a reference page, not a tutorial step: readers arrive from a search box
 or one internal link, decide in ten seconds whether the page is theirs, and leave with a
-decision they can defend. The rules below exist to keep that true for 160 chapters without
+decision they can defend. The rules below exist to keep that true for 180 chapters without
 any one author holding the conventions in their head. Each rule is enforced by
 `scripts/validate_docs.py` unless it says otherwise.
 
@@ -142,6 +142,23 @@ Claims carry one of three labels, and the label is the point rather than the dec
 Reported figures need a source, illustrative arithmetic needs its assumptions stated, and
 a paper chapter says what the paper established rather than what the vendor later claimed.
 
+### References must be checkable
+
+Every `## References` section links at least three external sources (one for the paper
+analyses in Part 9, which study a single source). The rule exists because every invented
+citation this book has shipped sat in a chapter whose references had no links: an unlinked
+entry cannot be checked in review, and an unchecked entry is where a plausible author list
+or a wrong year survives.
+
+- Before citing, open the source. Confirm authors, title, venue, and year against it, and
+  confirm that it says what the sentence attributes to it.
+- Prefer a stable identifier: a DOI, an arXiv abstract page, an RFC, or the publisher's
+  page. For a DOI or arXiv identifier, check that it resolves to the paper you mean.
+- A **Documented** label needs a source in the references that states the claim. If no
+  source does, the claim is an **Inference** and is labeled as one.
+- `python scripts/check_external_links.py` checks that every link still resolves. It runs
+  weekly in CI; run it on the part you touched before opening a pull request.
+
 ## Prose
 
 English copy uses hyphens and en dashes, never an em dash: ranges read as `1998-2004`, and
@@ -154,7 +171,24 @@ that does the work, so "the broker re-reads the log after failure" beats "things
 from the References and Related Chapters rules while that catch-up happens, which means
 new English structure does not have to be mirrored in the same pull request. Do not edit
 Japanese punctuation or headings to match English style: the mirror keeps its own
-typography, and `scripts/validate_docs.py` checks route parity rather than prose.
+typography.
+
+Each Japanese chapter carries one status line under its title, and it is one of two
+wordings: the chapter is a translation of the current English text, or it is based on an
+earlier English version and links to the current one. `scripts/translation_status.py`
+decides which from measurements (Japanese text per English word, section count, code
+lines), and `scripts/validate_docs.py` fails when a status line disagrees with them.
+
+- After rewriting an English chapter, either retranslate the Japanese file or run
+  `python scripts/translation_status.py --write`, which marks it as behind. Readers are
+  told the truth either way.
+- After translating, run the same command; the chapter is marked current once it tracks
+  the English section for section with the same code blocks.
+- `python scripts/translation_status.py --report` lists every chapter that is behind and
+  why. That list is the translation backlog.
+- Keep code and Mermaid blocks identical to the English file. If the English and Japanese
+  reference lists would be character-for-character identical, add a short Japanese note to
+  one entry so the duplicate-prose check does not read the list as a copied paragraph.
 
 ## Adding, Renaming, or Moving a Chapter
 
@@ -171,7 +205,7 @@ Chapter numbers are reading order and stay contiguous inside a part, so a list n
 hole where a chapter used to be. Add new chapters at the end of a part; when a merge removes
 one, renumber the survivors with `git mv`, update their routes in `book.manifest.json`, and
 regenerate the README. `scripts/book_structure.py --check` enforces both rules and names the
-four parts whose numbers still carry holes from earlier merges. Renumbering changes published
+parts whose numbers still carry holes from earlier merges. Renumbering changes published
 URLs, so treat it as a maintainer decision rather than routine cleanup.
 
 ## Checks Before Opening a Pull Request
@@ -181,6 +215,19 @@ python scripts/validate_docs.py       # structure, links, graph, evidence headin
 npm ci && npm run docs:build          # the site actually builds
 python scripts/validate_built_site.py # rendered links, anchors, and assets resolve
 ```
+
+The PDF and EPUB are built from a transformed copy of the chapters, because pandoc neither
+draws Mermaid diagrams nor resolves links between Markdown files:
+
+```bash
+python scripts/book_structure.py --chapters > build/chapters.txt
+python scripts/build_book_sources.py --chapter-list build/chapters.txt --out build/src \
+  --mmdc "npx --no-install mmdc" > build/sources.txt   # needs @mermaid-js/mermaid-cli
+```
+
+A diagram that fails to render fails the book build, so a Mermaid syntax error cannot ship
+as a block of source text. The site and the book share one palette in
+`.vitepress/mermaid-theme.json`.
 
 `validate_docs.py` is the CI gate on every pull request. When it rejects something a
 contributor keeps getting wrong, the fix is usually a clearer error message or a rule here,

@@ -1,6 +1,6 @@
 # オフライン評価とメトリクス設計
 
-> **翻訳についての注記:** 本ドキュメントは英語原文 `16-ml-systems/12-offline-evaluation-metrics.md` を日本語に翻訳したものです。コードブロック、YAML、Mermaidダイアグラムは原文のまま維持しています。
+> **翻訳の状態:** 現行の[英語版](../../16-ml-systems/12-offline-evaluation-metrics.md)からの翻訳です。
 
 ## TL;DR
 
@@ -485,6 +485,6 @@ Offline pass → shadow for runtime safety → canary for operational guardrails
 2. [Hidden Technical Debt in Machine Learning Systems](https://proceedings.neurips.cc/paper_files/paper/2015/file/86df7dcfd896fcaf2674f757a2463eba-Paper.pdf) — Sculley et al., 2015
 3. [The ML Test Score: A Rubric for ML Production Readiness](https://research.google/pubs/pub46555/) — Breck et al., 2017
 4. [Data Validation for Machine Learning](https://mlsys.org/Conferences/2019/doc/2019/167.pdf) — Breck et al., 2019
-5. [Trustworthy Online Controlled Experiments](https://www.cambridge.org/core/books/trustworthy-online-controlled-experiments/6A3B263E7114E81B95669A95B219C1D8) — Kohavi, Tang & Xu, 2020
+5. [Trustworthy Online Controlled Experiments](https://doi.org/10.1017/9781108653985) — Kohavi, Tang & Xu, 2020
 6. [Offline Evaluation for Recommender Systems](https://dl.acm.org/doi/10.1145/1864708.1864721) — レコメンダー評価とバイアスの文脈
 7. [Model Evaluation, Model Selection, and Algorithm Selection in Machine Learning](https://arxiv.org/abs/1811.12808) — Raschka, 2018
