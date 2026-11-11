@@ -135,7 +135,7 @@ export default withMermaid({
         },
         docFooter: { prev: '前へ', next: '次へ' },
         returnToTopLabel: 'トップに戻る',
-        outlineTitle: 'このページの内容',
+        outline: { level: 2, label: 'このページの内容' },
         footer: {
           message: 'MITライセンスの下で公開。Babushkaiコミュニティが構築。',
           copyright: 'Copyright 2024-present Babushkai'

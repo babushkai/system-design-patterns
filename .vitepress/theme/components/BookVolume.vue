@@ -286,8 +286,11 @@ const partLabel = computed(() =>
   box-sizing: border-box;
   padding: clamp(24px, 4vw, 36px) clamp(22px, 3.6vw, 32px) clamp(20px, 3.4vw, 28px);
   color: var(--cover-ink);
+  /* Bookcloth: a fine two-way weave under the board colour, lit from the left. */
   background:
-    linear-gradient(90deg, rgb(255 255 255 / 4%), transparent 8%, transparent 93%, rgb(0 0 0 / 12%)),
+    linear-gradient(90deg, rgb(255 255 255 / 5%), transparent 8%, transparent 91%, rgb(0 0 0 / 15%)),
+    repeating-linear-gradient(0deg, rgb(255 255 255 / 3.2%) 0 1px, transparent 1px 3px),
+    repeating-linear-gradient(90deg, rgb(0 0 0 / 7%) 0 1px, transparent 1px 3px),
     var(--cover);
   border: 1px solid rgb(239 224 193 / 16%);
   box-shadow:
@@ -341,6 +344,17 @@ const partLabel = computed(() =>
   font-style: italic;
 }
 
+/* The accent word is stamped in foil: a metallic sweep clipped to the letterforms. */
+@supports ((-webkit-background-clip: text) or (background-clip: text)) {
+  .cover-title strong {
+    padding: 0 0.08em 0.12em 0;
+    color: transparent;
+    background: linear-gradient(102deg, #c98d5a 0%, #f1d2a4 38%, #cf9662 58%, #ecc491 82%, #c58a57 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+  }
+}
+
 .book-object:lang(ja) .cover-title {
   font-size: clamp(1.7rem, 4.2vw, 2.4rem);
   line-height: 1.08;
@@ -351,15 +365,23 @@ const partLabel = computed(() =>
   font-style: normal;
 }
 
+/* The plate takes its size from the row the title leaves free, so a long title can
+   never push the artwork over the subject line beneath it. */
 .cover-plate {
   position: relative;
-  align-self: center;
   justify-self: center;
-  width: min(100%, 240px);
+  width: auto;
+  max-width: 100%;
+  height: 100%;
+  min-height: 0;
   aspect-ratio: 1;
   overflow: hidden;
-  border: 1px solid rgb(239 224 193 / 22%);
+  border: 1px solid rgb(239 224 193 / 26%);
   background: #d8cbae;
+  box-shadow:
+    0 0 0 3px var(--cover),
+    0 0 0 4px rgb(239 224 193 / 14%),
+    inset 0 0 18px rgb(60 40 20 / 22%);
 }
 
 .cover-plate img {
