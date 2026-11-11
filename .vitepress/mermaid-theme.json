@@ -7,6 +7,8 @@
     "lineColor": "#47675E",
     "secondaryColor": "#E9E0D1",
     "tertiaryColor": "#F2E6CF",
-    "fontFamily": "Inter, ui-sans-serif, system-ui, sans-serif"
-  }
+    "fontFamily": "Inter, ui-sans-serif, system-ui, sans-serif",
+    "transitionLabelColor": "#3A342B"
+  },
+  "themeCSS": ".edgeLabel, .edgeLabel p, .edgeLabel span, .edgeLabel div, .label div .edgeLabel { color: #3A342B; background-color: #F6F2E8; } .edgeLabel rect, .edgeLabel .label rect, .labelBkg { fill: #F6F2E8; background-color: #F6F2E8; } .edgeLabel text, .edgeLabel tspan, .edgeLabel .label text { fill: #3A342B; }"
 }

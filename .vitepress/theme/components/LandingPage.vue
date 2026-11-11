@@ -254,9 +254,8 @@ function focusSearch() {
 .sdp-entrance {
   min-height: calc(100svh - var(--vp-nav-height, 64px) - 1px);
   color: var(--vp-c-text-1);
-  background:
-    radial-gradient(circle at 18% 8%, color-mix(in srgb, var(--sdp-accent) 7%, transparent), transparent 42%),
-    var(--vp-c-bg);
+  /* No base colour here: the page's own paper grain shows through. */
+  background: radial-gradient(circle at 18% 8%, color-mix(in srgb, var(--sdp-accent) 7%, transparent), transparent 42%);
 }
 
 .entrance-shell {

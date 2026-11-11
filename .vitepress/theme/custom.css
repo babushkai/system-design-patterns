@@ -1,5 +1,13 @@
-/* Quiet Technical Folio
- * A warm, tactile reading system built on the stock VitePress structure.
+/* Fieldbook — a printed-book reading system on the stock VitePress structure.
+ *
+ * Three ideas carry the design:
+ *   1. Material. The page is paper: a fine grain tile sits under the text (never over it,
+ *      so glyph edges stay sharp), the sidebar is a darker board, and the two meet in a
+ *      shaded gutter like the fold of a bound volume.
+ *   2. Rules, not boxes. Structure is drawn with hairlines and two weights of rule, the
+ *      way a typeset book does it. Tables are ruled top, head, and foot only.
+ *   3. Density. Chapters are list- and table-heavy, so vertical rhythm stays at or below
+ *      the VitePress defaults. Refinement comes from tracking, weight, and colour.
  */
 :root {
   --sdp-font-ui:
@@ -12,44 +20,78 @@
     "Noto Serif JP", "Yu Mincho", YuMincho, "Hiragino Mincho ProN",
     "Iowan Old Style", Georgia, serif;
   --sdp-font-mono:
-    "SFMono-Regular", "Cascadia Code", "Roboto Mono", Consolas,
-    "Liberation Mono", monospace;
+    ui-monospace, "SF Mono", "SFMono-Regular", "Cascadia Code", "Roboto Mono",
+    Consolas, "Liberation Mono", monospace;
   --sdp-font-display: var(--sdp-font-reading);
 
   --vp-font-family-base: var(--sdp-font-ui);
   --vp-font-family-mono: var(--sdp-font-mono);
 
-  --vp-c-bg: #f3efe6;
-  --vp-c-bg-alt: #eae4d8;
-  --vp-c-bg-elv: #fbf8f0;
-  --vp-c-bg-soft: #ece6da;
-  --vp-c-border: #d3cabb;
-  --vp-c-divider: #ddd5c8;
-  --vp-c-gutter: #e6dfd2;
-  --vp-c-text-1: #292620;
-  --vp-c-text-2: #5c554a;
-  --vp-c-text-3: #706759;
+  /* Paper stock. */
+  --vp-c-bg: #f6f2e8;
+  --vp-c-bg-alt: #ebe5d8;
+  --vp-c-bg-elv: #fdfaf3;
+  --vp-c-bg-soft: #efe9dd;
+  --vp-c-border: #cfc5b3;
+  --vp-c-divider: #d9d0c0;
+  --vp-c-gutter: #d9d0c0;
+  --vp-c-text-1: #23201a;
+  --vp-c-text-2: #554e43;
+  --vp-c-text-3: #6d6456;
 
   --vp-c-brand-1: #8a4b37;
   --vp-c-brand-2: #65382b;
   --vp-c-brand-3: #47675e;
   --vp-c-brand-soft: rgb(138 75 55 / 10%);
 
-  --sdp-paper: #fbf8f0;
-  --sdp-paper-raised: #fffdf8;
-  --sdp-paper-sunken: #eee8dc;
-  --sdp-ink: #292620;
-  --sdp-ink-muted: #665e52;
-  --sdp-rule: #d8cfc1;
+  --sdp-paper: #f6f2e8;
+  --sdp-paper-raised: #fdfaf3;
+  --sdp-paper-sunken: #efe9dd;
+  --sdp-board: #ebe5d8;
+  --sdp-ink: #23201a;
+  --sdp-ink-muted: #5f574b;
+  --sdp-rule: #d9d0c0;
+  --sdp-rule-strong: #3a342b;
   --sdp-accent: #8a4b37;
-  --sdp-accent-soft: rgb(138 75 55 / 9%);
-  --sdp-data: #506e76;
-  --sdp-stream: #47675e;
-  --sdp-decision: #986b32;
-  --sdp-grain: rgb(72 58 39 / 6%);
+  --sdp-accent-soft: rgb(138 75 55 / 8%);
+  --sdp-data: #46666f;
+  --sdp-stream: #416258;
+  --sdp-decision: #8d6229;
+
+  /* Paper grain: fractal noise keyed to ink colour, tiled seamlessly. It is a background
+     image rather than an overlay so text is never composited through it. */
+  --sdp-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='g' x='0' y='0' width='100%25' height='100%25'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' seed='7' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .27 0 0 0 0 .2 0 0 0 0 .12 .52 0 0 0 -.218'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E");
+  --sdp-gutter-shade: rgb(64 48 28 / 9%);
+  --sdp-gutter-cast: rgb(64 48 28 / 13%);
   --sdp-shadow:
-    0 1px 0 rgb(255 255 255 / 75%),
-    0 22px 52px -42px rgb(57 45 31 / 62%);
+    0 0 0 1px rgb(64 48 28 / 7%),
+    0 1px 1px rgb(64 48 28 / 6%),
+    0 12px 28px -14px rgb(64 48 28 / 28%);
+
+  --vp-nav-bg-color: var(--vp-c-bg);
+  --vp-local-nav-bg-color: var(--vp-c-bg);
+  --vp-sidebar-bg-color: var(--sdp-board);
+  --vp-backdrop-bg-color: rgb(45 34 20 / 46%);
+
+  --vp-code-font-size: 13.25px;
+  --vp-code-line-height: 1.6;
+  --vp-code-block-bg: var(--sdp-paper-sunken);
+  --vp-code-block-color: #3d382f;
+  --vp-code-block-divider-color: var(--sdp-rule);
+  --vp-code-line-number-color: #9a9080;
+  --vp-code-lang-color: var(--vp-c-text-3);
+  --vp-code-copy-code-bg: var(--sdp-paper-raised);
+  --vp-code-copy-code-border-color: var(--sdp-rule);
+  --vp-code-copy-code-hover-bg: var(--sdp-paper-raised);
+  --vp-code-copy-code-hover-border-color: var(--sdp-accent);
+
+  --vp-local-search-bg: var(--sdp-paper-raised);
+  --vp-local-search-result-bg: var(--sdp-paper-raised);
+  --vp-local-search-result-border: transparent;
+  --vp-local-search-result-selected-bg: var(--sdp-paper-sunken);
+  --vp-local-search-result-selected-border: transparent;
+  --vp-local-search-highlight-bg: color-mix(in srgb, var(--sdp-accent) 22%, transparent);
+  --vp-local-search-highlight-text: var(--sdp-ink);
 
   --vp-button-brand-border: var(--sdp-ink);
   --vp-button-brand-text: var(--sdp-paper-raised);
@@ -63,37 +105,48 @@
 }
 
 .dark {
-  --vp-c-bg: #151411;
+  --vp-c-bg: #171612;
   --vp-c-bg-alt: #11100d;
-  --vp-c-bg-elv: #211f1a;
-  --vp-c-bg-soft: #24211b;
-  --vp-c-border: #3b362d;
-  --vp-c-divider: #332f28;
-  --vp-c-gutter: #0e0d0b;
-  --vp-c-text-1: #eee8dc;
-  --vp-c-text-2: #c0b6a5;
-  --vp-c-text-3: #918777;
+  --vp-c-bg-elv: #23211c;
+  --vp-c-bg-soft: #211f1a;
+  --vp-c-border: #403a30;
+  --vp-c-divider: #322e27;
+  --vp-c-gutter: #322e27;
+  --vp-c-text-1: #ece6da;
+  --vp-c-text-2: #beb4a3;
+  --vp-c-text-3: #948a7a;
 
-  --vp-c-brand-1: #d69778;
+  --vp-c-brand-1: #d99a7b;
   --vp-c-brand-2: #ebb093;
   --vp-c-brand-3: #86aa9d;
-  --vp-c-brand-soft: rgb(214 151 120 / 14%);
+  --vp-c-brand-soft: rgb(217 154 123 / 14%);
 
-  --sdp-paper: #1d1b17;
-  --sdp-paper-raised: #24211b;
-  --sdp-paper-sunken: #171511;
-  --sdp-ink: #eee8dc;
-  --sdp-ink-muted: #b7ad9d;
-  --sdp-rule: #3a352d;
-  --sdp-accent: #d69778;
-  --sdp-accent-soft: rgb(214 151 120 / 12%);
+  --sdp-paper: #171612;
+  --sdp-paper-raised: #23211c;
+  --sdp-paper-sunken: #100f0c;
+  --sdp-board: #11100d;
+  --sdp-ink: #ece6da;
+  --sdp-ink-muted: #b5ab9b;
+  --sdp-rule: #322e27;
+  --sdp-rule-strong: #b9af9e;
+  --sdp-accent: #d99a7b;
+  --sdp-accent-soft: rgb(217 154 123 / 10%);
   --sdp-data: #8eb3bb;
   --sdp-stream: #8cb4a5;
   --sdp-decision: #d3a667;
-  --sdp-grain: rgb(255 244 218 / 3.5%);
+
+  --sdp-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='g' x='0' y='0' width='100%25' height='100%25'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' seed='7' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 .94 0 0 0 0 .82 .26 0 0 0 -.114'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E");
+  --sdp-gutter-shade: rgb(0 0 0 / 34%);
+  --sdp-gutter-cast: rgb(0 0 0 / 46%);
   --sdp-shadow:
-    0 1px 0 rgb(255 255 255 / 3%),
-    0 28px 62px -44px rgb(0 0 0 / 92%);
+    0 0 0 1px rgb(255 240 214 / 7%),
+    0 1px 1px rgb(0 0 0 / 40%),
+    0 16px 34px -16px rgb(0 0 0 / 80%);
+
+  --vp-backdrop-bg-color: rgb(0 0 0 / 62%);
+
+  --vp-code-block-color: #d6cebf;
+  --vp-code-line-number-color: #6c6456;
 
   --vp-button-brand-border: var(--sdp-ink);
   --vp-button-brand-text: #171511;
@@ -105,13 +158,15 @@
 
 html {
   scroll-padding-top: calc(var(--vp-nav-height) + 28px);
-  scrollbar-color: var(--vp-c-text-3) transparent;
+  scrollbar-color: color-mix(in srgb, var(--vp-c-text-3) 55%, transparent) transparent;
 }
 
 body {
   color: var(--vp-c-text-1);
   background-color: var(--vp-c-bg);
+  background-image: var(--sdp-grain);
   font-feature-settings: "kern" 1, "liga" 1, "calt" 1;
+  font-optical-sizing: auto;
   text-rendering: optimizeLegibility;
 }
 
@@ -129,9 +184,10 @@ body {
   outline-offset: 3px;
 }
 
-/* Navigation: quiet book furniture rather than product chrome. */
+/* ───────────────────────────── Navigation ─────────────────────────────
+ * Book furniture rather than product chrome. On wide screens the bar is a translucent
+ * sheet the text slides under; the hairline below it doubles as a reading-progress rule. */
 .VPNav {
-  border-bottom: 1px solid color-mix(in srgb, var(--sdp-rule) 84%, transparent) !important;
   background: transparent;
   box-shadow: none;
 }
@@ -139,13 +195,13 @@ body {
 .VPNav::after {
   position: absolute;
   right: 0;
-  bottom: -1px;
+  bottom: 0;
   left: 0;
   z-index: 2;
   height: 2px;
   background: var(--sdp-accent);
   content: "";
-  opacity: 0.72;
+  opacity: 0.8;
   transform: scaleX(0);
   transform-origin: left center;
 }
@@ -163,12 +219,60 @@ body {
   }
 }
 
-.VPNavBar {
-  background: var(--vp-c-bg) !important;
+/* Progress is measured across the page, not across the cover board beside it. */
+@media (min-width: 960px) {
+  .VPNav:has(.VPNavBar.has-sidebar)::after {
+    left: var(--vp-sidebar-width);
+  }
 }
 
-.VPNavBar.has-sidebar .content {
-  background: transparent !important;
+@media (min-width: 1440px) {
+  .VPNav:has(.VPNavBar.has-sidebar)::after {
+    left: calc((100vw - var(--vp-layout-max-width)) / 2 + var(--vp-sidebar-width));
+  }
+}
+
+.VPNavBar {
+  background-color: var(--vp-c-bg);
+  background-image: var(--sdp-grain);
+}
+
+.VPNavBar .divider-line {
+  background-color: var(--sdp-rule) !important;
+}
+
+@media (min-width: 960px) {
+  /* With a sidebar, the title sits on the board and only the page side is a sheet. */
+  .VPNavBar.has-sidebar {
+    background: transparent;
+  }
+
+  .VPNavBar.has-sidebar .content-body {
+    background: transparent !important;
+  }
+
+  /* The sheet is a pseudo-element so it can run past the bar's right padding to the
+     edge of the window instead of stopping 32px short of it. */
+  .VPNavBar:not(.has-sidebar),
+  .VPNavBar.has-sidebar .content-body::before {
+    background-color: color-mix(in srgb, var(--vp-c-bg) 82%, transparent) !important;
+    background-image: none;
+    backdrop-filter: saturate(1.25) blur(14px);
+    -webkit-backdrop-filter: saturate(1.25) blur(14px);
+  }
+
+  .VPNavBar.has-sidebar .content-body::before {
+    position: absolute;
+    inset: 0;
+    right: calc(-32px - max(0px, (100vw - var(--vp-layout-max-width)) / 2));
+    z-index: -1;
+    content: "";
+  }
+}
+
+/* The outline's fade-out would print a flat, grainless patch on the paper. */
+.VPDoc .aside-curtain {
+  display: none;
 }
 
 .VPNavBarTitle .title {
@@ -190,10 +294,37 @@ body {
   color: var(--sdp-accent);
 }
 
-.VPNavBarSearch .DocSearch-Button,
-.VPNavBarSearch .VPLocalSearchBox {
+/* The search field reads as a debossed slot in the paper. */
+.VPNavBarSearch .DocSearch-Button {
+  border: 1px solid var(--sdp-rule);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--sdp-paper-raised) 72%, transparent);
+  box-shadow: inset 0 1px 1.5px rgb(64 48 28 / 7%);
+  transition:
+    border-color 0.16s ease,
+    background-color 0.16s ease;
+}
+
+.VPNavBarSearch .DocSearch-Button:hover {
+  border-color: color-mix(in srgb, var(--sdp-accent) 55%, var(--sdp-rule));
+  background: var(--sdp-paper-raised);
+}
+
+.VPNavBarSearch .DocSearch-Button-Placeholder {
+  font-size: 0.8rem;
+  letter-spacing: 0.01em;
+}
+
+.VPNavBarSearch .DocSearch-Button-Keys {
   border-color: var(--sdp-rule);
-  background: color-mix(in srgb, var(--sdp-paper) 78%, transparent);
+  border-radius: 3px;
+}
+
+.VPFlyout .menu .VPMenu {
+  border-color: var(--sdp-rule);
+  border-radius: 6px;
+  background-color: var(--sdp-paper-raised);
+  box-shadow: var(--sdp-shadow);
 }
 
 .VPButton {
@@ -205,11 +336,87 @@ body {
   box-shadow: none;
 }
 
-/* Sidebar and outline read like a table of contents. */
+/* ───────────────────────────── Local search ───────────────────────────── */
+.VPLocalSearchBox .backdrop {
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+}
+
+.VPLocalSearchBox .shell {
+  background-image: var(--sdp-grain);
+  box-shadow: var(--sdp-shadow), 0 40px 80px -30px rgb(30 22 12 / 50%);
+}
+
+@media (min-width: 768px) {
+  .VPLocalSearchBox .shell {
+    border-radius: 8px;
+  }
+}
+
+.VPLocalSearchBox .search-bar {
+  border-color: var(--sdp-rule);
+  background: color-mix(in srgb, var(--sdp-paper) 60%, transparent);
+}
+
+.VPLocalSearchBox .search-bar:focus-within {
+  border-color: var(--sdp-accent);
+  box-shadow: 0 0 0 3px var(--sdp-accent-soft);
+}
+
+/* The bar already shows focus; a second ring inside it would only cut across the field. */
+.VPLocalSearchBox .search-input:focus-visible {
+  outline: none !important;
+}
+
+.VPLocalSearchBox .result {
+  border-width: 1px;
+  border-radius: 4px;
+}
+
+.VPLocalSearchBox .result.selected {
+  box-shadow: inset 2px 0 0 var(--sdp-accent);
+}
+
+.VPLocalSearchBox .titles {
+  font-family: var(--sdp-font-reading);
+}
+
+.VPLocalSearchBox .title-icon {
+  color: var(--sdp-accent);
+}
+
+/* ───────────────────────────── Sidebar ─────────────────────────────
+ * A table of contents printed on the cover board. Its right edge darkens into the
+ * gutter and casts a soft shade onto the page, the way a bound spread folds. */
 .VPSidebar {
-  border-right: 1px solid var(--sdp-rule);
-  background: var(--vp-c-bg-alt);
-  box-shadow: none;
+  background-color: var(--sdp-board);
+  background-image: var(--sdp-grain);
+  scrollbar-width: thin;
+}
+
+.VPSidebar .curtain {
+  background-color: var(--sdp-board);
+  background-image: var(--sdp-grain);
+}
+
+@media (min-width: 960px) {
+  .VPSidebar {
+    border-right: 1px solid var(--sdp-rule);
+    background-image:
+      linear-gradient(90deg, transparent calc(100% - 26px), var(--sdp-gutter-shade)),
+      var(--sdp-grain);
+    box-shadow: 14px 0 18px -16px var(--sdp-gutter-cast);
+  }
+
+  .VPSidebar .curtain {
+    background-image:
+      linear-gradient(90deg, transparent calc(100% - 26px), var(--sdp-gutter-shade)),
+      var(--sdp-grain);
+  }
+}
+
+.VPSidebar .group + .group {
+  border-top-color: var(--sdp-rule);
 }
 
 .VPSidebarItem .item {
@@ -222,11 +429,30 @@ body {
   font-size: 0.92rem;
   font-weight: 650;
   letter-spacing: -0.005em;
+  font-variant-numeric: lining-nums tabular-nums;
 }
 
 .VPSidebarItem.level-1 .text {
   font-size: 0.82rem;
   line-height: 1.45;
+}
+
+.VPSidebarItem.level-1 > .item > .link > .text {
+  transition: color 0.14s ease;
+}
+
+.VPSidebarItem.level-1 > .item:hover > .link > .text {
+  color: var(--sdp-ink);
+}
+
+/* The current chapter is marked like a ribbon: a short accent rule in the margin. */
+.VPSidebarItem.level-1.is-active > .item > .indicator {
+  top: 7px;
+  bottom: 7px;
+  left: -14px;
+  width: 2px;
+  border-radius: 0;
+  background-color: var(--sdp-accent);
 }
 
 .VPSidebarItem.is-active > .item .link > .text {
@@ -244,18 +470,25 @@ body {
   margin-right: 0.5rem;
 }
 
+/* ───────────────────────────── Outline ───────────────────────────── */
+.VPDocAsideOutline .content {
+  border-left-color: var(--sdp-rule);
+}
+
 .VPDocAsideOutline .outline-title {
-  color: var(--vp-c-text-1);
-  font-family: var(--sdp-font-reading);
-  font-size: 0.92rem;
-  font-weight: 650;
-  letter-spacing: -0.008em;
+  color: var(--sdp-ink-muted);
+  font-family: var(--sdp-font-ui);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
 }
 
 .VPDocAsideOutline .outline-link {
   color: var(--vp-c-text-3);
   font-size: 0.74rem;
   line-height: 1.5;
+  transition: color 0.14s ease;
 }
 
 .VPDocAsideOutline .outline-link:hover,
@@ -265,11 +498,65 @@ body {
 
 .VPDocAsideOutline .outline-marker {
   width: 2px;
+  border-radius: 0;
   background-color: var(--sdp-accent);
 }
 
-/* A continuous book page: compact rhythm, no nested card around the prose. */
-.VPDoc:not(:has(.sdp-home)) .vp-doc {
+/* ───────────────────────────── Chapter opener ─────────────────────────────
+ * Rendered by ChapterOpener.vue above every chapter title: a running head with the part
+ * on the left and the chapter's place in it on the right, closed by a double rule. */
+.chapter-opener {
+  display: flex;
+  gap: 16px;
+  align-items: baseline;
+  justify-content: space-between;
+  margin: 0 0 clamp(20px, 3vw, 30px);
+  border-bottom: 3px double var(--sdp-rule-strong);
+  padding-bottom: 9px;
+  color: var(--sdp-ink-muted);
+  font-family: var(--sdp-font-ui);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  line-height: 1.5;
+  text-transform: uppercase;
+}
+
+.chapter-opener a {
+  color: inherit;
+  text-decoration: none;
+  transition: color 0.14s ease;
+}
+
+.chapter-opener a:hover {
+  color: var(--sdp-accent);
+}
+
+.chapter-opener .opener-part b {
+  color: var(--sdp-accent);
+  font-weight: 700;
+}
+
+.chapter-opener .opener-part i {
+  margin: 0 0.55em;
+  font-style: normal;
+  opacity: 0.5;
+}
+
+.chapter-opener .opener-folio {
+  flex-shrink: 0;
+  font-variant-numeric: lining-nums tabular-nums;
+  white-space: nowrap;
+}
+
+.chapter-opener:lang(ja) {
+  letter-spacing: 0.1em;
+}
+
+/* ───────────────────────────── The page ─────────────────────────────
+ * One continuous sheet: no card around the prose, compact rhythm, a single measure
+ * shared by paragraphs, lists, code, and tables so the right edge stays true. */
+.VPDoc .vp-doc {
   color: var(--sdp-ink);
   font-family: var(--sdp-font-reading);
   font-size: 17px;
@@ -277,60 +564,54 @@ body {
   hanging-punctuation: first last;
 }
 
-.VPDoc:not(:has(.sdp-home)) .vp-doc:lang(ja),
-.VPDoc:not(:has(.sdp-home)) .vp-doc [lang="ja"] {
+.VPDoc .vp-doc:lang(ja),
+.VPDoc .vp-doc [lang="ja"] {
   font-family: var(--sdp-font-reading-ja);
   line-height: 1.75;
 }
 
-@media (min-width: 960px) {
-  .VPDoc:not(:has(.sdp-home)) .vp-doc {
-    margin: 0;
-    border: 0;
-    padding: 0;
-    background: transparent;
-    box-shadow: none;
+/* Each chapter settles onto the page once, like a leaf being turned. */
+.VPDoc .vp-doc > div {
+  animation: sdp-leaf-in 0.34s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+@keyframes sdp-leaf-in {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
   }
 }
 
-.VPDoc:not(:has(.sdp-home)) .vp-doc p {
-  max-width: 66ch;
+.VPDoc .vp-doc p {
   margin: 0.78em 0;
   text-wrap: pretty;
 }
 
-.VPDoc:not(:has(.sdp-home)) .vp-doc h1,
-.VPDoc:not(:has(.sdp-home)) .vp-doc h2,
-.VPDoc:not(:has(.sdp-home)) .vp-doc h3,
-.VPDoc:not(:has(.sdp-home)) .vp-doc h4,
-.VPDoc:not(:has(.sdp-home)) .vp-doc h5,
-.VPDoc:not(:has(.sdp-home)) .vp-doc h6 {
+.VPDoc .vp-doc h1,
+.VPDoc .vp-doc h2,
+.VPDoc .vp-doc h3,
+.VPDoc .vp-doc h4,
+.VPDoc .vp-doc h5,
+.VPDoc .vp-doc h6 {
   color: var(--sdp-ink);
   font-family: var(--sdp-font-display);
   font-weight: 650;
   text-wrap: balance;
 }
 
-.VPDoc:not(:has(.sdp-home)) .vp-doc h1 {
-  margin: 0 0 0.52em;
+.VPDoc .vp-doc h1 {
+  margin: 0 0 0.5em;
   border: 0;
-  font-size: clamp(2.3rem, 3.4vw, 2.85rem);
-  line-height: 1.08;
-  letter-spacing: -0.032em;
+  font-size: clamp(2.3rem, 3.5vw, 2.95rem);
+  line-height: 1.06;
+  letter-spacing: -0.034em;
 }
 
-.VPDoc:not(:has(.sdp-home)) .vp-doc h1::after {
+.VPDoc .vp-doc h1::after {
   display: none;
 }
 
-.VPDoc:not(:has(.sdp-home)) .vp-doc h1 + p {
-  margin-top: 0;
-  color: var(--sdp-ink-muted);
-  font-size: 1.04em;
-  line-height: 1.62;
-}
-
-.VPDoc:not(:has(.sdp-home)) .vp-doc h2 {
+.VPDoc .vp-doc h2 {
   margin: 1.72em 0 0.5em;
   border-top: 0;
   padding-top: 0;
@@ -339,7 +620,7 @@ body {
   letter-spacing: -0.021em;
 }
 
-.VPDoc:not(:has(.sdp-home)) .vp-doc h3 {
+.VPDoc .vp-doc h3 {
   margin: 1.38em 0 0.4em;
   font-size: 1.24rem;
   font-style: italic;
@@ -347,7 +628,11 @@ body {
   letter-spacing: -0.012em;
 }
 
-.VPDoc:not(:has(.sdp-home)) .vp-doc h4 {
+.VPDoc .vp-doc:lang(ja) h3 {
+  font-style: normal;
+}
+
+.VPDoc .vp-doc h4 {
   margin: 1.25em 0 0.35em;
   font-family: var(--sdp-font-ui);
   font-size: 0.82rem;
@@ -356,7 +641,66 @@ body {
   text-transform: uppercase;
 }
 
-.VPDoc:not(:has(.sdp-home)) .vp-doc .header-anchor {
+/* The TL;DR is the chapter's abstract: a small-caps label over a lead paragraph that
+   opens on a drop capital, the way a printed chapter begins. */
+.VPDoc .vp-doc h2#tl-dr {
+  margin: 0 0 0.7em;
+  color: var(--sdp-accent);
+  font-family: var(--sdp-font-ui);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.17em;
+  line-height: 1.5;
+  text-transform: uppercase;
+}
+
+.VPDoc .vp-doc h2#tl-dr + p {
+  margin-top: 0;
+  font-size: 1.09em;
+  line-height: 1.56;
+}
+
+.VPDoc .vp-doc:lang(ja) h2#tl-dr + p {
+  line-height: 1.75;
+}
+
+.VPDoc .vp-doc:not(:lang(ja)) h2#tl-dr + p::first-letter {
+  float: left;
+  margin: 0.07em 0.09em 0 -0.02em;
+  color: var(--sdp-accent);
+  font-family: var(--sdp-font-display);
+  font-size: 3.28em;
+  font-weight: 400;
+  line-height: 0.82;
+}
+
+/* A translated chapter states its status directly under the title. That line is
+   metadata, so it is set as a marginal note rather than a pull quote. */
+.VPDoc .vp-doc h1 + blockquote {
+  margin: 0 0 1.5em;
+  border-left: 0;
+  border-top: 1px solid var(--sdp-rule);
+  border-bottom: 1px solid var(--sdp-rule);
+  padding: 0.5em 0;
+  color: var(--sdp-ink-muted);
+  font-family: var(--sdp-font-ui);
+  font-size: 0.74rem;
+  font-style: normal;
+  line-height: 1.6;
+}
+
+.VPDoc .vp-doc h1 + blockquote p {
+  margin: 0;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.VPDoc .vp-doc h1 + blockquote strong {
+  color: var(--sdp-ink-muted);
+  font-weight: 700;
+}
+
+.VPDoc .vp-doc .header-anchor {
   color: var(--sdp-accent);
   font-family: var(--sdp-font-ui);
   font-size: 0.65em;
@@ -364,12 +708,12 @@ body {
   transition: opacity 0.16s ease;
 }
 
-.VPDoc:not(:has(.sdp-home)) .vp-doc :is(h1, h2, h3, h4):hover .header-anchor,
-.VPDoc:not(:has(.sdp-home)) .vp-doc .header-anchor:focus-visible {
+.VPDoc .vp-doc :is(h1, h2, h3, h4):hover .header-anchor,
+.VPDoc .vp-doc .header-anchor:focus-visible {
   opacity: 0.72;
 }
 
-.VPDoc:not(:has(.sdp-home)) .vp-doc a {
+.VPDoc .vp-doc a {
   color: var(--vp-c-brand-1);
   font-weight: 550;
   text-decoration: underline;
@@ -381,41 +725,42 @@ body {
     text-decoration-color 0.16s ease;
 }
 
-.VPDoc:not(:has(.sdp-home)) .vp-doc a:hover {
+.VPDoc .vp-doc a:hover {
   color: var(--vp-c-brand-2);
   text-decoration-color: currentColor;
 }
 
-.VPDoc:not(:has(.sdp-home)) .vp-doc strong {
+.VPDoc .vp-doc strong {
   color: var(--sdp-ink);
   font-weight: 700;
 }
 
-.VPDoc:not(:has(.sdp-home)) .vp-doc ul,
-.VPDoc:not(:has(.sdp-home)) .vp-doc ol {
+.VPDoc .vp-doc ul,
+.VPDoc .vp-doc ol {
   padding-left: 1.45em;
 }
 
-.VPDoc:not(:has(.sdp-home)) .vp-doc li {
+.VPDoc .vp-doc li {
   margin: 0.22em 0;
   padding-left: 0.18em;
 }
 
-.VPDoc:not(:has(.sdp-home)) .vp-doc li::marker {
+.VPDoc .vp-doc li::marker {
   color: var(--sdp-accent);
   font-family: var(--sdp-font-ui);
   font-size: 0.86em;
   font-weight: 700;
+  font-variant-numeric: lining-nums tabular-nums;
 }
 
-.VPDoc:not(:has(.sdp-home)) .vp-doc hr {
+.VPDoc .vp-doc hr {
   height: 1px;
   margin: 2em 0;
   border: 0;
   background: var(--sdp-rule);
 }
 
-.VPDoc:not(:has(.sdp-home)) .vp-doc blockquote {
+.VPDoc .vp-doc blockquote {
   margin: 1.1em 0;
   border-left: 2px solid var(--sdp-accent);
   padding: 0.1em 0 0.1em 1em;
@@ -424,11 +769,27 @@ body {
   font-style: italic;
 }
 
-.VPDoc:not(:has(.sdp-home)) .vp-doc blockquote p {
+.VPDoc .vp-doc blockquote p {
   margin: 0.5em 0;
 }
 
-/* Technical furniture keeps a compact sans/mono voice. */
+/* The chapter closes on a printer's ornament: two rules and a lozenge. */
+.VPDoc .vp-doc > div::after {
+  display: block;
+  width: 132px;
+  height: 9px;
+  margin: 3em auto 0;
+  background: var(--sdp-accent);
+  content: "";
+  opacity: 0.7;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='132' height='9'%3E%3Cpath d='M0 4h54v1H0zM78 4h54v1H78zM66 0l4.5 4.5L66 9l-4.5-4.5z'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='132' height='9'%3E%3Cpath d='M0 4h54v1H0zM78 4h54v1H78zM66 0l4.5 4.5L66 9l-4.5-4.5z'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+}
+
+/* ───────────────────────────── Technical furniture ─────────────────────────────
+ * Code, tables, and callouts keep a compact sans/mono voice against the serif text. */
 .vp-doc :not(pre) > code {
   border: 1px solid color-mix(in srgb, var(--sdp-rule) 86%, transparent);
   border-radius: 3px;
@@ -440,69 +801,115 @@ body {
   font-weight: 500;
 }
 
+.vp-doc a > code {
+  color: inherit;
+}
+
+/* Listings are set into the page: a sunken panel with a crisp edge. Size and leading
+   come from the --vp-code-* tokens so the line-number gutter can never drift. */
 .vp-doc div[class*="language-"] {
   margin: 1.1em 0;
   border: 1px solid var(--sdp-rule);
-  border-radius: 2px;
-  box-shadow: none;
+  border-radius: 4px;
+  box-shadow: inset 0 1px 2px rgb(64 48 28 / 6%);
   font-family: var(--sdp-font-mono);
 }
 
+.dark .vp-doc div[class*="language-"] {
+  box-shadow: inset 0 1px 2px rgb(0 0 0 / 50%);
+}
+
+.vp-doc div[class*="language-"] pre {
+  padding: 16px 0;
+  scrollbar-width: thin;
+}
+
 .vp-doc div[class*="language-"] code {
-  font-size: 0.82rem;
-  line-height: 1.55;
+  padding: 0 20px;
+  font-variant-ligatures: none;
+}
+
+.vp-doc div[class*="language-"].line-numbers-mode {
+  padding-left: 40px;
+}
+
+.vp-doc .line-numbers-wrapper {
+  width: 40px;
+  padding-top: 16px;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
 }
 
 .vp-doc div[class*="language-"] > span.lang {
+  top: 5px;
+  right: 10px;
   font-family: var(--sdp-font-ui);
-  font-size: 0.63rem;
-  letter-spacing: 0.08em;
+  font-size: 0.6rem;
+  font-weight: 650;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
 }
 
+.vp-doc div[class*="language-"] > button.copy {
+  top: 8px;
+  right: 8px;
+  width: 34px;
+  height: 34px;
+  border-radius: 4px;
+  background-size: 17px;
+}
+
+/* Tables are ruled the way a typeset book rules them: a heavy rule above and below,
+   a medium rule under the head, hairlines between rows, and no vertical lines. */
 .vp-doc table {
-  width: 100%;
-  margin: 1.1em 0;
-  border: 1px solid var(--sdp-rule);
+  margin: 1.2em 0;
+  border: 0;
   border-radius: 0;
-  border-spacing: 0;
-  overflow: auto;
-  background: var(--sdp-paper-raised);
+  background: transparent;
   box-shadow: none;
   font-family: var(--sdp-font-ui);
   font-size: 0.82rem;
+  font-variant-numeric: lining-nums tabular-nums;
   line-height: 1.45;
+  scrollbar-width: thin;
+}
+
+.vp-doc table tr {
+  border: 0;
+  background: transparent !important;
 }
 
 .vp-doc table th,
 .vp-doc table td {
-  border-right: 1px solid var(--sdp-rule);
+  border: 0;
   border-bottom: 1px solid var(--sdp-rule);
-  padding: 0.5rem 0.62rem;
-}
-
-.vp-doc table th:last-child,
-.vp-doc table td:last-child {
-  border-right: 0;
-}
-
-.vp-doc table tr:last-child td {
-  border-bottom: 0;
+  padding: 0.5rem 0.75rem;
+  vertical-align: top;
+  background: transparent;
+  transition: background-color 0.12s ease;
 }
 
 .vp-doc table th {
+  border-top: 2px solid var(--sdp-rule-strong);
+  border-bottom: 1px solid var(--sdp-rule-strong);
   color: var(--sdp-ink);
-  background: var(--sdp-paper-sunken);
+  font-size: 0.78rem;
   font-weight: 700;
+  letter-spacing: 0.012em;
   text-align: left;
+  vertical-align: bottom;
 }
 
-.vp-doc table tbody tr:nth-child(even) td {
-  background: transparent;
+.vp-doc table tbody tr:last-child td {
+  border-bottom: 2px solid var(--sdp-rule-strong);
 }
 
 .vp-doc table tbody tr:hover td {
-  background: transparent;
+  background: var(--sdp-accent-soft);
+}
+
+.vp-doc table code {
+  white-space: nowrap;
 }
 
 .vp-doc .custom-block {
@@ -511,7 +918,7 @@ body {
   border-left: 2px solid var(--sdp-rule);
   border-radius: 0;
   padding: 0.62rem 0.82rem;
-  background: color-mix(in srgb, var(--vp-c-bg-soft) 54%, transparent);
+  background: transparent;
   box-shadow: none;
 }
 
@@ -530,7 +937,6 @@ body {
 
 .vp-doc .custom-block.tip {
   border-color: color-mix(in srgb, var(--sdp-stream) 62%, var(--sdp-rule));
-  background: transparent;
 }
 
 .vp-doc .custom-block.tip .custom-block-title {
@@ -539,7 +945,6 @@ body {
 
 .vp-doc .custom-block.warning {
   border-color: color-mix(in srgb, var(--sdp-decision) 66%, var(--sdp-rule));
-  background: transparent;
 }
 
 .vp-doc .custom-block.warning .custom-block-title {
@@ -549,7 +954,6 @@ body {
 .vp-doc .custom-block.info,
 .vp-doc .custom-block.details {
   border-color: color-mix(in srgb, var(--sdp-data) 62%, var(--sdp-rule));
-  background: transparent;
 }
 
 .vp-doc .custom-block.info .custom-block-title,
@@ -557,6 +961,7 @@ body {
   color: var(--sdp-data);
 }
 
+/* Diagrams keep their coloured nodes; only the plate around them is quiet. */
 .mermaid {
   display: block;
   margin: 1em 0;
@@ -573,6 +978,63 @@ body {
   max-width: 100%;
   height: auto;
   margin-inline: auto;
+}
+
+/* The shared theme sets edge labels in ink on a paper chip. On the dark page that chip
+   would glare, so it takes the page's own tones instead. */
+.dark :is(.mermaid, .sdp-figure) .edgeLabel,
+.dark :is(.mermaid, .sdp-figure) .edgeLabel :is(p, span, div),
+.dark :is(.mermaid, .sdp-figure) .label div .edgeLabel {
+  color: var(--vp-c-text-1) !important;
+  background-color: var(--vp-c-bg-soft) !important;
+}
+
+.dark :is(.mermaid, .sdp-figure) :is(.edgeLabel rect, .labelBkg) {
+  fill: var(--vp-c-bg-soft) !important;
+}
+
+.dark :is(.mermaid, .sdp-figure) .edgeLabel :is(text, tspan) {
+  fill: var(--vp-c-text-1) !important;
+}
+
+/* A diagram opens enlarged when clicked (see the theme's layout script). */
+.vp-doc .mermaid:has(svg) {
+  cursor: zoom-in;
+}
+
+.sdp-figure {
+  max-width: none;
+  max-height: none;
+  margin: auto;
+  border: 0;
+  padding: 0;
+  overflow: visible;
+  background: transparent;
+  cursor: zoom-out;
+}
+
+.sdp-figure:focus-visible {
+  outline: none !important;
+}
+
+.sdp-figure::backdrop {
+  background: var(--vp-backdrop-bg-color);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+}
+
+.sdp-figure[open] {
+  animation: sdp-leaf-in 0.22s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+.sdp-figure-sheet {
+  max-height: 92vh;
+  border-radius: 6px;
+  padding: 28px;
+  overflow: auto;
+  background-color: var(--sdp-paper-raised);
+  background-image: var(--sdp-grain);
+  box-shadow: var(--sdp-shadow), 0 40px 80px -30px rgb(30 22 12 / 55%);
 }
 
 /* Mermaid's base theme otherwise emits near-white sequence signals on paper. */
@@ -606,33 +1068,85 @@ body {
   font-size: 0.75em;
 }
 
+/* ───────────────────────────── Chapter foot ─────────────────────────────
+ * Previous and next read as the facing pages of a spread, not as buttons. */
 .VPDocFooter {
-  margin-top: 36px;
-  border-top: 1px solid var(--sdp-rule);
-  padding-top: 16px;
+  margin-top: 30px;
+}
+
+.VPDocFooter .edit-info {
+  padding-bottom: 12px;
 }
 
 .VPDocFooter .edit-link-button,
-.VPDocFooter .last-updated {
+.VPDocFooter .VPLastUpdated {
   color: var(--vp-c-text-3);
   font-family: var(--sdp-font-ui);
   font-size: 0.72rem;
+  font-variant-numeric: lining-nums tabular-nums;
 }
 
-.pager-link {
-  border-color: var(--sdp-rule);
+.VPDocFooter .edit-link-button:hover {
+  color: var(--sdp-accent);
+}
+
+.VPDocFooter .prev-next {
+  border-top: 3px double var(--sdp-rule-strong);
+  padding-top: 18px;
+}
+
+.VPDocFooter .pager-link {
+  border: 0;
   border-radius: 0;
+  padding: 2px 0 4px;
   background: transparent;
 }
 
-.pager-link:hover {
-  border-color: var(--sdp-accent);
-  background: transparent;
+.VPDocFooter .pager-link .desc {
+  color: var(--sdp-ink-muted);
+  font-family: var(--sdp-font-ui);
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+}
+
+.VPDocFooter .pager-link.prev .desc::before {
+  margin-right: 0.5em;
+  content: "←";
+}
+
+.VPDocFooter .pager-link.next .desc::after {
+  margin-left: 0.5em;
+  content: "→";
+}
+
+.VPDocFooter .pager-link .title {
+  margin-top: 4px;
+  color: var(--sdp-ink);
+  font-family: var(--sdp-font-reading);
+  font-size: 1.08rem;
+  font-weight: 650;
+  line-height: 1.3;
+  letter-spacing: -0.012em;
+  text-wrap: balance;
+}
+
+.VPDocFooter .pager-link:lang(ja) .title {
+  font-family: var(--sdp-font-reading-ja);
+  font-size: 1rem;
+  letter-spacing: 0;
+}
+
+.VPDocFooter .pager-link:hover .title,
+.VPDocFooter .pager-link:hover .desc {
+  color: var(--sdp-accent);
 }
 
 .VPFooter {
   border-top: 1px solid var(--sdp-rule);
-  background: color-mix(in srgb, var(--vp-c-bg-alt) 78%, transparent);
+  background-color: var(--sdp-board);
+  background-image: var(--sdp-grain);
 }
 
 .VPFooter .message,
@@ -704,12 +1218,9 @@ body {
 }
 
 @media (max-width: 959px) {
-  .VPDoc:not(:has(.sdp-home)) .vp-doc {
-    background: transparent;
-  }
-
-  .VPSidebar {
-    background-color: var(--vp-c-bg);
+  .VPLocalNav {
+    border-bottom-color: var(--sdp-rule);
+    background-image: var(--sdp-grain);
   }
 }
 
@@ -717,10 +1228,6 @@ body {
   html,
   body {
     overflow-x: hidden;
-  }
-
-  .VPNavBar {
-    backdrop-filter: none;
   }
 
   .VPNavBarTitle {
@@ -741,24 +1248,35 @@ body {
     white-space: normal;
   }
 
-  .VPDoc:not(:has(.sdp-home)) .vp-doc {
+  .VPDoc .vp-doc {
     font-size: 16.5px;
     line-height: 1.62;
   }
 
-  .VPDoc:not(:has(.sdp-home)) .vp-doc h1 {
+  .VPDoc .vp-doc h1 {
     font-size: clamp(2.1rem, 11vw, 2.55rem);
   }
 
-  .VPDoc:not(:has(.sdp-home)) .vp-doc h2 {
+  .VPDoc .vp-doc h2 {
     font-size: 1.48rem;
   }
 
-  .vp-doc div[class*="language-"],
+  /* On a phone a listing runs to the screen edge, so it loses its side borders. */
+  .vp-doc div[class*="language-"] {
+    border-right: 0;
+    border-left: 0;
+    border-radius: 0;
+  }
+
   .vp-doc table,
   .mermaid {
     margin-right: 0;
     margin-left: 0;
+  }
+
+  .chapter-opener {
+    font-size: 0.6rem;
+    letter-spacing: 0.12em;
   }
 }
 
@@ -781,11 +1299,15 @@ body {
 @media (forced-colors: active) {
   .VPNav,
   .VPSidebar,
-  .VPDoc:not(:has(.sdp-home)) .vp-doc,
-  .vp-doc table,
+  .vp-doc table th,
+  .vp-doc table td,
   .vp-doc .custom-block,
-  .mermaid {
-    border: 1px solid CanvasText;
+  .chapter-opener {
+    border-color: CanvasText;
+  }
+
+  .VPDoc .vp-doc > div::after {
+    background: CanvasText;
   }
 }
 
@@ -794,6 +1316,7 @@ body {
     --vp-c-bg: #fff;
     --sdp-paper: #fff;
     --sdp-ink: #111;
+    --sdp-grain: none;
   }
 
   body {
@@ -821,7 +1344,7 @@ body {
     padding: 0 !important;
   }
 
-  .VPDoc:not(:has(.sdp-home)) .vp-doc {
+  .VPDoc .vp-doc {
     margin: 0;
     border: 0;
     padding: 0;
@@ -831,7 +1354,11 @@ body {
     font-size: 11pt;
   }
 
-  .VPDoc:not(:has(.sdp-home)) .vp-doc a {
+  .VPDoc .vp-doc > div {
+    animation: none;
+  }
+
+  .VPDoc .vp-doc a {
     color: #111;
   }
 }
