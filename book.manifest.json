@@ -258,7 +258,9 @@
         {"route": "16-ml-systems/12-offline-evaluation-metrics", "title": {"en": "Offline Evaluation & Metrics", "ja": "オフライン評価とメトリクス設計"}},
         {"route": "16-ml-systems/13-model-registry-metadata", "title": {"en": "Model Registry & Metadata", "ja": "モデルレジストリとMLメタデータ"}},
         {"route": "16-ml-systems/14-ml-capacity-cost-planning", "title": {"en": "ML Capacity & Cost Planning", "ja": "MLキャパシティとコストプランニング"}},
-        {"route": "16-ml-systems/15-distributed-training-internals", "title": {"en": "Distributed Training Internals", "ja": "分散学習の内部構造"}}
+        {"route": "16-ml-systems/15-distributed-training-internals", "title": {"en": "Distributed Training Internals", "ja": "分散学習の内部構造"}},
+        {"route": "16-ml-systems/16-continual-learning-model-freshness", "title": {"en": "Continual Learning & Model Freshness", "ja": "継続学習とモデルの鮮度"}},
+        {"route": "16-ml-systems/17-embedding-tables-sparse-models", "title": {"en": "Embedding Tables & Sparse Models", "ja": "埋め込みテーブルとスパースモデル基盤"}}
       ]
     },
     {

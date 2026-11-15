@@ -287,14 +287,7 @@ steps_per_second = 20
 data_rate = 1024 × 200KB × 20 ≈ 4 GB/s
 ```
 
-If the storage path cannot deliver 4 GB/s sustained, the GPUs idle. Fixes include:
-
-- sharding data into appropriately sized files,
-- sequential formats for full scans,
-- local NVMe caching,
-- prefetching and parallel data loaders,
-- co-locating compute with storage,
-- avoiding per-example remote reads.
+If the storage path cannot deliver 4 GB/s sustained, the GPUs idle, and the remedies all work by removing per-example overhead from the read path. We shard data into files large enough that open and metadata costs amortize, and use sequential formats for full scans so that the storage system sees long streaming reads. We cache on local NVMe, prefetch, and run data loaders in parallel so that decode keeps pace with the accelerator. We co-locate compute with storage. And we avoid per-example remote reads altogether, since a round trip per example bounds throughput by request latency whatever the bandwidth.
 
 Training capacity is therefore not only GPU quota. It is GPU + storage bandwidth + CPU preprocessing + network.
 

@@ -306,6 +306,8 @@ Each case study starts from a product you can use today and works back to the me
 - [Model Registry and ML Metadata](16-ml-systems/13-model-registry-metadata.md)
 - [ML Capacity and Cost Planning](16-ml-systems/14-ml-capacity-cost-planning.md)
 - [Distributed Training Internals](16-ml-systems/15-distributed-training-internals.md)
+- [Continual Learning and Model Freshness](16-ml-systems/16-continual-learning-model-freshness.md)
+- [Embedding Tables and Sparse Model Infrastructure](16-ml-systems/17-embedding-tables-sparse-models.md)
 
 ### Part 17: LLM Systems
 - [LLM Agent Fundamentals](17-llm-systems/01-agent-fundamentals.md)
