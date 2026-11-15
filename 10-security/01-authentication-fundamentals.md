@@ -287,3 +287,4 @@ The final architecture should be explainable in four sentences: who owns authent
 - [Authorization at Scale](07-authorization-patterns.md): authentication answers who; authorization decides what they may do
 - [Cache Invalidation and Coherence](../04-caching/02-cache-invalidation.md): session propagation is cache invalidation with a security deadline attached
 - [Multi-Region Architecture](../06-scaling/09-multi-region-architecture.md): online authority versus availability when the session store is regional
+- [Passkeys and Phishing-Resistant Authentication](10-passkeys-and-phishing-resistant-authentication.md): the public-key credential path in depth, including fallbacks and session binding

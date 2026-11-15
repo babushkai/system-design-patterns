@@ -566,3 +566,4 @@ JWT reduces a lookup; it does not eliminate identity, authorization, revocation,
 - [Authorization at Scale](07-authorization-patterns.md): putting permissions inside a token freezes a decision at the moment you issue it
 - [Cryptographic Key and Data-Protection Architecture](06-encryption.md): algorithm choice and key rotation are cryptographic decisions wearing a token header
 - [Distributed Time](../01-foundations/05-distributed-time.md): an expired token is a disagreement about now, so the skew allowance is the failure budget granted to every verifier
+- [Verifiable Credentials and Selective Disclosure](14-verifiable-credentials-and-selective-disclosure.md): SD-JWT extends these validation rules with per-claim disclosure and holder key binding

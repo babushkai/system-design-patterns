@@ -599,3 +599,4 @@ Do not call an architecture zero trust merely because it uses a mesh, proxy, VPN
 - [Service Mesh Data and Control Planes](../12-service-mesh/03-sidecar-pattern.md): the mesh is where most teams deploy this enforcement point while leaving the decision logic unspecified
 - [Multi-Tenant Isolation and Tenant Lifecycle Architecture](../06-scaling/12-multi-tenancy.md): segmentation and tenant isolation converge on the same failure: one shared path with shared credentials
 - [Third-Party Dependency and Supply Chain Architecture](../20-production-readiness/03-third-party-dependencies-and-supply-chain.md): a vendored library is a principal inside your boundary that never completed enrollment and cannot be rotated
+- [Workload and Agent Identity Delegation](12-workload-and-agent-identity.md): how user authority travels with a workload identity across hops, domains, and AI agents

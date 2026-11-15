@@ -165,7 +165,12 @@
         {"route": "10-security/06-encryption", "title": {"en": "Cryptographic Key Architecture", "ja": "暗号化"}},
         {"route": "10-security/07-authorization-patterns", "title": {"en": "Authorization at Scale", "ja": "認可パターン"}},
         {"route": "10-security/08-threat-modeling-and-abuse-cases", "title": {"en": "Threat Modeling & Abuse Cases", "ja": "脅威モデリングと悪用ケース"}},
-        {"route": "10-security/09-ddos-defense", "title": {"en": "DDoS Defense Architecture", "ja": "DDoS防御アーキテクチャ"}}
+        {"route": "10-security/09-ddos-defense", "title": {"en": "DDoS Defense Architecture", "ja": "DDoS防御アーキテクチャ"}},
+        {"route": "10-security/10-passkeys-and-phishing-resistant-authentication", "title": {"en": "Passkeys & Phishing Resistance", "ja": "パスキーとフィッシング耐性認証"}},
+        {"route": "10-security/11-oauth-security-profiles", "title": {"en": "OAuth 2.1 & Security Profiles", "ja": "OAuth 2.1とセキュリティプロファイル"}},
+        {"route": "10-security/12-workload-and-agent-identity", "title": {"en": "Workload & Agent Identity", "ja": "ワークロードとエージェントのアイデンティティ"}},
+        {"route": "10-security/13-identity-lifecycle-and-continuous-access", "title": {"en": "Identity Lifecycle & Continuous Access", "ja": "アイデンティティライフサイクルと継続的アクセス評価"}},
+        {"route": "10-security/14-verifiable-credentials-and-selective-disclosure", "title": {"en": "Verifiable Credentials", "ja": "検証可能クレデンシャルと選択的開示"}}
       ]
     },
     {

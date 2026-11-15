@@ -243,6 +243,11 @@ Each case study starts from a product you can use today and works back to the me
 - [Authorization at Scale](10-security/07-authorization-patterns.md)
 - [Threat Modeling and Abuse Case Engineering](10-security/08-threat-modeling-and-abuse-cases.md)
 - [DDoS Defense Architecture](10-security/09-ddos-defense.md)
+- [Passkeys and Phishing-Resistant Authentication](10-security/10-passkeys-and-phishing-resistant-authentication.md)
+- [OAuth 2.1 and High-Assurance Authorization Profiles](10-security/11-oauth-security-profiles.md)
+- [Workload and Agent Identity Delegation](10-security/12-workload-and-agent-identity.md)
+- [Identity Lifecycle and Continuous Access Evaluation](10-security/13-identity-lifecycle-and-continuous-access.md)
+- [Verifiable Credentials and Selective Disclosure](10-security/14-verifiable-credentials-and-selective-disclosure.md)
 
 ### Part 11: Observability and Operations
 - [Distributed Tracing and Telemetry Pipelines](11-observability/01-distributed-tracing.md)
