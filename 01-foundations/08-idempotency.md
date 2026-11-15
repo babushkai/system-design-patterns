@@ -39,15 +39,7 @@ execute(operation_key, semantic_request)
   -> same compatible outcome for duplicate attempts
 ```
 
-Assume:
-
-- requests and responses can be lost;
-- a server may commit then crash before replying;
-- clients, queues, and workflow engines retry;
-- attempts can execute concurrently;
-- stale workers can resume;
-- delayed replay can occur after failover or restore;
-- clocks cannot establish global ownership.
+The protocol is designed against an environment that we assume to be hostile in ordinary ways. Requests and responses can be lost. A server may commit and then crash before it replies, which leaves the client unable to tell success from failure. Clients, queues, and workflow engines all retry, and their attempts can run concurrently with one another. A worker that was presumed dead can resume and finish what it started. A delayed replay can arrive long after the original, following a failover or a restore from backup. And clocks cannot be used to decide which attempt owns the operation, because no two machines agree on the time closely enough.
 
 ### Core invariants
 
@@ -142,15 +134,7 @@ request_digest = SHA-256(
 )
 ```
 
-Canonicalization defines:
-
-- field ordering;
-- Unicode normalization;
-- number/decimal representation;
-- absent versus null;
-- defaults;
-- excluded transport-only fields;
-- schema/operation version.
+The digest is only as good as the canonical form it is computed over. Two requests that mean the same thing must hash to the same value, and two SDKs in different languages must agree on what that value is. The canonicalization rules therefore have to settle field ordering, Unicode normalization, the representation of numbers and decimals, whether an absent field equals a null one, how defaults are applied, which transport-only fields are excluded, and which schema or operation version the request belongs to. Each of these is a place where a retry sent through a different client version could otherwise look like a different operation and be rejected, or worse, where a different operation could look like a retry.
 
 Do not hash raw JSON bytes if semantically equivalent encodings should match. Do not omit a field that changes the effect.
 
@@ -199,12 +183,7 @@ Atomically insert `IN_PROGRESS` if absent. A unique constraint or compare-and-sw
 
 ### Concurrent duplicate
 
-Policy options:
-
-- wait/poll for the first outcome within the caller deadline;
-- return `202 Accepted` plus status URL;
-- return a specific “operation in progress” response;
-- join a singleflight future inside one process as an optimization.
+The second attempt finds the record in `IN_PROGRESS` and must not start the effect again. What it tells its caller is a policy choice. It can wait or poll for the first attempt's outcome within the caller's deadline. It can return `202 Accepted` with a status URL, or a specific "operation in progress" response that the client knows to retry later. Inside a single process it can join a singleflight future for the first attempt, which is an optimization and not a substitute for the durable record, since the duplicate may land on another process.
 
 Do not immediately run the effect again.
 
@@ -263,19 +242,7 @@ The two traces above are mirror images, and together they explain why idempotenc
 
 ## API Contract
 
-A write API should document:
-
-- header/field carrying the key;
-- maximum key length and allowed character set;
-- uniqueness scope;
-- operation types requiring it;
-- parameter-reuse conflict behavior;
-- concurrent in-progress behavior;
-- terminal replay behavior;
-- retention horizon;
-- status-query endpoint;
-- whether authentication/tenant changes invalidate replay;
-- response fields that are stable versus regenerated.
+Idempotency is a contract between client and server, and it fails when either side has to guess the other's behavior. A write API should therefore document where the key travels (which header or field), its maximum length and allowed character set, and the scope within which it must be unique. It should say which operation types require a key. It should state what happens in each of the three duplicate cases: a key reused with different parameters, a duplicate that arrives while the first attempt is in progress, and a duplicate that arrives after a terminal outcome. It should give the retention horizon and the status-query endpoint, say whether a change of authentication or tenant invalidates replay, and identify which response fields are stable across replays and which are regenerated.
 
 Example:
 
@@ -294,13 +261,7 @@ Idempotency-Key: order-82-payment-1
 
 Store deterministic terminal outcomes when repeating cannot change them under the same preconditions. Do not permanently cache transient infrastructure failure merely because the first attempt saw it.
 
-Possible policy:
-
-- validation/auth failure before operation ownership: not stored as operation outcome;
-- deterministic domain rejection after ownership: store with domain version/preconditions;
-- transient dependency failure: keep retryable or release ownership safely;
-- ambiguous external timeout: `UNKNOWN`, reconcile;
-- success: store.
+One workable policy sorts failures by whether the operation had taken ownership of the key when they occurred. A validation or authorization failure that happens before ownership is not stored as an operation outcome, so the caller can correct the request and reuse the key. A deterministic domain rejection after ownership is stored, together with the domain version or preconditions it was decided against. A transient dependency failure leaves the operation retryable, or releases ownership safely. An ambiguous timeout from an external system is recorded as `UNKNOWN` and handed to reconciliation, because neither success nor failure can honestly be stored. Success is always stored.
 
 Authorization can change. Always authenticate the duplicate request before returning a stored outcome, and decide whether current authorization is required to reveal it.
 
@@ -384,12 +345,7 @@ retention >= max(
 ) + safety margin
 ```
 
-Document what happens after expiry:
-
-- key may be treated as new;
-- request must use a new business epoch;
-- API rejects keys older than a timestamp;
-- provider offers durable operation identity beyond the hot dedup tier.
+The guarantee ends when the record does, so the contract has to say what happens after expiry. There are four honest answers. The key may be treated as new, which means a sufficiently late retry executes again. The request may be required to use a new business epoch. The API may reject keys older than a timestamp embedded in or associated with the key, which turns a silent duplicate into a visible error. Or the provider may offer a durable operation identity that outlives the hot deduplication tier.
 
 Separate hot outcome response from long-lived identity. Terminal records can compact to key, digest, outcome code/reference, and audit metadata.
 
@@ -469,17 +425,9 @@ Dedup lookups add a write-path dependency. Provision N-minus-one capacity and de
 
 ## Security and Privacy
 
-- derive internal scope from authenticated tenant/client, not caller input alone;
-- authorize before returning stored outcomes;
-- reject cross-tenant key lookup;
-- rate-limit key creation and polling;
-- cap key/payload size;
-- hash opaque random keys before storage when appropriate;
-- avoid secrets and personal data in keys;
-- encrypt sensitive response records;
-- redact keys/digests from broad logs if they are correlatable;
-- audit manual outcome overrides;
-- prevent a client from probing whether another operation key exists.
+A deduplication store holds stored responses indexed by a caller-supplied string, which makes it an attractive target. The internal scope of a key is derived from the authenticated tenant and client and never from caller input alone, and a lookup that crosses tenants is rejected. Authorization runs before a stored outcome is returned, because the caller's access may have changed since the outcome was recorded. A client must not be able to probe whether another operation's key exists.
+
+The store also needs protection as a resource. We rate-limit key creation and polling, and cap key and payload size, so that it cannot be filled or used as free storage. Keys should not contain secrets or personal data; opaque random keys can be hashed before storage where that is appropriate, sensitive response records are encrypted, and keys and digests are redacted from broadly readable logs when they could be correlated with a customer. Manual overrides of an outcome are audited, since an override is a statement that money did or did not move.
 
 An idempotency key is not an authentication credential. Possessing it should not grant result access or authority to repeat an action under another principal.
 
@@ -560,31 +508,11 @@ Parameter binding must include security-relevant fields: tenant, account, amount
 
 ## Observability and Repair
 
-Track:
-
-- logical operations and attempts;
-- duplicate/replay rate;
-- key-parameter conflicts;
-- time in `IN_PROGRESS` and `UNKNOWN`;
-- reclaim/fencing events;
-- terminal outcome and response-replay rate;
-- dedup lookup/write latency and saturation;
-- storage growth/retention cleanup;
-- external reconciliation backlog and age;
-- expired-key repeats;
-- cross-tenant/auth rejection;
-- manual repair count.
+The health of an idempotency layer shows in the relationship between logical operations and attempts, so we count both, along with the duplicate and replay rate. A rising rate of key-parameter conflicts usually means a client bug. Time spent in `IN_PROGRESS` and `UNKNOWN`, and the number of reclaim and fencing events, show whether owners are dying mid-operation. We track terminal outcomes and the response-replay rate, the latency and saturation of deduplication lookups and writes, and storage growth against retention cleanup. For external effects we watch the reconciliation backlog and its age. Three further counters are worth alerting on because each indicates a hole in the guarantee: repeats that arrive after their key has expired, cross-tenant or authorization rejections on replay, and manual repairs.
 
 Use operation key/digest in traces/logs under controlled cardinality and privacy rules, not metric labels.
 
-Repair operations:
-
-- query by internal key/business entity/external ID;
-- attach provider proof;
-- transition `UNKNOWN` to verified terminal outcome;
-- reclaim abandoned work with new epoch;
-- issue a genuinely new operation key linked to prior one;
-- quarantine inconsistent records.
+Operators need a small set of supported repair operations, so that resolving a stuck operation never requires editing the database by hand. They need to query an operation by internal key, business entity, or external ID, and to attach proof from the provider. They need to move an `UNKNOWN` operation to a verified terminal outcome, reclaim abandoned work under a new epoch, issue a new operation key that is linked to the prior one when the work must be redone, and quarantine records that are inconsistent.
 
 Never delete a dedup row simply to “retry.” That erases the safety boundary.
 

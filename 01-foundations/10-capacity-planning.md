@@ -162,14 +162,9 @@ Build scenarios from drivers such as active tenants, devices, orders, content by
 demand = driver count × actions per driver × peak-shape factor × retry/fanout amplification
 ```
 
-Keep low/base/high scenarios and the assumptions that distinguish them. Segment by route, tenant cohort, geography, payload class, and day/event type. Report:
+Keep low/base/high scenarios and the assumptions that distinguish them. Segment by route, tenant cohort, geography, payload class, and day/event type.
 
-- average and chosen peak-window rates;
-- peak duration and ramp slope;
-- hottest tenant/key and correlated groups;
-- launch/event scenarios not present in history;
-- confidence interval and forecast error;
-- demand that will be shed or queued by policy.
+A demand report that supports a sizing decision gives the average and the chosen peak-window rates, the duration of the peak and the slope of the ramp into it, the hottest tenant or key and any groups that move together, launch and event scenarios that have no precedent in the history, the confidence interval and past forecast error, and the demand that policy will shed or queue instead of serving.
 
 A global percentile can hide a deterministic regional opening hour or one customer larger than an entire average cell. Use traces and product calendars alongside statistical forecasting.
 
@@ -185,13 +180,7 @@ $$
 
 This formula assumes demand and units are fungible. Zone affinity, tenant placement, shards, caches, and dependency quotas can make aggregate spare capacity unusable. Validate per failure domain and the hottest placement group.
 
-Examples of explicit scenarios:
-
-- one host and one rollout batch unavailable;
-- one zone lost while another zone is receiving a canary;
-- one cell drained into named destinations;
-- one shard replica rebuilding while compaction runs;
-- one region evacuated only for traffic classes the data plane can safely serve.
+The scenarios are named explicitly. One host down while one rollout batch is unavailable is the smallest such scenario. Others are a zone lost while another zone is receiving a canary, a cell drained into named destination cells, a shard replica rebuilding while compaction runs, and a region evacuated only for the traffic classes its data plane can safely serve elsewhere.
 
 [Multi-Region Architecture](../06-scaling/09-multi-region-architecture.md) owns cross-region authority/failover. Here the plan records the resulting surviving-capacity constraint.
 
@@ -368,18 +357,7 @@ Resource quotas are safety policy, not a substitute for authorization. Audit ove
 
 Introduce a new model in shadow mode. Compute old and new forecasts for the same history, explain deltas, then use the new model for one reversible capacity decision. Reconcile predicted versus observed demand, resource use, ready capacity, and user SLO after every launch, incident, and architecture change.
 
-Dashboards should show:
-
-- offered/admitted/goodput/rejected rates by workload class;
-- per-operation service demand and mix;
-- peak-window forecast, confidence, and error;
-- ready versus provisioned versus warming capacity;
-- headroom after named host/zone/cell/rollout failures;
-- hottest tenant/key/partition and placement skew;
-- queue age plus modeled drain time;
-- storage occupancy, growth, amplification, repair/migration reserve;
-- hard limits, quotas, and time-to-exhaustion versus lead time;
-- model revision and stale/missing inputs.
+A capacity dashboard exists to show how far the system is from its model, so it presents demand, supply, and the gap between them. For demand it shows offered, admitted, goodput, and rejected rates by workload class, the service demand per operation and the mix, and the peak-window forecast with its confidence and error. For supply it distinguishes ready capacity from capacity that is merely provisioned or still warming, and shows the headroom that would remain after each named host, zone, cell, or rollout failure. For skew it shows the hottest tenant, key, and partition and the placement imbalance. For state it shows queue age with modeled drain time, and storage occupancy, growth, amplification, and the reserve held for repair and migration. It also shows every hard limit and quota with its time to exhaustion set against the lead time for raising it. Lastly it shows the model revision and any stale or missing inputs, so that a reader knows how far to trust the rest.
 
 Rollback of a capacity-model change means restoring decision authority to the prior model while preserving collected evidence. It does not automatically remove already provisioned stateful capacity; that follows the safe scale-in protocol.
 
