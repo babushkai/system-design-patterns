@@ -118,6 +118,8 @@ Registration is idempotent for the tuple *(service, instance, incarnation, reque
 
 A lease bounds how long an endpoint can remain registered without renewed evidence. It cannot distinguish a dead process from a partitioned but healthy process. The lease duration trades failure-removal latency against renewal load and sensitivity to pauses:
 
+A registry learns that an instance has gone away in one of two ways. A healthy instance shutting down deregisters itself. A crashed instance cannot, so the registry has to notice its silence, and the lease is how it does so. Each registration lasts only as long as the instance keeps renewing it. The length of the lease is a trade: a short lease removes dead instances quickly and generates a steady load of renewals, while a long lease is cheap and leaves clients sending traffic to a dead address for longer.
+
 $$
 R_{\text{renew}} \approx \frac{E}{T_{\text{renew}}}
 $$
@@ -143,6 +145,8 @@ Use server-authoritative expiry and tolerate bounded clock uncertainty. Renew be
 ### Health checks must not become the outage
 
 An active probe should be cheap, bounded, and representative of the serving loop. A deep check that synchronously calls every dependency creates correlated failure: one database incident marks every frontend unready, drains the fleet, and converts a partial degradation into total unavailability.
+
+A health checker that probes every instance can, in a bad moment, remove every instance. If the probes depend on something shared that has become slow, or if the checker itself is overloaded and its probes time out, every instance appears unhealthy at once and the registry empties. Clients then have nowhere to send requests, and an instance that was serving perfectly well is now unreachable. Registries need a floor on how much of a service they will evict at once, so that a failure of the health checking cannot become a failure of the service.
 
 Prefer:
 
@@ -188,6 +192,8 @@ flowchart LR
 
 A watch is not just a stream of arrays. It needs:
 
+The difficulty with watches is that a client that misses an update has no way to know it missed one unless the protocol tells it. A stream of membership changes that drops one message, through a reconnect for example, leaves the client permanently wrong: an instance that was removed during the gap stays in its list. Revision numbers make gaps detectable, since a client that receives revision 105 after 103 knows it is missing 104 and must fetch a full snapshot before trusting its view again.
+
 - an initial snapshot and its revision;
 - ordered deltas or complete replacement snapshots;
 - explicit deletion;
@@ -213,6 +219,8 @@ Do not merge fragments from independent streams unless the protocol defines a co
 ### Stale configuration is an explicit mode
 
 Every cache entry carries:
+
+Clients must be able to keep working when the registry is unreachable, and this requires a deliberate decision. The tempting behavior, discarding a list that can no longer be refreshed, turns a registry outage into a total outage of every service that depends on discovery. The better behavior is to keep using the last known list, marked as stale, with a limit on how long it may be used. A list that is a few minutes old is almost always mostly right, and almost always better than nothing.
 
 ~~~text
 source revision

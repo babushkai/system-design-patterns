@@ -27,6 +27,8 @@ The failure model matters. Classic Paxos, Viewstamped Replication, and Raft tole
 
 The FLP result says a deterministic consensus protocol cannot guarantee termination in a fully asynchronous system with even one possible crash. It does not say consensus safety is impossible. A protocol can refuse to decide forever rather than decide inconsistently.
 
+The practical reading of this result is reassuring once it is understood. In a fully asynchronous system, where messages can be delayed without bound, no protocol can guarantee that it will eventually decide, because a slow node is indistinguishable from a failed one. Practical protocols therefore split their guarantees. Safety, never deciding two different values, holds always, however messages are delayed. Liveness, eventually deciding, holds only when the network behaves well enough for long enough that a leader can stay in office. Real networks are well behaved most of the time, so the protocols make progress in practice and never violate safety while waiting.
+
 Practical systems obtain liveness from partial synchrony, randomized timeouts, failure detectors, or a stable leader: after some unknown point, enough messages and processing complete within a useful bound. Timeouts choose when to try another leader; they must never be used as proof that an old value did not commit.
 
 ## State That Carries the Proof Across Crashes

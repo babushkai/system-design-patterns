@@ -228,6 +228,8 @@ An update notification can carry only `environment`, `configuration_revision`, a
 
 The last-known-good snapshot is normally safer than dropping immediately to defaults, but not forever. Define per-category behavior:
 
+Every application that evaluates flags depends on the flag service, and a design that fails closed when that service is unreachable makes the flag service a single point of failure for everything. Keeping the last snapshot received and continuing to evaluate against it lets applications ride through an outage of the flag service with the configuration they had a moment earlier. The cost is that a flag changed during the outage does not take effect, which matters most during an incident, when flags are often the tool being used to respond, and is the subject of one of the traces below.
+
 | Condition | Release flag | Kill switch | Security-sensitive deny flag |
 |---|---|---|---|
 | Control plane unreachable | last known good | last known good plus local emergency override | fail closed |
@@ -326,6 +328,8 @@ Flags can also create a confused-deputy path: a low-privilege release operator t
 ### Rollback reshuffles users
 
 1. A rollout uses `hash(user_id + percentage)`.
+
+Percentage rollouts depend on a property that is easy to break: a user who is in the rollout at ten percent must still be in it at twenty. That holds if each user is hashed once to a fixed number and included whenever that number is below the current percentage. It fails if the percentage is mixed into the hash, as in this trace, because then every change of percentage reshuffles who is included, and users flip between old and new behavior as the rollout proceeds.
 2. The percentage changes from 10 to 20.
 3. The hash input changes, so some original users leave while others enter.
 4. Stateful data created under the feature no longer matches exposure.

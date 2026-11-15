@@ -121,6 +121,8 @@ No single mechanism covers every failure:
 
 For each key, a coalescer maintains one in-flight future:
 
+Within one process the fix is simple. The first request to miss starts the load and records that a load for this key is in progress. Later requests for the same key find that record and wait for its result instead of starting their own. A thousand concurrent misses become one origin query and nine hundred and ninety-nine waiters. This does not help across processes: a fleet of two hundred servers can still send two hundred concurrent loads for one key, one from each, which is why the distributed lease below exists.
+
 ~~~text
 ABSENT -> LEADER_LOADING
               | joiners wait on same future
@@ -239,6 +241,8 @@ Coalescing and stale serving limit the damage once an entry has expired. A diffe
 ### Why fixed refresh thresholds synchronize
 
 If every request refreshes when 10 seconds remain, many concurrent requests can cross that threshold together. A lock can elect one, but probabilistic early recompute spreads election attempts over time without a separate scheduler.
+
+The point is that a deterministic rule produces synchronized behavior. Every process that reads the entry applies the same threshold to the same expiry time, so they all decide to refresh within the same instant, and the stampede that early refresh was meant to prevent happens ten seconds early. Randomness breaks the synchronization. If each request refreshes with a probability that starts near zero and rises as expiry approaches, then on a hot key some request will almost certainly refresh shortly before expiry, and it will very likely be just one, since the chance that several independently draw a refresh at nearly the same moment is small.
 
 ### XFetch decision
 

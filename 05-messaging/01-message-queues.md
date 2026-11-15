@@ -76,6 +76,8 @@ Separate queue metadata from message payloads. Large payloads amplify replicatio
 
 For a work-table design, claiming is one transaction:
 
+The claim is where the delivery guarantee is decided. A consumer takes a message and receives a lease on it, a period during which no other consumer will be given the same message. If the consumer finishes and acknowledges within the lease, the message is removed. If it crashes, or simply takes too long, the lease expires and the message becomes visible again for another consumer. This is what makes delivery at least once: a message is never lost because of a consumer failure, and it may be delivered twice when a consumer finishes its work just after its lease expired. The trace later in this chapter shows how a lease shorter than the processing time turns this occasional duplicate into a systematic one.
+
 1. select eligible rows in a bounded partition/time order while skipping rows locked by other claimers;
 2. update each row from `ready` to `claimed` with worker ID, lease deadline, and incremented claim generation;
 3. return payload references and signed delivery tokens;
@@ -107,6 +109,8 @@ Strict priority can starve normal work. Use weighted service, reserved capacity,
 
 Partitions are the unit of storage placement and parallelism. Hash routing balances arbitrary keys; entity routing keeps related work together; tenant routing supports isolation but creates skew. [Message Ordering](03-message-ordering.md) covers the ordering consequences.
 
+Partitioning is how a queue scales beyond what one machine can store or serve, and it imposes a ceiling that is easy to overlook. Order is preserved within a partition, so each partition is consumed by one consumer at a time. The number of partitions is therefore the maximum number of consumers that can work in parallel, and adding consumers beyond it leaves the extras idle. A queue created with eight partitions cannot use more than eight workers however large the backlog grows, and increasing the partition count later usually changes which partition each key maps to, which disturbs the ordering the partitions existed to provide.
+
 Partition count limits maximum useful parallelism and affects metadata, file handles, recovery, and fan-out. More partitions are not free. Use many logical/virtual buckets mapped to physical partitions when rebalancing is expected, but pin the mapping version into each routing decision so producers and consumers agree.
 
 Consumer assignment is epoch-based. A coordinator publishes `(group, partition, owner, epoch)`. During rebalance, the old owner stops claiming, drains or releases in-flight messages according to policy, and checkpoints before the new owner starts. If the system cannot guarantee a clean handoff, it must tolerate overlapping delivery while fencing stale acknowledgements.
@@ -116,6 +120,8 @@ Hot partitions require better routing or isolated capacity, not merely more cons
 ## Worker Flow Control and Overload
 
 The queue is a buffer, not infinite capacity. Apply backpressure at three boundaries:
+
+A queue makes it easy to forget that work is accumulating. The producer receives a fast acknowledgement whatever the state of the consumers, so nothing on the producing side slows down when consumers fall behind, and the backlog can grow for hours without anyone noticing. By the time it is noticed, the oldest messages may be too old to be useful, and the backlog will take far longer to drain than it took to accumulate. Bounding the queue, by size and by the age of its oldest message, and making the producer feel that bound, is what keeps a queue a buffer and not a place where work goes to wait indefinitely.
 
 - producer admission based on stored bytes, oldest age, and tenant quota;
 - broker-to-worker flow based on free execution slots and bytes;

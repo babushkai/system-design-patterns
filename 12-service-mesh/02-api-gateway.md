@@ -134,6 +134,8 @@ Keep named policy objects separate from route instances so a change to one timeo
 
 “First route in a file wins” turns file ordering into security policy. Compile routes into a deterministic match structure and reject ambiguous overlaps.
 
+This is a subtle hazard in route configuration. If routes are matched in the order they appear in a file, then a broad route added near the top, for a new feature, can capture traffic that a narrower route further down was meant to handle, including that route's authentication requirements. The change looks like an addition and is in fact a modification of existing behavior. Matching by specificity, so that the most precise route always wins regardless of order, and rejecting configurations where two routes overlap ambiguously, makes the effect of each change predictable.
+
 A useful precedence order is:
 
 1. exact authority before wildcard authority;
@@ -326,6 +328,8 @@ Do not return HTTP success with silently missing security-sensitive or monetary 
 ### Consistency boundary
 
 Parallel reads can observe different upstream revisions. If the response requires one coherent snapshot, use a domain-owned read model, version token propagated across services, or a purpose-built aggregation service backed by consistent data. The edge cannot manufacture transactional consistency from unrelated APIs.
+
+Aggregation is a popular gateway feature and a source of subtle inconsistency. A response assembled from several backends in parallel reflects each backend at a slightly different moment, so it can combine an account balance from before a payment with a transaction list from after it. For display this is usually harmless. For anything a client will act on, the response should either come from one authoritative source or carry enough version information that the client can tell its parts disagree.
 
 Keep reusable domain composition behind a service API. A channel-specific BFF may format, filter, and batch for its client, but business workflows and durable state transitions belong downstream.
 

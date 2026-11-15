@@ -111,6 +111,8 @@ Be careful with load shedding: if a valid user request is rejected because the s
 
 A latency SLI is a fraction under one or more thresholds, not a percentile average:
 
+Expressing latency as a fraction of fast requests, rather than as a percentile, is a deliberate choice with practical consequences. "99 percent of requests complete within 300 milliseconds" can be computed by counting good and total requests, and counts can be summed across instances, regions, and time windows without error, whereas percentiles cannot. It also makes latency failures consume the same error budget as other failures: a request that took two seconds is simply one more bad event.
+
 $$
 \text{SLI}_{L \le \tau}
 =
@@ -286,6 +288,8 @@ This makes the alert reviewable: “page if this condition consumes the selected
 ### Multi-window confirmation
 
 For long window $W_l$ and short window $W_s$:
+
+The two windows solve two problems at once. An alert on the long window alone is slow to fire and slow to clear, since a brief burst of errors affects a one-hour average for an hour afterward. An alert on the short window alone is noisy, firing on every momentary spike. Requiring both, so that the budget must be burning fast over the last hour and still be burning over the last five minutes, gives an alert that fires promptly for a sustained problem and stops promptly once it is fixed.
 
 ~~~text
 alert when:

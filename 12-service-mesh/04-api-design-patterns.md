@@ -261,6 +261,8 @@ The complete storage and retry pattern is in [Idempotency](../01-foundations/08-
 
 Idempotency answers “is this the same logical request?” It does not answer “is the resource still the version I read?”
 
+The lost update is the problem this section addresses. Two clients each read a document at version 7, each make a change, and each write the whole document back. The second write silently replaces the first, and the first client's change is gone with no error reported to anyone. Both requests were valid and neither was a duplicate, so idempotency has nothing to say about it. The remedy is to have each write name the version it was based on, and to reject a write whose base is no longer current. The client whose write is rejected re-reads, sees the other change, and decides how to combine them.
+
 ### Lost update
 
 ~~~text
@@ -299,6 +301,8 @@ Use a precondition failure when the client’s stated version/condition is false
 ## Pagination as a Continuation Protocol
 
 Offset pagination is simple but can scan deeply and shifts under concurrent inserts/deletes. Keyset pagination continues after a value in a total order:
+
+Offset pagination asks for "items 41 to 60" of a list, and it has two problems. The database must still walk past the first forty items to reach the forty-first, so the cost of a page grows with its depth and the hundredth page of a large result is expensive. And if items are inserted or deleted while a client is paging, every offset shifts, so the client sees some items twice and misses others. A cursor avoids both by recording where the previous page ended, typically the sort key of its last item, so the next page begins with a direct index lookup from that position and is unaffected by changes elsewhere in the list.
 
 ~~~text
 ORDER BY created_at, id
@@ -446,6 +450,8 @@ Operation workers can crash after performing work but before acknowledging compl
 
 A webhook is an API call made by your system to a subscriber-controlled endpoint. It inherits all distributed delivery failures plus an SSRF and tenant-isolation boundary.
 
+Webhooks reverse the usual relationship between provider and consumer, and with it the usual distribution of risk. The provider is now the client, calling an endpoint it does not control, which may be slow, down, misconfigured, or hostile. It may also be an internal address that an attacker registered in order to make the provider issue requests inside its own network. Reliable delivery to such endpoints requires retries with backoff, a way to stop retrying endpoints that have failed for a long time, and signatures that let the receiver confirm a call came from the provider and not from someone imitating it.
+
 ~~~mermaid
 flowchart LR
     TX[Domain transaction] --> OUTBOX[(Transactional outbox)]
@@ -567,6 +573,8 @@ Compatibility is directional:
 ### Unknown fields and enum values
 
 Response consumers should usually ignore unknown fields and preserve an unknown enum branch. Request producers should not assume a server accepted an unknown field merely because it returned success; security-sensitive write APIs often reject unknown input to prevent false belief.
+
+Whether a change is compatible depends on the behavior of clients, and clients are written by people who make assumptions. Adding a field to a response is safe only if clients ignore fields they do not recognize. Adding a value to an enumeration is safe only if clients handle values they have never seen, and many generated client libraries fail outright on an unknown enum value. The provider cannot fix those clients, so the contract has to state these expectations from the first version, and compatibility tests should include a client written to the strictest reasonable interpretation of the old schema.
 
 For Protocol Buffers:
 

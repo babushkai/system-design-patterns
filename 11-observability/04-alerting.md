@@ -100,6 +100,8 @@ Page primarily on user/business impact or an imminent hard limit with a known re
 
 Missing data has several causes:
 
+Missing data is where alerting systems most often fail silently, because the natural way to write a rule treats absence as health. A rule that fires when the error rate exceeds one percent evaluates to false when there is no error-rate data at all, and the alert resolves. So an outage severe enough to stop the service from reporting metrics, or a failure of the metrics pipeline itself, looks to the alerting system exactly like a quiet, healthy service. Every rule therefore needs an explicit decision about what absence means, and the most important signals need an independent check that data is arriving at all.
+
 - the service has zero legitimate traffic;
 - the instrument/resource no longer exists;
 - collection or remote write failed;
@@ -131,6 +133,8 @@ Track the data watermark and coverage alongside every alert. A “resolved” tr
 ### Fingerprint
 
 Choose labels that answer “would one responder action resolve all instances with this fingerprint?”
+
+The fingerprint decides how many separate alerts one problem produces. If an alert is identified by the service alone, a failure across a hundred pods produces one alert, which is right. If it is identified by service and pod, the same failure produces a hundred, and the responder has to read through all of them to establish that they share a cause. The test in the sentence above is the useful one: alerts that would all be fixed by the same action belong together.
 
 Common bounded identity:
 
@@ -165,6 +169,8 @@ Group payloads have size/member limits. A storm group summarizes counts and top 
 ### Inhibition
 
 Inhibition suppresses notification for an alert when a designated parent/cause alert is firing and labels match a declared relationship:
+
+Inhibition encodes knowledge of the dependency graph. When a database is down, every service that uses it will alert on its own errors, and none of those alerts adds information once the database alert has fired. Suppressing them keeps the responder's attention on the cause. The risk, illustrated in a failure trace below, is that an unrelated failure in one of those services is suppressed along with the consequences, so inhibition rules should be narrow and their effect should be visible to responders.
 
 ~~~text
 region connectivity alert firing for region=A
@@ -263,6 +269,8 @@ Never put all notification channels behind one provider or network path for crit
 ## Human Load and Policy Quality
 
 Human attention is the scarce resource. Measure:
+
+The capacity of an on-call rotation is measured in human attention, and it is easily exhausted. A responder who is paged five times a night for alerts that need no action will, within weeks, stop treating pages as urgent, and the alerting system will have trained its users to ignore it. Measuring what fraction of pages led to action, and deleting or downgrading rules that rarely do, is the maintenance that keeps the remaining alerts credible.
 
 - pages per on-call hour/shift;
 - unique incidents versus notifications;

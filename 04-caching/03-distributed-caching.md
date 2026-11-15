@@ -68,6 +68,8 @@ Consistent hashing was devised to avoid this. Nodes and keys are both hashed ont
 
 Never use a language runtime's default hash for distributed placement. Some runtimes randomize it between processes; implementations and versions may differ. Define:
 
+The reason is that every client must compute the same owner for the same key, or two clients will read and write different nodes for what they believe is one entry. Several language runtimes deliberately randomize their built-in hash per process as a defense against attacks that flood hash tables with colliding keys. That is good for a local hash table and catastrophic for placement, since two processes will disagree about where every key lives. Placement needs a hash function that is specified exactly, independent of language and version, so that a client written in Go and one written in Python agree.
+
 - hash algorithm and exact byte encoding;
 - normalization and namespace;
 - seed or domain separator;
@@ -128,6 +130,8 @@ Static stability matters: an unavailable topology service should not immediately
 ### Slots and hash tags
 
 Redis Cluster maps keys into 16,384 logical hash slots and assigns slots to primary nodes. A hash tag (the non-empty substring inside braces) can co-locate related keys:
+
+The slot design is a fixed form of the logical-shard idea. Keys map permanently to one of a fixed number of slots by hash, and slots, not keys, are assigned to nodes. Moving capacity between nodes then means moving whole slots, and a client needs to know only the small table of which node owns each slot. A client that sends a request to the wrong node receives a redirect naming the right one, so a stale map causes extra round trips but not wrong answers.
 
 ~~~text
 {order:789}:summary
@@ -265,6 +269,8 @@ Then add replication and enough spare primaries or slots to survive the declared
 
 If load is evenly distributed, losing one of $N$ primaries multiplies surviving average load by approximately:
 
+The arithmetic is worth doing for small clusters in particular. With three nodes, losing one raises the load on the other two by half. With four, by a third. A cluster running each node at seventy percent of capacity will overload when one of three nodes fails, at exactly the moment when it is also absorbing the extra misses caused by the lost node's keys being cold elsewhere. Headroom has to be sized for the failure, not for the steady state.
+
 $$
 \frac{N}{N-1}
 $$
@@ -282,6 +288,8 @@ Capacity gates should include:
 ### Memory cliffs
 
 A memory cache does not degrade smoothly when full. It may:
+
+Memory exhaustion behaves like a cliff, not a slope. A cache at ninety-five percent of its memory limit may perform perfectly, and at one hundred percent it may begin evicting aggressively, rejecting writes, or, if the operating system intervenes, being killed outright. Since the transition happens with little warning in the ordinary metrics, the limit to plan against is well below the physical memory, leaving room for fragmentation, replication buffers, and the temporary copies some operations make.
 
 - evict useful entries, increasing origin load;
 - reject writes under no-eviction policy;

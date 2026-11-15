@@ -51,6 +51,8 @@ A point includes value/distribution, observation interval or timestamp, flags fo
 
 A counter is a non-negative additive quantity over time:
 
+Counters only increase, and that property is what makes them robust. A system that scrapes the counter every fifteen seconds and misses a scrape loses nothing, because the next value still contains the total, and the rate over any interval is the difference between two readings divided by the time between them. When a process restarts its counter falls to zero, and the query layer must recognize that drop as a reset rather than a large negative rate, which is the failure trace later in this chapter.
+
 - requests started;
 - bytes sent;
 - failures observed;
@@ -120,6 +122,8 @@ Quantiles estimated from buckets are approximate. Accuracy depends on boundaries
 ### Why not percentile gauges?
 
 If instance A reports p99 10 ms for 100 requests and instance B reports p99 1 s for one million requests, averaging their p99 values has no population meaning. Preserve mergeable distributions or query raw observations in a system designed for them.
+
+Percentiles cannot be averaged, and this is the most common statistical error in monitoring. A percentile summarizes a particular set of measurements, and averaging the summaries of two sets does not produce the summary of their union. An instance serving a thousand requests and one serving ten contribute equally to the average of their percentiles, and a tail that exists only on one instance can vanish or be exaggerated. A histogram avoids the problem by recording how many measurements fell into each of a set of fixed ranges. Counts in matching ranges can be summed across instances, and a percentile computed from the summed histogram describes the whole population correctly, to within the width of a range.
 
 Client-side summaries/quantile sketches may be appropriate when their error guarantees and merge semantics are understood. A non-mergeable quantile cannot be aggregated across replicas or regions.
 

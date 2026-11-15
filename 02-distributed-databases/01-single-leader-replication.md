@@ -98,6 +98,8 @@ One scalar “replication lag” hides which subsystem is failing. Time-based la
 
 The primary returns after local durability and does not wait for a remote replica. Normal-case latency stays local. If the primary and its local durable media become unavailable before a follower persists the suffix, acknowledged transactions can be lost on promotion.
 
+Asynchronous replication is the default in most databases because it costs nothing on the write path, and its price is paid only at failover. Every write the primary acknowledged but had not yet shipped is lost if the primary dies and a follower is promoted. The amount lost is whatever the replication lag was at that moment, usually milliseconds and occasionally, under load or after a network hiccup, much longer. Clients were told those writes succeeded, so the loss is silent from their point of view.
+
 For log generation rate $g$ bytes/s and replication delay $d$ seconds, the unreplicated data exposure is roughly:
 
 $$
@@ -211,6 +213,8 @@ Use this path for maintenance and topology changes. It exercises most failover m
 ### Why timeout election is unsafe by itself
 
 During a partition, the primary cannot distinguish “I lost the network” from “all replicas failed.” A replica cannot distinguish “primary failed” from “primary is isolated from me.” If both use timeouts to declare authority, both may write.
+
+The consequence is that no amount of care in detecting failure can make timeout-based failover safe by itself. When followers stop hearing from the primary and promote one of their own, the old primary may be perfectly healthy and still accepting writes from clients that can reach it. For the duration of the partition there are two primaries with diverging histories, and when the partition heals one history must be discarded. The safeguard has to stop the old primary from committing, for example by requiring it to confirm its leadership with a majority before acknowledging any write, so that a primary cut off from the majority stops on its own.
 
 Use a majority-backed coordinator, storage-level reservation, cloud/virtual-machine fence, network fence, or manual procedure that establishes one promotion epoch. Clients and downstream systems include or validate that epoch where practical. A process-local role flag is not fencing.
 

@@ -133,6 +133,8 @@ Event time is best for user timelines but vulnerable to clock error and delayed 
 
 Given events A and B from different machines, timestamps alone may not establish order. Prefer:
 
+This catches investigators out regularly. Logs from two machines, merged and sorted by timestamp, appear to show a sequence of events, and the sequence can be wrong. If the clocks of the two machines differ by fifty milliseconds and the events were thirty milliseconds apart, the merged log shows them in the reverse order. A diagnosis built on that order, concluding that the second service failed before the first called it, will be mistaken. Ordering across machines can be trusted only when something other than the clock establishes it, such as a request identifier showing that one event caused the other.
+
 - trace parent/link causality;
 - message/event sequence within a partition or aggregate;
 - workflow history position;
@@ -209,6 +211,8 @@ Each boundary states acknowledgement durability. At-least-once retry can duplica
 ## Buffering and Backpressure
 
 Logging must not convert an observability outage into an application outage unless a specific audit contract requires it.
+
+Logging calls sit on every code path, so their failure modes become the application's failure modes. If writing a log line blocks when the disk is full or the collector is unreachable, every request blocks with it, and an outage in the logging infrastructure stops the service. For nearly all logs the right behavior under pressure is to drop, preferably counting what was dropped, and to keep serving. The exception is audit records whose loss would itself be a compliance failure, and those deserve a separate, durable path rather than the general-purpose pipeline.
 
 ### Priority classes
 
@@ -300,6 +304,8 @@ A leading-wildcard full-text search across months is batch work, not an unlimite
 ### Classification before storage
 
 Classify fields as public, internal, confidential, personal, secret, regulated, or audit-controlled under the organization’s taxonomy. The policy decides:
+
+Logs are the place where sensitive data most often escapes, because writing to them is so easy. A developer logs a request object to debug a problem, and that object contains a password, a session token, or a customer's address. The line is then replicated to a central store, indexed, retained for months, and made searchable by hundreds of engineers. Removing it later is very hard, since it now exists in many copies and backups. The only reliable defense is upstream: classifying fields so that sensitive ones are never emitted, or are redacted at the point of capture, before they reach any system that copies them.
 
 - whether collection is allowed;
 - transformation/tokenization;
