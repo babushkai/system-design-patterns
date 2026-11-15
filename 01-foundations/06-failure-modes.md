@@ -23,7 +23,7 @@ A program running on one machine either works or stops. A system made of many ma
 
 This is the central difficulty of distributed systems, and it cannot be engineered away. What can be done is to design each operation so that its possible outcomes are few, are distinguishable where it matters, and each have a safe next step. That design has to come first. A system built for the case where everything works, with failure handling added afterward, tends to treat the ambiguous outcome as either success or failure, and each of those guesses is wrong some of the time.
 
-For each operation, define externally meaningful outcomes:
+We begin by naming, for each operation, the outcomes that mean something to the caller:
 
 | Outcome | What the caller knows | Safe next action |
 |---|---|---|
@@ -37,15 +37,13 @@ An API that returns only `200` or `500` hides the most important state: whether 
 
 ### Safety, liveness, and durability
 
-- **Safety:** something forbidden never happens; for example, two owners never both commit writes for the same lease epoch.
-- **Liveness:** a valid operation eventually completes under stated timing and fault assumptions.
-- **Durability:** once an operation reaches its documented commit point, its effect survives the documented failures.
+Three properties are in play whenever we reason about failure, and they are often confused. *Safety* says that something forbidden never happens; for example, two owners never both commit writes for the same lease epoch. *Liveness* says that a valid operation eventually completes under stated timing and fault assumptions. *Durability* says that once an operation reaches its documented commit point, its effect survives the documented failures.
 
-These are not interchangeable. A minority replica may reject writes to preserve safety, sacrificing liveness until communication recovers. A queue may remain available by accepting work to local disk, but durability depends on whether that disk is within the promised failure domain.
+These are not interchangeable, and a design frequently has to give up one to keep another. A minority replica may reject writes to preserve safety, sacrificing liveness until communication recovers. A queue may remain available by accepting work to local disk, but whether that work is durable depends on whether the disk lies within the promised failure domain. When a design document says a system is "reliable," we ask which of the three it means, and under which faults.
 
 ### An explicit model
 
-A reviewable contract might say:
+A failure model is only useful if it is written down precisely enough for a reviewer to disagree with it. A reviewable contract might say:
 
 ```text
 Components:
@@ -66,39 +64,33 @@ Required liveness:
   progress resumes after a majority can communicate for one election interval
 ```
 
-Without the assumptions, “highly available” and “exactly once” are adjectives rather than claims.
+Every line can be checked against the implementation or challenged against reality. Without the assumptions, "highly available" and "exactly once" are adjectives and not claims.
 
 ---
 
 ## Fault Taxonomy Without a False Hierarchy
 
-Failure classes overlap; they are not a simple ladder where every level contains all lower behaviors.
+Textbooks often present failure classes as a ladder, from crash faults at the bottom to Byzantine faults at the top, with each level containing those below it. Real failure classes overlap, and a system hardened against a "stronger" class can still fall to a "weaker" one that it did not consider. We describe each class by what the other components can observe.
 
 ### Crash-stop and crash-recovery
 
-In a crash-stop model, a failed process never returns. In crash-recovery, it may restart with durable state, a new process identity, and no trustworthy volatile state.
+In a crash-stop model, a failed process never returns. This is convenient for proofs and rare in production, where an orchestrator restarts the process within seconds. In the crash-recovery model the process comes back with its durable state, a new process identity, and no trustworthy volatile state.
 
-Crash recovery raises questions that crash-stop abstracts away:
+Recovery raises questions that crash-stop abstracts away. The last log record may have been fully written, torn, or reordered by the storage stack. Some effects may have escaped to another system before the crash, and that system has no idea the sender died. A network response addressed to the old process can arrive after the restart and be mistaken for a reply to something new. A node restored from a snapshot may reuse an epoch, a nonce, or an operation ID that it had already used before the snapshot's successors were lost. And the node needs some way to prove that it has caught up before it serves anything.
 
-- Was the last log record fully written, torn, or reordered?
-- Which effects escaped to another system before the crash?
-- Can an old network response arrive after restart?
-- Does a restored snapshot reuse an epoch, nonce, or operation ID?
-- How does the node prove it has caught up before serving?
-
-A PID, container name, or hostname does not define an incarnation. Persist or obtain a monotonically increasing epoch when authority spans restarts.
+Most of these come down to identity. A PID, container name, or hostname does not define an incarnation, because all three are reused. When authority spans restarts, we persist or obtain a monotonically increasing epoch, so that the rest of the system can tell this life of the process from the previous one.
 
 ### Omission, duplication, reordering, and delay
 
 A send, channel, or receive path can omit a message. Transport and application layers may duplicate it during retry. Concurrent paths may reorder it. Delay can be unbounded in the asynchronous model.
 
-From the caller's point of view:
+The consequence is easiest to see from the caller's side. The entire observation available to it is:
 
 ```text
 request sent -> timeout
 ```
 
-is compatible with all of these histories:
+That single observation is compatible with all of these histories:
 
 1. the request never arrived;
 2. it arrived but did not commit;
@@ -106,22 +98,15 @@ is compatible with all of these histories:
 4. it is still queued and will execute later;
 5. a response is delayed behind a newer retry.
 
-Timeouts create suspicion and a latency boundary; they do not prove non-execution.
+The caller cannot tell them apart, and the correct action differs among them. A timeout therefore creates suspicion and sets a latency boundary. It does not prove that the operation did not execute, and any design that treats it as proof will eventually duplicate or lose work.
 
 ### Timing and gray failure
 
-A component can be correct but too slow for its caller's deadline. Gray failure is partial and observer-dependent: a storage node serves cached reads but stalls writes, a proxy can reach one shard but not another, or a host answers a shallow health check while packet loss makes real work unusable.
+A component can be correct and still too slow for its caller's deadline, which from the caller's position is a failure. Gray failure is the partial, observer-dependent form of this: a storage node serves cached reads but stalls writes, a proxy can reach one shard and not another, or a host answers a shallow health check while packet loss makes real work impossible. The component's own view of its health and its clients' view disagree, and the monitoring usually takes the component's side.
 
-Model resource exhaustion as a failure mode:
+Resource exhaustion belongs in the failure model for the same reason. CPU throttling and long scheduler queues, stop-the-world pauses, memory pressure with paging or allocation failure, disk tail-latency spikes and full filesystems, exhaustion of sockets, threads, descriptors, connections, or ephemeral ports, and quota or admission rejection by a dependency all leave the process running and unable to do its job.
 
-- CPU throttling and long scheduler queues;
-- stop-the-world pauses;
-- memory pressure, paging, and allocation failure;
-- disk tail-latency spikes and full filesystems;
-- socket, thread, descriptor, connection, and ephemeral-port exhaustion;
-- dependency quota or admission rejection.
-
-Slow components often cause more system-wide damage than stopped components because they retain connections and work while triggering retries.
+Slow components often cause more system-wide damage than stopped ones. A stopped component fails fast, and its callers move on. A slow one holds connections, threads, and memory in every caller until the timeout fires, and then attracts retries, so its trouble spreads upstream.
 
 ### Value, storage, and software faults
 
@@ -141,7 +126,7 @@ For a single-organization data service, Byzantine consensus may add cost without
 
 ## Failure Domains and Correlation
 
-Redundancy only covers failures outside the shared domain.
+Redundancy protects only against failures that do not affect all the copies at once. Every component sits inside a nest of failure domains, and a fault in an enclosing domain takes out everything beneath it.
 
 ```mermaid
 flowchart TD
@@ -157,15 +142,7 @@ flowchart TD
     CFG --> Z2
 ```
 
-Two replicas in different zones can still share:
-
-- the same IAM principal or expired certificate chain;
-- one DNS/control-plane dependency;
-- a destructive configuration rollout;
-- the same software defect and input;
-- one regional service quota;
-- a synchronized backup-deletion job;
-- capacity assumptions that fail after either zone is lost.
+The physical hierarchy is the part of this picture that most designs get right. The dependencies that cut across it are where correlated failure usually comes from. Two replicas in different zones can still share the same IAM principal or an expiring certificate chain, a single DNS or control-plane dependency, a destructive configuration rollout that reaches both, the same software defect triggered by the same input, one regional service quota, a synchronized backup-deletion job, and capacity assumptions that stop holding once either zone is lost. Each of these is a domain in which the two replicas are one unit.
 
 ### Map each invariant to a domain
 
@@ -181,17 +158,7 @@ The blast radius is an architectural property. Cells and bulkheads reduce it onl
 
 ### Common-mode testing
 
-Killing one process proves little about zone loss or bad configuration. Exercise failures by domain:
-
-- process pause/restart;
-- host loss and disk corruption;
-- rack/zone communication loss;
-- asymmetric regional routing;
-- identity/key/policy outage;
-- deployment of a deterministic bug;
-- operator deletion and backup restore;
-- dependency quota exhaustion;
-- loss of capacity plus a traffic spike.
+Killing one process proves little about zone loss or a bad configuration push, because it exercises only the innermost domain. We test by domain, working outward: process pause and restart; host loss and disk corruption; loss of communication for a rack or zone; asymmetric regional routing; an outage of identity, keys, or policy; deployment of a deterministic bug to every instance; operator deletion followed by a restore from backup; exhaustion of a dependency's quota; and the loss of capacity at the same moment as a traffic spike. The later items are harder to stage, and they resemble the outages that make postmortem reading lists.
 
 ---
 
@@ -201,7 +168,7 @@ In a fully asynchronous system, a silent process cannot be distinguished with ce
 
 ### Timeout design
 
-A timeout combines:
+A timeout is a budget for everything that happens between sending a request and reading its response:
 
 ```text
 queue wait + connection acquisition + network + remote queue
@@ -253,14 +220,7 @@ sequenceDiagram
 
 A lease reduces overlapping ownership only under its clock and communication assumptions. A **fencing token** makes the protected resource reject stale owners. If the downstream database, object store, or device ignores the token, the lease service cannot prevent a paused client from acting.
 
-Rules:
-
-- tokens increase monotonically per protected scope;
-- acquire/renew is durable at the coordinator's commit point;
-- the resource remembers the highest accepted token;
-- late messages are rejected even if credentials remain valid;
-- authority is not restored from a process snapshot;
-- expiration uses the protocol's stated clock-drift bound.
+Fencing works only if a few rules hold together. Tokens increase monotonically within each protected scope. Acquisition and renewal are durable at the coordinator's commit point, so a coordinator failover cannot reissue an old token. The resource remembers the highest token it has accepted and rejects late messages that carry a lower one, even when the sender's credentials are still valid. Authority is never restored from a process snapshot, since the snapshot predates whatever happened after it. And expiration is computed with the protocol's stated clock-drift bound.
 
 Leadership for replicated state machines is treated in [Leader Election and Fencing](../02-distributed-databases/09-leader-election.md); application locks in [Distributed Locks](./09-distributed-locks.md).
 
@@ -270,7 +230,7 @@ Leadership for replicated state machines is treated in [Leader Election and Fenc
 
 ### Locate every irreversible boundary
 
-For a mutation that touches a log, database, queue, and external API, enumerate crash points:
+A crash can interrupt an operation between any two steps, so we list the steps. For a mutation that touches a log, a database, a queue, and an external API, the crash points are:
 
 ```text
 receive request
@@ -286,7 +246,7 @@ At each arrow, ask what survives and what a retry observes. A local transaction 
 
 ### Write-ahead recovery
 
-Write-ahead logging requires more than `append()`:
+The write-ahead log is the standard tool for making a crash at any point recoverable, and it requires more than a call to `append()`:
 
 1. encode record length/version/checksum;
 2. write the log before the dependent state mutation;
@@ -300,19 +260,13 @@ The storage mechanics are in [Write-Ahead Logging](../03-storage-engines/04-writ
 
 ### Rejoin, catch-up, and quarantine
 
-A restarted replica should not serve because its process is healthy. It must:
+A restarted replica should not serve merely because its process is healthy. Before it does, it validates its local identity, configuration, log, and snapshot. It compares its epoch and committed position with the current membership, since the cluster may have moved on without it. It repairs or replaces state that has diverged or is corrupt, catches up to within a bounded lag, and enters read or write service only once the invariants required for that service hold.
 
-- validate local identity, configuration, log, and snapshot;
-- compare epoch and committed position with current membership;
-- repair or replace divergent/corrupt state;
-- catch up within bounded lag;
-- enter read or write service only after required invariants hold.
-
-If state fails integrity checks, quarantine it. Automatically copying a suspect replica to peers can convert a local corruption into a cluster-wide one.
+If the state fails its integrity checks, we quarantine it. Automatically copying a suspect replica to its peers can turn a local corruption into a cluster-wide one.
 
 ### Reconciliation
 
-Retries prevent duplicate intent only when every consumer honors the operation identity. Reconciliation repairs facts after an unknown or failed path:
+Retries prevent duplicate intent only when every consumer honors the operation identity, and some paths will always end in an unknown state. Reconciliation repairs the facts afterward by comparing independent records of what should be true:
 
 ```text
 desired domain state
@@ -321,7 +275,7 @@ vs external provider receipts
 vs derived projections
 ```
 
-Run reconciliation continuously, partition it for scale, and make repairs idempotent and auditable. “Operator will inspect the dead-letter queue” is not a recovery protocol.
+We run reconciliation continuously, partition it for scale, and make its repairs idempotent and auditable. "An operator will inspect the dead-letter queue" is not a recovery protocol.
 
 ---
 
@@ -329,7 +283,7 @@ Run reconciliation continuously, partition it for scale, and make repairs idempo
 
 A partition is a communication failure that separates some participants from others; it may be partial, asymmetric, protocol-specific, or indistinguishable from process delay. The CAP theorem constrains consistency and availability when messages needed for coordination cannot arrive; its precise scope is in [CAP Theorem: Scope, Proof, and Design Consequences](./03-cap-theorem.md).
 
-Operational partition handling requires:
+Handling a partition in operation, as opposed to in a proof, involves five obligations:
 
 1. **Authority:** only a quorum-backed/fenced side continues non-mergeable writes.
 2. **Degradation:** define which reads, buffered writes, or local functions remain safe.
@@ -339,7 +293,7 @@ Operational partition handling requires:
 
 ### Stop, buffer, or diverge
 
-For each operation choose deliberately:
+For each operation we choose deliberately among a small set of behaviors:
 
 | Strategy | Valid when | Cost after healing |
 |---|---|---|
@@ -382,14 +336,7 @@ downstream attempts along one failing chain. Real fan-out can make it worse. Ret
 
 ### Admission before collapse
 
-Queues convert a short overload into latency; unbounded queues convert it into memory exhaustion and stale work. During failure:
-
-- reject or shed low-priority work early;
-- bound concurrency at the scarce resource;
-- propagate backpressure rather than accepting infinite backlog;
-- reserve capacity for recovery, health, and control operations;
-- isolate tenants and critical paths;
-- prefer explicit degraded responses to timeouts after expensive work.
+Queues convert a short overload into latency. Unbounded queues convert it into memory exhaustion and into work that is already stale by the time it is served. During a failure we would sooner refuse work early than accept it and fail it late. That means rejecting or shedding low-priority work at the edge, bounding concurrency at the scarce resource, and propagating backpressure to callers instead of accepting an infinite backlog. It also means reserving capacity for recovery, health, and control operations, so that the system retains the means to repair itself, and isolating tenants and critical paths from one another. An explicit degraded response is better than a timeout that arrives after the expensive work has been done.
 
 See [Backpressure and Overload Control](../06-scaling/07-backpressure.md) and [Circuit Breakers as Adaptive Admission Control](../06-scaling/06-circuit-breakers.md).
 
@@ -417,12 +364,7 @@ $$
 
 The independence assumption is often false, but the calculation exposes why adding a mandatory remote service to every request is an availability decision.
 
-Classify dependencies:
-
-- **hard data-path dependency:** operation cannot be correct without it;
-- **soft enrichment:** can be omitted or served stale with explicit semantics;
-- **control plane:** config, membership, keys, policy, placement, or deployment state;
-- **observability:** must not block the operation, but loss reduces safe operability.
+Not every dependency deserves to be mandatory, and we classify them by what happens to the operation when they are missing. A *hard data-path dependency* is one without which the operation cannot be correct. A *soft enrichment* can be omitted or served stale under explicit semantics. A *control-plane dependency* supplies configuration, membership, keys, policy, placement, or deployment state, and is needed to change the system more than to run it. An *observability dependency* must never block the operation, although its loss reduces our ability to operate safely.
 
 A healthy data plane may continue on last-known-good immutable configuration during a control-plane outage. Bound how long, preserve expiry and revocation rules, and ensure a corrupt control-plane update cannot instantly reach all cells. Validate and sign artifacts, stage activation, and retain rollback state locally.
 
@@ -488,7 +430,7 @@ Use coordinated reintroduction, repair budgets, priority classes, staggered rest
 
 ### State-machine and history testing
 
-Write the invariant before the fault campaign:
+A fault campaign without a stated invariant can only show that the system stayed up. We write the invariant first:
 
 ```text
 no two successful withdrawals spend the same balance
@@ -519,18 +461,7 @@ The experiment platform itself needs scope, approvals, automatic aborts, blast-r
 
 ## Observability and Recovery Objectives
 
-Observe evidence at the boundaries:
-
-- operation outcomes: committed, rejected, ambiguous, fenced, indeterminate;
-- timeout phase: queue, connect, remote execution, response;
-- failure-detector suspicion and false-positive/false-negative indicators;
-- leader/lease epoch changes and stale-token rejections;
-- replication, repair, replay, and reconciliation lag;
-- queue age and estimated drain time, not only queue length;
-- capacity remaining after each failure domain is removed;
-- corrupt-record quarantine and verification backlog;
-- dependency/control-plane version and last successful refresh;
-- recovery milestones and restored SLO, not merely process restart.
+Failures are diagnosed from evidence gathered at boundaries, so that is where we instrument. For operations we record the outcome class (committed, rejected, ambiguous, fenced, or indeterminate) and the phase in which a timeout occurred: queue, connect, remote execution, or response. For detection and authority we record failure-detector suspicion with its false-positive and false-negative indicators, changes of leader or lease epoch, and rejections of stale tokens. For recovery we record replication, repair, replay, and reconciliation lag; queue age and estimated drain time, which matter more than queue length; the capacity that would remain after each failure domain is removed; corrupt-record quarantine and the verification backlog; and the version and last successful refresh of each dependency and control plane. Finally we record recovery milestones in terms of restored SLO, since a restarted process is not yet a recovered service.
 
 Recovery time objective (RTO) and recovery point objective (RPO) are workload contracts. Define them per operation class and failure domain. A service can have a five-minute process restart but a six-hour data convergence time; the latter is the real recovery for affected reads.
 
@@ -540,7 +471,7 @@ Alert on user-impacting symptoms and invariant threats. “One heartbeat missed�
 
 ## Design Review Framework
 
-For every important component and operation, answer:
+For every important component and operation, we ask:
 
 1. Which crash, delay, omission, partition, corruption, resource, software, security, and operator faults are in scope?
 2. Which faults may be correlated through zone, region, account, deployment, identity, or control plane?

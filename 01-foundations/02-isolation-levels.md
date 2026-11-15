@@ -12,12 +12,7 @@ A database that ran one transaction at a time would have no isolation problems a
 
 The difficulty for the engineer is that the interference a level permits is defined in terms of anomalies with unfamiliar names, and the same level name means different things in different databases. Two applications that each read a balance, check that it is sufficient, and write a withdrawal can both succeed and overdraw the account under an isolation level whose name suggests nothing of the kind. The purpose of this chapter is to make it possible to say, for a given invariant in a given database, which level actually protects it.
 
-Transaction isolation governs concurrent access to one transactional authority through snapshots, locks, serialization conflicts, and retry behavior.
-
-- [ACID Transactions](01-acid-transactions.md) covers atomic commit, durability, WAL, and recovery.
-- [Consistency Models](04-consistency-models.md) covers client-visible guarantees across replicas and services.
-- [Distributed Transactions](../02-distributed-databases/07-distributed-transactions.md) covers commit across multiple resource managers.
-- [Idempotency](08-idempotency.md) covers duplicate requests and durable effect deduplication.
+Transaction isolation governs concurrent access to one transactional authority through snapshots, locks, serialization conflicts, and retry behavior. The neighboring problems belong to neighboring chapters. [ACID Transactions](01-acid-transactions.md) covers atomic commit, durability, WAL, and recovery. [Consistency Models](04-consistency-models.md) covers client-visible guarantees across replicas and services. [Distributed Transactions](../02-distributed-databases/07-distributed-transactions.md) covers commit across multiple resource managers, and [Idempotency](08-idempotency.md) covers duplicate requests and durable effect deduplication.
 
 Those boundaries matter. A serializable transaction on a lagging read replica can be internally serializable yet stale. A linearizable key-value operation can be individually current yet fail a multi-row invariant. “The database is ACID” does not specify either behavior.
 
@@ -31,7 +26,7 @@ Two histories are **conflict-equivalent** when they preserve the order of every 
 
 Serializability deliberately says nothing about wall-clock order. If transaction B starts after transaction A has returned, a merely serializable system may still choose a serialization order that places B before A. **Strict serializability** adds real-time order. Linearizability is the corresponding single-operation/object property; strict serializability applies the idea to transactions.
 
-Snapshot isolation (SI) is different again:
+Snapshot isolation (SI) is a third thing again, and it is the level most production systems actually run at, whatever name the engine gives it. It makes three promises:
 
 1. a transaction reads from a stable snapshot,
 2. its writes become visible atomically at commit, and
@@ -47,7 +42,7 @@ The SQL names `READ COMMITTED`, `REPEATABLE READ`, and `SERIALIZABLE` describe m
 
 ## Anomalies as Broken Invariants
 
-Memorizing four ANSI phenomena is insufficient. The useful question is: *which dependency cycle can this operation create?*
+Memorizing the four ANSI phenomena is not enough, because they were defined against a locking implementation and miss anomalies that snapshot-based engines allow. The question we ask of each operation is more direct: *which dependency cycle can this operation create?*
 
 | Anomaly | Minimal shape | Broken assumption | Typical defense |
 |---|---|---|---|
@@ -92,14 +87,9 @@ T1 commits                      T2 commits
 Final: Alice=off, Bob=off
 ```
 
-The rows written are disjoint, so a row-level write conflict cannot detect the broken predicate. Defenses, in order of locality, are:
+Each doctor's transaction checked the rule, found it satisfied, and made a change that was safe given what it had read. The rows written are disjoint, so a row-level write conflict has nothing to detect, and the broken predicate goes unnoticed. The defenses differ in how local they are. The most local is to redesign the state so that one constrained row represents available coverage, which turns the invariant into an ordinary write conflict. Next, both transitions can lock a stable parent or guard row that they share. Failing that, we can use a serializable implementation that tracks predicate dependencies, or route this command through a single ordered owner.
 
-1. redesign the state so one constrained row represents available coverage;
-2. lock a stable parent or guard row shared by both transitions;
-3. use a serializable implementation that tracks predicate dependencies; or
-4. serialize this command through one ordered owner.
-
-“Use repeatable read” is not a defense unless that engine explicitly rejects this history.
+"Use repeatable read" is not a defense unless that engine explicitly rejects this history. In PostgreSQL, for example, it does not.
 
 ### Phantoms are about predicates, not mystical rows
 
@@ -301,16 +291,7 @@ A serializable query scans broadly because the intended filter lacks an index. L
 
 ## Observability as History Evidence
 
-Monitor the mechanism and the user-visible outcome together:
-
-- commits, aborts, deadlock victims, and serialization failures by transaction class;
-- retry attempts per logical command and exhausted retry budgets;
-- lock wait time, wait-for edges, oldest waiter, and hot locked resource;
-- transaction duration and idle-in-transaction age;
-- oldest snapshot, retained-version/undo bytes, cleanup debt, and WAL retention;
-- predicate/read-set memory where the engine exposes it;
-- ambiguous commit resolutions and duplicate-command constraint hits;
-- query-plan changes for invariant-bearing predicates.
+Isolation problems show up first as retries and waits, and only later as wrong data, so we monitor the mechanism and the user-visible outcome together. For each transaction class we count commits, aborts, deadlock victims, and serialization failures, along with retry attempts per logical command and the number of commands that exhausted their retry budget. On the locking side we watch lock wait time, wait-for edges, the oldest waiter, and the hottest locked resource. On the versioning side we watch transaction duration and idle-in-transaction age, the oldest snapshot, retained version or undo bytes, cleanup debt, and WAL retention, plus predicate and read-set memory where the engine exposes it. Two further signals connect isolation to correctness: ambiguous commit resolutions with duplicate-command constraint hits, and query-plan changes on predicates that carry an invariant.
 
 Use stable operation names rather than raw SQL as metric labels. Raw statements contain sensitive values and create unbounded cardinality. During an incident, retain sampled transaction traces with transaction ID, snapshot/commit coordinate, rows or key ranges touched, wait/abort reason, and logical command ID.
 
