@@ -8,7 +8,11 @@ Use flags to separate deployment from release, to limit blast radius, or to prov
 
 ---
 
-## 1. Define the Decision Contract
+## Define the Decision Contract
+
+Deploying code and releasing a feature were once the same event. New behavior reached users at the moment the new binary went live, and withdrawing it meant deploying again. A feature flag separates the two. The new code is deployed in a disabled state, behind a condition evaluated at run time, and is then enabled for one employee, for one percent of users, for everyone, or for nobody, by changing a configuration value. Withdrawing it takes seconds and requires no deployment.
+
+This makes release a much safer and more gradual operation, and it brings costs that are easy to underestimate. Each flag doubles the number of paths through the code it guards, and with many flags most combinations are never tested. Flags meant to be temporary are left in place long after the feature has fully launched, and the code fills with conditions whose alternative branch has not run in years and may no longer work. One well-known financial firm lost several hundred million dollars in under an hour when a flag was reused and reactivated code that had been dead for years. The flag system is also a dependency of every request. If the service that supplies flag values is slow or unavailable, each application must have a safe value to fall back on.
 
 An evaluation is a pure logical function:
 
@@ -36,7 +40,7 @@ evaluation_timestamp
 
 That envelope lets an application answer the operational question that matters after an incident: *which rule and revision produced this behavior?*
 
-### 1.1 Flag categories have different failure policies
+### Flag categories have different failure policies
 
 | Category | Typical lifetime | Failure default | Primary risk |
 |---|---:|---|---|
@@ -48,7 +52,7 @@ That envelope lets an application answer the operational question that matters a
 
 An entitlement flag may improve presentation, but the authoritative permission check must still occur in the authorization system. A client-visible flag cannot protect a paid feature or sensitive operation.
 
-### 1.2 Core invariants
+### Core invariants
 
 Write these into the service contract and test them:
 
@@ -67,7 +71,7 @@ These invariants expose why a database lookup on every request is not a complete
 
 ---
 
-## 2. Architecture: Control Plane and Evaluation Plane
+## Architecture: Control Plane and Evaluation Plane
 
 ```mermaid
 flowchart LR
@@ -92,7 +96,7 @@ The **evaluation plane** is on the serving path. It must be fast, highly availab
 
 Remote evaluation is appropriate when rules or attributes must stay centralized, but it turns every flag check into an RPC dependency. If a request evaluates ten flags and each evaluation is remote, the architecture has created fan-out, tail-latency, and partial-failure problems for what appears to be a local branch.
 
-### 2.1 State model
+### State model
 
 A flag record should separate identity, lifecycle, and immutable rule revisions:
 
@@ -133,7 +137,7 @@ snapshot:
 
 The mutation API writes a new revision with compare-and-swap on the expected previous revision. Concurrent editors then receive a conflict instead of silently overwriting each other.
 
-### 2.2 Ordered rules are a program
+### Ordered rules are a program
 
 Rule order changes semantics. A common evaluation order is:
 
@@ -149,7 +153,7 @@ The rule language needs a schema, a version, and bounded complexity. Unbounded r
 
 ---
 
-## 3. Deterministic Fractional Allocation
+## Deterministic Fractional Allocation
 
 Percentage rollout is stable partitioning, not random sampling on each request. Derive a bucket from a canonical byte sequence:
 
@@ -167,7 +171,7 @@ A variant owns a half-open interval such as `[0.00, 0.05)`. Moving the upper bou
 
 The targeting key must represent the assignment unit. Use an account ID for account-wide behavior, a user ID for user experiments, or a device ID only when device-level inconsistency is acceptable. Anonymous-to-authenticated identity transitions need an explicit policy; changing keys mid-funnel can expose one subject to multiple variants.
 
-### 3.1 Cross-SDK conformance
+### Cross-SDK conformance
 
 Determinism fails if SDKs disagree about:
 
@@ -181,7 +185,7 @@ Determinism fails if SDKs disagree about:
 
 Publish language-independent conformance vectors containing context, revision, expected value, variant, and reason. Every SDK release must pass the same corpus. A flag service with five SDK languages is a distributed interpreter implementation; treat it like a protocol.
 
-### 3.2 Experiments need an exposure contract
+### Experiments need an exposure contract
 
 Assignment is not exposure. Record an exposure only when the application actually executes or renders the variant, and deduplicate repeated exposures according to the experiment's analysis unit. The event should include experiment revision, subject key class, variant, and exposure time.
 
@@ -189,9 +193,9 @@ Feature delivery and experiment analysis share allocation machinery but have dif
 
 ---
 
-## 4. Publication and Convergence
+## Publication and Convergence
 
-### 4.1 Compile, persist, publish, activate
+### Compile, persist, publish, activate
 
 A safe mutation follows a state transition:
 
@@ -214,13 +218,13 @@ DRAFT
 
 Publishing the blob before advancing the pointer avoids a pointer to missing content. Keeping snapshots content-addressed makes rollback a pointer change, while retaining a complete forensic history.
 
-### 4.2 Push plus pull
+### Push plus pull
 
 Use a change stream for low propagation latency and periodic polling for repair. Push alone loses updates during disconnects; polling alone creates a trade-off between control-plane load and response time.
 
 An update notification can carry only `environment`, `configuration_revision`, and `content_digest`. The SDK ignores revisions at or below its active revision, fetches the referenced snapshot, validates its signature and digest, then activates it atomically.
 
-### 4.3 Staleness policy
+### Staleness policy
 
 The last-known-good snapshot is normally safer than dropping immediately to defaults, but not forever. Define per-category behavior:
 
@@ -235,7 +239,7 @@ The SDK must expose provider state such as `READY`, `STALE`, `ERROR`, and `NOT_R
 
 ---
 
-## 5. Capacity and Availability Model
+## Capacity and Availability Model
 
 Assume:
 
@@ -268,7 +272,7 @@ Availability math must include correlated failure. A globally shared flag servic
 
 ---
 
-## 6. Multi-Region and Offline Operation
+## Multi-Region and Offline Operation
 
 Use one authoritative mutation stream per environment or a conflict-free administrative model with explicit ownership boundaries. Allowing arbitrary concurrent writes in every region creates rule-order conflicts that cannot be resolved safely with last-write-wins.
 
@@ -288,7 +292,7 @@ Mobile, desktop, browser, and edge clients may be offline for long periods. Publ
 
 ---
 
-## 7. Security and Privacy Boundaries
+## Security and Privacy Boundaries
 
 Targeting context often contains identifiers, geography, account plan, or organizational attributes. Minimize it:
 
@@ -308,9 +312,9 @@ Flags can also create a confused-deputy path: a low-privilege release operator t
 
 ---
 
-## 8. Failure Traces
+## Failure Traces
 
-### 8.1 Partial publication
+### Partial publication
 
 1. Revision 81 is committed.
 2. A publisher sends individual flag updates.
@@ -319,7 +323,7 @@ Flags can also create a confused-deputy path: a low-privilege release operator t
 
 **Prevention:** publish a complete revision or a transactional delta with a declared base revision; activate atomically only after validation.
 
-### 8.2 Rollback reshuffles users
+### Rollback reshuffles users
 
 1. A rollout uses `hash(user_id + percentage)`.
 2. The percentage changes from 10 to 20.
@@ -328,7 +332,7 @@ Flags can also create a confused-deputy path: a low-privilege release operator t
 
 **Prevention:** keep percentage out of the hash input; move interval boundaries over a stable hash.
 
-### 8.3 Control-plane outage during an incident
+### Control-plane outage during an incident
 
 1. A dependency begins returning corrupt results.
 2. Operators attempt to disable it with a kill switch.
@@ -337,7 +341,7 @@ Flags can also create a confused-deputy path: a low-privilege release operator t
 
 **Mitigation:** regional mutation failover with a single-writer lease, pre-authorized local emergency override, last-known-good snapshots, and regular game-day drills. A kill switch that is never exercised is an untested recovery mechanism.
 
-### 8.4 Stale SDK restores retired behavior
+### Stale SDK restores retired behavior
 
 1. A migration reaches 100 percent and the old schema is removed.
 2. An offline client wakes with a months-old flag snapshot.
@@ -345,7 +349,7 @@ Flags can also create a confused-deputy path: a low-privilege release operator t
 
 **Prevention:** server-side compatibility gates, snapshot expiry, minimum supported application versions, and migration flags whose fallback changes by protocol phase. A flag cannot make an incompatible binary safe indefinitely.
 
-### 8.5 Targeting data crosses tenants
+### Targeting data crosses tenants
 
 1. An SDK cache key omits tenant ID.
 2. A result cached for one tenant is reused for another.
@@ -355,7 +359,7 @@ Flags can also create a confused-deputy path: a low-privilege release operator t
 
 ---
 
-## 9. Rollout as a Feedback-Control Process
+## Rollout as a Feedback-Control Process
 
 A rollout changes load, behavior, and sometimes data shape. Treat it as a sequence of guarded state transitions:
 
@@ -383,7 +387,7 @@ Flags do not replace [Deployment Strategies](./01-deployment-strategies.md). Inf
 
 ---
 
-## 10. Lifecycle and Change Management
+## Lifecycle and Change Management
 
 Every flag needs an owner, category, creation reason, expected removal event, and expiry. Expiry is a workflow trigger, not an automatic production toggle.
 
@@ -403,9 +407,9 @@ Track lifecycle metrics such as flags past expiry, flags with no recent evaluati
 
 ---
 
-## 11. Observability and Verification
+## Observability and Verification
 
-### 11.1 Signals
+### Signals
 
 Control-plane signals:
 
@@ -426,7 +430,7 @@ Evaluation-plane signals:
 
 Avoid putting raw user IDs, emails, or arbitrary context values in metric labels. They create cardinality and privacy failures.
 
-### 11.2 Test layers
+### Test layers
 
 1. **Rule-unit tests:** precedence, missing attributes, type errors, and defaults.
 2. **Cross-SDK conformance:** shared vectors for hashing and rule semantics.
@@ -441,7 +445,7 @@ The release pipeline should produce an evidence record: proposed revision, seman
 
 ---
 
-## 12. Decision Framework
+## Decision Framework
 
 Use a feature flag when:
 

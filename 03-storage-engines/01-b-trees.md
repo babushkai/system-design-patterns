@@ -8,6 +8,10 @@ A B+-tree implementation must account for page structure, search and mutation al
 
 ## Workload and Storage Contract
 
+A database has to find one record among billions with very few reads from storage, and it has to keep doing so while records are inserted and deleted. A sorted file permits binary search, which needs about thirty probes for a billion records, each of them a separate read at a distant location, and inserting into the middle of a sorted file means rewriting everything after it. The B-tree solves both problems, and it has been the standard index structure of databases since the early 1970s.
+
+Its central idea is to make each node of the search tree as large as a disk page, so that it holds hundreds of keys and has hundreds of children. A tree that branches five hundred ways at each level reaches a billion records in about four levels, and the top levels are small enough to stay in memory, so a lookup typically costs one or two reads from storage. Inserts are handled locally. A new key goes into the leaf page where it belongs, and when a page fills it splits into two and passes one key up to its parent. The tree therefore grows from the root and remains balanced without ever being rebuilt. Most of what follows concerns the consequences of updating those pages in place.
+
 Characterize point lookups, bounded ranges, ordered scans, inserts, in-place updates, and deletes separately. Record key and payload width distributions, ordering and skew, buffer-pool budget, page size, concurrent readers and writers, durability mode, snapshot lifetime, and latency percentiles. A tree serving immutable 8-byte keys with 99% cache hits is a different system from one indexing variable-length URLs under random updates.
 
 Define what the leaf value means. In a heap-organized table it is usually a stable or version-aware row locator. In a clustered table the primary tree’s leaf contains the row, while each secondary leaf often contains the primary key. A wide clustered key therefore widens every secondary index. Covering payloads save a second lookup but enlarge leaves and make more updates touch the index.

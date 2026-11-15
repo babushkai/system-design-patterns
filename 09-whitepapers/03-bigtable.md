@@ -6,6 +6,10 @@ Bigtable's central move is to expose **physical locality as part of the data mod
 
 ## Publication Identity and Boundary
 
+Bigtable was built to store structured data at a scale no relational database of its time could approach: the web index, with billions of pages and many versions of each. It did so by giving up most of what a relational database provides, including joins, secondary indexes, and transactions across rows, and keeping one thing, which is a very large sorted map from keys to values.
+
+Two decisions in the paper proved especially influential. The first is the data model. Rows are kept in sorted order by key and divided into contiguous ranges, called tablets, which are split as they grow and moved between servers to balance load. Because rows are sorted, related data can be placed together by choosing keys carefully, which is why the paper stores web pages under their hostnames written in reverse. The second is the storage design. Writes go to a log and an in-memory table, which is periodically written out as an immutable sorted file, and these files are merged in the background. That is the log-structured merge tree, and through this paper it became the foundation of a whole family of later storage systems.
+
 - **Paper:** *Bigtable: A Distributed Storage System for Structured Data*
 - **Authors:** Fay Chang, Jeffrey Dean, Sanjay Ghemawat, Wilson C. Hsieh, Deborah A. Wallach, Mike Burrows, Tushar Chandra, Andrew Fikes, and Robert E. Gruber
 - **Venue and version:** 7th USENIX Symposium on Operating Systems Design and Implementation (OSDI), 2006, pages 205–218

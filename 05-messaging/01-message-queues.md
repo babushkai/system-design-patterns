@@ -8,6 +8,10 @@ A queue contract must specify enqueue, claim and visibility, acknowledgement, pa
 
 ## Workload and Contract
 
+When one service calls another directly, the two are coupled in time. The caller waits for the answer, both must be running at once, and a burst of requests reaches the callee at whatever rate the caller produces it. A queue placed between them removes that coupling. The producer hands over a message and carries on, the consumer takes messages at its own pace, and either side can be slow, restarted, or briefly absent without the other noticing.
+
+Those benefits are real, and they come with a change in how failure presents itself. A direct call that fails does so at once, in front of a caller who can react. A queued message that cannot be processed fails later, somewhere else, with nobody waiting on it. The questions a queue design has to answer are consequently about what happens when things go wrong. What becomes of a message whose consumer crashes halfway through handling it? How many times may a message be delivered? What happens to one that can never be processed, and to the messages waiting behind it? The usual mechanism is a lease: a consumer claims a message for a limited period and must confirm completion within it, and otherwise the message becomes visible again for another consumer. Most of the behavior described in this chapter follows from that mechanism.
+
 Define the API in state-machine terms:
 
 ```text

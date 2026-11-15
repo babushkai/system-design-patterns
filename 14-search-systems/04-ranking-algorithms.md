@@ -8,6 +8,10 @@ Ranking covers multiple stages, feature consistency, labels, learning-to-rank ob
 
 ## Decision Contract and Objective
 
+The order in which results are shown determines, in practice, what users see. Few people look beyond the first few results, so an item ranked thirtieth might as well be absent. Ranking is therefore where a search or recommendation system creates most of its value, and it is usually done by a model trained to predict what users will find relevant.
+
+Two features of the problem shape how such systems are built. The first is cost. The most accurate models are too slow to apply to every candidate, so ranking proceeds in stages, with a cheap method reducing millions of candidates to thousands and progressively more expensive models ordering progressively fewer. The second is that the training data is biased by the system that produced it. Models learn from what users clicked, and users click on what they are shown, in proportion to how prominently it is shown. An item at the top receives clicks partly because it is at the top. A model trained naively on such data learns to reproduce the existing ranking, and the system reinforces its own past decisions. Correcting for the effect of position, and measuring a ranking change by a controlled experiment and not by clicks alone, are the central methodological concerns.
+
 Write the ranking contract before choosing a model:
 
 ```text

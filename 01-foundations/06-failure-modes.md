@@ -17,7 +17,11 @@ Safety and liveness must be separated. During uncertainty, a system may have to 
 
 ---
 
-## 1. Specify the Failure Contract Before the Happy Path
+## Specify the Failure Contract Before the Happy Path
+
+A program running on one machine either works or stops. A system made of many machines has a third condition, which is by far the commonest: part of it has failed and the rest carries on. A request sent to another machine may be answered, or refused, or it may simply receive no reply, and in the last case the sender cannot tell whether the request was lost on the way, whether it arrived and the machine crashed before acting, whether it was carried out and the reply was lost, or whether the reply is merely late. These possibilities look identical from where the sender stands, and they call for different responses.
+
+This is the central difficulty of distributed systems, and it cannot be engineered away. What can be done is to design each operation so that its possible outcomes are few, are distinguishable where it matters, and each have a safe next step. That design has to come first. A system built for the case where everything works, with failure handling added afterward, tends to treat the ambiguous outcome as either success or failure, and each of those guesses is wrong some of the time.
 
 For each operation, define externally meaningful outcomes:
 
@@ -31,7 +35,7 @@ For each operation, define externally meaningful outcomes:
 
 An API that returns only `200` or `500` hides the most important state: whether a timed-out mutation committed. A timeout proves only that the caller did not receive a response; it does not prove rollback. Retrying under a new identity can duplicate a payment or reservation, while refusing to retry can lose an operation that never committed. The safe protocol reuses a stable idempotency key and queries the recorded outcome until the caller can distinguish committed, rejected, or still unknown. [Idempotency and Operation Identity](./08-idempotency.md) defines that protocol; this chapter defines the failure semantics that make it necessary.
 
-### 1.1 Safety, liveness, and durability
+### Safety, liveness, and durability
 
 - **Safety:** something forbidden never happens; for example, two owners never both commit writes for the same lease epoch.
 - **Liveness:** a valid operation eventually completes under stated timing and fault assumptions.
@@ -39,7 +43,7 @@ An API that returns only `200` or `500` hides the most important state: whether 
 
 These are not interchangeable. A minority replica may reject writes to preserve safety, sacrificing liveness until communication recovers. A queue may remain available by accepting work to local disk, but durability depends on whether that disk is within the promised failure domain.
 
-### 1.2 An explicit model
+### An explicit model
 
 A reviewable contract might say:
 
@@ -66,11 +70,11 @@ Without the assumptions, “highly available” and “exactly once” are adjec
 
 ---
 
-## 2. Fault Taxonomy Without a False Hierarchy
+## Fault Taxonomy Without a False Hierarchy
 
 Failure classes overlap; they are not a simple ladder where every level contains all lower behaviors.
 
-### 2.1 Crash-stop and crash-recovery
+### Crash-stop and crash-recovery
 
 In a crash-stop model, a failed process never returns. In crash-recovery, it may restart with durable state, a new process identity, and no trustworthy volatile state.
 
@@ -84,7 +88,7 @@ Crash recovery raises questions that crash-stop abstracts away:
 
 A PID, container name, or hostname does not define an incarnation. Persist or obtain a monotonically increasing epoch when authority spans restarts.
 
-### 2.2 Omission, duplication, reordering, and delay
+### Omission, duplication, reordering, and delay
 
 A send, channel, or receive path can omit a message. Transport and application layers may duplicate it during retry. Concurrent paths may reorder it. Delay can be unbounded in the asynchronous model.
 
@@ -104,7 +108,7 @@ is compatible with all of these histories:
 
 Timeouts create suspicion and a latency boundary; they do not prove non-execution.
 
-### 2.3 Timing and gray failure
+### Timing and gray failure
 
 A component can be correct but too slow for its caller's deadline. Gray failure is partial and observer-dependent: a storage node serves cached reads but stalls writes, a proxy can reach one shard but not another, or a host answers a shallow health check while packet loss makes real work unusable.
 
@@ -119,13 +123,13 @@ Model resource exhaustion as a failure mode:
 
 Slow components often cause more system-wide damage than stopped components because they retain connections and work while triggering retries.
 
-### 2.4 Value, storage, and software faults
+### Value, storage, and software faults
 
 A component may respond on time with an incorrect value because of data corruption, a stale replica, nondeterministic state-machine code, misconfiguration, schema mismatch, numeric overflow, or software defect. Checksums detect some corruption but not a validly encoded wrong value.
 
 Replicating corrupt state three times does not make it correct. Recovery needs an independent source of truth or invariant: end-to-end checksum, immutable log, reconciliation against domain facts, quorum comparison, or backup with verified provenance.
 
-### 2.5 Byzantine behavior
+### Byzantine behavior
 
 A Byzantine participant can behave arbitrarily, including sending conflicting statements to different peers. This model is relevant when participants cross trust domains, software/hardware compromise is in scope, or silent arbitrary faults must be tolerated.
 
@@ -135,7 +139,7 @@ For a single-organization data service, Byzantine consensus may add cost without
 
 ---
 
-## 3. Failure Domains and Correlation
+## Failure Domains and Correlation
 
 Redundancy only covers failures outside the shared domain.
 
@@ -163,7 +167,7 @@ Two replicas in different zones can still share:
 - a synchronized backup-deletion job;
 - capacity assumptions that fail after either zone is lost.
 
-### 3.1 Map each invariant to a domain
+### Map each invariant to a domain
 
 | Invariant | Threatened by | Containment mechanism |
 |---|---|---|
@@ -175,7 +179,7 @@ Two replicas in different zones can still share:
 
 The blast radius is an architectural property. Cells and bulkheads reduce it only when routing, state, capacity, control plane, and operations respect the boundary; see [Cell-Based Architecture](../06-scaling/11-cell-based-architecture.md).
 
-### 3.2 Common-mode testing
+### Common-mode testing
 
 Killing one process proves little about zone loss or bad configuration. Exercise failures by domain:
 
@@ -191,11 +195,11 @@ Killing one process proves little about zone loss or bad configuration. Exercise
 
 ---
 
-## 4. Failure Detection Is Evidence, Not Truth
+## Failure Detection Is Evidence, Not Truth
 
 In a fully asynchronous system, a silent process cannot be distinguished with certainty from a correct process whose messages are delayed. Practical systems add timing assumptions and implement **failure detectors** that output suspicion.
 
-### 4.1 Timeout design
+### Timeout design
 
 A timeout combines:
 
@@ -208,19 +212,19 @@ Set it from the caller's end-to-end deadline and measured distributions, not a r
 
 Use monotonic elapsed time for deadlines. Wall clocks can jump during synchronization and are needed only when the protocol explicitly reasons about real time. Propagate a decreasing deadline through calls rather than giving every hop the original duration.
 
-### 4.2 Heartbeats and accrual suspicion
+### Heartbeats and accrual suspicion
 
 Fixed “three missed heartbeats means dead” thresholds are easy to operate but adapt poorly to latency changes. Accrual detectors output a suspicion level derived from the observed arrival distribution; a higher threshold trades slower detection for fewer false positives.
 
 Heartbeats need isolation from the work path only with care. A separate high-priority channel distinguishes a dead process from an overloaded work queue, but it can also report green while the application path is unusable. Pair process/liveness evidence with real readiness and end-to-end probes.
 
-### 4.3 Membership dissemination
+### Membership dissemination
 
 All-to-all heartbeat traffic grows quadratically. Gossip membership protocols such as SWIM use randomized probing, indirect probes, and infection-style dissemination to scale, while incarnation numbers prevent an old suspicion from overriding a newer “alive” state.
 
 Membership is not consensus. Two nodes can temporarily hold different membership views. Do not derive exclusive write authority from gossip alone.
 
-### 4.4 Asymmetric and partial connectivity
+### Asymmetric and partial connectivity
 
 A can reach B does not imply B can reach A, and both reaching a health endpoint does not imply they can exchange protocol traffic. Detect from multiple vantage points and retain path-specific telemetry. During a partial partition, a node may reach the database but not the lease service, or the control plane but not peers.
 
@@ -228,7 +232,7 @@ The system should avoid declaring a partition topology from one observer's persp
 
 ---
 
-## 5. Authority, Epochs, Leases, and Fencing
+## Authority, Epochs, Leases, and Fencing
 
 Failover creates a new owner before the old owner is proven dead. If the old process resumes, two actors may perform side effects.
 
@@ -262,9 +266,9 @@ Leadership for replicated state machines is treated in [Leader Election and Fenc
 
 ---
 
-## 6. Crash Consistency and Recovery State Machines
+## Crash Consistency and Recovery State Machines
 
-### 6.1 Locate every irreversible boundary
+### Locate every irreversible boundary
 
 For a mutation that touches a log, database, queue, and external API, enumerate crash points:
 
@@ -280,7 +284,7 @@ receive request
 
 At each arrow, ask what survives and what a retry observes. A local transaction cannot atomically commit an external email, payment network request, or object-store mutation. Use durable workflow/effect protocols where required; see [Effect Commit Protocols for Workflows](../18-workflow-job-systems/06-retry-idempotency-compensation.md).
 
-### 6.2 Write-ahead recovery
+### Write-ahead recovery
 
 Write-ahead logging requires more than `append()`:
 
@@ -294,7 +298,7 @@ Write-ahead logging requires more than `append()`:
 
 The storage mechanics are in [Write-Ahead Logging](../03-storage-engines/04-write-ahead-logging.md). Recovery must distinguish “record durable but not applied” from “applied but completion marker absent.”
 
-### 6.3 Rejoin, catch-up, and quarantine
+### Rejoin, catch-up, and quarantine
 
 A restarted replica should not serve because its process is healthy. It must:
 
@@ -306,7 +310,7 @@ A restarted replica should not serve because its process is healthy. It must:
 
 If state fails integrity checks, quarantine it. Automatically copying a suspect replica to peers can convert a local corruption into a cluster-wide one.
 
-### 6.4 Reconciliation
+### Reconciliation
 
 Retries prevent duplicate intent only when every consumer honors the operation identity. Reconciliation repairs facts after an unknown or failed path:
 
@@ -321,7 +325,7 @@ Run reconciliation continuously, partition it for scale, and make repairs idempo
 
 ---
 
-## 7. Network Partitions and Healing
+## Network Partitions and Healing
 
 A partition is a communication failure that separates some participants from others; it may be partial, asymmetric, protocol-specific, or indistinguishable from process delay. The CAP theorem constrains consistency and availability when messages needed for coordination cannot arrive; its precise scope is in [CAP Theorem: Scope, Proof, and Design Consequences](./03-cap-theorem.md).
 
@@ -333,7 +337,7 @@ Operational partition handling requires:
 4. **Healing:** exchange summaries, identify missing/divergent state, repair, and verify.
 5. **Reintroduction:** rate-limit catch-up and prevent an old node from serving stale data.
 
-### 7.1 Stop, buffer, or diverge
+### Stop, buffer, or diverge
 
 For each operation choose deliberately:
 
@@ -346,7 +350,7 @@ For each operation choose deliberately:
 
 Do not classify the whole database as “CP” or “AP” and stop reasoning. A balance transfer, shopping-cart add, presence heartbeat, and profile photo update can have different safe behaviors.
 
-### 7.2 Repair protocols
+### Repair protocols
 
 Anti-entropy can compare Merkle trees, version vectors, log positions, or checksums to locate differences. Hinted handoff stores intended replicas' writes elsewhere temporarily, but hints need durability, limits, ownership, expiry, ordering, and a plan when the destination never returns.
 
@@ -356,7 +360,7 @@ Conflicting application values require semantics described in [Conflict Resoluti
 
 ---
 
-## 8. Cascading Failure and Overload
+## Cascading Failure and Overload
 
 A component failure shifts traffic and work to the survivors. If the steady state uses 80% of fleet capacity, losing one of four equal cells raises the others' ideal load from 80% to roughly:
 
@@ -366,7 +370,7 @@ $$
 
 Failover without reserve capacity is load redistribution, not resilience.
 
-### 8.1 Retry amplification
+### Retry amplification
 
 Suppose a request fans out to five dependencies and each layer performs up to three attempts. If retries are nested without a shared budget, one top-level attempt can generate as many as:
 
@@ -376,7 +380,7 @@ $$
 
 downstream attempts along one failing chain. Real fan-out can make it worse. Retry at one owning layer, use a total deadline and attempt budget, add randomized backoff, and stop retrying overload or permanent failures. Detailed mechanics are in [Retries, Deadlines, and Hedging](../06-scaling/10-retries-timeouts-hedging.md).
 
-### 8.2 Admission before collapse
+### Admission before collapse
 
 Queues convert a short overload into latency; unbounded queues convert it into memory exhaustion and stale work. During failure:
 
@@ -389,7 +393,7 @@ Queues convert a short overload into latency; unbounded queues convert it into m
 
 See [Backpressure and Overload Control](../06-scaling/07-backpressure.md) and [Circuit Breakers as Adaptive Admission Control](../06-scaling/06-circuit-breakers.md).
 
-### 8.3 Backlog recovery math
+### Backlog recovery math
 
 If arrivals continue at $\lambda=8{,}000$ jobs/s, recovered capacity is $\mu=10{,}000$ jobs/s, and the outage accumulated 18 million jobs, ideal drain time is:
 
@@ -403,7 +407,7 @@ This ignores cache misses, retries, expired work, and database recovery load. If
 
 ---
 
-## 9. Dependency and Control-Plane Failures
+## Dependency and Control-Plane Failures
 
 An end-to-end path is limited by its mandatory dependencies. If five independent serial dependencies are each 99.9% available, the simplified path availability is:
 
@@ -426,9 +430,9 @@ Fallbacks are real production paths. A stale cache, default policy, secondary pr
 
 ---
 
-## 10. Concrete Failure Traces
+## Concrete Failure Traces
 
-### 10.1 The ambiguous payment timeout
+### The ambiguous payment timeout
 
 1. The service sends provider request `op-73`.
 2. The provider commits the charge.
@@ -438,7 +442,7 @@ Fallbacks are real production paths. A stale cache, default policy, secondary pr
 
 The fix is a stable operation identity accepted by the provider plus a status/reconciliation path. A longer timeout only changes how often ambiguity appears.
 
-### 10.2 Green health, unusable storage
+### Green health, unusable storage
 
 1. A storage process answers `/health` from memory.
 2. Its device has 30-second write stalls.
@@ -448,7 +452,7 @@ The fix is a stable operation identity accepted by the provider plus a status/re
 
 Use layered probes: process liveness, readiness based on bounded real work, and external SLO probes. Remove or down-weight a node based on observed service quality, with hysteresis to avoid flapping. Admission control must engage before retry load consumes survivors.
 
-### 10.3 Paused leader writes after failover
+### Paused leader writes after failover
 
 1. Leader A holds a lease and pauses for 45 seconds.
 2. A majority elects B in a new term.
@@ -458,7 +462,7 @@ Use layered probes: process liveness, readiness based on bounded real work, and 
 
 Consensus protected the internal log but not the external side effect. Include the term/fencing token in the downstream conditional write or route the effect through a fenced single owner.
 
-### 10.4 Corruption copied by repair
+### Corruption copied by repair
 
 1. A memory or software fault writes a validly checksummed but semantically invalid index segment.
 2. The replica reports the newest version.
@@ -468,7 +472,7 @@ Consensus protected the internal log but not the external side effect. Include t
 
 Use end-to-end/domain invariants, delayed garbage collection, immutable source logs, sampled recomputation, and quarantine. Version order proves recency, not correctness.
 
-### 10.5 Recovery overload
+### Recovery overload
 
 1. A zone loses connectivity for 40 minutes.
 2. Clients shift to the surviving zones, consuming their reserve.
@@ -480,9 +484,9 @@ Use coordinated reintroduction, repair budgets, priority classes, staggered rest
 
 ---
 
-## 11. Verification: Prove Invariants Under Faults
+## Verification: Prove Invariants Under Faults
 
-### 11.1 State-machine and history testing
+### State-machine and history testing
 
 Write the invariant before the fault campaign:
 
@@ -495,7 +499,7 @@ read-your-writes holds for a session token
 
 Then record invocation/completion histories with operation IDs and revisions. A checker can test linearizability, serializability, or domain-specific properties. Green service metrics do not prove these histories are valid.
 
-### 11.2 Test layers
+### Test layers
 
 1. **Deterministic unit/state-machine tests:** enumerate crash points and replay.
 2. **Property and model tests:** generate operation/fault sequences and shrink failures.
@@ -507,13 +511,13 @@ Then record invocation/completion histories with operation IDs and revisions. A 
 
 Jepsen-style testing combines concurrent workloads, a fault “nemesis,” recorded histories, and a consistency checker. It proves only the tested workload, configuration, version, and fault set; a process-kill test does not establish behavior under asymmetric partition or disk corruption.
 
-### 11.3 Failure-injection safety
+### Failure-injection safety
 
 The experiment platform itself needs scope, approvals, automatic aborts, blast-radius limits, identity, audit, and a reliable cleanup path. Verify the fault actually occurred. A chaos test that failed to apply its network rule and reported green is worse than no test because it creates false confidence.
 
 ---
 
-## 12. Observability and Recovery Objectives
+## Observability and Recovery Objectives
 
 Observe evidence at the boundaries:
 
@@ -534,7 +538,7 @@ Alert on user-impacting symptoms and invariant threats. “One heartbeat missed�
 
 ---
 
-## 13. Design Review Framework
+## Design Review Framework
 
 For every important component and operation, answer:
 

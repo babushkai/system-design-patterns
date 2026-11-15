@@ -14,6 +14,10 @@ Stripe publishes API semantics, Ledger, DocDB, and migration techniques, but not
 
 ## Workload and Correctness Contract
 
+A payment system differs from most of the systems in this book in what it counts as failure. A social feed that is briefly stale or shows an item twice has not harmed anyone. A payment that is taken twice, or taken and never recorded, has, and the customer will notice. The design is consequently organized around correctness under failure, with throughput and latency as secondary concerns, and the interesting question at each step is what happens when the step is interrupted.
+
+The difficulty is that a payment is not a single action. It involves the merchant's server, the payment processor, the card network, and the issuing bank, each of which can fail or time out independently, and none of which shares a transaction with the others. A request to charge a card that receives no answer may or may not have charged it. The system therefore has to be built so that every operation can be safely repeated, every state a payment can be in is explicit, and the ledger can always be reconciled against what the outside parties say happened.
+
 **Documented, API behavior.** Stripe's PaymentIntent lifecycle exposes asynchronous states such as `requires_payment_method`, `requires_action`, `processing`, `requires_capture`, `succeeded`, and `canceled`. This is direct evidence that “charge a card” must be modeled as a durable state machine rather than a request-scoped transaction. [Stripe, PaymentIntent lifecycle](https://docs.stripe.com/payments/paymentintents/lifecycle)
 
 **Documented, 2023 snapshot.** Stripe reported processing USD 1 trillion in total payment volume in 2023. Its DocDB article reported more than five million queries per second over petabytes of financial data, with more than 5,000 collections on more than 2,000 shards. Those figures describe the database platform in that article, not the rate of card authorizations. [Stripe, 2024 DocDB article](https://stripe.dev/blog/how-stripes-document-databases-supported-99.999-uptime-with-zero-downtime-data-migrations)

@@ -19,7 +19,11 @@ Idempotency does not make execution literally once. It makes retries, redelivery
 
 ---
 
-## 1. Semantics and System Model
+## Semantics and System Model
+
+Networks lose messages, and the only remedy for a lost message is to send it again. The sender, however, cannot always tell a lost request from a lost reply. If a client asks a server to charge a card and hears nothing, the charge may or may not have happened, and the client faces a choice between two bad options. If it does not retry, some payments silently fail. If it does, some customers are charged twice.
+
+Idempotency removes the dilemma by making the second request harmless. If an operation can be applied any number of times with the same effect as applying it once, the client may retry freely, and the question of whether the first attempt succeeded no longer needs an answer. Some operations have this property naturally, such as setting a value or deleting a record. Most interesting ones, such as charging a card or sending a message, do not, and have to be given it by attaching an identity to each operation so that the server can recognize a repeat. Nearly every reliability technique elsewhere in this book, including retries, queue redelivery, and workflow replay, is safe only because of what this chapter describes.
 
 Mathematically, an operation `f` is idempotent when:
 
@@ -45,7 +49,7 @@ Assume:
 - delayed replay can occur after failover or restore;
 - clocks cannot establish global ownership.
 
-### 1.1 Core invariants
+### Core invariants
 
 1. **Stable key:** all attempts of one logical operation use the same key.
 2. **Unique scope:** the same key cannot collide across tenants, callers, operations, or business epochs.
@@ -60,9 +64,9 @@ Assume:
 
 ---
 
-## 2. Natural and Keyed Idempotency
+## Natural and Keyed Idempotency
 
-### 2.1 Naturally idempotent state transitions
+### Naturally idempotent state transitions
 
 Prefer setting a desired state over applying an unbounded delta:
 
@@ -82,13 +86,13 @@ WHERE order_id = ?
 
 A duplicate observes `shipped` and returns the stored transition result. The transition must still distinguish “already shipped by this operation” from “shipped by a different operation with incompatible parameters.”
 
-### 2.2 Resource identity
+### Resource identity
 
 `PUT /resources/{stable-id}` can be idempotent when the client chooses the resource identity and repeated payloads replace it consistently. `POST /resources` with a server-generated identity is not naturally idempotent; add an operation key or client-provided resource key.
 
 HTTP method semantics are a protocol contract, not a database guarantee. A nominally idempotent `DELETE` can still send duplicate emails or ledger entries if its implementation is not.
 
-### 2.3 Keyed effects
+### Keyed effects
 
 Non-idempotent effects (charge, shipment, notification, increment, external call) need a logical operation key. Examples:
 
@@ -103,7 +107,7 @@ Do not include retry attempt number or random value generated inside each attemp
 
 ---
 
-## 3. Key Scope and Request Identity
+## Key Scope and Request Identity
 
 A raw caller string is not globally unique. Construct internal identity:
 
@@ -118,7 +122,7 @@ internal_key = hash(
 
 Include a business epoch when the same entity can legitimately undergo the operation again. `cancel-subscription/{subscription_id}` may be sufficient if cancellation is terminal; `charge/{order_id}` is insufficient if an order supports multiple payment attempts.
 
-### 3.1 Canonical request digest
+### Canonical request digest
 
 Bind the key to semantic input:
 
@@ -152,7 +156,7 @@ If an existing key has a different digest, return a conflict. Replaying the old 
 
 ---
 
-## 4. Deduplication State Machine
+## Deduplication State Machine
 
 ```text
 ABSENT -> IN_PROGRESS -> SUCCEEDED
@@ -183,11 +187,11 @@ idempotency_record:
   retention_until
 ```
 
-### 4.1 First request
+### First request
 
 Atomically insert `IN_PROGRESS` if absent. A unique constraint or compare-and-swap elects the owner.
 
-### 4.2 Concurrent duplicate
+### Concurrent duplicate
 
 Policy options:
 
@@ -198,17 +202,17 @@ Policy options:
 
 Do not immediately run the effect again.
 
-### 4.3 Terminal duplicate
+### Terminal duplicate
 
 Verify tenant/caller authorization and request digest, then return the stored semantic outcome. The response may need re-encoding for a newer API version; preserve the original business result separately from transient headers.
 
-### 4.4 Abandoned `IN_PROGRESS`
+### Abandoned `IN_PROGRESS`
 
 An owner may crash. Use a lease and monotonically increasing `owner_epoch`; a new attempt claims after expiry. Any local commit accepts only the current epoch. A timeout alone does not prove the old worker stopped, so fencing or effect-level idempotency is still necessary.
 
 ---
 
-## 5. Atomicity With a Local Effect
+## Atomicity With a Local Effect
 
 When dedup record and effect share a database:
 
@@ -227,14 +231,14 @@ COMMIT
 
 The unique operation identity can be embedded directly in a ledger/event row. A separate dedup table is not mandatory if the business table enforces the same invariant and stores enough result state.
 
-### 5.1 Wrong order: effect then record
+### Wrong order: effect then record
 
 1. effect commits;
 2. process crashes;
 3. no dedup success exists;
 4. retry executes effect again.
 
-### 5.2 Wrong order: record then effect
+### Wrong order: record then effect
 
 1. record marked success;
 2. process crashes;
@@ -245,7 +249,7 @@ Only a shared atomic transaction closes both gaps. Across external systems, use 
 
 ---
 
-## 6. API Contract
+## API Contract
 
 A write API should document:
 
@@ -274,7 +278,7 @@ Idempotency-Key: order-82-payment-1
 422/4xx            deterministic final rejection, if contract stores it
 ```
 
-### 6.1 Which failures are cached?
+### Which failures are cached?
 
 Store deterministic terminal outcomes when repeating cannot change them under the same preconditions. Do not permanently cache transient infrastructure failure merely because the first attempt saw it.
 
@@ -288,7 +292,7 @@ Possible policy:
 
 Authorization can change. Always authenticate the duplicate request before returning a stored outcome, and decide whether current authorization is required to reveal it.
 
-### 6.2 Status resource
+### Status resource
 
 ```text
 GET /operations/{key}
@@ -303,7 +307,7 @@ Authorize this lookup like the underlying resource. A predictable key must not e
 
 ---
 
-## 7. Message Consumers and Inbox Transactions
+## Message Consumers and Inbox Transactions
 
 Broker message IDs may identify deliveries, not business operations. Redelivery after republish or across topics can carry a new message ID. Prefer a producer-defined event/operation identity.
 
@@ -330,7 +334,7 @@ Ordering and idempotency are separate. Deduplication does not repair out-of-orde
 
 ---
 
-## 8. External Effects and Ambiguity
+## External Effects and Ambiguity
 
 For a remote API with idempotency, pass your stable key and bind parameters. Persist the provider's operation ID/result.
 
@@ -349,7 +353,7 @@ For message publication, use a transactional outbox. For local consumers, use an
 
 ---
 
-## 9. Retention and Expiry
+## Retention and Expiry
 
 The guarantee exists only while identity is retained:
 
@@ -373,13 +377,13 @@ Document what happens after expiry:
 
 Separate hot outcome response from long-lived identity. Terminal records can compact to key, digest, outcome code/reference, and audit metadata.
 
-### 9.1 Cleanup race
+### Cleanup race
 
 Cleanup must not delete a record while an attempt can still commit. Use `retention_until` after terminal state, partition lifecycle, and compare state/epoch during deletion. Coordinate with backups: restoring a database snapshot without more recent dedup records can resurrect repeatable effects.
 
 ---
 
-## 10. Multi-Region Design
+## Multi-Region Design
 
 Options:
 
@@ -405,7 +409,7 @@ During disaster recovery, restore business state, operation records, outbox/inbo
 
 ---
 
-## 11. Capacity and Storage
+## Capacity and Storage
 
 Assume:
 
@@ -443,7 +447,7 @@ Dedup lookups add a write-path dependency. Provision N-minus-one capacity and de
 
 ---
 
-## 12. Security and Privacy
+## Security and Privacy
 
 - derive internal scope from authenticated tenant/client, not caller input alone;
 - authorize before returning stored outcomes;
@@ -463,9 +467,9 @@ Parameter binding must include security-relevant fields: tenant, account, amount
 
 ---
 
-## 13. Failure Traces
+## Failure Traces
 
-### 13.1 New key per retry
+### New key per retry
 
 1. client times out after payment commits;
 2. retry library generates a new UUID;
@@ -474,7 +478,7 @@ Parameter binding must include security-relevant fields: tenant, account, amount
 
 **Prevention:** generate key once per logical operation above retry loop.
 
-### 13.2 Check-then-act race
+### Check-then-act race
 
 1. two workers query `seen(key)` and both see false;
 2. both execute;
@@ -482,7 +486,7 @@ Parameter binding must include security-relevant fields: tenant, account, amount
 
 **Prevention:** unique insert/transaction or atomic compare-and-swap before effect.
 
-### 13.3 Key reused with new amount
+### Key reused with new amount
 
 1. first request under key charges 40.
 2. caller changes amount to 55 but reuses key.
@@ -491,7 +495,7 @@ Parameter binding must include security-relevant fields: tenant, account, amount
 
 **Prevention:** canonical request digest conflict.
 
-### 13.4 `IN_PROGRESS` treated as done
+### `IN_PROGRESS` treated as done
 
 1. owner crashes before effect.
 2. duplicate sees record exists and returns success.
@@ -499,7 +503,7 @@ Parameter binding must include security-relevant fields: tenant, account, amount
 
 **Prevention:** explicit state and reclaim/reconciliation protocol.
 
-### 13.5 Stale owner overwrites terminal result
+### Stale owner overwrites terminal result
 
 1. epoch 7 pauses.
 2. epoch 8 reclaims and succeeds.
@@ -507,7 +511,7 @@ Parameter binding must include security-relevant fields: tenant, account, amount
 
 **Prevention:** fenced epoch and monotonic terminal state.
 
-### 13.6 Dedup expires before replay
+### Dedup expires before replay
 
 1. broker retains messages seven days.
 2. dedup records expire after one day.
@@ -515,7 +519,7 @@ Parameter binding must include security-relevant fields: tenant, account, amount
 
 **Prevention:** align retention horizons.
 
-### 13.7 Backup restore repeats external effect
+### Backup restore repeats external effect
 
 1. application database restores to yesterday.
 2. provider still contains today's successful charge.
@@ -524,7 +528,7 @@ Parameter binding must include security-relevant fields: tenant, account, amount
 
 **Prevention:** provider query/reconciliation and DR-consistent outcome state.
 
-### 13.8 Cross-tenant response leak
+### Cross-tenant response leak
 
 1. cache key is caller-provided key only.
 2. tenant B guesses tenant A's key.
@@ -534,7 +538,7 @@ Parameter binding must include security-relevant fields: tenant, account, amount
 
 ---
 
-## 14. Observability and Repair
+## Observability and Repair
 
 Track:
 
@@ -566,7 +570,7 @@ Never delete a dedup row simply to “retry.” That erases the safety boundary.
 
 ---
 
-## 15. Verification
+## Verification
 
 1. **Property tests:** same key/input converges; different input conflicts.
 2. **Concurrency tests:** many simultaneous attempts produce one local effect.
@@ -585,7 +589,7 @@ Fault injection at commit boundaries is essential. A happy-path duplicate unit t
 
 ---
 
-## 16. Decision Framework
+## Decision Framework
 
 | Operation | Preferred mechanism |
 |---|---|

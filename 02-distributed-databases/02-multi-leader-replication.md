@@ -8,6 +8,10 @@ This chapter traces replication streams between writable sites through durable c
 
 ## Workload and Consistency Contract
 
+A single leader is a single place where every write must go. For users on another continent that means a round trip of a hundred milliseconds or more on each write, and for everyone it means that losing contact with the leader's region stops writes entirely. Multi-leader replication removes the restriction by letting several nodes, usually one per region, accept writes locally and exchange them with each other afterward.
+
+The benefit is real, and the cost is exactly the thing single-leader replication was designed to avoid. Two leaders can each accept a write to the same record before either has heard of the other's. Both writes were acknowledged to their clients as successful, and when they meet, they disagree. No replication protocol can make this impossible, because preventing it would require the leaders to consult each other before accepting a write, which is the latency and availability cost the design set out to escape. The conflict must therefore be resolved after the fact, and choosing multi-leader replication is in practice choosing to design, for every kind of data, what should happen when two valid writes collide.
+
 Start with operations, not a topology diagram. For each command class, specify:
 
 - where it may be accepted and which local durability boundary precedes success;

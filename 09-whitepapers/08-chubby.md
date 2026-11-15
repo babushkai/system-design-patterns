@@ -6,6 +6,10 @@ Chubby is a paper about packaging consensus into an operable coordination servic
 
 ## Publication Identity and Scope
 
+Many distributed systems need a small amount of very reliable coordination: a way to decide which of several servers is the master, or a place to keep a little configuration that everyone must agree on. The principled way to provide this is a consensus algorithm, and embedding one correctly in each system that needs it is difficult. Chubby was Google's answer, and it took an indirect route. It ran consensus in one place, among a small group of replicas, and exposed the result to everyone else through a familiar interface: a lock service that also stores small files.
+
+The paper is unusually frank about why. Engineers found locks easier to think about than consensus libraries, a lock service made it simple to add high availability to an existing program, and a shared service could be operated by people who understood it. It is equally frank about what went wrong. Clients used the service in ways its designers had not anticipated, and much of the paper recounts lessons from operating it. One of its most reusable ideas concerns the weakness of locks that expire: Chubby hands out a sequence number with each lock, which the holder passes to the services it uses so that they can reject requests from a holder whose lock has since been lost.
+
 - **Paper:** *The Chubby Lock Service for Loosely-Coupled Distributed Systems*
 - **Author:** Mike Burrows, Google
 - **Venue and version:** 7th USENIX Symposium on Operating Systems Design and Implementation (OSDI), 2006, pages 335–350

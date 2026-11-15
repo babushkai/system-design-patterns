@@ -8,6 +8,10 @@ Three problems make "count the clicks" hard. **Duplicates**: every hop retries, 
 
 ## Requirements and Contract
 
+An advertising system counts clicks, and money changes hands on the basis of the counts. Advertisers are billed for each click, publishers are paid for each, and both will dispute a figure they believe to be wrong. That makes the problem unusual among analytics pipelines. A dashboard showing page views can be approximately right. A click count that is used for billing has to be exactly right, and it also has to be available within seconds, because advertisers adjust their spending on the basis of it and campaigns must stop when their budgets are spent.
+
+Those two requirements conflict, and the conflict defines the design. Click events arrive late and out of order, since they are reported by browsers and phones over unreliable networks. They arrive more than once, when a client or an intermediate system retries. Some of them are fraudulent. A count produced quickly cannot have seen the late events and may include duplicates. A count that waits for everything is correct and too late to act on. The usual resolution is to produce both: a fast, provisional figure for display and budget control, and a later, reconciled figure, computed after late data has arrived and duplicates have been removed, which is the one that is billed.
+
 **Functional.**
 
 - Ingest click events from ad servers and client redirects.

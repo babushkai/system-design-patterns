@@ -8,6 +8,10 @@ An analytical column store is defined by its **physical layout and scan path**: 
 
 ## Workload and Correctness Contract
 
+A conventional database stores each row's fields together, which suits a workload that reads and writes whole records: fetching one customer brings all of that customer's fields from one place. Analytical queries have the opposite shape. A question such as the average order value by region over the last year reads two or three fields from hundreds of millions of rows and has no use for the other fifty. In a row store those unwanted fields are interleaved with the wanted ones and must be read from disk regardless.
+
+A column store keeps all the values of each field together. A query then reads only the columns it mentions, which for a wide table can cut the data read by a factor of ten or more before any other optimization. A second benefit follows from the first. The values within one column are of one type and tend to resemble each other, with long runs of the same country code or timestamps that increase steadily, and such data compresses far better than a mixture of fields does. The processor can also apply an operation to a packed array of values much faster than to fields scattered among rows. The costs are the mirror image of the benefits. Reassembling one complete row means reading from every column, and inserting one touches every column file, so column stores take their writes in batches.
+
 Columnar layout is strongest when:
 
 - scans touch a small fraction of a wide schema;

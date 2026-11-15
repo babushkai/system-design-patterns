@@ -8,6 +8,10 @@ Safe leader election requires explicit **terms and leadership epochs, failure de
 
 ## Define the Leadership Contract
 
+A great many designs become simple if exactly one process is in charge of something: one writer for a log, one scheduler for a queue, one controller for a resource. Electing that process is not the hard part, since a consensus service can choose a leader reliably. The hard part is that leadership has to be revocable, because leaders crash, and a leader whose leadership has been revoked does not necessarily know it.
+
+Leadership is normally held under a lease that the leader must keep renewing. If it stops, the lease expires and another process is elected. Suppose, though, that the old leader has not crashed and has only stalled, in a long garbage collection or a suspended virtual machine. When it resumes, its own clock tells it nothing about how long it was gone, and it carries on issuing instructions as leader while its successor does the same. The election behaved correctly throughout, and there are now two leaders. The remedy is to stop relying on any process's belief about its own status. Each term of leadership carries a number that only increases, every instruction is stamped with it, and whatever receives the instructions refuses any stamped with a number lower than the highest it has seen.
+
 Leadership is always scoped:
 
 - leader for one consensus log;

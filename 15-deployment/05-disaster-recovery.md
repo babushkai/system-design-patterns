@@ -23,7 +23,11 @@ Replication is not backup: it optimizes current agreement and commonly replicate
 
 ---
 
-## 1. Define the Recovery Contract
+## Define the Recovery Contract
+
+Ordinary redundancy protects against the failures that happen often: a disk, a machine, a rack. Disaster recovery concerns the failures that are rare and total, such as the loss of a whole region, the destruction of the data by a software fault, or an attacker who encrypts everything. These events are unlikely in any given year, and an organization that has not prepared for them may not survive one.
+
+Two numbers define what preparation means. The first is how much data may be lost, measured as time: if the last recoverable copy is an hour old, an hour of work is gone. The second is how long the service may be unavailable while it is restored. Each can be reduced at a price, from restoring last night's backup onto new hardware, through keeping a standby that is continuously updated, to running fully in two regions at once, and the price rises steeply at each step. One point is often missed. Replication does not substitute for backup. A replica faithfully copies every change, including the accidental deletion of a table and the corruption written by a bug, within seconds. Recovering from those requires a copy from before the damage. And a backup that has never been restored cannot be relied on, since only a restore shows that it works.
 
 For each product capability, specify:
 
@@ -42,7 +46,7 @@ RecoveryContract {
 }
 ```
 
-### 1.1 Threat model
+### Threat model
 
 Include more than region outage:
 
@@ -57,7 +61,7 @@ Include more than region outage:
 - a disaster declaration made on incomplete evidence, creating split brain;
 - recovery load overwhelming the surviving source or target.
 
-### 1.2 Core invariants
+### Core invariants
 
 1. **Independent recovery authority:** at least one usable recovery copy cannot be altered or deleted by the ordinary production writer/administrator path.
 2. **Complete dependency inventory:** retained state includes or references the schema, key versions, software artifacts, configuration, and logs required to interpret it.
@@ -72,7 +76,7 @@ Include more than region outage:
 
 ---
 
-## 2. Recovery Boundary and Dependency Graph
+## Recovery Boundary and Dependency Graph
 
 A service rarely recovers from one database alone:
 
@@ -108,7 +112,7 @@ Inventory:
 
 For every asset label it **authoritative**, **derived/rebuildable**, **external authority**, or **evidence only**. Two “authoritative” copies with no conflict protocol create an undefined recovery choice.
 
-### 2.1 RPO is not consistency
+### RPO is not consistency
 
 Suppose an order database is restored to 10:00:00, its payment-outbox log to 09:59:40, and the payment provider has charges through 10:00:05. Every individual asset may meet a one-minute RPO while the combined business state loses charge intents and risks incorrect refunds or duplicates.
 
@@ -122,9 +126,9 @@ Define consistency groups or a reconciliation protocol:
 
 ---
 
-## 3. Recovery Objectives and Service Tiers
+## Recovery Objectives and Service Tiers
 
-### 3.1 RPO and RTO
+### RPO and RTO
 
 For disaster time $t_d$ and latest committed state included in the recovered system $t_r$:
 
@@ -142,7 +146,7 @@ Be explicit whether the contractual clock begins at fault occurrence, detection,
 
 RTO should name capability and load. “Database accepted a query” is not “checkout restored at 70% peak throughput with reconciliation current.”
 
-### 3.2 Example tiering
+### Example tiering
 
 The following is illustrative, not a universal standard:
 
@@ -155,7 +159,7 @@ The following is illustrative, not a universal standard:
 
 Derive objectives from maximum tolerable loss, regulatory duty, customer promise, and recovery cost. Separate read, write, export, and administrative capabilities; a degraded read-only product may meet an early recovery milestone before full writes are safe.
 
-### 3.3 Recovery strategy spectrum
+### Recovery strategy spectrum
 
 | Strategy | Standing resources | Typical trade-off |
 |---|---|---|
@@ -168,9 +172,9 @@ Active-active multi-region is not automatically a backup: bad mutations, comprom
 
 ---
 
-## 4. Data-Protection Pipeline
+## Data-Protection Pipeline
 
-### 4.1 Base snapshots plus change logs
+### Base snapshots plus change logs
 
 A common database recovery chain is:
 
@@ -192,13 +196,13 @@ A “successful upload” is not enough. Verify:
 - time/position mapping is precise enough for corruption-point selection;
 - retention cannot delete a base while dependent log segments remain, or vice versa.
 
-### 4.2 Snapshots and quiescence
+### Snapshots and quiescence
 
 Storage snapshots may be crash-consistent at a device boundary but not transaction-consistent across volumes or services. Application quiescence, database-native backup APIs, consistency groups, or log-coordinated snapshots may be needed.
 
 Freezing a large system can violate availability. Prefer incremental/online mechanisms when they preserve semantics, and measure copy-on-write pressure and backup impact on tail latency.
 
-### 4.3 Object and blob state
+### Object and blob state
 
 Object versioning keeps earlier bytes, while replication copies current operations elsewhere. Object lock/WORM retention can prevent deletion for a period. Still catalog:
 
@@ -211,13 +215,13 @@ Object versioning keeps earlier bytes, while replication copies current operatio
 
 A restored database pointing to object versions already expired by lifecycle policy is not recovered.
 
-### 4.4 Logical exports
+### Logical exports
 
 Logical dumps or portable columnar exports may survive engine-level defects and enable selective recovery. They are slower, can lose transactional cross-table consistency, and may omit users, extensions, sequences, grants, or large objects. Use them as a diverse recovery path, not a casually assumed equivalent of physical backup.
 
 ---
 
-## 5. Isolation, Immutability, and Key Custody
+## Isolation, Immutability, and Key Custody
 
 Recovery data must break shared-fate paths:
 
@@ -238,19 +242,19 @@ recovery identity
 
 Use separate accounts/projects, access paths, credentials, and retention governance where the threat requires it. Object lock protects objects only if administrators cannot change governance or destroy the account/key. Preserve audit logs in another boundary.
 
-### 5.1 Encryption dependency
+### Encryption dependency
 
 Backups normally need encryption, but the key hierarchy becomes part of recovery. Inventory exact key versions and test access from the recovery identity/environment. A KMS replica in the same deleted account is not independent.
 
 Escrow/highly protect root recovery material with split knowledge or multi-party approval appropriate to the risk. Do not weaken day-to-day key policy by granting broad permanent decrypt access “for emergencies.” Exercise the real break-glass path and rotate it after use. See [Cryptographic Key and Data-Protection Architecture](../10-security/06-encryption.md).
 
-### 5.2 Crypto-shredding and retention
+### Crypto-shredding and retention
 
 Tenant deletion through key destruction conflicts with backup retention and legal hold. Define whether deleted tenant data must remain unavailable in restored backups, how tombstones/denylists are replayed before serving, and whether per-tenant key scope supports it. Restoring an old backup must not resurrect accounts, permissions, credentials, or erased data into a reachable environment.
 
 ---
 
-## 6. Corruption-Point Analysis
+## Corruption-Point Analysis
 
 For region loss, “latest good copy” may be clear. For silent corruption, selecting the recovery point is often the longest step.
 
@@ -275,7 +279,7 @@ Maintain evidence to answer:
 
 Continuous invariant checks narrow the unknown interval. Examples include ledger balance, foreign-key/domain relationship, object checksum/reference, monotonically increasing sequence, and source/projection count with bounded lag.
 
-### 6.1 Selective versus full recovery
+### Selective versus full recovery
 
 If corruption is confined and provenance is trustworthy, repair affected rows/objects from historical versions while preserving later good writes. Full point-in-time restore is simpler semantically but can discard large amounts of legitimate history.
 
@@ -283,7 +287,7 @@ Run forensic replay in an isolated environment. Compare candidate points and pro
 
 ---
 
-## 7. Recovery Orchestration State Machine
+## Recovery Orchestration State Machine
 
 ```mermaid
 stateDiagram-v2
@@ -301,7 +305,7 @@ stateDiagram-v2
     FailbackPlanned --> [*]
 ```
 
-### 7.1 Declare and contain
+### Declare and contain
 
 Before restoring, stop the cause:
 
@@ -314,7 +318,7 @@ Before restoring, stop the cause:
 
 Failing over while a corrupt writer remains active reproduces the disaster.
 
-### 7.2 Bootstrap
+### Bootstrap
 
 Break circular dependencies:
 
@@ -328,7 +332,7 @@ Break circular dependencies:
 
 Store the runbook and necessary tools outside the primary failure boundary. Recovery should not require the compromised CI runner to build a script.
 
-### 7.3 Restore and replay
+### Restore and replay
 
 Make each step idempotent and checkpointed:
 
@@ -338,7 +342,7 @@ step ID + input snapshot/log digest + target + status + evidence
 
 Restore base data, apply schema/tooling compatible with the selected point, replay logs to the exact target, rebuild derived state, and retain source positions. Workers, schedulers, webhooks, and notification systems stay disabled until operation identities and reconciliation prevent duplicate external effects.
 
-### 7.4 Reconcile external and later effects
+### Reconcile external and later effects
 
 Compare:
 
@@ -350,7 +354,7 @@ Compare:
 
 Classify missing, duplicate, conflicting, and uncertain operations. Automated replay is safe only for idempotent effects with stable identities. Money movement, entitlement, shipment, or irreversible communication may require domain-specific review.
 
-### 7.5 Verify and admit traffic
+### Verify and admit traffic
 
 Verification layers:
 
@@ -367,7 +371,7 @@ Traffic ramp uses the same controlled exposure principles as [Progressive Delive
 
 ---
 
-## 8. Restore Capacity and Cost Model
+## Restore Capacity and Cost Model
 
 End-to-end RTO is approximately the critical path, not the sum of every parallel task:
 
@@ -376,7 +380,7 @@ RTO \ge T_{declare} + T_{bootstrap} + T_{base\ restore}
     + T_{log\ replay} + T_{reconcile} + T_{verify} + T_{traffic\ ramp}
 $$
 
-### 8.1 Base restore
+### Base restore
 
 For an illustrative 24 TiB compressed backup and effective end-to-end restore throughput of 1.2 GiB/s:
 
@@ -390,7 +394,7 @@ This already misses a four-hour RTO before replay or verification. “Storage su
 
 Measure throughput by object size, region, encryption path, target engine, concurrency, and checksum cost. Small-file/object restores often become request-rate bound rather than bandwidth bound.
 
-### 8.2 Log replay
+### Log replay
 
 If the restored base is six hours behind, the workload generated 300 MiB/s of archived log, and replay applies at 900 MiB/s while no new writes are admitted:
 
@@ -405,7 +409,7 @@ $$
 
 If the target accepts new writes during catch-up, subtract arrival rate from replay capacity. When replay capacity is not greater than new log generation, convergence never completes.
 
-### 8.3 Restore fleet sizing
+### Restore fleet sizing
 
 Parallelism is bounded by source read, network, KMS/decrypt operations, target write/compaction, catalog/API quotas, and dependency order. Overparallelization can throttle the vault or cause storage compaction collapse. Benchmark, cap, and dynamically adjust concurrency from the bottleneck.
 
@@ -413,19 +417,19 @@ Standing warm capacity costs more but buys bootstrap and restore bandwidth. Comp
 
 ---
 
-## 9. Failover Authority and Traffic
+## Failover Authority and Traffic
 
-### 9.1 Fence before redirect
+### Fence before redirect
 
 Region or account isolation may prevent proving the old site stopped. New write authority needs an epoch/fencing mechanism enforced at the durable system or external provider. DNS change alone creates routing preference, not exclusive authority; old clients and queues can continue.
 
 For multi-writer designs, conflict/merge semantics may permit continued writes, but disaster declaration can still change which region owns non-mergeable resources, background jobs, and external effects.
 
-### 9.2 DNS and client convergence
+### DNS and client convergence
 
 DNS TTL is only one delay. Recursive resolvers can cache, clients pool connections, mobile apps remain offline, and allow lists/firewalls may reference old addresses. Track traffic at old and new sites. Provide explicit epoch rejection for stale clients when writes must not continue.
 
-### 9.3 Degraded modes
+### Degraded modes
 
 A documented recovery mode may offer:
 
@@ -440,7 +444,7 @@ Each mode states correctness and durability. “Accept writes locally and figure
 
 ---
 
-## 10. Failback Is Another Migration
+## Failback Is Another Migration
 
 After recovery, the original site may return with stale or contaminated state. Do not simply reverse DNS.
 
@@ -456,9 +460,9 @@ Failback consumes risk while the team is tired. Delay it until the product is st
 
 ---
 
-## 11. Concrete Failure Traces
+## Concrete Failure Traces
 
-### 11.1 Every replica contains the corruption
+### Every replica contains the corruption
 
 1. A deployment writes malformed balances for six days.
 2. Synchronous and asynchronous replicas apply every transaction correctly.
@@ -468,7 +472,7 @@ Failback consumes risk while the team is tired. Delay it until the product is st
 
 Set retention from maximum detection interval, not backup frequency alone. Run continuous business-invariant scans, maintain PITR/archive depth, and protect historical copies from the same lifecycle job.
 
-### 11.2 Backup is intact but undecryptable
+### Backup is intact but undecryptable
 
 1. Backups are encrypted with a production-account KMS key.
 2. Account compromise triggers account isolation/deletion.
@@ -477,7 +481,7 @@ Set retention from maximum detection interval, not backup frequency alone. Run c
 
 Key hierarchy, policy, aliases/versions, and break-glass access are recovery assets. Exercise a restore using the actual independent identity and region.
 
-### 11.3 Latest restore duplicates external payments
+### Latest restore duplicates external payments
 
 1. Payment provider calls committed through 10:05.
 2. The internal database is restored to 10:00.
@@ -487,7 +491,7 @@ Key hierarchy, policy, aliases/versions, and break-glass access are recovery ass
 
 Recover provider idempotency identities and receipts, disable workers initially, and reconcile provider authority against recovered intent before replay.
 
-### 11.4 Failover creates split-brain writers
+### Failover creates split-brain writers
 
 1. Region A loses control-plane connectivity but continues serving some clients.
 2. Incident command promotes region B and changes DNS.
@@ -496,7 +500,7 @@ Recover provider idempotency identities and receipts, disable workers initially,
 
 Use quorum/fencing at the write authority, drain or reject stale epochs, and verify traffic at the old site. Routing is not fencing.
 
-### 11.5 Restore storm misses the RTO
+### Restore storm misses the RTO
 
 1. Thousands of backup objects restore concurrently.
 2. The vault hits request/KMS quotas.
@@ -506,7 +510,7 @@ Use quorum/fencing at the write authority, drain or reject stale epochs, and ver
 
 Prioritize metadata/critical partitions, enforce global concurrency, prearrange quotas, use single-flight/retry budgets, and test at full retained volume.
 
-### 11.6 Old backup resurrects revoked access
+### Old backup resurrects revoked access
 
 1. A six-month-old snapshot is restored for forensic recovery.
 2. It contains users, API keys, sharing relationships, and tenants deleted since then.
@@ -517,9 +521,9 @@ Keep the restore isolated, apply current deny/tombstone/key-revocation state bef
 
 ---
 
-## 12. Drills, Verification, and Evidence
+## Drills, Verification, and Evidence
 
-### 12.1 Automated restore verification
+### Automated restore verification
 
 A recurring pipeline should:
 
@@ -533,7 +537,7 @@ A recurring pipeline should:
 
 Do not connect a restored historical environment to production webhooks, email, schedulers, or customer-facing DNS.
 
-### 12.2 Game-day matrix
+### Game-day matrix
 
 Rotate scenarios:
 
@@ -549,7 +553,7 @@ Rotate scenarios:
 
 Tabletops validate decisions and contacts; technical drills validate mechanics and throughput. Both are necessary. Capture observed RPO, phase-level RTO, manual steps, unavailable dependencies, security exceptions, and unresolved gaps with owners.
 
-### 12.3 Recovery SLOs and telemetry
+### Recovery SLOs and telemetry
 
 Track continuously:
 
@@ -567,7 +571,7 @@ Alert on loss of recoverability before an incident (for example, a missing log s
 
 ---
 
-## 13. Security and Governance
+## Security and Governance
 
 Recovery bypasses normal controls by design, so it is a high-value attack path.
 
@@ -583,7 +587,7 @@ Backups expand the privacy and breach surface. Retain only what the recovery con
 
 ---
 
-## 14. Design Review Framework
+## Design Review Framework
 
 Ask:
 

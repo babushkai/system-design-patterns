@@ -17,7 +17,11 @@ The architecture is incomplete until onboarding, configuration, export, residenc
 
 ---
 
-## 1. Tenant Contract and Threat Model
+## Tenant Contract and Threat Model
+
+A software service sold to many organizations can give each customer its own installation or serve them all from shared infrastructure. Sharing is far cheaper and far easier to operate, since there is one system to upgrade and its spare capacity is pooled. That economy is the reason nearly every such service is multi-tenant. It also creates the central obligation of the design, which is that each customer must experience the service as though the others were not there.
+
+That obligation has two parts, and they fail in different ways. The first is isolation of data: one tenant must never see another's. The risk is usually an omission more than an attack, such as a single query without a tenant filter or a cache key that leaves the tenant out. A leak of this kind is among the most damaging failures a service provider can have, so the design should make the filter impossible to forget and should not depend on every engineer remembering it every time. The second is isolation of performance. Tenants share machines, and one tenant's heavy query or sudden burst can slow all the others, the so-called noisy neighbour. This cannot be eliminated on shared infrastructure and can only be bounded, through quotas and fair scheduling for each tenant and, for the largest customers, hardware of their own.
 
 A tenant may represent an organization, workspace, account, project, school, reseller subtree, or regulatory boundary. Define whether users can belong to multiple tenants and whether resources can be shared across them.
 
@@ -35,7 +39,7 @@ TenantContext {
 }
 ```
 
-### 1.1 Threat model
+### Threat model
 
 Assume an attacker or defect may:
 
@@ -51,7 +55,7 @@ Assume an attacker or defect may:
 - read sensitive identifiers through logs, metrics, traces, billing, or error timing;
 - use a global configuration or rollout error to affect every tenant.
 
-### 1.2 Core invariants
+### Core invariants
 
 1. **Canonical tenant binding:** every protected operation is bound to exactly one authorized tenant context or an explicitly modeled cross-tenant/platform operation.
 2. **Complete mediation:** all paths (including async workers, exports, analytics, support, migration, search, cache, object storage, and restore) enforce that context.
@@ -66,9 +70,9 @@ Assume an attacker or defect may:
 
 ---
 
-## 2. Establish and Propagate Tenant Context
+## Establish and Propagate Tenant Context
 
-### 2.1 Authentication is necessary, selection is separate
+### Authentication is necessary, selection is separate
 
 An authenticated user may belong to many organizations. A signed claim can identify the user and perhaps memberships at token issuance; it does not automatically prove that a caller-selected tenant is current or that the user may perform this action there.
 
@@ -87,7 +91,7 @@ For a resource URL, resolve the canonical resource under a tenant-scoped lookup 
 
 Long-lived tokens should avoid embedding rapidly changing membership/role graphs. Bind stable identity and audience in the token; consult or cache current authorization with a revocation objective. See [Authentication Systems](../10-security/01-authentication-fundamentals.md) and [Authorization at Scale](../10-security/07-authorization-patterns.md).
 
-### 2.2 Cross-service propagation
+### Cross-service propagation
 
 Downstream services receive an authenticated workload identity plus a signed/verified user delegation or internal request context. A header from the public client does not become trusted because a gateway forwarded it.
 
@@ -100,7 +104,7 @@ At each hop:
 - propagate placement epoch so stale writers are rejected;
 - record canonical IDs, not tenant names, in audit.
 
-### 2.3 Asynchronous work
+### Asynchronous work
 
 A queue job is a new authorization/execution event. Its envelope includes:
 
@@ -119,7 +123,7 @@ The consumer authenticates the producer, validates the envelope, resolves curren
 
 ---
 
-## 3. Isolation Models
+## Isolation Models
 
 ```mermaid
 flowchart LR
@@ -132,7 +136,7 @@ flowchart LR
     CELL -->|dedicated requirement| SILO
 ```
 
-### 3.1 Pool
+### Pool
 
 Shared tables, services, queues, and infrastructure minimize marginal cost and simplify fleet-wide rollout. Costs:
 
@@ -142,7 +146,7 @@ Shared tables, services, queues, and infrastructure minimize marginal cost and s
 - per-tenant restore/export/deletion are data-selection operations;
 - one control/data-plane defect has broad blast radius.
 
-### 3.2 Bridge
+### Bridge
 
 The app/control fleet is shared while data uses a database/schema/bucket/keyspace per tenant or cohort. It improves data isolation and lifecycle operations but multiplies:
 
@@ -154,15 +158,15 @@ The app/control fleet is shared while data uses a database/schema/bucket/keyspac
 
 Thousands of database-per-tenant connections can exhaust server/pooler memory before storage is large. Route and pool by active tenant; do not hold one connection per dormant tenant.
 
-### 3.3 Cell
+### Cell
 
 A cell contains a bounded cohort and most data-plane dependencies, limiting failure and overload while permitting incremental rollout. Shared identity, placement, DNS, billing, or deployment planes can still defeat containment. [Cell-Based Architecture](./11-cell-based-architecture.md) covers cell construction; tenant placement and movement remain part of the isolation contract.
 
-### 3.4 Silo
+### Silo
 
 Dedicated account/project, network, compute, database, keys, and possibly control plane offer the strongest contractual boundary. They add provisioning/patching/drift/observability/recovery cost and can still share provider, software, deployment, or organization-level identity roots.
 
-### 3.5 Choose per dimension, not one label
+### Choose per dimension, not one label
 
 A tenant can have a dedicated database but shared workers and KMS; or a shared database with dedicated encryption keys and queue. Record an isolation matrix:
 
@@ -179,9 +183,9 @@ A tenant can have a dedicated database but shared workers and KMS; or a shared d
 
 ---
 
-## 4. Data-Layer Isolation
+## Data-Layer Isolation
 
-### 4.1 Composite identity and constraints
+### Composite identity and constraints
 
 In pooled relational tables:
 
@@ -201,7 +205,7 @@ Foreign keys, unique indexes, joins, and upserts include tenant scope. A global 
 
 Opaque globally unique IDs reduce guessing but do not authorize access. Composite scope protects against ID collision/reuse and supports partition pruning.
 
-### 4.2 Row-level security
+### Row-level security
 
 Database row policies can contain application-query defects:
 
@@ -226,7 +230,7 @@ Operational cautions:
 
 RLS is defense in depth, not the whole authorization model. Domain action/resource policy still belongs at the service.
 
-### 4.3 Cache, search, object and analytics keys
+### Cache, search, object and analytics keys
 
 Every derived identity includes tenant and version:
 
@@ -240,7 +244,7 @@ vector/KV cache: tenant + model/context/policy revision
 
 Never cache a response by `user_id` or `resource_id` alone if IDs can overlap or permissions differ. Authorization filtering after global search/retrieval can leak snippets, counts, timing, logs, or candidates to downstream models; enforce before candidate exposure.
 
-### 4.4 Global/shared data
+### Global/shared data
 
 Reference data such as product catalogs may be global, tenant-overridden, or shared across an explicit collaboration relation. Model that authority separately. A nullable `tenant_id` meaning “global” often creates surprising predicates and override precedence. Use a typed scope and deterministic resolution:
 
@@ -253,7 +257,7 @@ Cross-tenant sharing must create a relationship/policy object, not remove the te
 
 ---
 
-## 5. Tenant Placement Control Plane
+## Tenant Placement Control Plane
 
 A placement directory maps tenant generation to data-plane location:
 
@@ -271,19 +275,19 @@ TenantPlacement {
 
 Routers cache this state by immutable epoch with bounded staleness. Writes carry the epoch; target storage/services reject stale epochs. A friendly tenant alias or domain resolves to canonical tenant generation and placement, but is not the storage key authority.
 
-### 5.1 Control/data plane separation
+### Control/data plane separation
 
 The control plane provisions and moves tenants, changes tier/config/policy, and publishes placement. The data plane serves requests from an already resolved placement and should continue safely on last-known-good state during a bounded control-plane outage. Deletion, suspension, key revocation, or completed movement may require a freshness floor.
 
 Control-plane mutations are high impact. Separate tenant-admin actions from platform placement authority, require idempotent operation IDs and preconditions, stage bulk changes, and audit source/target/epoch.
 
-### 5.2 Directory scale
+### Directory scale
 
 Do not call a central placement database on every request. Distribute versioned snapshots/deltas, cache locally, and provide at-least-epoch routing when a client observes a movement. Handle cold start and invalidation bursts; a global cache flush can turn the directory into a synchronous fleet bottleneck.
 
 ---
 
-## 6. Performance Isolation and Fair Scheduling
+## Performance Isolation and Fair Scheduling
 
 Capacity without admission does not isolate tenants. Apply hierarchical limits:
 
@@ -295,7 +299,7 @@ global safety budget
               -> principal/workflow/action budget
 ```
 
-### 6.1 Rate and concurrency
+### Rate and concurrency
 
 Rate limits control average/burst arrival; concurrency controls in-flight occupancy. A tenant with slow requests can consume the worker/connection pool while staying below requests/second. Charge weighted work units when requests differ materially:
 
@@ -305,13 +309,13 @@ work_units = base + rows_scanned*w_r + bytes*w_b + gpu_ms*w_g + fanout*w_f
 
 Estimate before admission and reconcile with actual usage for future enforcement/billing. Cap maximum query/import/document size independently.
 
-### 6.2 Fair queues
+### Fair queues
 
 One global FIFO lets a whale's import place every other tenant behind millions of jobs. Use per-tenant/subqueue state with weighted fair/deficit scheduling and per-tenant concurrency. Preserve priority without starvation: high tiers may have reservations and larger weights, but background work needs an aging/minimum-share policy.
 
 [Priority, Fairness, and Backpressure](../18-workflow-job-systems/07-priority-fairness-backpressure.md) covers scheduler algorithms; tenant hierarchy and isolation objectives define their policy.
 
-### 6.3 Shared downstreams
+### Shared downstreams
 
 Enforce at the scarce dependency:
 
@@ -326,13 +330,13 @@ Enforce at the scarce dependency:
 
 Edge rate limits alone do not prevent a single admitted request from creating huge internal fan-out.
 
-### 6.4 Shuffle sharding and cells
+### Shuffle sharding and cells
 
 Assign each tenant to a small deterministic subset of worker shards. If one tenant poisons its subset, only shard-mates are affected rather than the full fleet. Replicas/subsets must retain enough capacity and failure independence; a tenant's retry router cannot escape into every shard under failure and destroy containment.
 
 ---
 
-## 7. Capacity and Cost Model
+## Capacity and Cost Model
 
 Tenant load is heavy-tailed. Model joined distributions, not “average tenant.”
 
@@ -354,11 +358,11 @@ $$
 
 of safe cell concurrency, too large for a desired 5% blast share. Promote it to a dedicated shard/cell or cap/degrade it. Placement admission should reject a move that would violate cell headroom under one failure domain.
 
-### 7.1 Database-per-tenant connection math
+### Database-per-tenant connection math
 
 If 8,000 tenant databases each retain a minimum of two idle connections, the platform holds 16,000 connections before traffic. If server/pooler state averages an illustrative 6 MiB per backend, that is roughly 94 GiB. Use transaction/connection proxying, active-tenant pooling, cohort databases, or silo only tiers that fund the overhead. Measure exact engine/pooler state.
 
-### 7.2 Cost attribution
+### Cost attribution
 
 Allocate:
 
@@ -373,7 +377,7 @@ Unit cost per tenant/tier is an observability product, not a bill inferred from 
 
 ---
 
-## 8. Tenant Lifecycle as Durable Workflow
+## Tenant Lifecycle as Durable Workflow
 
 ```mermaid
 stateDiagram-v2
@@ -389,25 +393,25 @@ stateDiagram-v2
     Deleted --> [*]
 ```
 
-### 8.1 Provisioning
+### Provisioning
 
 Reserve canonical tenant ID/generation, establish membership/admin, choose isolation/placement, create scoped resources/keys/config, seed data, verify read/write/isolation, then publish `Active`. Retries use the same operation ID. A partially provisioned tenant is not routable.
 
-### 8.2 Configuration
+### Configuration
 
 Tenant-specific feature flags, policy, schema/extensions, integrations, and limits form versioned configuration. Validate against tier/platform constraints, roll out progressively, and record effective revisions. One tenant's malformed config must not crash a shared parser or expand another tenant's behavior.
 
 Avoid one conditional branch per enterprise customer in application code. Model supported configuration and extension points with ownership and retirement.
 
-### 8.3 Suspension
+### Suspension
 
 Define reads, writes, background jobs, integrations, exports, retention, and billing during suspension. Security suspension may require immediate credential/session revocation and outbound egress stop; billing suspension may permit read/export. Preserve audit and prevent queued work from resuming under stale state.
 
-### 8.4 Export
+### Export
 
 An export manifest inventories every authoritative/derived included source, snapshot position, schema, checksum, encryption, and omission. Run against a consistent snapshot or explicitly describe time skew. Authorize delivery destination; a presigned URL is a bearer capability. Large exports consume fair-scheduled resources and expire/delete after policy.
 
-### 8.5 Deletion
+### Deletion
 
 Build a data-location inventory:
 
@@ -424,13 +428,13 @@ external processors/integrations
 
 Publish a tenant-generation tombstone early so stale jobs/restores cannot reactivate it. Delete or render unavailable according to retention/legal hold; verify each system; store non-sensitive deletion receipts. Crypto-shredding helps only when every relevant copy is under the destroyed key and other tenants do not share it.
 
-### 8.6 Per-tenant restore
+### Per-tenant restore
 
 Silo/bridge restore may replace a database; pooled restore is selective merge. Prevent ID/version collision, duplicate external effects, overwritten newer rows, and resurrection of deleted principals. Restore into isolation, compare/reconcile, write through normal operation identities, and reindex derived state. [Disaster Recovery and Data Reconstruction](../15-deployment/05-disaster-recovery.md) owns the broader protocol.
 
 ---
 
-## 9. Pool-to-Silo or Cell Migration
+## Pool-to-Silo or Cell Migration
 
 A tenant promotion is a live state migration:
 
@@ -454,51 +458,51 @@ sequenceDiagram
     R--xSRC: stale epoch rejected
 ```
 
-### 9.1 One authority
+### One authority
 
 Avoid indefinite application dual-write as two authorities. Prefer one source plus ordered log/outbox/CDC replication. If synchronous dual-write is unavoidable, define partial success, idempotency, reconciliation, and the commit authority.
 
-### 9.2 Data/identity coverage
+### Data/identity coverage
 
 Move database rows, objects, queue/workflow state, search/index, cache invalidation, keys/secrets, integrations, audit references, config, quotas, and placement. Derived state can rebuild, but its lag must meet cutover gates.
 
-### 9.3 Validation
+### Validation
 
 Compare row/object counts, content hashes or domain aggregates, sampled/full records, referential/business invariants, read results, authorization, and change positions. Tenant size and write rate determine backfill duration; throttle so source tenants and destination cell keep headroom.
 
-### 9.4 Rollback
+### Rollback
 
 After target writes begin, rollback requires reverse replication or a forward repair; switching to a stale source loses writes. Keep source read-only for a bounded window, continuously prove target, and define the point of no return.
 
 ---
 
-## 10. Security, Privacy, and Operational Isolation
+## Security, Privacy, and Operational Isolation
 
-### 10.1 Key hierarchy
+### Key hierarchy
 
 Per-tenant logical keys improve audit, revocation and selective destruction, but increase KMS/cache cardinality. Bind tenant, object/resource, purpose and key version; a key alone does not replace tenant authorization. Dedicated tenants may use customer-managed keys, with explicit outage/rotation/recovery contracts.
 
-### 10.2 Residency
+### Residency
 
 Placement policy binds data class and allowed regions. Derived stores, backups, logs, support access, external processors, and model/training data must follow it. Routing a request to a region is insufficient if the feature store or observability pipeline exports data elsewhere.
 
-### 10.3 Support and break glass
+### Support and break glass
 
 Support access is a common cross-tenant boundary. Require case/reason, exact tenant/resource/action, stronger approval for content access, time-bound capabilities, visible customer policy where appropriate, and independent audit. Do not grant global production database access because support serves many tenants.
 
-### 10.4 Logs and metrics
+### Logs and metrics
 
 Tenant tags are sensitive and high cardinality. Use canonical opaque IDs, access-controlled tenant views, redaction of payloads/tokens, retention policy, and a mapping service for display names. One tenant must not query another's traces or infer activity through shared dashboards.
 
-### 10.5 Software and control-plane blast radius
+### Software and control-plane blast radius
 
 Isolation is not only runtime resources. Stage configuration/schema/deployment by cell/tenant cohort; protect tenant import/plugins/webhooks as untrusted supply/egress; cap global control-plane fan-out; and preserve a rollback artifact. Silo data can still all fail from one globally deployed bug.
 
 ---
 
-## 11. Concrete Failure Traces
+## Concrete Failure Traces
 
-### 11.1 Connection-pool tenant bleed
+### Connection-pool tenant bleed
 
 1. Request A sets session variable `tenant=A` on a pooled connection.
 2. It returns the connection without transaction-local reset after an error.
@@ -507,7 +511,7 @@ Isolation is not only runtime resources. Stage configuration/schema/deployment b
 
 Set context transaction-locally after checkout, fail closed when absent, guarantee rollback/reset, and run adversarial pool-reuse tests.
 
-### 11.2 Cache key omits authorization scope
+### Cache key omits authorization scope
 
 1. Tenant A requests resource ID 42; response caches under `resource:42`.
 2. Tenant B also has local ID 42.
@@ -515,7 +519,7 @@ Set context transaction-locally after checkout, fail closed when absent, guarant
 
 Cache identity includes tenant generation, resource, representation, authorization/policy revision where relevant, and release. Treat cache as an enforcement-adjacent data store.
 
-### 11.3 Global FIFO starves small tenants
+### Global FIFO starves small tenants
 
 1. One tenant submits two million import jobs.
 2. Shared workers drain FIFO.
@@ -523,7 +527,7 @@ Cache identity includes tenant generation, resource, representation, authorizati
 
 Use tenant subqueues, weighted fair scheduling, concurrency reservations, cost-aware admission, and import pacing.
 
-### 11.4 Migration split brain
+### Migration split brain
 
 1. Router cache still points to source epoch 17.
 2. Control plane activates target epoch 18.
@@ -532,7 +536,7 @@ Use tenant subqueues, weighted fair scheduling, concurrency reservations, cost-a
 
 Publish monotonic placement epochs and enforce them at write ownership. Drain/reconcile source through an ordered frontier.
 
-### 11.5 Deleted tenant returns after restore
+### Deleted tenant returns after restore
 
 1. Tenant generation 3 is deleted and its current data removed.
 2. Disaster recovery restores a backup from before deletion.
@@ -541,7 +545,7 @@ Publish monotonic placement epochs and enforce them at write ownership. Drain/re
 
 Keep current deletion tombstones/revocation authority independent, apply them before traffic, rotate credentials, and verify tenant-generation lifecycle during restore.
 
-### 11.6 Bridge migration fan-out outage
+### Bridge migration fan-out outage
 
 1. Schema rollout opens one connection to each of 30,000 tenant databases.
 2. Pooler/database exhausts connections and metadata locks.
@@ -549,7 +553,7 @@ Keep current deletion tombstones/revocation authority independent, apply them be
 
 Schedule bounded waves by size/tier, use per-database state/checkpoints, cap global and target concurrency, prioritize foreground work, and expose migration backlog/SLO.
 
-### 11.7 Shared search filters too late
+### Shared search filters too late
 
 1. Search retrieves global top-K across all tenants.
 2. App filters unauthorized hits after snippets/reranking/logging.
@@ -557,7 +561,7 @@ Schedule bounded waves by size/tier, use per-database state/checkpoints, cap glo
 
 Apply tenant/authorization constraints during candidate generation, partition indexes where required, and scope caches/logs.
 
-### 11.8 Tenant-specific config crashes shared fleet
+### Tenant-specific config crashes shared fleet
 
 1. One tenant uploads a deeply recursive rule/template.
 2. Shared instances parse/evaluate it on request.
@@ -567,9 +571,9 @@ Validate/compile in isolation, bound complexity, publish immutable qualified con
 
 ---
 
-## 12. Observability and Verification
+## Observability and Verification
 
-### 12.1 Signals
+### Signals
 
 Track distributions and top contributors:
 
@@ -587,7 +591,7 @@ Track distributions and top contributors:
 
 Do not put every tenant ID on every metrics series. Maintain a usage/event ledger, top-N heavy hitters, cohort/cell/tier aggregates, and on-demand tenant diagnostics.
 
-### 12.2 Isolation test matrix
+### Isolation test matrix
 
 For every resource/action/path, generate tenants A/B with colliding local IDs and attempt:
 
@@ -603,7 +607,7 @@ For every resource/action/path, generate tenants A/B with colliding local IDs an
 
 Negative tests are release gates. Property tests can assert that replacing tenant context with another tenant never returns/mutates the original resource unless an explicit sharing relation authorizes it.
 
-### 12.3 Performance and fault tests
+### Performance and fault tests
 
 Replay heavy-tailed tenant traces. Saturate one tenant's CPU, database, connection, queue, cache, object, KMS, search and observability budgets while measuring unrelated tenants. Lose a cell, migrate a whale during peak, flush placement caches, pause the control plane, and restore a pooled tenant. Verify global safety limits and minimum shares under retry storms.
 
@@ -611,7 +615,7 @@ Synthetic tenants in production can continuously exercise each isolation tier, b
 
 ---
 
-## 13. Design Review Framework
+## Design Review Framework
 
 Ask:
 

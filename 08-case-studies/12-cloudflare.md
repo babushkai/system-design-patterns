@@ -8,6 +8,10 @@ Treated as an evidence-bounded reference design, the composite teaches that rout
 
 ## Scope and Evidence Contract
 
+Cloudflare operates a network of data centers in hundreds of cities that sits between websites and their visitors. Its architecture has one feature that distinguishes it from most large systems. Every data center runs the same software and can perform every function, and traffic reaches the nearest one through the routing of the internet itself, with no central point directing it.
+
+The mechanism is anycast. The same network addresses are announced from every location, and the internet's routing protocol delivers each packet to whichever location is closest in network terms. This has several consequences that explain much of the design. A visitor is served nearby without any lookup deciding where to send them. If a location fails, its announcement is withdrawn and traffic flows to the next nearest. And an attack launched from machines around the world is divided among all the locations in the same way as ordinary traffic, so that no single site faces the whole of it. The corresponding difficulty is configuration: a change must reach every location quickly, and a bad change reaches every location just as quickly, which is the origin of the company's most instructive public incidents.
+
 Cloudflare publishes detailed engineering accounts, each bounded by component, date, and measurement. The following labels preserve that evidence boundary:
 
 - **Documented fact:** a statement in a dated Cloudflare source.

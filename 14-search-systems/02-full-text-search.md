@@ -8,6 +8,10 @@ Analysis and shard-local execution cover query parsing, tokenization, Boolean an
 
 ## Workload and Contract
 
+Finding the documents that contain the words of a query is the easy half of search. A query on a large collection matches thousands or millions of documents, and the user will look at ten. The hard half is deciding which ten, and that depends on judging how well each document matches.
+
+The classical approach rests on two observations. A document that mentions a query term many times is probably more about that term than one mentioning it once, though the benefit of repetition falls off quickly. And a term that appears in few documents is more informative than one that appears in most, so matching a rare word should count for more than matching a common one. The scoring function used by most search engines combines these, with an adjustment for document length so that long documents do not win merely by containing more words. Before any of this, the text has to be turned into terms, and the choices made there determine what can be found at all: whether "running" matches "run," how accents and capital letters are treated, where words are divided in languages that do not use spaces. The query must be processed in exactly the same way as the documents were, or terms that should match will not.
+
 A query API should expose semantics instead of pretending every search is one string:
 
 ```text

@@ -8,6 +8,10 @@ A durable encoding contract covers record and message representation, framing, s
 
 ## Boundary and Workload Contract
 
+Inside a program, data lives in structures that the language manages. To send it over a network or write it to disk, it has to be turned into bytes, and something else must later turn the bytes back. If the writer and the reader were always the same version of the same program, any format would do. They never are. During a rolling deployment, old and new versions of a service exchange messages. A record written to a database today will be read by code that does not yet exist. An event placed in a log may be consumed years later.
+
+The property that matters most in an encoding format is therefore how it behaves when writer and reader disagree about the schema. New code must be able to read data written by old code, and during a rollout or after a rollback, old code must cope with data written by new code. Formats differ greatly in how they provide this. Some identify each field by a number that must never be reused, so that an unknown field can be skipped. Others resolve the difference by comparing the writer's schema with the reader's. Text formats such as JSON leave the matter to convention. Size and speed are worth having, and they are secondary to this.
+
 Inventory every boundary separately: public HTTP, internal RPC, event stream, database blob, WAL, snapshot, cache value, and analytical file. For each, record:
 
 - producer and consumer languages, ownership, and deployment independence;

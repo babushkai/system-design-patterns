@@ -14,6 +14,12 @@ This chapter covers east-west connectivity planes and failure behavior. [Service
 
 ## Mesh Boundary and Invariants
 
+The mesh exists because of a problem that grows with the number of programming languages an organization uses. Every service that calls another service needs the same set of capabilities: it must find the other service's instances, encrypt the connection, prove its own identity, time out, retry sensibly, and report what happened. The first solution is a shared library that every service links, and for an organization with one language it is a good solution. With five languages, the library must be written and maintained five times, the five implementations drift apart in behavior, and changing a retry policy across the fleet requires every team to upgrade a dependency and redeploy. A security fix to the TLS configuration can take a year to reach every service.
+
+The mesh takes those capabilities out of the application process and puts them in a proxy that sits beside it and intercepts its network traffic. The application makes a plain call to what it believes is the other service. The proxy on its side handles discovery, encryption, identity, and retries, and the proxy on the far side authenticates the caller and enforces policy before passing the request on. Since the proxy is the same program whatever language the application is written in, behavior is uniform, and since it is configured remotely, policy can change across the whole fleet without redeploying anything.
+
+The price is stated in the TL;DR and should not be passed over: there is now an additional distributed system on the path of every request, with its own configuration, its own failure modes, and its own capacity to cause outages. The rest of this chapter is about making that system safe.
+
 ~~~mermaid
 flowchart TB
     subgraph ControlPlane[Control plane]
@@ -38,7 +44,7 @@ flowchart TB
     ID --> OUT
 ~~~
 
-The control plane is not in the normal request path. It compiles intent into resources, distributes them, observes client state, and coordinates rollout. The data plane accepts connections and requests using an active local snapshot.
+The control plane is not in the normal request path. It compiles intent into resources, distributes them, observes client state, and coordinates rollout. The data plane accepts connections and requests using an active local snapshot. This separation is the most important structural property of the design. If a proxy had to consult the control plane on each request, the control plane's availability would bound the availability of all service-to-service traffic. Because each proxy holds a complete local copy of what it needs, the control plane can be down for minutes and requests continue to flow. The cost of that independence is that every proxy is working from a copy, and a copy can be stale, which is the subject of a later section.
 
 ### Core invariants
 
@@ -131,7 +137,7 @@ A correct streaming protocol includes:
 - flow control and slow-client policy; and
 - server visibility into last accepted and active state.
 
-An ACK proves only what the protocol defines. Syntax-valid and accepted does not necessarily mean warmed, connected, or serving. Export active-state telemetry or a readiness probe separately.
+The ACK and NACK deserve a word, because rollout tooling tends to read more into them than they say. When a proxy receives a configuration update, it replies with an ACK if it accepted the update or a NACK if it rejected it, and in the latter case it keeps running on the previous version. The control plane thus learns which proxies are on which version. An ACK proves only what the protocol defines, however. It says the proxy parsed the update and found it acceptable. It does not say the proxy has finished establishing connections to the new upstream, loaded the new certificates, or begun serving with the new configuration. A dashboard that shows every proxy has acknowledged version 84 has shown that the update was delivered. Whether it is in effect has to be learned from separate active-state telemetry or a readiness probe.
 
 ### Warming and atomic activation
 
@@ -216,7 +222,7 @@ Use overlapping validity:
 5. fleet telemetry proves migration;
 6. old credentials and trust material expire or are revoked.
 
-Rotating a file on disk is not enough. A proxy may retain old TLS contexts and existing connections. Track credential loaded time, not-after horizon, connections by identity generation, and trust-bundle generation.
+Rotating a file on disk is not enough, and the gap between the two is a classic source of outages. A certificate is presented and checked during the TLS handshake, when a connection is opened. A connection established yesterday with yesterday's certificate does not notice that a new certificate has been written to disk. Modern protocols encourage long-lived connections that carry many requests, so a proxy may hold connections that are hours or days old. If the old certificate then expires, or the root that signed it is withdrawn, those connections fail, and they fail at a time unrelated to any deployment, which makes the cause hard to find. Rotation is complete only when connections have been replaced as well as files. We track the time each credential was loaded, the not-after horizon, the number of connections by identity generation, and the trust-bundle generation.
 
 ### Trust-bundle rotation
 
@@ -305,38 +311,17 @@ The platform should test for bypass, not assume an injected component captures e
 
 ### Sidecar
 
-Advantages:
+In the sidecar model every replica of every workload gets a proxy of its own, running beside it and sharing its network namespace. The appeal is that every boundary lines up with the workload. The proxy serves exactly one application, so there is no question about whose traffic it is handling, and source identity is unambiguous. Its memory, connection pools, and overload state belong to that workload alone, so a misbehaving service exhausts only its own proxy. If the proxy crashes, one replica is affected. Workloads with unusual trust or protocol requirements can be configured individually.
 
-- resource and failure isolation follows one workload;
-- clear source identity and per-workload policy;
-- independent connection pools and overload state;
-- easy support for different trust or protocol requirements.
+The cost is multiplication. A fleet of ten thousand replicas runs ten thousand proxies, each with its own runtime, its own copy of the configuration, its own stream to the control plane, and its own listeners, clusters, connection pools, certificates, and telemetry buffers. Much of that is duplicated: a hundred replicas of one service each hold separate connection pools to the same upstreams. Each request also crosses two additional local hops, out through the caller's proxy and in through the callee's, with the context switches that implies. Operationally, proxies must be injected into every workload and upgraded across the fleet, and at any moment the fleet contains several proxy versions.
 
-Costs:
-
-- one proxy runtime and configuration stream per workload replica;
-- duplicated listeners, clusters, pools, certificates, and telemetry buffers;
-- application/proxy startup and shutdown ordering;
-- fleet-wide injection and version skew;
-- more local hops and context switches.
-
-Sidecar lifecycle must be native to the workload scheduler where possible: start before application traffic, remain through application drain, and terminate after forwarding completes. A generic helper container that exits too early breaks request drain.
+There is also an ordering problem between the application and its proxy. If the application starts first, its early outbound calls fail because nothing is yet intercepting them. If the proxy stops first during shutdown, the application's in-flight requests are cut off. Sidecar lifecycle must be native to the workload scheduler where possible: start before application traffic, remain through application drain, and terminate after forwarding completes. A generic helper container that exits too early breaks request drain.
 
 ### Node or shared proxy
 
-Advantages:
+A shared proxy, whether one per node or one per namespace, reverses each of those trades. One proxy serves many workloads, so its runtime, configuration, and control-plane stream are paid for once, and it can be upgraded without touching application pods. Connection pools to common upstreams can be shared.
 
-- amortized memory, connections, and control-plane streams;
-- independent upgrades from application pods;
-- fewer local processes and potentially fewer duplicate upstream pools.
-
-Costs:
-
-- one proxy fault affects many workloads;
-- per-tenant fair scheduling and memory isolation become mandatory;
-- source workload attribution must be unspoofable;
-- policy and secret scoping are harder;
-- shared pools can leak identity or authorization context if keys are incomplete.
+Everything the sidecar isolated is now shared, and each kind of sharing needs an explicit defense. A fault in the proxy affects every workload on the node. One workload that opens many slow connections can fill the shared buffers and starve its neighbors, so fair scheduling and memory accounting per tenant become mandatory. The proxy must also determine which workload each connection came from, and that determination must be impossible to spoof, because all policy depends on it. With a sidecar the answer was implicit in the topology. Here it has to be established from kernel-level facts about the connection. Scoping of policy and secrets is harder for the same reason, and a shared connection pool whose key omits some part of the caller's identity can hand one caller a connection authenticated as another.
 
 A shared connection can be reused across callers only when transport identity, destination, policy, tenant, protocol settings, and upstream authorization semantics permit it.
 
@@ -397,7 +382,9 @@ $$
 A_{\text{worst}} = a_1 a_2 a_3.
 $$
 
-A declarative retry policy does not know whether a non-idempotent application operation committed before a reset. The route contract must classify method safety and idempotency, and the application must participate when deduplication is required.
+The multiplication is easy to underestimate. Suppose the application's client library retries three times, the caller's proxy is configured for three attempts, and the service being called itself retries its own downstream three times. Each layer's setting looks conservative. Together they permit twenty-seven attempts against the bottom service for one user request, and they do so precisely when that service is slow, since slowness is what triggers the retries. A dependency that is struggling at twice its comfortable load can be pushed to many times that by the layers above it trying to help. Each team configured its own layer reasonably, and no one was responsible for the product.
+
+A declarative retry policy also does not know whether a non-idempotent application operation committed before a reset. The route contract must classify method safety and idempotency, and the application must participate when deduplication is required.
 
 ### Mesh retry invariants
 
@@ -414,7 +401,7 @@ See [Retries, Timeouts, and Hedging](../06-scaling/10-retries-timeouts-hedging.m
 
 ## Control-Plane Outage and Stale State
 
-Separate configuration classes because they expire differently:
+Since the data plane runs on a local copy of its configuration, it survives a control-plane outage, and the question becomes how long it should be allowed to. The answer is different for each kind of state, and treating them alike produces one of two failures. If nothing is allowed to go stale, a control-plane outage becomes a total outage, which defeats the purpose of separating the planes. If everything is allowed to go stale indefinitely, a proxy cut off from the control plane will go on honoring an authorization that was revoked an hour ago and presenting a certificate past its expiry. Routing information that is a few minutes old is usually harmless. A revoked permission that is a few minutes old may not be. We therefore separate configuration into classes according to how each expires:
 
 | State class | Examples | Safe through outage? |
 |---|---|---|
@@ -688,9 +675,9 @@ Test policy on the actual intercepted representation. Unit tests of a declarativ
 
 ## Decision Framework
 
-### Should you deploy a mesh?
+### Should You Deploy a Mesh?
 
-A mesh is justified when several are true:
+The honest starting position is that a mesh is expensive, in machines, in latency, and above all in the operational skill needed to run identity rotation and configuration rollout without causing outages. Many organizations adopt one because it has become conventional and then find they have acquired a large system to solve a problem they did not have. The question to ask is whether the uniformity it provides is worth more than the system costs to run. A mesh is justified when several of the following are true:
 
 - many services and languages need uniform workload identity and transport policy;
 - teams repeatedly implement incompatible discovery, TLS, retry, or telemetry logic;

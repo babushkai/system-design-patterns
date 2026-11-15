@@ -8,6 +8,10 @@ Background-job execution covers job records and transitions, receive/claim/compl
 
 ## Primary Evidence and Scope
 
+Some work is too slow to do while a user waits. Sending an email, resizing an image, generating a report, or calling a slow outside service may take seconds or minutes, and a web request that waits for it holds a connection open and risks timing out. The usual remedy is to record that the work needs doing, answer the user at once, and have a separate pool of worker processes carry it out afterward.
+
+The pattern is simple and its difficulties are all in the details of failure. A worker may crash in the middle of a job, so the system needs a way to notice and hand the job to another worker, which in turn means that a job may run more than once and must be written to tolerate that. A job that always fails must stop being retried at some point and be set aside for inspection. A sudden flood of one kind of job must not delay every other kind behind it, which calls for separate queues or some scheme of priority. And the worker pool must not be able to overwhelm the systems it calls: a hundred workers each retrying against a struggling database make its situation worse.
+
 | Primary evidence | What it establishes | Boundary |
 |---|---|---|
 | Amazon SQS visibility and delete documentation | Receive returns a receipt handle and temporarily hides a message; visibility can change; delete uses the latest handle; standard queues may still redeliver | SQS semantics, not RabbitMQ or database-row claims |

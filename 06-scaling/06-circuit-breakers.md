@@ -10,7 +10,11 @@ Prefer local enforcement because each caller sees its own route, deadlines, and 
 
 ---
 
-## 1. Dependency Contract
+## Dependency Contract
+
+When a service that others depend on becomes slow, its callers suffer in a way that is worse than if it had stopped altogether. Each call to it now occupies a thread or a connection for the full length of a timeout before failing. The caller has a limited number of threads, and soon all of them are waiting on the slow dependency. At that point the caller can do nothing else, including serve requests that never needed the dependency. The caller's own callers then begin to wait in the same way, and the failure spreads upward through the system.
+
+The circuit breaker takes its name and its logic from the electrical device. It watches the outcomes of calls to a dependency, and when failures pass a threshold it opens, after which calls fail immediately without being attempted. The caller is spared the waiting and keeps its threads for other work, and the struggling dependency is spared the load, which gives it a chance to recover. After an interval the breaker lets a small number of trial calls through, and closes again if they succeed. A dependency that is failing should be made to fail quickly, so that its failure costs its callers as little as possible.
 
 Define one breaker scope:
 
@@ -39,7 +43,7 @@ Define one breaker scope:
 
 ---
 
-## 2. Data Plane and Control Plane
+## Data Plane and Control Plane
 
 ~~~mermaid
 flowchart LR
@@ -73,7 +77,7 @@ The data plane makes decisions without a synchronous control-plane round trip. I
 
 ---
 
-## 3. Scope and Outcome Classification
+## Scope and Outcome Classification
 
 ### Scope narrowly enough to isolate failure
 
@@ -110,7 +114,7 @@ Record local-origin and remote-origin failures separately. This distinguishes a 
 
 ---
 
-## 4. State Machine and Rolling Evidence
+## State Machine and Rolling Evidence
 
 ~~~mermaid
 stateDiagram-v2
@@ -158,7 +162,7 @@ An exponentially weighted estimate reacts smoothly but does not provide a finite
 
 ---
 
-## 5. Concurrency Limits and Bulkheads
+## Concurrency Limits and Bulkheads
 
 An error breaker reacts too late to pure slowness. When latency rises, in-flight work grows:
 
@@ -207,7 +211,7 @@ Rate limiting in [Rate Limiting](./05-rate-limiting.md) controls admitted entitl
 
 ---
 
-## 6. Probe and Recovery Design
+## Probe and Recovery Design
 
 An open interval should be backoff with jitter, not one fleet-wide timer. If thousands of clients all probe at the same instant, recovery traffic becomes another outage.
 
@@ -232,7 +236,7 @@ Keep the breaker able to reopen immediately during ramp.
 
 ---
 
-## 7. Local versus Distributed Breakers
+## Local versus Distributed Breakers
 
 ### Local state
 
@@ -277,7 +281,7 @@ Global telemetry should advise, not erase, local evidence without a clear author
 
 ---
 
-## 8. Fallbacks Are Dependencies
+## Fallbacks Are Dependencies
 
 A fallback may return:
 
@@ -292,7 +296,7 @@ Fallbacks consume capacity. If every failed recommendation call queries a shared
 
 ---
 
-## 9. Concrete Failure Trace: Healthy Probe, Recovery Storm
+## Concrete Failure Trace: Healthy Probe, Recovery Storm
 
 1. A database-backed dependency slows and local breakers open.
 2. Every caller schedules the same open duration.
@@ -306,7 +310,7 @@ The breaker did not fail; its recovery contract was wrong. Jitter probe schedule
 
 ---
 
-## 10. Capacity and Cost Model
+## Capacity and Cost Model
 
 Let:
 
@@ -332,7 +336,7 @@ Memory cost is scopes × rolling buckets plus endpoint/priority dimensions. Boun
 
 ---
 
-## 11. Operations and Migration
+## Operations and Migration
 
 ### Rollout
 
@@ -359,7 +363,7 @@ Manual force-open/force-close must expire automatically. A forgotten force-close
 
 ---
 
-## 12. Security and Governance
+## Security and Governance
 
 - Do not treat authentication/authorization failures as dependency outages.
 - Authenticate and sign dynamic policy/override distribution.
@@ -373,7 +377,7 @@ A breaker is not a DDoS defense; admission and abuse policy belong at an earlier
 
 ---
 
-## 13. Observability
+## Observability
 
 Per scope, record:
 
@@ -390,7 +394,7 @@ Fleet views need the distribution of local states, not only “percent open.” 
 
 ---
 
-## 14. Verification
+## Verification
 
 - classify every protocol/domain outcome with table-driven tests;
 - inject isolated endpoint, zone-path, operation, and whole-cluster failures;
@@ -409,7 +413,7 @@ Measure goodput and user-visible deadline success. Fast breaker rejection alone 
 
 ---
 
-## 15. Decision Framework
+## Decision Framework
 
 | Need | Mechanism |
 |---|---|

@@ -8,6 +8,10 @@ Dense retrieval covers vector generation, approximate-nearest-neighbor (ANN) str
 
 ## Workload and Service Contract
 
+Keyword search finds documents that contain the words in the query. It cannot find a document that expresses the same idea in different words, and it has nothing to offer for images or audio. Vector search addresses this by representing each item as a point in a space of several hundred or several thousand dimensions, placed there by a machine-learning model so that items with similar meaning lie close together. A search then consists of finding the stored points nearest to the point representing the query.
+
+Finding those nearest points exactly means comparing the query with every stored vector, which is too slow for a large collection, and the index structures that make low-dimensional search efficient stop working when the number of dimensions is large. Practical systems therefore settle for approximate answers. They build a structure that examines a small fraction of the vectors and finds most of the true nearest neighbours most of the time. The commonest such structure is a graph in which each vector is linked to its near neighbours, and a search moves through the graph toward the query. The fraction of true neighbours found is called recall, and it can always be raised by doing more work, so every such system is tuned along a trade among recall, speed, and memory. The vectors themselves are large, and compressing them is usually necessary for the index to fit in memory.
+
 Define the retrieval operation in terms a caller can verify:
 
 ```text

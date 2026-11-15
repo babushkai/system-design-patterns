@@ -8,6 +8,10 @@ Its contract is stricter than fast lookup. ACL writes are externally consistent,
 
 ## Publication Boundary
 
+Every product that lets users share things must answer, on almost every request, whether this user may perform this action on this object. At Google the same question arose across Drive, Photos, YouTube, Calendar, and many other services, each of which had built its own answer, and sharing between products was awkward as a result. Zanzibar is a single authorization system that serves all of them, and it has to do so with very low latency, since a permission check lies on the path of nearly every request.
+
+Its model is deliberately small. Permissions are stored as tuples stating that a user, or a set of users, has a named relation to an object, and a configuration language describes how relations imply one another, so that an editor is also a viewer and a member of a group inherits the group's access. A check becomes a search through this graph. The subtlest part of the paper is about consistency. A permission system must never apply an old access list to new content, or a user who has just been removed from a document could read what was written after their removal. Zanzibar avoids this by having clients carry a token that records how fresh a check must be, which lets the system serve most checks from slightly stale data without ever violating that ordering.
+
 - **Paper:** *Zanzibar: Google's Consistent, Global Authorization System*
 - **Venue and version:** USENIX Annual Technical Conference 2019, proceedings paper, pages 33–46
 - **Authors:** Ruoming Pang, Ramón Cáceres, Mike Burrows, Zhifeng Chen, Pratik Dave, Nathan Germer, Alexander Golynski, Kevin Graney, Nina Kang, Lea Kissner, Jeffrey L. Korn, Abhishek Parmar, Christopher D. Richards, and Mengzhi Wang

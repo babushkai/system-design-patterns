@@ -8,6 +8,10 @@ The engine is a distributed system with three hard problems that are not about s
 
 ## Primary Evidence and Scope
 
+An analytical query asks a question of a very large amount of data: total revenue by product and month across three years of orders. The database must read perhaps billions of rows and combine them, and the user is waiting. The engineering of analytical engines is about making that read as cheap as possible and spreading it over as many processors as possible.
+
+Several ideas recur. Data is stored by column, so that a query reading three fields out of a hundred touches only those three. Files carry small summaries of their contents, such as the minimum and maximum of each column, which let the engine skip files that cannot contain matching rows without opening them. Execution proceeds over batches of values and not row by row, which lets the processor apply one operation to thousands of values in a tight loop. And the work is divided among many machines that each scan a share of the data and exchange intermediate results. Before any of this runs, an optimizer chooses a plan, in particular the order in which tables are joined, and the difference between a good order and a bad one can be several orders of magnitude in running time. Its choices depend on estimates of how many rows each step will produce, and when those estimates are wrong, so is the plan.
+
 | Source | What it establishes | Boundary |
 |---|---|---|
 | Graefe, Volcano (SIGMOD 1990) | The iterator model and the exchange operator, which encapsulates parallelism so other operators stay single-threaded | An execution framework, not a performance claim for modern hardware |

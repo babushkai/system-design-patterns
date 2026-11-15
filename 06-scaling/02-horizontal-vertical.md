@@ -8,6 +8,10 @@ A scaling plan must define **scaling dimensions, bottleneck models, and safe man
 
 ## Primary Evidence and Scope
 
+A system that has outgrown its hardware can be given a larger machine or more machines. A larger machine is by far the simpler remedy. Nothing about the software changes, there is still one copy of the data, and none of the difficulties of distribution arise. Its limits are equally plain: the largest machine available has a fixed size, its price rises faster than its capacity, and it remains one machine that can fail.
+
+Adding machines removes those limits and replaces them with others. The work has to be divisible among machines, and whatever part of it cannot be divided sets a ceiling on the gain. If a twentieth of a task must be done serially, no number of machines can speed the task up more than twentyfold. Beyond that, machines working together must coordinate, and coordination costs something that grows with their number, so that past a certain point adding a machine makes the whole system slower. The practical conclusion is that scaling out is not a property a system can be assumed to have. It has to be designed for, chiefly by removing shared state from the parts meant to scale, and it should be measured before it is relied on.
+
 | Primary evidence | What it establishes | Boundary |
 |---|---|---|
 | Amdahl, AFIPS 1967 | For fixed work, the serial fraction bounds speedup from parallel resources | A model, not a capacity forecast without measured fractions |

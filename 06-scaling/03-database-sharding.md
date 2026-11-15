@@ -10,6 +10,10 @@ Evidence labels distinguish **Documented** claims backed by dated primary or off
 
 ## When Sharding Is Justified
 
+Sharding splits one database into several, each holding a portion of the data, so that no single machine has to store everything or accept every write. It is the standard remedy for a database that has outgrown its hardware, and it is also among the most expensive changes an engineering organization can make. The cost is seldom in the initial split. It lies in everything a single database provided for nothing and a sharded one does not: transactions across any rows, joins between any tables, unique constraints over the whole dataset, a consistent backup. Each of these becomes a problem for the application, permanently.
+
+The decision therefore deserves resistance. A larger machine, read replicas, caching, archiving of old data, and moving a heavy workload to a system built for it are all cheaper and all reversible, and they should be exhausted first. When sharding is unavoidable, the choice of key by which data is divided outweighs every other decision, because it determines which operations stay within one shard and remain simple, and which cross shards and become distributed problems. A key that suits today's queries and not next year's is very difficult to change afterward.
+
 **Reference design.** Start with a workload envelope, not a shard count:
 
 - peak and sustained read/write operations by access path;

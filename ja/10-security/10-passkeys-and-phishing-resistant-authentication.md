@@ -1,6 +1,6 @@
 # パスキーとフィッシング耐性認証
 
-> **翻訳の状態:** 現行の[英語版](../../10-security/10-passkeys-and-phishing-resistant-authentication.md)からの翻訳です。
+> **翻訳の状態:** この日本語版は英語版の以前の版に基づいており、現行の[英語版](../../10-security/10-passkeys-and-phishing-resistant-authentication.md)とは構成や内容が異なります。最新の内容は英語版を参照してください。
 
 ## TL;DR
 

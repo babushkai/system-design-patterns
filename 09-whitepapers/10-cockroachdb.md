@@ -6,6 +6,10 @@ CockroachDB's 2020 design assembles range-level Raft, MVCC timestamps, transacti
 
 ## Publication Identity and Frozen Version
 
+Spanner showed that a database could offer consistent transactions across the globe, and it depended on atomic clocks and satellite receivers that few organizations have. CockroachDB set out to provide similar guarantees on ordinary hardware in any cloud, and the interesting part of the paper is how it manages without precise time.
+
+The system keeps data in sorted ranges, each replicated by its own consensus group, and layers transactions across ranges on top. For ordering it uses clocks that combine physical time with a logical counter, together with an assumed upper bound on how far any two machines' clocks may differ. Spanner waits out its clock uncertainty on every commit. CockroachDB does not wait, and handles the problem at the moment it arises. When a transaction reads a value whose timestamp falls inside the window where the clocks' disagreement makes the order ambiguous, the transaction is restarted at a later timestamp. The cost of uncertainty is thus paid only by the transactions that actually meet it. The paper is also notable for treating geography as part of the schema, letting a table specify which regions its data should live in and survive the loss of.
+
 - **Paper:** *CockroachDB: The Resilient Geo-Distributed SQL Database*
 - **Authors:** Rebecca Taft, Irfan Sharif, Andrei Matei, Nathan VanBenschoten, Jordan Lewis, Tobias Grieger, Kai Niemi, Andy Woods, Anne Birzin, Raphael Poss, Paul Bardea, Amruta Ranade, Ben Darnell, Bram Gruneir, Justin Jaffray, Lucy Zhang, and Peter Mattis
 - **Venue and version:** ACM SIGMOD International Conference on Management of Data, 2020, pages 1493–1509

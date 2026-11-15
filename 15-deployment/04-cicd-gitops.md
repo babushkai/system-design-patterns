@@ -20,7 +20,11 @@ Build once and identify by digest. Promote the same artifact. Make every control
 
 ---
 
-## 1. Delivery as a State Machine
+## Delivery as a State Machine
+
+A change to software passes through several stages between an engineer's editor and production: it is merged, built, tested, packaged, and released. When those stages are performed by hand, each is an opportunity for error and delay, and releases become infrequent and large, which makes each one riskier. Automating the path makes releases cheap enough to do many times a day, and small releases are far easier to understand and to reverse than large ones.
+
+The traditional pipeline pushes changes outward. A script, at the end of a build, issues commands that alter the running system. This works, and it leaves a gap, since nothing afterward checks that the system remains as the script left it. Someone may change a setting by hand, or a step may half fail, and what is running drifts from what anyone believes is running. The GitOps approach reverses the direction. The desired state of the system is written down in a repository, and an agent inside the environment continually compares that description with reality and corrects any difference. The repository becomes the single record of what should be running and who changed it, and reverting to a previous state means reverting a commit.
 
 A useful model separates source, artifact, promotion, and runtime state:
 
@@ -53,7 +57,7 @@ These records answer different questions:
 - Did the environment converge on that intent?
 - Did the new version behave acceptably under real traffic?
 
-### 1.1 Core invariants
+### Core invariants
 
 1. **Content identity:** an artifact digest identifies immutable bytes; a mutable tag is never the authority for promotion.
 2. **One build, many promotions:** later environments receive the tested artifact, not a rebuild from the same source.
@@ -68,7 +72,7 @@ These records answer different questions:
 
 ---
 
-## 2. Planes and Trust Boundaries
+## Planes and Trust Boundaries
 
 ```mermaid
 flowchart LR
@@ -91,7 +95,7 @@ The **source/review plane** establishes human and automation authority. The **ve
 
 Do not collapse the entire graph into one CI service account. A compromised test runner should not write trusted attestations or mutate production. A production reconciler needs only the resources and namespaces it owns, not organization-wide administration.
 
-### 2.1 Control-plane availability
+### Control-plane availability
 
 The running data plane should not depend on the CI service for every request. During a delivery-control outage, existing workloads normally continue on the last-known-good state. Expiring secrets, certificates, policy bundles, and feature leases can still make the control plane time-sensitive; inventory those dependencies explicitly.
 
@@ -99,9 +103,9 @@ Recovery must not require rebuilding the old artifact. Retain approved artifact 
 
 ---
 
-## 3. Continuous Integration as a Verified Build Graph
+## Continuous Integration as a Verified Build Graph
 
-### 3.1 Change graph and feedback budget
+### Change graph and feedback budget
 
 A CI scheduler evaluates a dependency graph, not an unordered list of scripts:
 
@@ -120,7 +124,7 @@ Fast pre-merge feedback limits developer queueing and change batch size. Expensi
 
 Affected-target execution can reduce work in a monorepo, but the dependency graph becomes a correctness boundary. Missing an edge can let a breaking library change bypass a consumer test. Periodically compare affected-only results against full-graph builds and treat mismatches as platform defects.
 
-### 3.2 Hermeticity and reproducibility
+### Hermeticity and reproducibility
 
 A hermetic action declares and pins:
 
@@ -135,7 +139,7 @@ A hermetic action declares and pins:
 
 Bit-for-bit reproducibility is ideal for some artifacts but not always practical because signing timestamps, archive ordering, or toolchains introduce variation. At minimum, make inputs complete and attest them. Independently rebuild high-value artifacts and compare meaningful outputs where the ecosystem supports it.
 
-### 3.3 Cache correctness
+### Cache correctness
 
 A build cache key must include every semantic input:
 
@@ -147,7 +151,7 @@ An under-keyed cache can produce a green build with an output generated from dif
 
 Separate cache namespaces by trust level, verify returned content digests, make write permission narrower than read permission, and allow a clean uncached rebuild. Cache hit rate is not success if cache correctness is unproven.
 
-### 3.4 Flaky and nondeterministic tests
+### Flaky and nondeterministic tests
 
 Retrying a failing test until it passes converts evidence into selection bias. Record every attempt. Quarantine only with an owner, expiry, impact classification, and release policy. Track:
 
@@ -161,9 +165,9 @@ Randomized/property tests should record seeds and minimized counterexamples. Int
 
 ---
 
-## 4. Artifact Identity, Provenance, and Admission
+## Artifact Identity, Provenance, and Admission
 
-### 4.1 Build once
+### Build once
 
 Promote a digest such as:
 
@@ -173,7 +177,7 @@ registry.example/payments@sha256:4f8c...
 
 not `payments:release` or `payments:latest`. Environment-specific configuration remains outside the binary/image and is versioned separately. If packaging genuinely must differ by platform, each platform artifact is a distinct content identity derived from the same source revision and tested explicitly.
 
-### 4.2 Evidence graph
+### Evidence graph
 
 The release record should bind:
 
@@ -192,7 +196,7 @@ An SBOM inventories components; it does not prove the artifact is safe. A signat
 
 SLSA defines incremental supply-chain guarantees. in-toto models steps and attestations. Sigstore provides short-lived identity-based signing and transparency mechanisms. Select a profile, then test verifier behavior for expired identity, wrong repository, missing transparency evidence, and digest mismatch.
 
-### 4.3 Admission policy
+### Admission policy
 
 At promotion and/or cluster admission, evaluate immutable facts:
 
@@ -208,7 +212,7 @@ Policy failure and policy-service unavailability are distinct outcomes. Producti
 
 ---
 
-## 5. Promotion Is Not Rebuilding
+## Promotion Is Not Rebuilding
 
 A promotion advances an environment pointer:
 
@@ -220,7 +224,7 @@ A promotion advances an environment pointer:
 
 The operation has an ID and precondition on current environment revision. If two automation paths race, compare-and-swap prevents an older promotion from overwriting the newer one.
 
-### 5.1 Gates
+### Gates
 
 Gates can establish:
 
@@ -235,7 +239,7 @@ A human approval proves a person with a role accepted the change; it does not pr
 
 [Progressive Delivery and Deployment Strategies](./01-deployment-strategies.md) covers rolling, canary, blue-green, shadow, and rollback thresholds. [Feature-Flag Control Planes](./02-feature-flags.md) covers runtime behavior decoupling. The delivery control plane moves immutable candidates and evidence into both systems.
 
-### 5.2 Stateful ordering
+### Stateful ordering
 
 A safe multi-system promotion might be:
 
@@ -252,7 +256,7 @@ The pipeline should query actual migration and fleet state rather than trust ela
 
 ---
 
-## 6. GitOps as a Reconciliation Protocol
+## GitOps as a Reconciliation Protocol
 
 GitOps applies the controller pattern to operations: desired state is declarative, versioned/immutable, pulled automatically, and continuously reconciled. Git provides reviewable intent and history; the running cluster remains a distributed system whose observed state can differ.
 
@@ -271,7 +275,7 @@ sequenceDiagram
     R->>S: applied rev 184, healthy/failed
 ```
 
-### 6.1 Reconcile loop
+### Reconcile loop
 
 For each owned object:
 
@@ -285,7 +289,7 @@ For each owned object:
 
 Convergence is not the same as success. A controller can continuously converge on a configuration that crashes the application. Runtime verification is a separate gate.
 
-### 6.2 Ownership and drift
+### Ownership and drift
 
 Multiple reconcilers or humans editing the same field create a control loop fight. Define field/resource ownership and detect conflicts. Choose drift policy per resource:
 
@@ -296,7 +300,7 @@ Multiple reconcilers or humans editing the same field create a control loop figh
 
 Deletion semantics are dangerous. Removing a manifest might delete a production database. Require finalizers, retention policy, explicit prune approval, and resource-class safeguards. “Git revert” cannot resurrect deleted durable data.
 
-### 6.3 Repository topology
+### Repository topology
 
 App and environment intent may share or separate repositories. The decision depends on authority and scale, not dogma:
 
@@ -309,7 +313,7 @@ At fleet scale, avoid one giant repository/reconciler hot spot. Partition by env
 
 ---
 
-## 7. Configuration and Secret Delivery
+## Configuration and Secret Delivery
 
 An environment revision is usually `(artifact digest, config digest, secret references, policy revision)`. Configuration needs schema validation, defaults, compatibility, and rollout ordering just like code.
 
@@ -325,7 +329,7 @@ CI should use short-lived federated credentials rather than static production se
 
 ---
 
-## 8. Scale and Cost Model
+## Scale and Cost Model
 
 Consider an illustrative monorepo:
 
@@ -369,7 +373,7 @@ $$
 
 across the fleet, before drift storms. Use watches/informers, incremental diffs, jitter, work queues, caching, and per-cluster rate limits. A repository commit that changes a shared base can enqueue hundreds of thousands of resources; stage fan-out and reserve API capacity.
 
-### 8.1 Pipeline SLOs
+### Pipeline SLOs
 
 Measure distributions by trust/risk class:
 
@@ -387,9 +391,9 @@ Deployment frequency, lead time for changes, change failure, and restoration mea
 
 ---
 
-## 9. Concrete Failure Traces
+## Concrete Failure Traces
 
-### 9.1 Under-keyed build cache promotes old code
+### Under-keyed build cache promotes old code
 
 1. A compiler flag changes artifact semantics.
 2. The cache key includes source files but not the flag.
@@ -399,7 +403,7 @@ Deployment frequency, lead time for changes, change failure, and restoration mea
 
 Include all semantic inputs in cache identity, verify cached content, run clean builds on protected candidates, and make provenance cover the action/input graph rather than source commit alone.
 
-### 9.2 Stale GitOps reconciler rolls back a newer release
+### Stale GitOps reconciler rolls back a newer release
 
 1. Reconciler A observes desired revision 500 and pauses.
 2. Reconciler B applies revision 501.
@@ -408,7 +412,7 @@ Include all semantic inputs in cache identity, verify cached content, run clean 
 
 Bind plans to desired and observed resource versions, reject stale writes, and report applied revision from observed state. Idempotence alone does not prevent out-of-order control events.
 
-### 9.3 Automatic drift correction fights incident response
+### Automatic drift correction fights incident response
 
 1. An operator reduces worker concurrency to protect a database.
 2. The GitOps controller restores the declared high value every minute.
@@ -416,7 +420,7 @@ Bind plans to desired and observed resource versions, reject stale writes, and r
 
 Provide a bounded break-glass/suspend mechanism with identity, expiry, reason, and audit. Reconcile the emergency state back through the desired-state workflow before resuming automatic correction.
 
-### 9.4 Rollback binary cannot read the new schema
+### Rollback binary cannot read the new schema
 
 1. Release 12 changes a column and begins writing a new representation.
 2. Runtime verification fails for an unrelated latency regression.
@@ -425,7 +429,7 @@ Provide a bounded break-glass/suspend mechanism with identity, expiry, reason, a
 
 Promotion policy must query schema compatibility and migration phase. Prefer expand/contract with old-reader compatibility; otherwise rollback is a forward recovery plan, not a digest change.
 
-### 9.5 Untrusted pull request steals production identity
+### Untrusted pull request steals production identity
 
 1. A fork changes a build script.
 2. The workflow exposes a long-lived registry/cloud credential to all PR jobs.
@@ -434,7 +438,7 @@ Promotion policy must query schema compatibility and migration phase. Prefer exp
 
 Run untrusted code without protected secrets, separate trusted post-review workflows, use short-lived contextual identity, restrict registry paths, and verify provenance/admission constraints.
 
-### 9.6 Shared-base change creates a reconcile storm
+### Shared-base change creates a reconcile storm
 
 1. A common manifest library changes.
 2. Every cluster receives a desired-state update simultaneously.
@@ -446,7 +450,7 @@ Canary desired-state fan-out by cell, jitter queues, isolate control traffic, se
 
 ---
 
-## 10. Multi-Region, Recovery, and Bootstrap
+## Multi-Region, Recovery, and Bootstrap
 
 Partition delivery components by blast radius. A single config repository or signing identity can be global, but compromise or outage then affects every region. Protect roots strongly, replicate read paths, and limit environment write authority.
 
@@ -466,9 +470,9 @@ Test with the primary CI provider, repository, registry region, identity issuer,
 
 ---
 
-## 11. Verification and Migration
+## Verification and Migration
 
-### 11.1 Test the delivery system
+### Test the delivery system
 
 - Rebuild candidates from a clean environment and compare outputs/evidence.
 - Mutate each provenance field and prove admission rejects it.
@@ -481,7 +485,7 @@ Test with the primary CI provider, repository, registry region, identity issuer,
 - Attempt credential access from untrusted fork workflows.
 - Restore a region from retained artifacts and desired state without rebuilding.
 
-### 11.2 Migrate incrementally
+### Migrate incrementally
 
 To replace script-driven deployment with a delivery control plane:
 
@@ -498,7 +502,7 @@ Avoid a flag day. Two controllers actively owning the same fields are more dange
 
 ---
 
-## 12. Design Review Framework
+## Design Review Framework
 
 Ask:
 

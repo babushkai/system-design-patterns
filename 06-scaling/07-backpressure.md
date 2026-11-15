@@ -2,17 +2,21 @@
 
 ## TL;DR
 
-Backpressure is the propagation of downstream capacity information toward producers. It is complete only when it changes **enqueue or production behavior**. Slowing workers while an upstream accepts an unbounded backlog merely moves the failure.
+Backpressure is the propagation of downstream capacity information toward producers. It is complete only when it changes **enqueue or production behavior**. If workers slow down while something upstream continues to accept an unbounded backlog, the failure has only been moved to another place.
 
-Every boundary needs a finite buffer, a full-buffer action, cancellation/deadline handling, and a signal the producer can obey. Options include blocking or asynchronous demand, explicit credits, cheap rejection, coalescing, sampling, degradation, or intentional loss. Durable queues absorb a bounded mismatch in time; they do not create service capacity.
+Every boundary needs a finite buffer, an action to take when that buffer is full, handling for cancellation and deadlines, and a signal the producer can obey. The options include blocking or asynchronous demand, explicit credits, cheap rejection, coalescing, sampling, degradation, and intentional loss. A durable queue absorbs a bounded mismatch in time between arrival and completion. It does not create service capacity.
 
-Backpressure governs already admitted work and defines the overload policy at every buffer. [Rate Limiting](./05-rate-limiting.md) owns entitlement/admission budgets, [Circuit Breakers](./06-circuit-breakers.md) own dependency health and in-flight calls, [Auto-Scaling](./08-auto-scaling.md) owns delayed capacity changes, and [Retries, Timeouts, and Hedging](./10-retries-timeouts-hedging.md) owns repeated attempts.
+Backpressure governs work that has already been admitted and defines the overload policy at every buffer. [Rate Limiting](./05-rate-limiting.md) owns entitlement and admission budgets, [Circuit Breakers](./06-circuit-breakers.md) own dependency health and in-flight calls, [Auto-Scaling](./08-auto-scaling.md) owns delayed capacity changes, and [Retries, Timeouts, and Hedging](./10-retries-timeouts-hedging.md) owns repeated attempts.
 
 ---
 
-## 1. Flow-Control Contract
+## Flow-Control Contract
 
-For every producer → buffer → consumer edge, define:
+Every system has a rate at which work arrives and a rate at which it can be completed. When the first exceeds the second, the excess has to go somewhere, and there are only three places for it. It can wait in a buffer. It can be refused or discarded. Or the producer can be made to send less. No fourth option exists, and a system that has not decided among these has had the decision made for it, usually by an unbounded queue that grows until the process runs out of memory.
+
+The unbounded queue is the default in most software, and it is attractive because it appears to make the problem go away. Under a brief burst it absorbs the excess and drains afterward. Under sustained overload it has a specific and unpleasant behavior. The queue lengthens, so each item waits longer. Callers time out and abandon their requests, but the requests are still in the queue and will still be processed, at full cost, for nobody. Throughput stays high and the amount of useful work falls toward zero. Eventually memory is exhausted, the process is killed, and everything in the queue is lost, including the work that could have been completed had the system refused the rest.
+
+Backpressure is the discipline of making the decision explicitly. For every edge from a producer through a buffer to a consumer, we define:
 
 | Field | Required answer |
 |---|---|
@@ -36,9 +40,11 @@ For every producer → buffer → consumer edge, define:
 6. Critical traffic retains a bounded share during optional-traffic overload.
 7. Recovery load is bounded; clearing a backlog cannot exceed downstream safe capacity.
 
+The second invariant is the definition of the subject. A signal that reaches no producer, or reaches one that ignores it, is not backpressure.
+
 ---
 
-## 2. Data Plane and Control Plane
+## Data Plane and Control Plane
 
 ~~~mermaid
 flowchart LR
@@ -69,25 +75,31 @@ flowchart LR
     SCALE -.delayed capacity.-> C
 ~~~
 
-The data plane must remain bounded without waiting for the autoscaler or configuration service. The control plane can change capacity and policy later; it cannot rescue an unbounded buffer during a fast burst.
+The dotted arrows that run backward, from the consumer and the buffer to the admission boundary, are the backpressure. Work flows left to right, and information about capacity flows right to left.
+
+The diagram also separates two timescales. The data plane has to stay bounded by its own means, within milliseconds, without waiting for anything else. The control plane, including the autoscaler, works over minutes. It can add capacity and change policy after the fact. It cannot rescue an unbounded buffer during a burst that fills memory in seconds, and a design that relies on autoscaling to handle overload has no protection during the interval before the new capacity arrives.
 
 ---
 
-## 3. Flow Control at Different Layers
+## Flow Control at Different Layers
+
+Flow control exists at several layers of a system, and each layer protects only its own buffers. A recurring mistake is to assume that because one layer has flow control, the system does.
 
 ### Transport flow control
 
-TCP receive windows and HTTP/2 or QUIC stream/connection credits prevent a fast sender from overflowing protocol buffers at the receiver. They do not know whether the application’s database, worker pool, or user-level queue has capacity. If the application eagerly reads the socket into an unbounded heap queue, transport backpressure has ended too early.
+TCP has had flow control since its beginning. A receiver advertises a window, the number of bytes it has room for, and the sender may not exceed it. When the receiving application stops reading, the kernel's buffer fills, the advertised window shrinks to zero, and the sender stops. HTTP/2 and QUIC add a similar scheme of credits for each stream and connection.
+
+This protects the receiver's protocol buffers and nothing beyond them. TCP has no knowledge of whether the application's database, worker pool, or internal queue has capacity. If the application eagerly reads everything from the socket and appends it to an unbounded in-memory queue, the kernel's buffer never fills and the window never closes. The sender is told, in effect, that the receiver has unlimited capacity, and transport backpressure has ended one step too early.
 
 ### Application demand and credits
 
-Pull/demand protocols let a consumer grant a bounded number of elements or bytes. Reactive Streams requires demand before a publisher sends elements. Credit must correspond to actual downstream capacity, not merely the ability to copy data into another buffer.
+In a pull or demand protocol the consumer states how much it is prepared to receive, and the producer may send only that much. Reactive Streams is built on this rule: a publisher may not send an element until the subscriber has requested it. The credit must correspond to real downstream capacity. A stage that grants credit as soon as it has copied an item into its own buffer has only relocated the queue.
 
-Track bytes or weighted work when item sizes vary. “Ten messages” can mean ten tiny events or ten multi-megabyte objects.
+Where items vary in size, credits are counted in bytes or weighted work. Ten messages may be ten small events or ten objects of several megabytes each.
 
 ### Queue/broker flow control
 
-A durable broker decouples availability and permits replay. It transfers the backlog to durable storage and extends the time available to recover. Producers still need:
+A durable broker decouples the availability of producers and consumers and allows replay. In doing so it moves the backlog onto disk, which is larger than memory and survives restarts. That extends the time available to recover. It does not change the arithmetic: if arrival exceeds completion indefinitely, the disk fills as well, only later. Producers therefore still need:
 
 - quota and queue-depth/age admission;
 - broker publish failure handling;
@@ -95,17 +107,19 @@ A durable broker decouples availability and permits replay. It transfers the bac
 - a policy for expiration, compaction, or dead-lettering;
 - a consumer catch-up rate above new arrival rate.
 
-Pausing a consumer does not backpressure a producer unless queue policy eventually rejects, slows, or changes producer behavior.
+The last item is easily forgotten. To drain a backlog, consumers must process faster than new work arrives. A system whose consumers can just keep up with normal traffic can never catch up after an outage.
+
+Pausing a consumer does not, by itself, apply backpressure to a producer. The producer is affected only when queue policy eventually rejects it, slows it, or otherwise changes what it does.
 
 ### Work scheduler
 
-Concurrency permits bound work that left the queue. Separate pending work from running work. If every worker takes many items into a local prefetch buffer, the broker may look empty while a large, invisible backlog waits on workers; bound and observe prefetch.
+Concurrency permits bound the work that has left the queue and is executing. Pending and running work should be counted separately. Prefetch is a place where a backlog hides: if each worker pulls many items from the broker into a local buffer for efficiency, the broker may report an empty queue while a large backlog sits invisibly in worker memory. Prefetch is bounded and observed like any other buffer.
 
 ---
 
-## 4. Buffer Sizing and Queue Stability
+## Buffer Sizing and Queue Stability
 
-Let:
+The behavior of a queue under overload follows from simple arithmetic, and the arithmetic is worth internalizing because intuition about queues is frequently wrong. Let:
 
 - <code>lambda</code>: arrival work units/s;
 - <code>mu</code>: sustainable completion units/s;
@@ -121,60 +135,66 @@ A free buffer of <code>Q_free</code> fills after approximately:
 
 > time to full = Q_free / (lambda − mu), when lambda > mu
 
+A buffer therefore buys time, and the amount is its size divided by the excess rate. If arrivals exceed capacity by a thousand items a second, a buffer of sixty thousand items delays the inevitable by one minute. Making the buffer ten times larger makes that ten minutes. No buffer size changes the outcome of sustained overload.
+
 After arrivals fall to <code>lambda_recovery < mu</code>, a backlog <code>B</code> drains in:
 
 > drain time = B / (mu − lambda_recovery)
 
-If recovery arrival stays at or above completion, it never drains.
+The denominator is the spare capacity, the difference between what the system can do and what is still arriving. A system that normally runs at ninety percent of capacity has ten percent spare, so a backlog accumulated in one hour of total outage takes about nine hours to clear. If recovery arrival stays at or above completion, the backlog never drains. This is why incidents so often last far longer than their cause.
 
 Little’s Law relates average queue occupancy <code>Lq</code>, admitted arrival <code>lambda_a</code>, and average wait <code>Wq</code>:
 
 > Lq = lambda_a × Wq
 
-Size the queue from useful wait and memory/disk cost, not from the largest integer supported. If callers have deadline <code>D</code>, capacity beyond roughly <code>mu × D</code> often stores work that cannot finish usefully; workload variance and priorities require simulation, not blind equality.
+Read in reverse, the law tells us how long items wait: queue length divided by throughput. A queue of ten thousand items in front of a system completing a hundred a second means each item waits a hundred seconds. If callers give up after five seconds, nearly everything in that queue has already been abandoned by the time it is served.
+
+That gives the principle for sizing. A queue is sized from the wait that remains useful and from the cost of memory or disk, and the largest number the data type allows is irrelevant. If callers have a deadline <code>D</code>, capacity beyond roughly <code>mu × D</code> mostly stores work that cannot finish in time. Variance in the workload and priorities complicate this, and they call for simulation and not for blind use of the equality.
 
 ### Count and byte bounds
 
-Enforce both. A count-only queue fails on oversized items; a byte-only queue can fail on per-item metadata, timers, file descriptors, or scheduler overhead. Weighted-cost bounds protect expensive operations.
+Both are enforced. A queue bounded only by count fails when items are oversized, since a thousand items of a megabyte each is a gigabyte. A queue bounded only by bytes can fail on per-item overhead such as metadata, timers, file descriptors, or scheduler state. Bounds on weighted cost protect expensive operations.
 
 ---
 
-## 5. Backpressure Mechanisms
+## Backpressure Mechanisms
 
 ### Blocking or asynchronous wait
 
-The producer waits for capacity. This naturally propagates through a synchronous pipeline only if:
+The simplest mechanism is for the producer to wait until there is room. In a synchronous pipeline this propagates naturally, each stage waiting on the next, all the way back to the source. It is safe only under conditions:
 
 - waits have deadlines and cancellation;
 - blocked producers do not hold scarce locks/transactions;
 - thread or coroutine counts are bounded;
 - cyclic dependencies cannot deadlock.
 
-Blocking an event loop or holding a database connection while waiting turns flow control into resource starvation.
+The second condition is the one that causes trouble. A producer that blocks while holding a database connection or a lock is no longer merely waiting. It is withholding a scarce resource from everyone else, and flow control has become resource starvation. Blocking the event loop of an asynchronous runtime is worse, since it stops everything that loop serves.
 
 ### Credit or pull
 
-Consumers grant explicit demand. This gives a clear upper bound:
+Consumers grant explicit demand, which gives a clear upper bound on what can be outstanding:
 
 > outstanding elements ≤ granted credits + in-flight protocol race
 
-Return credit only after the resource it represents is actually released. Granting credit when an item is merely copied to another queue breaks the bound.
+Credit is returned only when the resource it stands for has actually been released. If credit is returned when an item has merely been copied into another queue, the bound no longer means anything.
 
 ### Explicit rejection
 
-Reject before expensive work with an overload-specific response. This is appropriate for interactive requests whose callers can degrade or retry later under the canonical retry policy. A rejection path must avoid expensive authentication, logging, serialization, or dependency calls after the decision.
+The system refuses work before doing anything expensive and returns a response that says it is overloaded. This suits interactive requests, where the caller can degrade or try again later under a proper retry policy. It is often the kindest behavior available: a caller told immediately that the system is busy can do something useful, whereas a caller left waiting for a timeout cannot.
+
+The rejection path itself must be cheap. If refusing a request involves authentication, detailed logging, serialization, or a call to a dependency, a flood of requests can overload the system through the cost of saying no.
 
 ### Shaping
 
-Delay work to a controlled rate when the caller deadline and buffer bound permit it. Shaping turns burst into queue delay; its capacity math still applies. Long shaping queues hide overload and make cancellation essential.
+Work is delayed so that it leaves at a controlled rate, where the caller's deadline and the buffer bound allow. Shaping converts a burst into queue delay, and the capacity arithmetic still applies. A long shaping queue hides overload and makes cancellation essential.
 
 ### Coalescing
 
-Replace many pending updates for the same key with the newest state, or combine identical reads into one in-flight call. This is correct only when intermediate events have no required semantics. State replication may coalesce desired state; a financial ledger may not.
+Many pending updates for the same key are replaced by the newest one, or identical reads are combined into a single in-flight call. This is very effective where it applies, and it applies only where intermediate values carry no meaning. If a user's profile is updated five times while the queue is backed up, only the final state needs to be propagated. A replication system for desired state can coalesce. A financial ledger cannot, because each entry is a fact in its own right.
 
 ### Sampling and degradation
 
-Reduce optional work:
+Optional work is reduced:
 
 - sample telemetry with known probability and weights;
 - lower image/video quality;
@@ -182,9 +202,11 @@ Reduce optional work:
 - return a cached/stale result with provenance;
 - aggregate many metrics into one summary.
 
-Make the mode visible so downstream analytics and users do not treat sampled or degraded data as complete.
+The degraded mode has to be visible. If telemetry is sampled at ten percent and the consumers of that data do not know it, they will conclude that traffic fell by ninety percent. Recording the sampling probability lets them scale the counts back up.
 
 ### Drop policy
+
+When work must be discarded, the choice of which work is a product decision:
 
 - **Drop newest:** preserves accepted order and backlog but penalizes current traffic.
 - **Drop oldest:** favors fresh work when old work loses value.
@@ -192,13 +214,15 @@ Make the mode visible so downstream analytics and users do not treat sampled or 
 - **Priority drop:** preserves critical classes but needs quotas to prevent starvation.
 - **Deadline drop:** removes objectively expired work.
 
-Choose by product semantics, never by queue library default.
+Serving the newest request first seems unfair, and under overload it is often right for interactive traffic. The oldest request in the queue is the one most likely to have been abandoned already by a caller who timed out. The newest has a caller who is still waiting. Processing in strict arrival order during overload means working through requests in decreasing order of their likelihood to matter.
+
+The choice follows from product semantics. The default behavior of a queue library was chosen by someone who did not know the product.
 
 ---
 
-## 6. End-to-End Propagation and Hidden Buffers
+## End-to-End Propagation and Hidden Buffers
 
-Inventory every place work can accumulate:
+A system is bounded only if every place where work can accumulate is bounded. There are more such places than most designs acknowledge:
 
 - client retry queue;
 - socket send/receive buffers;
@@ -212,30 +236,30 @@ Inventory every place work can accumulate:
 - database lock/wait queue;
 - fallback and dead-letter paths.
 
-The end-to-end bound is the sum of these reservoirs, and the deadline cost is their sequential wait. A bounded queue followed by an unbounded executor is not a bounded system.
+The end-to-end bound is the sum of all these reservoirs, and the time a request spends is the sum of its waits in each. A carefully bounded application queue that feeds an unbounded thread-pool executor is an unbounded system, and the bounded queue has accomplished nothing.
 
 ### Fan-out
 
-One input can create <code>F</code> downstream work units. Backpressure must account for amplification before fan-out. If branches have different speeds:
+One input may create <code>F</code> units of downstream work, and backpressure has to account for that amplification before the fan-out occurs. When the branches run at different speeds, the options are:
 
 - block all branches for strict aligned semantics;
 - buffer each branch independently within bounds;
 - drop/degrade optional branches;
 - materialize once in a durable log and let branches own lag.
 
-A slow optional consumer must not hold mandatory processing unless that coupling is deliberate.
+A slow optional consumer must not hold up mandatory processing unless that coupling was intended. If an order is written to the database and also sent to an analytics pipeline, a stall in analytics should not stop orders.
 
 ### Cycles
 
-Credit cycles can deadlock when A waits for B while B waits for A. Break cycles with bounded seed credit, separate control channels, or durable asynchronous boundaries. Never allow the backpressure signal itself to require capacity from the saturated data queue.
+Where A waits for credit from B and B waits for credit from A, both wait forever. Cycles are broken with a bounded initial grant of credit, with separate control channels, or with a durable asynchronous boundary. One rule applies generally: the backpressure signal must never itself require capacity from the queue it is reporting on. A message saying "the queue is full" that has to pass through the full queue will not arrive.
 
 ---
 
-## 7. Fairness and Priority
+## Fairness and Priority
 
-One FIFO mixes cheap/expensive, interactive/batch, and tenants. A large low-priority backlog can make critical traffic miss deadlines even after capacity returns.
+A single first-in, first-out queue treats all work alike, and work is not alike. Cheap and expensive requests, interactive and batch work, and different tenants all share the line. A large backlog of low-priority work can then cause critical traffic to miss its deadlines even after capacity has returned, because the critical work is waiting behind it.
 
-Use:
+The remedies are:
 
 - separate queues or concurrency pools by priority/resource class;
 - weighted fair scheduling;
@@ -243,15 +267,15 @@ Use:
 - aging only where starvation is worse than missing fresh deadlines;
 - reserved critical capacity plus controlled borrowing.
 
-Priority must propagate. Marking a request high priority at the edge is useless if it waits behind bulk work in the database pool.
+Priority has to propagate through every layer to be worth anything. A request marked high-priority at the edge that then waits behind bulk work for a database connection has not been prioritized.
 
-Guard against priority inflation: only trusted policy may assign classes.
+Priority also needs guarding against inflation. If callers can assign their own priority, every caller will in time mark everything as critical, and the classes lose their meaning. Only trusted policy may assign them.
 
 ---
 
-## 8. Cancellation and Abandoned Work
+## Cancellation and Abandoned Work
 
-When a client disconnects or deadline expires:
+Work that nobody is waiting for is pure waste, and under overload it is the commonest kind. When a client disconnects or a deadline expires:
 
 1. Stop admitting downstream fan-out.
 2. Remove queued work if possible.
@@ -260,13 +284,13 @@ When a client disconnects or deadline expires:
 5. Decide whether a committed side effect must finish despite caller loss.
 6. Record goodput separately from work completed too late.
 
-Cancellation is not rollback. A write may already have committed. Use idempotency and effect protocols from [Idempotency](../01-foundations/08-idempotency.md); do not blindly retry an ambiguous operation.
+Cancellation is not rollback. By the time the cancellation arrives, a write may already have committed. The caller does not know whether it did, and must not simply retry. The protocols for this situation are in [Idempotency](../01-foundations/08-idempotency.md).
 
-For long jobs, cancellation may mean “stop future steps and compensate” rather than kill a process.
+For long-running jobs, cancellation may mean stopping future steps and compensating for those already taken. Killing the process is rarely the right implementation.
 
 ---
 
-## 9. Concrete Failure Trace: Backpressure Stops at the Wrong Queue
+## Concrete Failure Trace: Backpressure Stops at the Wrong Queue
 
 1. A downstream database slows from <code>mu_normal</code> to <code>mu_degraded</code>.
 2. Consumers reduce polling and their local queues remain bounded.
@@ -276,11 +300,19 @@ For long jobs, cancellation may mean “stop future steps and compensate” rath
 6. When the database recovers, old work plus live traffic and retries hit it together.
 7. Most old results are no longer useful; goodput stays low and the database overloads again.
 
-Backpressure existed only between broker and consumer. Fix the end-to-end contract: bound queue age/bytes, reject or degrade at enqueue, propagate deadlines into messages, discard expired work, reserve recovery capacity, and drain at a rate the database can sustain.
+Each component in this trace behaved defensibly. The consumers applied backpressure correctly and protected themselves. The broker stored messages durably, as brokers do. The autoscaler saw a growing queue and added workers, as it was configured to. The failure lies in where the backpressure stopped. It ran from the database to the consumers and from the consumers to the broker, and there it ended, because the API in front of the broker never learned that anything was wrong and went on accepting work.
+
+Step 5 shows a common misdiagnosis. A long queue looks like a shortage of consumers, and adding consumers is the reflex. Here the bottleneck was the database, and more consumers meant more connections contending for a resource that was already saturated.
+
+Step 6 is the second outage. When the database recovers, it is met with the entire stored backlog, the live traffic, and the retries of everyone who timed out, all at once, and it is overloaded again. Most of that backlog is from callers who left long ago.
+
+The repair is to make the contract end to end: bound the queue by age and bytes, reject or degrade at the point of enqueue, carry deadlines inside messages so that expired work can be discarded, reserve capacity for recovery, and drain at a rate the database can sustain.
 
 ---
 
-## 10. Backpressure versus Neighboring Controls
+## Backpressure versus Neighboring Controls
+
+Several mechanisms protect a system from overload, and they are often confused because they overlap. Each answers a different question:
 
 | Mechanism | Canonical question |
 |---|---|
@@ -291,7 +323,9 @@ Backpressure existed only between broker and consumer. Fix the end-to-end contra
 | Autoscaling | How should capacity change after delayed measurements? |
 | Retry budget | How much extra attempt load may failures create? |
 
-Compose them:
+A rate limit is concerned with entitlement: what a caller is permitted to send, whatever the current load. Backpressure is concerned with capacity: what the system can accept at this moment, whoever is asking. A caller well within its rate limit may still be refused because the system is saturated, and the two refusals mean different things.
+
+They compose in sequence:
 
 1. Reject invalid/unauthorized work cheaply.
 2. Apply admission entitlement.
@@ -301,13 +335,13 @@ Compose them:
 6. Retry only within the remaining deadline and aggregate retry budget.
 7. Feed sustained demand (not uncontrolled queue growth alone) to autoscaling.
 
-The exact order depends on whether a token is charged for rejected or completed work, but the accounting boundary must be explicit.
+The exact order depends on whether a token is charged for work that was rejected or only for work that completed. Either is defensible, provided the accounting boundary is explicit.
 
 ---
 
-## 11. Capacity and Cost Model
+## Capacity and Cost Model
 
-Include:
+The cost of buffering includes:
 
 - buffer memory = queued items × per-item retained bytes plus allocator/index overhead;
 - durable storage = arrival byte rate × retained backlog time × replication factor;
@@ -317,21 +351,23 @@ Include:
 - consumer idle headroom reserved for drain;
 - cost of dropped work already partially executed.
 
-For partitioned queues, total consumer parallelism may be bounded by partitions or ordering keys. Adding workers beyond eligible partitions does not raise <code>mu</code>. Hot keys create one slow partition while fleet averages look idle.
+For partitioned queues, consumer parallelism may be limited by the number of partitions or ordering keys. Each partition is consumed by one worker at a time in order to preserve order, so adding workers beyond the number of partitions does not raise <code>mu</code>. Hot keys make this worse: one partition holding a very active key falls behind while the fleet's average utilization looks low, and adding consumers does nothing for it.
 
 To meet a drain objective <code>T_drain</code> for backlog <code>B</code> with recovery arrival <code>lambda_r</code>:
 
 > required completion rate ≥ lambda_r + B / T_drain
 
-Verify the downstream can tolerate that rate. Otherwise change the objective, shed backlog, or isolate drain capacity.
+The downstream must be able to tolerate that rate. If it cannot, the objective has to change, the backlog has to be shed, or drain capacity has to be isolated from live traffic.
 
-Cost per **useful** completion matters. During overload, high CPU with many expired completions is poor goodput, not efficiency.
+The quantity that matters is cost per **useful** completion. During overload, high CPU utilization spent completing work that has already expired is a sign of poor goodput and should not be mistaken for efficiency.
 
 ---
 
-## 12. Operations and Migration
+## Operations and Migration
 
 ### Introducing bounds
+
+Adding bounds to a system that has none will cause requests to be rejected that were previously accepted, and so it is done in stages:
 
 1. Inventory and instrument every buffer.
 2. Add byte, count, age, and deadline visibility.
@@ -341,7 +377,9 @@ Cost per **useful** completion matters. During overload, high CPU with many expi
 6. Expand while monitoring goodput and fairness.
 7. Remove or cap hidden downstream buffers.
 
-Changing buffer size or drop order changes observable semantics. Version queue messages and consumer behavior when adding deadlines, priorities, coalescing, or gap markers.
+Step 3 computes what the bound would have rejected without rejecting anything, which shows the effect of a threshold before it is enforced. Step 4 has to come before enforcement. A producer that receives a "queue full" response it does not understand will typically retry at once, which adds load at the worst moment.
+
+A change to buffer size or drop order changes behavior that others can observe. Queue messages and consumer behavior are versioned when deadlines, priorities, coalescing, or gap markers are introduced.
 
 ### Recovery runbook
 
@@ -354,9 +392,11 @@ Changing buffer size or drop order changes observable semantics. Version queue m
 - avoid retrying dropped work without a new admission decision;
 - verify the system returns to low-lag stable state after the trigger is removed.
 
+The last item checks for a condition sometimes called a metastable failure. Some overloaded systems do not recover when the original cause is removed, because the overload sustains itself through retries, cache misses, or the backlog. A system that remains saturated after the trigger has gone needs load actively removed before it will return to normal.
+
 ---
 
-## 13. Security and Governance
+## Security and Governance
 
 - Authenticate before granting tenant/priority credit, with an earlier cheap abuse guard.
 - Bound message/item size before allocation or deserialization.
@@ -367,13 +407,13 @@ Changing buffer size or drop order changes observable semantics. Version queue m
 - Protect control/credit channels from spoofing and starvation.
 - Audit emergency shedding, queue purge, replay, and priority-policy changes.
 
-Backlogs often contain the most complete copy of recently submitted sensitive data.
+Queues are easily overlooked in security reviews because they are thought of as plumbing. A backlog, and especially a dead-letter queue, often contains the most complete copy of recently submitted sensitive data in the whole system, with long retention and broad read access for debugging.
 
 ---
 
-## 14. Observability
+## Observability
 
-At every boundary:
+At every boundary we measure:
 
 - offered, admitted, completed, rejected, dropped, coalesced, sampled, and expired units/bytes;
 - queue count, bytes, oldest age, and residence-time distribution;
@@ -385,11 +425,11 @@ At every boundary:
 - fairness by bounded tenant/priority aggregation;
 - retry and dead-letter creation/replay.
 
-Queue depth without arrival and completion rate cannot predict whether lag is growing or draining. Oldest age is often closer to user impact than count.
+Queue depth is the metric everyone graphs, and by itself it says little. A depth of ten thousand may be a queue that is draining rapidly or one that is growing without limit, and only the arrival and completion rates distinguish them. The age of the oldest item is usually closer to what users experience: it states directly how long work is waiting, and it keeps rising when a consumer is stuck, even if the count is flat.
 
 ---
 
-## 15. Verification
+## Verification
 
 - burst above capacity and prove every buffer remains within count/byte bounds;
 - vary item size and processing cost independently;
@@ -404,11 +444,13 @@ Queue depth without arrival and completion rate cannot predict whether lag is gr
 - push beyond saturation, remove excess arrival, and prove autonomous recovery;
 - reconcile accepted work with completed, expired, dropped, and still-pending outcomes.
 
-Test long enough to expose retention, dead-letter, and replay loops, not only a short request burst.
+The second-to-last test is the most informative. The system is driven past saturation, the excess load is removed, and we observe whether it returns to normal unaided. A system that passes has overload behavior that can be trusted. A system that fails will turn its next brief spike into a long outage.
+
+Tests need to run long enough to expose retention, dead-letter, and replay loops. A short burst of requests reveals none of them.
 
 ---
 
-## 16. Decision Framework
+## Decision Framework
 
 | Workload | Flow-control direction |
 |---|---|
@@ -421,7 +463,9 @@ Test long enough to expose retention, dead-letter, and replay loops, not only a 
 | Cyclic topology | Explicit seed credit or durable cycle break |
 | Producer cannot slow and loss is forbidden | Provision for peak or move buffer to a capacity/retention contract that can hold it |
 
-If the producer cannot slow, work cannot be rejected, loss is forbidden, and storage is bounded, the requirements are inconsistent once arrival exceeds completion. Architecture cannot negotiate that arithmetic.
+The first row may be surprising. For a synchronous request with a short deadline, the best queue is very small or absent. A queue helps only if the work can still be useful after waiting, and an interactive request that has waited longer than its caller's patience is useless. A small concurrency limit with immediate rejection serves such traffic better than any buffer.
+
+The last row marks the limit of what design can do. If the producer cannot slow down, work cannot be rejected, loss is forbidden, and storage is bounded, then the requirements contradict one another as soon as arrival exceeds completion. One of the four has to give, and it is better to choose which in a design review than to find out in production.
 
 ---
 

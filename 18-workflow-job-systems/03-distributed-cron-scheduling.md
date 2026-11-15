@@ -13,7 +13,11 @@ Give every occurrence a stable identity, persist it before dispatch, use compare
 
 ---
 
-## 1. Workload and Contract
+## Workload and Contract
+
+Running a task at a fixed time is trivial on one machine, where the scheduler that ships with the operating system does it. That arrangement has an obvious weakness. If the machine is down at the appointed time, the task does not run, and nobody is told. Moving the scheduler onto several machines for reliability removes that weakness and creates the opposite one: without coordination, every machine runs the task, and a job meant to send one invoice sends three.
+
+A distributed scheduler therefore has to guarantee two things that pull against each other, namely that each scheduled run happens and that it happens only once, and it has to do so while machines fail and clocks disagree. It also has to settle questions a single machine never raised. If the scheduler was unavailable for an hour, should the runs that were missed be performed late, or skipped? If a run is still in progress when the next is due, should the two overlap? What should happen to a task scheduled for a time that does not exist, or occurs twice, on the day the clocks change? The answers depend on the task, and a scheduler that does not let each task state its own answers will be wrong for some of them.
 
 Scheduling workloads fall into three families:
 
@@ -33,7 +37,7 @@ The service contract should state:
 - payload schema and code revision;
 - tenancy, priority, quota, and resource class.
 
-### 1.1 Core invariants
+### Core invariants
 
 1. **Unique occurrence:** one logical schedule time maps to one occurrence identity.
 2. **Durable materialization:** a due occurrence is stored before dispatch can be lost.
@@ -50,7 +54,7 @@ The service contract should state:
 
 ---
 
-## 2. Data Model and State Machines
+## Data Model and State Machines
 
 ```text
 schedule:
@@ -103,7 +107,7 @@ occurrence_id = hash(
 
 The unique constraint on that tuple makes repeated materialization harmless.
 
-### 2.1 Schedule state
+### Schedule state
 
 ```text
 DRAFT -> ACTIVE -> PAUSED -> ACTIVE
@@ -113,7 +117,7 @@ ACTIVE/PAUSED -> INVALID
 
 `PAUSED` prevents new occurrences but retains state. `DRAINING` prevents new materialization while existing occurrences finish. `RETIRED` is terminal after retention requirements are met.
 
-### 2.2 Occurrence state
+### Occurrence state
 
 ```text
 SCHEDULED -> READY -> CLAIMED -> RUNNING -> SUCCEEDED
@@ -143,7 +147,7 @@ This avoids losing forensic history when a new attempt overwrites a `RUNNING` ro
 
 ---
 
-## 3. Materializing Recurring Schedules
+## Materializing Recurring Schedules
 
 A scheduler shard repeatedly:
 
@@ -154,7 +158,7 @@ A scheduler shard repeatedly:
 5. commits occurrence insertion and cursor advancement atomically;
 6. publishes a wake-up hint or lets executors scan durable `READY` state.
 
-### 3.1 Transactional materialization
+### Transactional materialization
 
 ```text
 BEGIN
@@ -169,7 +173,7 @@ COMMIT
 
 If the process crashes before commit, neither cursor nor occurrences advance. If it crashes after commit but before notifying workers, durable occurrences remain discoverable. The notification is an optimization, not the source of truth.
 
-### 3.2 Lookahead horizon
+### Lookahead horizon
 
 Materializing slightly ahead of time hides storage and dispatch latency. Too short a horizon risks late work during control-plane pauses; too long creates unnecessary state and makes schedule edits/cancellations harder.
 
@@ -189,11 +193,11 @@ Choose based on the service's failure envelope, not a universal constant. One-sh
 
 ---
 
-## 4. Timer Indexes
+## Timer Indexes
 
 A full table scan for every tick is not a scheduler.
 
-### 4.1 Ordered time buckets
+### Ordered time buckets
 
 Partition timers by coarse time bucket and shard:
 
@@ -205,7 +209,7 @@ sort key = eligible_at, timer_id
 
 Workers query only current and recovery buckets. Include a tie-breaker so pagination is stable. Avoid a partition key that is only the minute/hour; every timer due at a round boundary would land on one hot partition.
 
-### 4.2 Hierarchical timing wheel
+### Hierarchical timing wheel
 
 A timing wheel groups deadlines into circular buckets at multiple resolutions:
 
@@ -220,7 +224,7 @@ As time advances, higher-level buckets cascade into lower levels. Insert and exp
 
 Resolution creates bounded lateness. A one-second wheel cannot promise microsecond dispatch. Cascading also creates bursts at bucket boundaries; shard buckets and cap work per tick.
 
-### 4.3 Calendar queues and ordered heaps
+### Calendar queues and ordered heaps
 
 A priority heap offers simple exact ordering but costs logarithmic insertion/removal and becomes a single-memory bottleneck. Calendar queues bucket by expected inter-arrival spacing and can approach constant-time operations when distributions are stable, but need resizing when density changes.
 
@@ -228,15 +232,15 @@ Choose the index by timer count, mutation rate, required resolution, persistence
 
 ---
 
-## 5. Time Semantics
+## Time Semantics
 
-### 5.1 Use wall time for intent, monotonic time for elapsed durations
+### Use wall time for intent, monotonic time for elapsed durations
 
 Recurring calendar intent depends on civil time and a named time zone. Lease duration and timeout measurement depend on elapsed time and should use a monotonic clock within a process.
 
 Do not compare wall clocks from two nodes to decide which owner is current. Ownership comes from a consensus-backed transaction/lease and monotonically increasing epoch.
 
-### 5.2 Time zones and daylight-saving transitions
+### Time zones and daylight-saving transitions
 
 Store the IANA time-zone identifier and schedule revision, not only a UTC offset. Offsets change.
 
@@ -254,13 +258,13 @@ For an ambiguous local time repeated during fall-back:
 
 There is no universally correct answer. Persist the selected calendar policy and include the canonical UTC logical time in occurrence identity.
 
-### 5.3 Leap seconds and clock corrections
+### Leap seconds and clock corrections
 
 Most application schedulers rely on platform time behavior rather than modeling leap seconds directly. They must still tolerate time moving forward in steps or being smeared. Derive each next occurrence from the prior logical schedule time, not by repeatedly adding a measured duration to “now,” or calendar schedules drift.
 
 ---
 
-## 6. Claims, Leases, and Fencing
+## Claims, Leases, and Fencing
 
 Executors claim ready work atomically:
 
@@ -277,13 +281,13 @@ RETURNING claim_epoch
 
 On expiry, a recovery transaction changes `CLAIMED/RUNNING` back to `READY` and increments or preserves a fencing epoch according to the storage design.
 
-### 6.1 Why leader election is insufficient
+### Why leader election is insufficient
 
 A scheduler leader can pause beyond its lease, recover, and continue dispatching. The new leader also dispatches. Consensus elects a current leader; it cannot erase messages already emitted by the stale one.
 
 Downstream state accepts only the current `claim_epoch`, or effects use stable operation identity. See [Leases, Heartbeats, and Recovery](./08-leases-heartbeats-recovery.md) for the ownership protocol.
 
-### 6.2 Heartbeat and lease sizing
+### Heartbeat and lease sizing
 
 Let:
 
@@ -302,7 +306,7 @@ Shorter leases recover faster but produce false takeovers. Longer leases delay r
 
 ---
 
-## 7. Misfires, Catch-Up, and Overlap
+## Misfires, Catch-Up, and Overlap
 
 After downtime, a schedule may have thousands of missed occurrences. Declare a policy:
 
@@ -316,7 +320,7 @@ After downtime, a schedule may have thousands of missed occurrences. Declare a p
 
 Catch-up identity must preserve the original logical fire time so retries and downstream partitions remain stable.
 
-### 7.1 Overlap policies
+### Overlap policies
 
 - **allow:** multiple occurrences run concurrently;
 - **forbid:** later occurrence waits or skips while one is active;
@@ -326,7 +330,7 @@ Catch-up identity must preserve the original logical fire time so retries and do
 
 `replace` is only safe if cancellation is meaningful and effect commit handles races. “Forbid overlap” needs an authority record; querying whether a worker appears active is racy.
 
-### 7.2 Backfill amplification
+### Backfill amplification
 
 If 100,000 schedules fire every minute and the control plane is down for 30 minutes, “catch up all” creates:
 
@@ -338,7 +342,7 @@ Releasing them instantly produces a recovery storm. Materialize durably, then ad
 
 ---
 
-## 8. Sharding and Hot Partitions
+## Sharding and Hot Partitions
 
 Separate schedule ownership from occurrence execution.
 
@@ -346,7 +350,7 @@ Control-plane shards can own ranges of `hash(tenant_id, schedule_id)`. Each shar
 
 Execution queues may shard by tenant, resource class, priority, or occurrence ID. The best control-plane distribution is not always the best worker distribution.
 
-### 8.1 Resharding protocol
+### Resharding protocol
 
 1. publish routing map revision `R+1`;
 2. stop old shard materialization at a recorded cursor;
@@ -358,7 +362,7 @@ Execution queues may shard by tenant, resource class, priority, or occurrence ID
 
 An overlap scan is safer than a gap. Uniqueness turns overlap into extra reads; a gap loses occurrences.
 
-### 8.2 Hot tenants and synchronized schedules
+### Hot tenants and synchronized schedules
 
 Round times such as midnight and the top of the hour create natural spikes. Mitigations:
 
@@ -373,7 +377,7 @@ Never silently jitter a financial or legal deadline. Timing flexibility is part 
 
 ---
 
-## 9. Admission, Fairness, and Capacity
+## Admission, Fairness, and Capacity
 
 Scheduling decides eligibility; admission decides whether execution can begin.
 
@@ -398,7 +402,7 @@ ceil(42,858 / 40) = 1,072 workers
 
 This mean-based estimate is insufficient when service times are heavy-tailed or resource classes differ. Size CPU, memory, accelerator, network, and downstream concurrency independently; simulate bursts and retries.
 
-### 9.1 Drain-time model
+### Drain-time model
 
 For backlog `B`, arrival rate `lambda`, and service rate `mu` where `mu > lambda`:
 
@@ -408,7 +412,7 @@ drain_time = B / (mu - lambda)
 
 If `mu <= lambda`, backlog never drains. Scaling on queue depth alone can lag; include oldest eligible age, arrival/service rates, and startup delay.
 
-### 9.2 Scheduling policy
+### Scheduling policy
 
 The execution scheduler should support:
 
@@ -423,7 +427,7 @@ The canonical fairness algorithms and overload boundary belong to [Priority, Fai
 
 ---
 
-## 10. Schedule Evolution and Payload Versioning
+## Schedule Evolution and Payload Versioning
 
 Editing a schedule creates a new revision. Define what happens to already materialized occurrences:
 
@@ -440,7 +444,7 @@ Worker rollouts need compatibility across queued payload versions. Use upcasters
 
 ---
 
-## 11. Multi-Region Design
+## Multi-Region Design
 
 Common models:
 
@@ -471,7 +475,7 @@ Recovery point for schedules includes the ledger, timer state, payload reference
 
 ---
 
-## 12. Security and Multi-Tenant Isolation
+## Security and Multi-Tenant Isolation
 
 Scheduling is authority to execute future code. Protect:
 
@@ -491,9 +495,9 @@ A tenant must not infer another tenant's schedule timing from shared identifiers
 
 ---
 
-## 13. Failure Traces
+## Failure Traces
 
-### 13.1 Cursor advances before occurrence commit
+### Cursor advances before occurrence commit
 
 1. Scheduler computes the 10:00 occurrence.
 2. It updates `next_fire_at` to 11:00.
@@ -502,7 +506,7 @@ A tenant must not infer another tenant's schedule timing from shared identifiers
 
 **Prevention:** insert occurrence and advance cursor in one transaction.
 
-### 13.2 Notification lost after commit
+### Notification lost after commit
 
 1. Occurrence commits.
 2. Queue notification fails.
@@ -510,7 +514,7 @@ A tenant must not infer another tenant's schedule timing from shared identifiers
 
 **Prevention:** executors scan durable ready state or an outbox republishes; notification is not authority.
 
-### 13.3 Failover duplicates a tick
+### Failover duplicates a tick
 
 1. Old leader pauses after dispatch.
 2. Lease transfers and new leader rescans overlap.
@@ -518,7 +522,7 @@ A tenant must not infer another tenant's schedule timing from shared identifiers
 
 **Prevention:** unique occurrence identity absorbs duplicate materialization; effect identity absorbs duplicate dispatch.
 
-### 13.4 DST produces a double payroll
+### DST produces a double payroll
 
 1. “01:30 local” occurs twice at fall-back.
 2. Scheduler keys by formatted local string without offset/fold.
@@ -526,7 +530,7 @@ A tenant must not infer another tenant's schedule timing from shared identifiers
 
 **Prevention:** explicit ambiguous-time policy and canonical UTC logical instant.
 
-### 13.5 Misfire storm overloads dependency
+### Misfire storm overloads dependency
 
 1. Scheduler is unavailable for an hour.
 2. Every missed occurrence becomes immediately ready.
@@ -535,7 +539,7 @@ A tenant must not infer another tenant's schedule timing from shared identifiers
 
 **Prevention:** durable catch-up plus admission budgets, fairness, and dependency-specific concurrency caps.
 
-### 13.6 Stale worker commits after lease transfer
+### Stale worker commits after lease transfer
 
 1. Worker A pauses beyond lease.
 2. Worker B claims with epoch 18 and succeeds.
@@ -543,7 +547,7 @@ A tenant must not infer another tenant's schedule timing from shared identifiers
 
 **Prevention:** downstream fence on epoch or stable idempotent effect key; monotonic terminal state.
 
-### 13.7 Schedule edit rewrites history
+### Schedule edit rewrites history
 
 1. Payload template changes in place.
 2. A queued old occurrence dereferences the mutable template.
@@ -553,7 +557,7 @@ A tenant must not infer another tenant's schedule timing from shared identifiers
 
 ---
 
-## 14. Observability and Repair
+## Observability and Repair
 
 Control-plane signals:
 
@@ -590,7 +594,7 @@ Every repair emits an audit event and uses the same transition rules as normal e
 
 ---
 
-## 15. Verification
+## Verification
 
 1. **Calendar vectors:** DST gaps/folds, leap days, month ends, time-zone rule updates.
 2. **State-machine properties:** terminal monotonicity, unique occurrence, legal phase transitions.
@@ -607,7 +611,7 @@ Use a virtual clock in deterministic simulation. Wall-clock integration tests al
 
 ---
 
-## 16. Decision Framework
+## Decision Framework
 
 Use operating-system cron when one host, best-effort execution, and manual recovery are acceptable. Use a database-backed scheduler when volume is moderate, transactional materialization is valuable, and the database can sustain indexed due-time scans. Use a broker's delayed delivery when delays fit its retention/resolution contract and recurring-calendar semantics are minimal. Use a durable workflow engine when timers are part of a long-running state machine with replay, cancellation, and effect recovery.
 

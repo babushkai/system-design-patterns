@@ -10,7 +10,11 @@ Maintenance is part of the write path’s deferred cost. Small files, delete met
 
 ---
 
-## 1. Workload and Table Contract
+## Workload and Table Contract
+
+For many years analytical data in the cloud was kept as files in object storage, organized by directory, with a table defined as whatever files happened to be found under a path. This was cheap and it scaled, and it gave none of the guarantees a database gives. A job that wrote a hundred files could be seen by a reader when fifty had been written. Two jobs writing at once could corrupt each other's work. Changing a single row meant rewriting whole files with no protection against a concurrent reader, and finding the files in a large table meant listing millions of objects.
+
+A table format repairs this by adding a layer of metadata that states exactly which files make up the table at a given moment. A change to the table writes new data files and then a new metadata file listing the complete set, and the table is switched to the new version by a single atomic operation. Readers see either the old list or the new one and never a mixture. The same structure brings other benefits. Old versions remain readable for a time, which permits queries against the table as it was at an earlier point. Concurrent writers can detect that they conflict. And the metadata holds statistics about every file, so a query can decide which files to read without listing or opening any of them.
 
 Choose a table format only after defining the table’s workload:
 
@@ -41,7 +45,7 @@ These invariants apply to one table unless a higher-level catalog or transaction
 
 ---
 
-## 2. Why a Directory of Files Is Not a Table
+## Why a Directory of Files Is Not a Table
 
 Suppose a writer creates 500 Parquet files under a partition prefix and fails after 317:
 
@@ -58,7 +62,7 @@ Table formats make **metadata**, not directory listing, authoritative.
 
 ---
 
-## 3. Common Metadata Model
+## Common Metadata Model
 
 The exact files differ, but the logical layers are:
 
@@ -93,7 +97,7 @@ The engine must not silently fall back to recursively listing data files, becaus
 
 ---
 
-## 4. The Formats Differ at the Commit Boundary
+## The Formats Differ at the Commit Boundary
 
 ### Apache Iceberg
 
@@ -127,7 +131,7 @@ This table maps concepts, not feature parity. Verify protocol version and the ex
 
 ---
 
-## 5. Planning, Pruning, and Metadata Scale
+## Planning, Pruning, and Metadata Scale
 
 Columnar data files carry row-group statistics, but opening every footer to discover which files matter does not scale. Table-level planning metadata can skip files before data access.
 
@@ -149,7 +153,7 @@ Do not put high-cardinality raw values directly into physical partitions merely 
 
 ---
 
-## 6. Optimistic Commit and Conflict Validation
+## Optimistic Commit and Conflict Validation
 
 A generic optimistic write has these phases, though each format implements them differently:
 
@@ -181,7 +185,7 @@ Catalog outage may prevent new Iceberg commits while already resolved snapshots 
 
 ---
 
-## 7. Updates, Deletes, and Read Amplification
+## Updates, Deletes, and Read Amplification
 
 Immutable files require logical indirection or rewriting.
 
@@ -217,7 +221,7 @@ Choose from end-to-end cost and freshness. Fast ingestion that makes every impor
 
 ---
 
-## 8. Schema and Partition Evolution
+## Schema and Partition Evolution
 
 Do not state that every rename or type change is universally metadata-only.
 
@@ -245,7 +249,7 @@ A protocol upgrade can be irreversible for old clients even when no data file ch
 
 ---
 
-## 9. Small Files, Compaction, and Clustering
+## Small Files, Compaction, and Clustering
 
 Small files increase:
 
@@ -283,7 +287,7 @@ Compaction, clustering, and manifest/log optimization compete with ingestion for
 
 ---
 
-## 10. Retention, Garbage Collection, and Reader Safety
+## Retention, Garbage Collection, and Reader Safety
 
 Old metadata and files support time travel, rollback, incremental readers, audits, and long-running queries. Cleanup must account for all of them.
 
@@ -315,7 +319,7 @@ Legal holds and reproducible ML datasets may require durable tags/branches or co
 
 ---
 
-## 11. Capacity and Cost Model
+## Capacity and Cost Model
 
 Track data, metadata, commits, and deferred work.
 
@@ -352,7 +356,7 @@ Comparing only storage price hides the table’s operational cost.
 
 ---
 
-## 12. Operations, Migration, and Disaster Recovery
+## Operations, Migration, and Disaster Recovery
 
 ### Operational ownership
 
@@ -393,7 +397,7 @@ Recovery must restore a mutually consistent metadata root and reachable object s
 
 ---
 
-## 13. Security and Governance
+## Security and Governance
 
 - Separate data-file write permission from table commit authority.
 - Prevent users from bypassing table policy by reading or mutating raw object paths.
@@ -408,7 +412,7 @@ Central policy in a catalog is useful only if direct storage access and alternat
 
 ---
 
-## 14. Observability
+## Observability
 
 ### Commit path
 
@@ -438,7 +442,7 @@ Alert on contract risk, not arbitrary universal thresholds: maintenance completi
 
 ---
 
-## 15. Verification and Failure Injection
+## Verification and Failure Injection
 
 - run readers continuously while a multi-file write commits and prove each query sees one state;
 - race compatible appends and verify both survive;
@@ -457,7 +461,7 @@ Verify logical rows, source versions, snapshot isolation, and object reachabilit
 
 ---
 
-## 16. Decision Framework
+## Decision Framework
 
 ### Lakehouse table or another store?
 

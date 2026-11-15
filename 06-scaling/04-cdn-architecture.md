@@ -10,6 +10,10 @@ Evidence labels distinguish **Documented** claims backed by dated primary or off
 
 ## Workload and Delivery Contract
 
+The speed of light sets a floor on how quickly a server can answer a distant user. A round trip between continents takes on the order of a hundred milliseconds, and loading a page involves many round trips. No improvement to the server changes this. The only remedy is to put the content physically closer to the user, and that is what a content delivery network does: it keeps copies of content on servers in hundreds of locations and answers each request from one nearby.
+
+A CDN is thus a cache, distributed around the world and operated by someone else, and the difficult parts of using one are the difficult parts of caching at larger scale. The CDN has to know which requests may be answered with the same stored response, and a mistake here either wastes the cache or serves one user's page to another. It has to know how long a copy remains valid, and how to discard copies across the whole network when the content changes. And the origin behind it comes to depend on it for capacity. An origin that normally receives one request in fifty will be overwhelmed if the CDN's caches are emptied and all fifty arrive.
+
 **Reference design.** Inventory content by behavior, not file extension:
 
 | Class | Identity and freshness | Failure behavior |

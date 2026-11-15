@@ -14,6 +14,10 @@ This chapter covers the public service contract. [Edge Gateway](./02-api-gateway
 
 ## The Contract Surface
 
+An interface between two programs is a promise. Once another team, another company, or a mobile app installed on millions of phones depends on it, the author can no longer change it at will, because the people who depend on it cannot all be made to change at the same moment. Internal code can be rewritten freely. A published interface, in practice, is permanent, and mistakes in it are carried for years.
+
+That is why the design of an API deserves more care than its implementation, and why so much of the subject concerns change. The useful question about any proposed modification is whether existing callers, written against the old behavior, will continue to work. Adding an optional field is generally safe. Removing a field, changing what one means, or tightening what is accepted will break someone. There is also a subtler hazard. Callers come to depend on everything they can observe, including behavior that was never documented or intended, such as the order of a list or the wording of an error. With enough callers, every observable detail of an interface is relied upon by somebody, and so the surface an API exposes should be kept as small and as deliberate as possible.
+
 An API contract spans:
 
 | Dimension | Examples |

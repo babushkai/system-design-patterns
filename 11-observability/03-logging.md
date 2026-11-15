@@ -14,6 +14,10 @@ Collection must survive file rotation, container death, duplicate delivery, part
 
 ## Log Workload and Contract
 
+Logging begins as lines of text written to a file for a developer to read. That approach stops working when there are hundreds of machines and millions of lines a minute. Nobody can read the output, searching it means pattern-matching against free text whose format changes with every release, and questions such as how many requests failed for a given customer in the last hour cannot be answered at all.
+
+The remedy is to treat a log entry as a record with named fields and not as a sentence. An entry that states the event, the customer, the duration, and the outcome as separate fields can be filtered, counted, and joined with other data, while one that embeds the same facts in prose can only be searched for. With structure in place, the remaining problems are those of any large data pipeline. Volume is very large and grows with traffic, so it has to be decided what is kept, at what detail, and for how long. The pipeline must not harm the application when it falls behind. And logs collect sensitive data with remarkable ease, since it takes one careless line to write a password or a personal record into a system that many people can search.
+
 An event envelope:
 
 ~~~json

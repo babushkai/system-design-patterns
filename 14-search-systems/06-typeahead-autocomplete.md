@@ -8,6 +8,10 @@ Suggestion serving covers generation, prefix data structures, popularity and fre
 
 ## Workload and Product Contract
 
+Autocomplete suggests completions while the user is still typing. It looks like a small feature and has the most demanding latency requirement of any in search. A suggestion that arrives after the user has typed the next letter is useless, so the whole round trip has to complete in a few tens of milliseconds, and a request is issued for almost every keystroke, so the volume is several times that of search itself.
+
+The usual structure is a tree in which each path from the root spells out a prefix. Finding all completions of what the user has typed means walking to the node for that prefix and collecting what lies beneath it. Collecting and ranking everything beneath a short prefix is far too slow, since a single letter may have millions of completions. The standard remedy is to do the work in advance and store, at each node, the few best completions for that prefix, so that a lookup is a walk down the tree followed by reading a short stored list. The cost is in updates, since a change in the popularity of one query affects the stored lists of every prefix of it. Suggestions therefore tend to be rebuilt periodically from query logs, with a separate, faster path for terms that have suddenly become popular.
+
 A request is more than a prefix:
 
 ```text

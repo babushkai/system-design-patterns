@@ -8,6 +8,10 @@ The cost is that the engine is only cheap while those regularities hold. **Serie
 
 ## Primary Evidence and Scope
 
+Time-series data, such as metrics, sensor readings, and financial ticks, has a shape so regular that a general-purpose database wastes most of its effort on it. Points arrive in time order and are almost never updated. Queries nearly always ask for a range of time. Recent data is read constantly and old data hardly at all. And the volume is very large: a fleet of servers reporting a thousand metrics every ten seconds produces billions of points a day.
+
+A storage engine built for this shape exploits each regularity. Since data arrives in order, it can be appended and never inserted. Since queries are by time, data is divided into blocks by time, and expiring old data becomes the deletion of whole blocks. The largest gains come from compression. Consecutive timestamps in a series are usually exactly the same interval apart, so storing only the change in the interval reduces most timestamps to a single bit. Consecutive values tend to be close, so storing how each differs from the one before takes a few bits where a naive encoding takes sixty-four. With these techniques a point that would occupy sixteen bytes can be stored in less than two, and that ratio is what makes it affordable to keep the data at all.
+
 | Source | What it establishes | Boundary |
 |---|---|---|
 | Pelkonen et al., Gorilla (VLDB 2015) | Delta-of-delta timestamps and XOR-compressed floats reach about 1.37 bytes per sample on Facebook's monitoring data; recent data is served from memory | Compression ratio is a property of that workload's regular intervals and slowly changing values |

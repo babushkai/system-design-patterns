@@ -10,9 +10,13 @@ Cache coherence depends on explicit freshness guarantees, race handling, depende
 
 ---
 
-## 1. Define the Consistency Target
+## Define the Consistency Target
 
-### 1.1 “Eventually consistent” is not a requirement
+There is an old remark that the two hard problems in computer science are cache invalidation and naming things. The first of these is hard for a reason that can be stated exactly. A write to the database and the corresponding change to the cache are two operations on two systems, and no transaction spans them. Between the first and the second there is always an interval, however short, in which the two disagree, and a crash, a timeout, or an unlucky interleaving with another request can leave them in disagreement for as long as the entry lives.
+
+Invalidation is therefore a problem of distributed consistency, with the same structure as replication between two databases, and it yields to the same discipline. We state how much disagreement is tolerable and for how long, make the signal that a change occurred as durable as the change itself, and attach versions to values so that a late or reordered operation can be recognized and discarded. Teams that treat invalidation as a line of code placed after the database write discover the races one production incident at a time.
+
+### “Eventually consistent” is not a requirement
 
 Specify guarantees per operation and object class:
 
@@ -27,7 +31,7 @@ Specify guarantees per operation and object class:
 
 Inventory, balances, permissions, and uniqueness checks often cannot tolerate the same cache contract as catalog descriptions or timelines. If serving a stale result can transfer money, oversell scarce stock, or restore revoked access, validate against an authoritative version or do not cache the decision.
 
-### 1.2 Source version is the ordering primitive
+### Source version is the ordering primitive
 
 Wall-clock timestamps are weak ordering evidence: clocks skew, transactions can commit out of timestamp order, and two writes can share a timestamp resolution. Prefer a monotonic value meaningful to the source:
 
@@ -39,7 +43,7 @@ Wall-clock timestamps are weak ordering evidence: clocks skew, transactions can 
 
 A cache entry should expose both **source_version** and **generated_at**. Version orders updates; time enforces age.
 
-### 1.3 Freshness budget
+### Freshness budget
 
 For an event-invalidated cache:
 
@@ -61,7 +65,7 @@ maximum served age = fresh TTL + explicitly allowed stale window
 
 That bound holds only if downstream tiers retain the original generation time. Refilling an outer tier from a stale inner tier and resetting its TTL breaks the bound.
 
-### 1.4 TTL-only staleness is quantifiable
+### TTL-only staleness is quantifiable
 
 Assume, only for a rough model, that updates arrive as a Poisson process at rate $\mu$ and a cache entry's observed age is uniformly distributed from zero to TTL $T$. The probability that an entry of age $a$ is stale is:
 
@@ -79,9 +83,9 @@ Real traffic and writes are rarely Poisson, so use this to expose sensitivity, t
 
 ---
 
-## 2. Canonical Invalidation Patterns
+## Canonical Invalidation Patterns
 
-### 2.1 TTL as a safety net
+### TTL as a safety net
 
 TTL requires no change-delivery system and limits how long an entry is reused. It is appropriate when:
 
@@ -91,7 +95,7 @@ TTL requires no change-delivery system and limits how long an entry is reused. I
 
 TTL is not proof that a value is current. Expiry can also synchronize misses; always treat expiry as an origin-load event. Stale-while-revalidate extends availability but also extends the maximum age and must be in the contract.
 
-### 2.2 Commit, then delete
+### Commit, then delete
 
 For a database-owned value:
 
@@ -114,7 +118,7 @@ Delete is usually safer than setting a new value because:
 
 Deletion still has a stale-refill race, covered in section 4.
 
-### 2.3 Update after commit
+### Update after commit
 
 Populate-after-commit can remove the next-read miss when the writer already has the exact committed representation. It needs a conditional write:
 
@@ -124,7 +128,7 @@ set cache entry only if incoming source_version >= stored source_version
 
 Without that comparison, a delayed update for version 41 can overwrite version 42. If the cached object is a derived query rather than the written row, the writer may not know the correct representation; delete it instead.
 
-### 2.4 Generational keys
+### Generational keys
 
 A generation makes old keys unreachable:
 
@@ -141,7 +145,7 @@ Incrementing a generation is an O(1) logical invalidation for a namespace. Trade
 
 Use a generation for serializer changes, bulk content releases, or bounded groups, not as a reflex for every row write.
 
-### 2.5 Tag or surrogate-key invalidation
+### Tag or surrogate-key invalidation
 
 A derived response may depend on many entities. Associate it with a bounded set of tags such as **product:123**, **seller:9**, or **template:7**. Invalidation can then bump a tag generation or enumerate tagged objects.
 
@@ -149,9 +153,9 @@ An explicit reverse index has its own atomicity and cleanup problem. A generatio
 
 ---
 
-## 3. Make the Change Signal Durable
+## Make the Change Signal Durable
 
-### 3.1 The after-commit publish gap
+### The after-commit publish gap
 
 This sequence loses invalidations:
 
@@ -163,7 +167,7 @@ This sequence loses invalidations:
 
 Retrying step 2 in memory does not close the gap. Two common durable sources do.
 
-### 3.2 Transactional outbox
+### Transactional outbox
 
 Write the domain change and an outbox record in the same database transaction. A relay publishes outbox rows and marks progress.
 
@@ -178,7 +182,7 @@ Required properties:
 
 Do not claim exactly-once delivery. Design repeated invalidation to be harmless.
 
-### 3.3 Change data capture
+### Change data capture
 
 CDC reads the database's commit log and catches application writes, migrations, and approved administrative writes that bypass service code. It is useful when many writers share a source.
 
@@ -193,7 +197,7 @@ Operational requirements include:
 
 CDC does not automatically provide a single global order across shards. Preserve per-entity order and attach source versions so consumers can reject regression.
 
-### 3.4 Event contract
+### Event contract
 
 Publish domain identity and source evidence, not only an implementation-specific cache key:
 
@@ -214,9 +218,11 @@ The invalidator owns the mapping from a domain change to L2 keys, L1 namespaces,
 
 ---
 
-## 4. Races That Survive “Delete on Write”
+## Races That Survive “Delete on Write”
 
-### 4.1 Stale fill after invalidation
+Deleting the cache entry after each write is the standard advice, and it is much better than nothing. It is not sufficient, and the cases in which it fails are instructive because each involves two requests that individually behave correctly. The commonest runs as follows. A reader misses the cache and reads the current value from the database. Before the reader has stored that value, a writer commits a new value and deletes the cache entry, which is already absent. The reader then stores what it read. The cache now holds the old value, the delete that should have removed it has already happened, and nothing further will correct it until the entry expires.
+
+### Stale fill after invalidation
 
 ~~~text
 Reader R                         Writer W
@@ -241,7 +247,7 @@ Options, in increasing strength:
 
 A delayed second delete can reduce the probability of the race but is not a correctness proof.
 
-### 4.2 Version-fenced fill
+### Version-fenced fill
 
 Conceptually, one atomic cache-side operation should perform:
 
@@ -256,7 +262,7 @@ else:
 
 The invalidator advances **version_floor** even when no value is present. Its retention must exceed the longest possible in-flight load. This adds metadata and complexity, so reserve it for objects whose TTL-bounded race is unacceptable.
 
-### 4.3 Reordered value updates
+### Reordered value updates
 
 ~~~text
 commit v10 -> event delayed
@@ -266,7 +272,7 @@ event v10 arrives -> blind SET, cache=v10
 
 Delete events are naturally less sensitive to reordering. If consumers populate values, partition by entity and compare source versions atomically.
 
-### 4.4 Read replica regression
+### Read replica regression
 
 Deleting a regional cache does not guarantee a fresh refill if the loader reads an asynchronous replica:
 
@@ -279,15 +285,15 @@ miss refills v19
 
 Carry the committed version in the event. The regional loader can wait until its replica reaches that version, read the primary, or leave the entry absent and serve an explicitly stale copy. Cache coherence cannot repair database replication semantics.
 
-### 4.5 Concurrent writers
+### Concurrent writers
 
 Two writers that both “update DB then set cache” can finish cache writes in the opposite order from database commits. Source versions and conditional fills are the remedy. A process-local mutex is not sufficient across instances.
 
 ---
 
-## 5. Coherence Across Tiers
+## Coherence Across Tiers
 
-### 5.1 Treat each tier as a separate projection
+### Treat each tier as a separate projection
 
 ~~~mermaid
 flowchart LR
@@ -303,7 +309,7 @@ flowchart LR
 
 Do not implement this as a synchronous chain of remote calls on the user write path. One slow CDN purge should not hold a database transaction open.
 
-### 5.2 L1 coherence
+### L1 coherence
 
 Process-local caches are invisible to other writers. Options:
 
@@ -315,7 +321,7 @@ Process-local caches are invisible to other writers. Options:
 
 Transient pub/sub is an optimization, not the only safety mechanism. A process that disconnects may miss messages; it must flush affected entries, resume from a durable offset, or rely on a short age bound.
 
-### 5.3 CDN and reverse-proxy coherence
+### CDN and reverse-proxy coherence
 
 For immutable content, change the URL. For mutable content:
 
@@ -328,7 +334,7 @@ For immutable content, change the URL. For mutable content:
 
 A purge acknowledgement may mean “accepted,” not “every edge is empty.” Put that provider behavior into the propagation SLO.
 
-### 5.4 Browser caches
+### Browser caches
 
 A service cannot enumerate every browser and delete its entry. Use:
 
@@ -339,15 +345,17 @@ A service cannot enumerate every browser and delete its entry. Use:
 
 A service worker is another cache implementation with its own upgrade and invalidation protocol; test old workers during rolling frontend deployments.
 
-### 5.5 Do not reset age across tiers
+### Do not reset age across tiers
 
 Every fill copies the authoritative **generated_at** and **source_version**. An L1 populated from L2 receives L2's remaining freshness, not a new full TTL. HTTP caches use **Age** for the same reason.
 
 ---
 
-## 6. Derived Queries and Dependency Graphs
+## Derived Queries and Dependency Graphs
 
-### 6.1 Why query caches are harder
+Invalidating a cached row when that row changes is the easy case, because the key to delete is obvious. Cached query results are harder. A cached list of "the ten most recent orders for this customer" depends on rows that did not exist when it was computed, and a cached aggregate depends on every row it summed. When a row is written, the system must work out which cached results that write could have affected, and it has to do so without having recorded, for each result, everything it was derived from.
+
+### Why query caches are harder
 
 A product row can affect:
 
@@ -368,13 +376,13 @@ Prefer, in order:
 4. materialize the projection from an ordered event stream;
 5. maintain an explicit reverse index only when its size and atomicity are controlled.
 
-### 6.2 Cascades need budgets
+### Cascades need budgets
 
 One change that invalidates one million keys is a workload, not a metadata operation. Rate-limit it, deduplicate keys, batch network calls, and protect the cache event loop. Consider a generation bump when physical deletion is unnecessary.
 
 Deleting many hot keys simultaneously also creates a refill surge. Coordinate with the soft-invalidation and warming controls in [Stampede, Cold Start, and Warming](04-cache-stampede.md).
 
-### 6.3 Schema deployment
+### Schema deployment
 
 During a rolling deploy, old and new code may disagree about key or payload format. Safe choices:
 
@@ -386,7 +394,7 @@ A global flush is simple but transforms a schema rollout into a cold-cache load 
 
 ---
 
-## 7. Failure Analysis
+## Failure Analysis
 
 | Failure | Observable consequence | Containment |
 |---|---|---|
@@ -402,7 +410,7 @@ A global flush is simple but transforms a schema rollout into a cold-cache load 
 | Tag-index loss | Derived objects remain reachable | Generation fallback and sampled audit |
 | Bad invalidation release | Mass miss and origin surge | Rate limit, canary invalidator, pause switch |
 
-### 7.1 Fail open versus fail closed
+### Fail open versus fail closed
 
 The cache's business role decides failure behavior:
 
@@ -416,9 +424,9 @@ Document this per endpoint. “Cache unavailable, query the database” is unsaf
 
 ---
 
-## 8. Measuring Coherence
+## Measuring Coherence
 
-### 8.1 Required signals
+### Required signals
 
 - commit-to-event, event-to-consumer, and consumer-to-delete lag;
 - age and source-version lag of served entries;
@@ -432,7 +440,7 @@ Document this per endpoint. “Cache unavailable, query the database” is unsaf
 
 Broker lag alone does not measure user-visible staleness. A consumer can be current while cache deletes fail.
 
-### 8.2 Shadow verification
+### Shadow verification
 
 Sample requests and read cache plus authority without affecting the response. Compare:
 
@@ -443,7 +451,7 @@ Sample requests and read cache plus authority without affecting the response. Co
 
 Sampling must respect privacy and avoid doubling expensive origin load. Focus on new key generations, changed invalidation mappings, and high-impact objects.
 
-### 8.3 Example SLOs
+### Example SLOs
 
 ~~~text
 99.9% of product invalidations remove all regional L2 copies within 2 seconds.
@@ -456,9 +464,9 @@ Each SLO needs a measurement source and a declared response when telemetry is mi
 
 ---
 
-## 9. Rollout and Recovery
+## Rollout and Recovery
 
-### 9.1 New invalidation path
+### New invalidation path
 
 1. Define the event and source-version contract.
 2. Publish to a shadow topic or consumer without deleting.
@@ -469,7 +477,7 @@ Each SLO needs a measurement source and a declared response when telemetry is mi
 7. Stop the old path only after new consumers have replay and recovery drills.
 8. Let old key generations expire before deleting compatibility code.
 
-### 9.2 Recovery after an invalidation outage
+### Recovery after an invalidation outage
 
 1. Stop any consumer that is applying changes out of order.
 2. Preserve offsets and determine the first uncertain source version.
@@ -479,7 +487,7 @@ Each SLO needs a measurement source and a declared response when telemetry is mi
 6. Sample-compare authority and cache before declaring recovery.
 7. Retain incident evidence: lag, lost range, affected keys, and served age.
 
-### 9.3 Checklist
+### Checklist
 
 - [ ] Every cacheable object has a named freshness or revocation contract.
 - [ ] Source versions, not wall clocks alone, order updates.

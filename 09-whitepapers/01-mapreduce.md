@@ -6,6 +6,10 @@ MapReduce's lasting contribution is not the word-count example. It places the di
 
 ## Publication Identity and Scope
 
+In the early 2000s, processing a very large dataset meant writing a distributed program by hand. The author had to divide the input among machines, move data between them, and above all cope with the machines that would fail before the job finished, which at the scale of thousands of machines was a certainty and not a risk. The logic of the actual computation was usually a small part of the code.
+
+MapReduce separated the two. The programmer supplies two functions: one that turns each input record into intermediate key and value pairs, and one that combines all the values sharing a key. The framework does everything else. The idea that made this workable was how it handles failure. Because both functions are deterministic and have no side effects, a task that was running on a failed machine can simply be run again elsewhere, and the result is the same. Fault tolerance thus needed no checkpointing or coordinated recovery. The model is restrictive, and many computations fit it awkwardly, but the restriction is what bought the simplicity, and the paper changed how the industry thought about processing data at scale.
+
 - **Paper:** *MapReduce: Simplified Data Processing on Large Clusters*
 - **Authors:** Jeffrey Dean and Sanjay Ghemawat, Google
 - **Venue and version:** 6th USENIX Symposium on Operating Systems Design and Implementation (OSDI), 2004, pages 137–150

@@ -8,6 +8,10 @@ A cell architecture must define **cell boundaries, placement and routing, tested
 
 ## Primary Evidence and Scope
 
+Redundancy protects a service against the failure of machines. It gives no protection against failures that affect every copy at once, and in mature systems those are the failures that cause the large outages: a bad deployment, a corrupt configuration, one customer whose requests trigger a bug in whatever server handles them. A service of a thousand identical servers behind one load balancer is, with respect to such a failure, a single unit. Whatever harms one server harms them all.
+
+A cell-based architecture limits the damage by dividing the service into several complete and independent copies of itself, called cells, each with its own servers, its own data, and its own share of the customers. A fault in one cell reaches only the customers assigned to it. Deployments proceed one cell at a time, so that a bad one is caught after affecting a fraction of users. Shuffle sharding takes the idea further by assigning each customer to a different small subset of the available resources. Two customers then rarely share their whole subset, and a customer who brings down every resource assigned to them leaves almost everyone else with at least some resources that still work. The cost is that capacity is fragmented and the routing layer in front of the cells must itself be very simple and very reliable, since it is shared by all of them.
+
 | Primary evidence | What it establishes | Boundary |
 |---|---|---|
 | AWS Architecture Blog, April 2014 | Shuffle sharding maps a workload to a small overlapping subset, creating many possible isolation groups | Historical Route 53/AWS explanation; published examples are not universal retry settings |

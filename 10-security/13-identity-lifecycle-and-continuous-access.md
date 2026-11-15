@@ -2,9 +2,19 @@
 
 ## TL;DR
 
-Authentication is an event; access is a duration. Between the moment a user signs in and the moment their token expires, facts change: the employee is terminated, the device falls out of compliance, the password is reset after a breach, a group membership is removed. Every system that validates tokens locally keeps granting access on the old facts until the token runs out. **The exposure window of an identity system is the longest-lived artifact that nothing can recall**, and in federated deployments that is usually not the access token but a session at some downstream application the identity provider has forgotten about.
+Authentication is an event; access is a duration. Between the moment a user signs in and the moment their token expires, facts change: the employee is terminated, the device falls out of compliance, the password is reset after a breach, a group membership is removed. Every system that validates tokens locally keeps granting access on the old facts until the token runs out. **The exposure window of an identity system is the longest-lived artifact that nothing can recall**, and in federated deployments that is usually not the access token. It is a session at some downstream application the identity provider has forgotten about.
 
-Two standard families close the gap. **SCIM** (RFC 7643 and RFC 7644) keeps the accounts and groups in each application synchronized with the source of truth, so that joiners, movers, and leavers are reflected without a ticket. The **Shared Signals Framework** with its CAEP and RISC event profiles, final OpenID Foundation specifications since 2025, pushes security events between providers in near real time, so that a session revoked in one place ends everywhere. Federation protocols and token validation are in [OAuth 2.0 and OpenID Connect](02-oauth2-openid-connect.md) and [JOSE and JSON Web Token Verification](03-jwt-tokens.md); this chapter covers how identity state changes after sign-in reach the systems that depend on it.
+Two standard families close the gap. **SCIM** (RFC 7643 and RFC 7644) keeps the accounts and groups in each application synchronized with the source of truth, so that joiners, movers, and leavers are reflected without a ticket. The **Shared Signals Framework** with its CAEP and RISC event profiles, final OpenID Foundation specifications since 2025, pushes security events between providers in near real time, so that a session revoked in one place ends everywhere. Federation protocols and token validation are in [OAuth 2.0 and OpenID Connect](02-oauth2-openid-connect.md) and [JOSE and JSON Web Token Verification](03-jwt-tokens.md). This chapter covers how changes in identity state after sign-in reach the systems that depend on it.
+
+## The Bargain Behind Every Signed Token
+
+Identity systems scale because of a single trade, and this chapter is about paying for it.
+
+In the simplest possible design, every request to every application would ask the identity provider, "is this user still allowed?" The answer would always be current, and the identity provider would sit in the path of every request in the organization, bounding the latency and availability of everything. Nobody builds this. We sign a statement instead. The identity provider asserts, once, that this user authenticated at this time with these attributes, and the application verifies the signature locally and trusts the statement for some period afterward.
+
+A signed statement is a cache entry. It is a copy of the identity provider's knowledge, taken at one moment and held somewhere the provider cannot reach. Like every cache it buys independence from the origin at the price of staleness, and like every cache it raises the question of invalidation. Federation protocols, for most of their history, did not answer that question. SAML and OpenID Connect both specify in great detail how to deliver the statement, and say almost nothing about what happens when it stops being true.
+
+There are only three ways to invalidate a cache: let entries expire, have the consumer check back with the origin, or have the origin notify the consumer. Everything in this chapter is one of the three. Short token lifetimes are expiry. Introspection is checking back. SCIM and shared signals are notification. Each has the cost profile one would predict from caching in any other domain, and a sound design combines them for the same reasons a sound cache does.
 
 ## The Lifecycle Contract
 
@@ -14,6 +24,8 @@ Two standard families close the gap. **SCIM** (RFC 7643 and RFC 7644) keeps the 
 4. **Revocation covers every artifact.** Sessions, refresh tokens, API keys, personal access tokens, and third-party grants created by the identity are all in scope.
 5. **Receivers decide.** A security signal is evidence; the receiving application applies its own policy and does not blindly obey.
 6. **Loss of a signal is detectable.** A broken stream or failed provisioning job raises an alert instead of silently leaving stale access.
+
+The third clause is the one that turns the others into engineering. A bound that is written down can be tested, alerted on, and argued about. Without one, "we deprovision promptly" is an aspiration.
 
 ## Where Stale Access Hides
 
@@ -29,6 +41,8 @@ flowchart LR
     style IdP fill:#dbeafe,stroke:#2563eb
 ```
 
+The diagram is a chain of derivation. Each box was created from the one to its left and then became independent of it. The application session was created from an assertion, and once the application set its own cookie, the assertion played no further part. The refresh token was created within the session and survives it. The personal access token was created by a signed-in user and has no link back to any sign-in at all.
+
 Disabling a user at the identity provider stops new sign-ins. It does nothing, by itself, to any box to the right of the first arrow.
 
 | Artifact | Typical lifetime | What ends it |
@@ -41,31 +55,39 @@ Disabling a user at the identity provider stops new sign-ins. It does nothing, b
 | OAuth grant to a third-party app or agent | Until revoked | Grant revocation; usually not tied to the user's status |
 | Local account in the application | Forever | SCIM deactivation |
 
-**Illustrative.** A terminated employee with a 15-minute access token, a 12-hour application session, and a personal access token has an exposure of 15 minutes, 12 hours, and unlimited respectively. Shortening the access token changed nothing that matters.
+**Illustrative.** A terminated employee with a 15-minute access token, a 12-hour application session, and a personal access token has an exposure of 15 minutes, 12 hours, and unlimited respectively. Teams often invest effort in shortening the first number because it is the one the identity team controls. The exposure of the system is the maximum of the column, and shortening the access token changed nothing that matters.
 
 ## Federation Still Runs on Two Protocols
 
-Enterprise single sign-on is OpenID Connect for new integrations and SAML 2.0 for a large installed base. Both deliver a signed statement about a sign-in to the application, and neither says anything afterward. The design points that carry over:
+Enterprise single sign-on is OpenID Connect for new integrations and SAML 2.0 for a large installed base. Both deliver a signed statement about a sign-in to the application, and neither says anything afterward. A few design points carry over into the lifecycle problem.
 
-- **SAML specifics.** Validate the signature over the assertion that is actually consumed, to defeat signature-wrapping; check audience, recipient, and validity window; bind the response to a request with `InResponseTo` and refuse unsolicited responses unless the business case is explicit; keep a replay cache of assertion IDs.
-- **Attributes in assertions go stale immediately.** Group membership copied into a session at sign-in is a snapshot. Either keep sessions short, or keep groups synchronized by SCIM and read them at decision time.
-- **Just-in-time provisioning is half a lifecycle.** Creating the account on first sign-in handles joiners. It never handles leavers, because a user who cannot sign in generates no event.
+SAML deserves specific care, because its most serious class of vulnerability follows from how its signatures work. An XML signature does not cover "the document." It covers an element that the signature refers to by ID. In a signature-wrapping attack, the attacker takes a legitimately signed response, leaves the signed assertion in place somewhere in the tree where the signature still validates, and inserts a second, forged assertion in the position where the application's business logic will look. The signature check finds the original and passes. The application reads the forgery. The defense is to make sure the element whose signature was verified is the very same element whose contents are consumed, and beyond that to check the audience, recipient, and validity window, bind the response to a request with `InResponseTo`, refuse unsolicited responses unless the business case is explicit, and keep a replay cache of assertion IDs.
+
+The second point is that attributes in assertions go stale immediately. Group membership copied into a session at sign-in is a snapshot, and a user removed from the administrators group an hour later is an administrator until the session ends. Either sessions are kept short, or groups are synchronized by SCIM and read at decision time.
+
+The third is that just-in-time provisioning is half a lifecycle. Creating the account on first sign-in handles joiners neatly, and for that reason it is popular. It can never handle leavers, for a reason that is almost a matter of logic: the mechanism is triggered by sign-in, and a user who has been disabled does not sign in. Their departure generates no event the application can see, and the account, with whatever keys and grants hang from it, stays.
 
 ## Provisioning With SCIM
 
 **Documented, RFC 7643 and RFC 7644:** SCIM defines a JSON schema for users and groups and a REST protocol for managing them: `POST /Users`, `GET /Users?filter=...`, `PATCH /Users/{id}`, `DELETE`, the same for `/Groups`, plus bulk operations and resource versions through ETags. The identity provider is the client; each application exposes the server.
 
-The protocol is simple; the systems problems are in the edges:
+The protocol is a plain REST interface and takes an afternoon to read. What makes SCIM implementations difficult is that they are replication. The identity provider holds the primary copy of a dataset, each application holds a replica, and the link between them is an unreliable sequence of HTTP requests with no log, no sequence numbers, and no transactions. The well-known problems of replication all appear, under different names.
 
-- **Correlation.** The provider stores the application's `id` for each user and supplies its own `externalId`. Creation must be idempotent: if a create times out and is retried, a lookup by `externalId` or user name has to find the first attempt instead of producing a duplicate.
-- **Deactivate, then delete.** Setting `active` to false is the leaver event and must end sessions, tokens, and keys immediately. Deleting the record is a retention decision that may come much later, and deleting first often orphans owned resources and audit history.
-- **Group updates at scale.** A group with 50,000 members cannot be replaced wholesale on each change. Use `PATCH` with add and remove operations, and expect providers to split large changes into many requests.
-- **Ordering and convergence.** Requests arrive out of order and some fail. The provider runs a periodic full reconciliation that compares both sides and repairs drift; the application makes every operation safe to repeat.
-- **Rate and backpressure.** A reorganization changes thousands of memberships in minutes. Answer with 429 and `Retry-After` instead of timing out, and make sure deactivations are not queued behind bulk group edits.
+**Correlation** is the problem of knowing that two records are the same record. The provider stores the application's `id` for each user and supplies its own `externalId`. The hard case is a create that times out. The provider cannot know whether the application processed it, and will retry. If the application treats the retry as new, there are now two accounts for one person, and later updates will reach only one of them. Creation must therefore be idempotent: a lookup by `externalId` or user name has to find the first attempt.
 
-**Illustrative.** A provider that pushes changes as they occur and reconciles every 40 minutes has a worst-case deprovisioning delay of 40 minutes whenever one push is lost. If the stated bound is 5 minutes, either the push path needs delivery guarantees and alerting, or a signal stream must carry the urgent subset.
+**Deactivation and deletion are different operations with different clocks.** Setting `active` to false is the leaver event, and it must end sessions, tokens, and keys immediately. Deleting the record is a retention decision that may come much later. Applications that delete first tend to orphan the resources the user owned and the audit history that refers to them.
+
+**Group updates at scale** run into the size of the object. A group with 50,000 members cannot be replaced wholesale each time one member changes. SCIM's `PATCH` carries add and remove operations for this reason, and applications should expect providers to split large changes into many requests.
+
+**Ordering and convergence** follow from the absence of a log. Requests arrive out of order and some fail. No amount of care in the push path makes this reliable, and so the design that works is the one replication systems settled on long ago: an incremental stream for speed, plus a periodic full comparison of both sides that repairs whatever the stream missed. The application's part is to make every operation safe to repeat.
+
+**Rate and backpressure** matter because the load is bursty in a particular way. A reorganization changes thousands of memberships in minutes. An application that times out under this load teaches the provider nothing, whereas one that answers 429 with `Retry-After` gets a well-behaved client. The subtle requirement is priority. A deactivation that waits in the same queue behind 200,000 group edits will miss its bound on exactly the day when access is being restructured.
+
+**Illustrative.** A provider that pushes changes as they occur and reconciles every 40 minutes has a worst-case deprovisioning delay of 40 minutes whenever one push is lost. If the stated bound is 5 minutes, then either the push path needs delivery guarantees and alerting, or a signal stream must carry the urgent subset. The reconciliation interval is the real bound, and the push is an optimization of the common case.
 
 ## Shared Signals, CAEP, and RISC
+
+SCIM replicates state, and state converges eventually. Some changes cannot wait for convergence. When a session is known to be stolen, the useful message is not "here is the user's current record" but "this happened, just now, act on it." That is an event, and events need a different transport.
 
 **Documented, OpenID Shared Signals Framework 1.0, CAEP 1.0, and RISC 1.0 (final, 2025):** a transmitter and a receiver agree on a stream. Events are Security Event Tokens (SETs, RFC 8417), which are signed JWTs with an `events` claim, delivered by HTTP push (RFC 8935) or by the receiver polling (RFC 8936). The subject of an event is expressed with a standard subject identifier format (RFC 9493), which can name a user, a session, a device, or a tenant.
 
@@ -74,33 +96,43 @@ The protocol is simple; the systems problems are in the edges:
 | CAEP (session state) | session revoked, credential change, token claims change, assurance level change, device compliance change | End or re-evaluate the session; demand step-up |
 | RISC (account state) | account disabled, account enabled, account purged, credentials compromised, identifier changed or recycled | Lock, flag for review, or unlink the federated identity |
 
-Signals flow in both directions. An identity provider tells applications that a session was revoked. An application that detects impossible travel or token theft tells the identity provider, which can then end the session for every other application. A device-management service tells both that a laptop is no longer compliant.
+A feature of this design that is easy to miss is that signals flow in both directions. An identity provider tells applications that a session was revoked. An application that detects impossible travel or a stolen token tells the identity provider, which can then end the session for every other application. A device-management service tells both that a laptop is no longer compliant. Before this framework, each of these parties held evidence the others needed and had no standard way to share it, so an attacker detected by one application could carry on unhindered in the next.
 
-Operating a stream is a messaging problem with security consequences:
+Operating a stream is a messaging problem with security consequences, and the familiar rules of messaging apply with unusual force.
 
-- **Verification events.** The receiver periodically asks the transmitter to send a verification event and alerts if it does not arrive. This is the only way to tell a quiet stream from a dead one.
-- **Ordering and duplicates.** SETs carry a unique `jti` and an event time. Receivers deduplicate on `jti` and apply events idempotently: "session revoked at T" is safe to process twice and in any order relative to later sign-ins if sessions record their start time.
-- **Push versus poll.** Push is faster and needs the receiver reachable; poll works behind a firewall and makes the receiver's lag explicit. Both need acknowledgment and redelivery.
-- **Policy at the receiver.** A compromised or misconfigured transmitter must not be able to lock out an organization. Rate-limit destructive actions per transmitter and prefer "require re-authentication" over "delete."
+The first concerns silence. A revocation stream is quiet most of the time, and a stream that has broken is also quiet. A receiver that sees no events cannot tell a calm afternoon from a transmitter whose certificate expired at noon. The framework's answer is the verification event: the receiver periodically asks the transmitter to send one, and alerts if it does not arrive. This is a heartbeat, and it is the only thing that distinguishes "nothing has happened" from "we would not know if it had."
+
+The second concerns ordering and duplicates. Delivery is at-least-once, so events will repeat, and they may arrive out of order. SETs carry a unique `jti` and an event time. Receivers deduplicate on `jti`, and, more importantly, they phrase the effect of each event so that order does not matter. "Delete the user's sessions" is order-dependent: if it is delayed and arrives after the user has legitimately signed in again, it destroys a valid session. "Sessions for this user that started before time T are invalid" can be applied twice, late, or out of order, and the result is the same.
+
+The third is the choice of push or poll. Push is faster and requires the receiver to be reachable from the transmitter. Poll works from behind a firewall and makes the receiver's lag explicit and measurable. Both need acknowledgment and redelivery.
+
+The fourth is the reason for the contract's fifth clause. A stream is a channel through which another party can cause sessions to end and accounts to lock. A compromised or misconfigured transmitter that emits "account disabled" for every user is a denial-of-service attack delivered through the security system. Receivers should rate-limit destructive actions per transmitter and should prefer the reversible response, requiring re-authentication, over the irreversible one.
 
 ## Enforcing Revocation at the Resource
 
-A signal is useful only if the request path consults its result. The patterns, cheapest first:
+A signal changes nothing until the request path consults its result. There are four established ways to arrange that, and they differ in where they put the cost.
 
-1. **Short tokens with gated refresh.** Access tokens live 5 to 15 minutes; revocation is enforced when the client refreshes. Exposure equals the token lifetime.
-2. **Per-subject validity watermark.** Store one timestamp per user or session: "tokens issued before T are invalid." A revocation event sets it to now. Resource servers compare the token's `iat` with the watermark from a local cache fed by the event stream. **Illustrative:** 10 million users at 16 bytes each is 160 MB, small enough to hold in memory at every enforcement point, and only users with a recent event need an entry if the watermark is kept for the maximum token lifetime.
-3. **Introspection (RFC 7662).** The resource asks the authorization server on each request or with a short cache. This is exact, and it makes the authorization server part of every request's availability and latency.
-4. **Back-channel logout.** The identity provider calls each application's logout endpoint with a signed logout token. This is the OpenID Connect predecessor of the session-revoked signal and is widely implemented.
+**Short tokens with gated refresh.** Access tokens live 5 to 15 minutes, and revocation is enforced when the client comes back to refresh. The request path is untouched. The exposure equals the token lifetime, and reducing it further means more refresh traffic, in direct proportion.
 
-The combination that works at scale is short tokens plus a watermark fed by signals: the watermark handles the urgent cases in seconds, and expiry is the backstop when a signal is lost.
+**Per-subject validity watermark.** The system stores one timestamp per user or session, meaning "tokens issued before T are invalid." A revocation event sets it to the present. Resource servers hold these timestamps in a local cache fed by the event stream and compare each token's `iat` against the entry for its subject. **Illustrative:** 10 million users at 16 bytes each is 160 MB, small enough to hold in memory at every enforcement point. In practice the table is far smaller, because an entry is only needed while tokens issued before it could still be alive. Once the maximum token lifetime has passed since the watermark was set, every older token has expired anyway and the entry can be dropped. The table therefore holds only users with a recent event.
+
+The watermark is worth a second look because it shows why revocation lists for tokens are the wrong shape. A list of revoked token identifiers grows with the number of tokens and requires knowing every token that was issued. A watermark grows with the number of revoked subjects and requires knowing nothing about individual tokens. One comparison invalidates every token the user holds, including ones the issuer never recorded.
+
+**Introspection (RFC 7662).** The resource asks the authorization server about the token on each request, or with a short cache. The answer is exact. The cost is the one we set out to avoid at the start of the chapter: the authorization server is back in the path of every request, bounding latency and availability. It is the right choice for a small number of high-value operations and the wrong default.
+
+**Back-channel logout.** The identity provider calls each application's logout endpoint with a signed logout token. This is the OpenID Connect predecessor of the session-revoked signal and is widely implemented.
+
+The combination that works at scale is short tokens together with a watermark fed by signals. The watermark handles the urgent cases within seconds. Expiry is the backstop that still holds when a signal is lost, a stream is down, or a cache is cold. Neither is sufficient alone: expiry is too slow for a stolen session, and a signal with no backstop fails open and gives no indication that it has.
 
 ## Non-Human and Third-Party Access
 
-Leaver processes are built around people and miss the credentials people create.
+Leaver processes are built around people, and they miss the credentials that people create.
 
-- **Personal tokens and API keys** must be owned by an identity and die with it, or be transferred deliberately.
-- **Service accounts** need an owning team, an expiry, and a review, because no HR event will ever fire for them.
-- **Third-party OAuth grants**, including grants to AI agents and automation tools, outlive the employee who approved them and often hold broader scopes than the employee's current role. Inventory them at the authorization server, tie them to the granting user's status, and revoke on deactivation. The delegation model in [Workload and Agent Identity Delegation](12-workload-and-agent-identity.md) keeps this tractable by making derived authority short-lived.
+Personal tokens and API keys must be owned by an identity and die with it, or be transferred deliberately. The typical failure is a key created by an engineer for a script, which continues to run in production for years after the engineer has left, because disabling it would break the script and nobody knows what the script does.
+
+Service accounts need an owning team, an expiry, and a review, because no HR event will ever fire for them. A human account has a natural end. A service account lasts until someone decides to remove it, and without an owner nobody will.
+
+Third-party OAuth grants, including grants to AI agents and automation tools, outlive the employee who approved them and often hold broader scopes than the employee's current role would allow. They should be inventoried at the authorization server, tied to the granting user's status, and revoked on deactivation. The delegation model in [Workload and Agent Identity Delegation](12-workload-and-agent-identity.md) keeps this tractable by making derived authority short-lived, so that most of it expires without anyone having to remember it.
 
 ## Failure Traces
 
@@ -109,6 +141,8 @@ Leaver processes are built around people and miss the credentials people create.
 1. HR terminates an employee; the identity provider disables the account and SCIM sets `active` to false in the application.
 2. The application marks the account inactive but does not invalidate existing sessions.
 3. The former employee's open browser tab continues to work until the 30-day session cookie expires.
+
+Every system reported success. The identity provider shows the user disabled, the SCIM call returned 200, and the application's user list shows the account as inactive. The gap is visible only to a test that makes a request after deactivation, which is why that test belongs in the suite.
 
 **Prevention:** deactivation invalidates sessions and tokens in the same transaction; a test asserts that a request made after deactivation fails.
 
@@ -137,6 +171,8 @@ Leaver processes are built around people and miss the credentials people create.
 
 ## Verification
 
+The first test below is the most valuable measurement in this chapter, because it replaces a belief with three numbers.
+
 1. Deactivate a test user at the source and measure time until an already-open session, a refresh, and a personal access token each fail. Record the three numbers against the stated bound.
 2. Reassign a test email address to a new subject identifier and confirm the application creates a new account.
 3. Replay a SET: the second delivery is a no-op.
@@ -155,6 +191,7 @@ Leaver processes are built around people and miss the credentials people create.
 
 ## Key Takeaways
 
+- A signed token is a cache entry, and revocation is cache invalidation: expire, check back, or notify.
 - Shortening token lifetimes does not shorten exposure if sessions, keys, and grants live longer.
 - SCIM handles state that must converge; shared signals handle changes that must arrive now. Most systems need both.
 - Deactivation must end live sessions, and that property needs a test.

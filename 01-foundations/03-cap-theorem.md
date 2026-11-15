@@ -14,6 +14,10 @@ CAP is therefore an impossibility result about a specific execution. It is not a
 
 ## Formal Model
 
+The CAP theorem is probably the most cited and least carefully read result in distributed systems. It is usually summarized as "consistency, availability, partition tolerance: pick two," which suggests a menu with three equally available options. That summary misleads in a specific way. Networks fail, and a system spread over several machines cannot choose to be exempt from that. The real content of the theorem is narrower and more useful: when a network failure separates some nodes from others, each node that receives a request must either answer, at the risk of giving an answer inconsistent with the nodes it cannot reach, or decline to answer. There is no third behavior, and no amount of engineering produces one.
+
+Stated that way the theorem can be proved in a few lines, and it is worth being exact about its terms, because each of the three words has a technical meaning considerably narrower than its everyday one.
+
 Gilbert and Lynch model an asynchronous message-passing service with at least two nodes and a read/write object. Messages can be delayed or lost indefinitely, and an algorithm cannot infer from silence whether a peer is slow, unreachable, or failed.
 
 CAP consistency is **linearizability**, not ACID consistency, transaction serializability, sequential consistency, or eventual convergence. A history is linearizable when its completed operations, plus a permissible completion of some pending operations, can be placed in one legal sequential order that respects real time. If write `w` completes before read `r` begins, `r` must observe `w` or a later write in that order.

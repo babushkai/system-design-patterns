@@ -8,6 +8,10 @@ A CQRS projection needs an explicit read-model lifecycle covering query ownershi
 
 ## Workload and Contract
 
+Most applications use one model of their data for both changing it and reading it, and the two uses pull in different directions. Writes want a normalized structure that enforces the rules of the business and makes each change small and safe. Reads want data already joined, aggregated, and arranged in the shape of whatever screen is asking. A single model serves each of them imperfectly, and as the read side grows more varied the compromise becomes harder to sustain.
+
+Command Query Responsibility Segregation ends the compromise by maintaining two models. One accepts commands, validates them, and records the result. Separate read models, each shaped for a particular kind of query, are kept up to date from the changes the write side produces. Each side can then be designed, stored, and scaled for its own job. The price is that the read models are updated after the write, so for a short interval a query may not reflect a change that has just been accepted. A user who saves a form and is taken at once to a list that does not yet show the change is the characteristic symptom. The delay is inherent in the design, so it has to be handled in the product, for instance by letting a request ask to see its own write.
+
 Commands express intent and return command outcomes:
 
 ```text

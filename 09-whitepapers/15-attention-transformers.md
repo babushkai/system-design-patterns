@@ -8,6 +8,10 @@ The analysis stays inside the 2017 evidence boundary of encoder-decoder machine 
 
 ## Publication Boundary
 
+Before 2017, the leading models for language processed a sentence one word at a time, carrying forward a summary of everything read so far. This had two weaknesses. Information from early in a long passage tended to fade by the time it was needed, and because each step depended on the one before, the computation could not be done in parallel, which made training on large amounts of text slow.
+
+The Transformer removed the sequential processing altogether. Its mechanism, attention, lets every position in a sequence look directly at every other position and decide how much each is relevant to it. A word's representation is computed as a weighted combination of all the others, with the weights learned. Distance no longer matters, since any two words are one step apart, and all positions can be computed at once, which suited the graphics processors that were becoming available. The paper was about machine translation, and its authors did not claim more. The architecture proved to scale with data and computation far better than its predecessors, and it became the basis of the large language models that followed. For a systems engineer its importance is that it defines the workload those models place on hardware, including the cost that grows with the square of the sequence length.
+
 - **Paper:** *Attention Is All You Need*
 - **Authors:** Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N. Gomez, Łukasz Kaiser, and Illia Polosukhin
 - **Venue and version:** NIPS 2017 proceedings paper

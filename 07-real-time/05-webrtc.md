@@ -8,6 +8,10 @@ WebRTC is a secure, congestion-controlled media stack, not a browser-to-browser 
 
 ## The Stack and Its Trust Boundaries
 
+Most communication on the internet passes through a server. For live audio and video that is undesirable where it can be avoided, since every server on the path adds delay and conversation becomes awkward once the delay exceeds a few hundred milliseconds. WebRTC lets two browsers send media directly to each other, and most of its considerable complexity comes from one obstacle to doing so.
+
+Nearly every device sits behind a network address translator, which lets many devices share one public address and, as a side effect, prevents connections from being opened to them from outside. Two such devices cannot simply connect, because neither knows an address at which the other can be reached. The procedure WebRTC uses has each side discover every address it might be reachable at, including the public address its translator presents to the world, exchange these with the other side through some separate channel, and then try all the pairings at once until one works. When none does, which happens behind the stricter kinds of translator, the media is relayed through a server after all. An application must provide that relay capacity and the channel for the initial exchange, and it must expect that a meaningful fraction of its calls will not be peer-to-peer.
+
 WebRTC deliberately does not standardize signaling. An application may use ordinary HTTP, SSE, WebSocket, or another channel to exchange offers, answers, ICE candidates, room membership, and control messages. That channel creates intent; the browser's WebRTC stack negotiates and transports media.
 
 ```mermaid

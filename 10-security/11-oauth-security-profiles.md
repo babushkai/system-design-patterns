@@ -2,9 +2,19 @@
 
 ## TL;DR
 
-OAuth 2.0 (RFC 6749) is a framework with many optional parts, and most real breaches came from the options: tokens in URLs, loosely matched redirects, bearer tokens that work for whoever holds them, and clients that cannot tell which authorization server answered. A decade of extension RFCs closed those gaps one at a time. The current state of the art is not a new protocol but a **profile**: a fixed selection of those extensions in which the dangerous options are simply absent.
+OAuth 2.0 (RFC 6749) is a framework with many optional parts, and most real breaches came from the options: tokens in URLs, loosely matched redirects, bearer tokens that work for whoever holds them, and clients that cannot tell which authorization server answered. A decade of extension RFCs closed those gaps one at a time. The current state of the art is therefore a **profile** and not a new protocol: a fixed selection of those extensions in which the dangerous options are simply absent.
 
-Three layers are worth telling apart. **RFC 9700** (2025) is the published Best Current Practice and is what an implementation should already satisfy. **OAuth 2.1** consolidates that practice into one document; as of November 2026 it is still an IETF Internet-Draft, so cite it as a direction, not as a standard. **FAPI 2.0** is a final OpenID Foundation profile that goes further, with pushed requests, sender-constrained tokens, and a published attacker model. The grant mechanics, token types, and refresh lifecycle are in [OAuth 2.0 and OpenID Connect](02-oauth2-openid-connect.md); this chapter covers which extensions to adopt, in what order, and what each costs to operate.
+Three layers are worth telling apart. **RFC 9700** (2025) is the published Best Current Practice and is what an implementation should already satisfy. **OAuth 2.1** consolidates that practice into one document; as of November 2026 it is still an IETF Internet-Draft, so we cite it as a direction and not as a standard. **FAPI 2.0** is a final OpenID Foundation profile that goes further, with pushed requests, sender-constrained tokens, and a published attacker model. The grant mechanics, token types, and refresh lifecycle are in [OAuth 2.0 and OpenID Connect](02-oauth2-openid-connect.md). This chapter explains what each extension defends against, how it works on the wire, and what it costs to operate, because an extension adopted without understanding its threat tends to be configured in a way that no longer addresses it.
+
+## Why the Front Channel Is the Problem
+
+Nearly every weakness in this chapter has one root, and seeing it early makes the extensions feel less like a list.
+
+OAuth has to move information between two servers that have no direct relationship in the moment: the client application and the authorization server. It does so by bouncing the user's browser between them with HTTP redirects. Parameters ride out in a URL, and results ride back in a URL. This path through the browser is called the front channel, and it has two unfortunate properties. Nothing on it is authenticated, since anyone can construct a URL and induce a browser to visit it. And nothing on it is private, since URLs are recorded in browser history, proxy logs, analytics beacons, and `Referer` headers, and are visible to every extension the user has installed.
+
+The direct connection between client and authorization server, the back channel, has neither problem. It runs over TLS between two parties that can authenticate each other.
+
+The history of OAuth security is a steady migration of anything valuable off the front channel. First the tokens moved, then the binding between request and response, then the request parameters themselves. What remains in a fully hardened flow is a pair of opaque references that are useless to anyone who intercepts them. With that in mind, the deletions in the modern baseline read as a single argument.
 
 ## What the Baseline Removes
 
@@ -19,7 +29,19 @@ Three layers are worth telling apart. **RFC 9700** (2025) is the published Best 
 | Bearer tokens in the URI query | `Authorization` header or form body | URLs are logged everywhere |
 | Long-lived bearer refresh tokens for public clients | Sender-constrained or rotated with reuse detection | A stolen refresh token is a standing grant |
 
-A system that meets this table has an ordinary, defensible OAuth deployment. The profiles below are for systems where an attacker who can read or alter the browser's traffic, or steal a token at rest, must still fail.
+Some of these rows deserve their history, because the history shows they were reasonable once and explains why they linger in old systems.
+
+The **implicit grant** returned the access token directly in the redirect. It existed because, in 2010, a JavaScript application could not make a cross-origin POST to a token endpoint. Browsers did not yet widely support CORS, so the front channel was the only channel a single-page application had. That constraint is long gone, and the grant should have gone with it.
+
+**PKCE** was introduced for mobile apps, where another app on the device could register the same custom URL scheme and receive the authorization code. The mechanism is small. Before redirecting, the client generates a random string, the code verifier, and sends its SHA-256 hash, the code challenge, with the authorization request. When it later redeems the code, it sends the verifier itself. The authorization server hashes it and compares. An interceptor who obtains the code has seen only the hash, and cannot produce the preimage.
+
+Why require it of confidential clients, which already authenticate with a secret when redeeming a code? Because the secret defends against a different attack. Consider an attacker who has stolen a victim's authorization code, perhaps from a log. They begin their own sign-in with the legitimate client, and at the redirect step they substitute the victim's code for their own. The client dutifully redeems it, authenticating with its real secret, and the attacker's browser session is now attached to the victim's account. The client secret was presented by the client and proves nothing about which browser session the code belongs to. PKCE does, because the verifier is held in the session that started the flow, and the victim's code was issued against a different challenge.
+
+**Exact redirect matching** closes a family of attacks that all work the same way: if the authorization server accepts `https://app.example/*`, then any open redirect, any user-controlled page, or any forgotten subdomain under that pattern becomes a place to which the attacker can have codes delivered.
+
+**Refresh token rotation** issues a new refresh token on every use and invalidates the old one. If an old token is ever presented again, either the client or a thief is holding a stale copy, and the server cannot tell which, so it revokes the whole family of tokens descended from the original grant. This works, and it has an operational sharp edge worth knowing about. A client whose refresh response is lost to a network failure will retry with the token it still has, which the server has already rotated, and a legitimate user is signed out by the theft detector. Servers usually soften this with a grace period of a few seconds during which the previous token is still accepted, which is a small, deliberate hole in the detection. Binding the refresh token to a key, as described below, avoids the dilemma.
+
+A system that meets this table has an ordinary, defensible OAuth deployment. The profiles that follow are for systems where an attacker who can read or alter the browser's traffic, or steal a token at rest, must still fail.
 
 ## The Hardened Request Path
 
@@ -41,17 +63,23 @@ sequenceDiagram
     RS->>C: response, or step-up challenge
 ```
 
-Each extension answers one specific weakness of the plain front-channel flow.
+The diagram shows the destination. We will walk through it one extension at a time, in each case starting from the weakness in the plain flow.
 
 ### Pushed Authorization Requests
 
-With plain OAuth the authorization request travels through the browser as query parameters, where the user, extensions, and intermediaries can read and alter it. **Documented, RFC 9126:** the client instead POSTs the parameters directly to the authorization server's pushed-request endpoint, authenticating as it would at the token endpoint, and receives a `request_uri`. The browser carries only `client_id` and that reference.
+Even with tokens removed from it, the front channel still carries the request: the scopes being asked for, the redirect URI, the PKCE challenge. The user can read these and so can anything in the browser. More seriously, they can be changed. An attacker who can modify the URL before the authorization server sees it can widen a scope or alter the details of a payment, and the server has no way of knowing that the client did not ask for exactly that.
 
-The effects are concrete. Request parameters gain integrity and confidentiality without signing. The authorization server authenticates the client and can reject a bad request before any user interaction. Large requests no longer hit URL length limits. The cost is one extra back-channel round trip per authorization and a short-lived store of pending requests. A signed request object (**RFC 9101**, JAR) is the alternative when the request must be attributable to the client's key afterward, at the price of key management on every client.
+**Documented, RFC 9126:** with pushed authorization requests the client sends the parameters directly to the authorization server over the back channel, authenticating as it would at the token endpoint. The server validates them, stores them, and returns a `request_uri`, an opaque single-use reference that expires in about a minute. The browser redirect carries only the `client_id` and that reference.
+
+Three things improve at once. The request gains integrity and confidentiality without any cryptography beyond TLS. The server knows which client it is dealing with before the user is involved, and can reject a malformed request with a clear error to the party able to fix it, where previously the user would have been shown an error page. And large requests no longer strain URL length limits. The cost is one more round trip per authorization and a short-lived store of pending requests.
+
+The alternative is to keep the request on the front channel and sign it. **RFC 9101** (JAR) packages the parameters as a signed JWT. It is the right tool when the request must later be attributable to the client's key, as in some payment regulations, and its price is key management in every client. Where attribution is not required, pushing the request achieves the security properties with less machinery.
 
 ### Rich Authorization Requests
 
-A scope string such as `payments` says nothing about amount or payee. **Documented, RFC 9396:** `authorization_details` is a JSON array of typed objects describing exactly what is being authorized:
+A scope is a string, and a string such as `payments` cannot say how much, to whom, or from which account. Systems worked around this by inventing scope grammars like `payment:123.50:EUR:DE0210...`, each one different and none of them parseable by anyone else's software.
+
+**Documented, RFC 9396:** `authorization_details` is a JSON array of typed objects describing exactly what is being authorized:
 
 ```json
 [{
@@ -63,37 +91,54 @@ A scope string such as `payments` says nothing about amount or payee. **Document
 }]
 ```
 
-The user consents to that object, the granted details are returned with the token, and the resource server enforces them. Two rules keep this safe: each `type` has a schema the authorization server validates, and the resource server treats the details as an upper bound that it still checks against its own object-level policy from [Authorization at Scale](07-authorization-patterns.md). Because the payload is sensitive and can be large, RFC 9396 is normally paired with pushed requests.
+The user consents to that object, the granted details are returned with the token, and the resource server enforces them. Two rules keep this safe. Each `type` has a schema the authorization server validates, so that an unknown field cannot smuggle in authority the consent screen did not display. And the resource server treats the granted details as an upper bound, which it still checks against its own object-level policy from [Authorization at Scale](07-authorization-patterns.md). The token says the client may pay this amount to this account. Whether the user owns the debited account is a question the token cannot answer.
+
+It should now be obvious why this extension is almost always deployed with pushed requests: a payment instruction is exactly the kind of parameter that must not travel through a browser where it can be read or edited.
 
 ### Sender-Constrained Tokens
 
-A bearer token is a password for an API. Sender constraint makes a stolen token useless without a private key.
+A bearer token is a password for an API. Whoever holds it is authorized, and tokens are held in many places: client memory, server logs, crash dumps, proxy caches, and the compromised API that received one legitimately. Sender constraint changes the question the resource server asks from "is this token valid?" to "is this token valid, and does the caller hold the private key it was issued to?"
 
 | Mechanism | Binding | Fits | Operational cost |
 |---|---|---|---|
 | Mutual TLS (RFC 8705) | Certificate thumbprint in `cnf.x5t#S256` | Server-to-server clients with managed certificates | TLS termination must pass a verified certificate identity to the application |
 | DPoP (RFC 9449) | JWK thumbprint in `cnf.jkt`; per-request proof JWT | Browsers, mobile apps, clients behind varied network paths | Replay cache or server nonces; exact URI reconstruction behind proxies |
 
-A DPoP proof is a JWT with `typ` set to `dpop+jwt`, the public key in the header, and claims `htm` (method), `htu` (target URI without query), `iat`, a unique `jti`, and `ath` (hash of the access token) when calling a resource. The resource server checks the signature against the embedded key, compares that key's thumbprint to the token's `cnf.jkt`, and enforces freshness. A server-issued `DPoP-Nonce` narrows the acceptance window so that a proof created in advance cannot be used later. Passing `dpop_jkt` in the pushed request binds the authorization code to the same key, closing the gap between code issuance and token issuance.
+Mutual TLS is the simpler idea. The client presents a certificate during the TLS handshake, the authorization server records its thumbprint inside the token, and the resource server compares the thumbprint in the token to the certificate on the connection. The proof of possession is the handshake itself, performed once per connection at no additional per-request cost. Its difficulty is architectural: TLS is rarely terminated by the application. It ends at a load balancer or gateway, which must then convey the verified certificate to the service in a header that the service can trust and a client cannot forge. Every hop that terminates TLS is a place this can be misconfigured.
 
-What sender constraint does not do: an attacker who can run code inside the client can ask it to sign. In browsers, generate the key as non-extractable so script can use it but not export it, and prefer a backend-for-frontend that keeps tokens out of the page altogether.
+DPoP moves the proof up to the application layer so that it survives any number of TLS terminations. On each request the client sends a small JWT, the proof, signed with its private key. The proof's header carries `typ` set to `dpop+jwt` and the public key itself. Its claims are `htm` (the HTTP method), `htu` (the target URI without query), `iat`, a unique `jti`, and, when calling a resource, `ath`, a hash of the access token. Each claim exists to defeat a particular reuse. Without `htm` and `htu`, a proof captured from a harmless GET could accompany a destructive POST. Without `ath`, a proof could be paired with a different token bound to the same key. Without `jti` and `iat`, a captured proof could simply be sent again.
+
+That last point is where the operational cost appears. To reject a replayed proof, the resource server must remember every `jti` it has seen within the acceptance window, which makes a previously stateless check stateful. RFC 9449 offers a second mechanism that trades the memory for a round trip. The server issues a `DPoP-Nonce` value that the client must include in subsequent proofs. If the nonce is derived from a keyed hash of the current time bucket, the server can verify it without storing anything, and a proof minted in advance, for instance by an attacker with brief access to the client's signing capability, is refused because it carries no current nonce. Most deployments use both: nonces to keep the window to seconds and a small cache to cover the remainder.
+
+One gap remains between the authorization code and the token. Passing `dpop_jkt`, the thumbprint of the client's key, in the pushed request binds the code to that key, so a stolen code cannot be redeemed with a different key.
+
+We should also be clear about what sender constraint does not do. An attacker who can run code inside the client can ask the client to sign. In browsers, the key should be generated as non-extractable, so that injected script can use it for as long as the page is open but cannot take it away. Better still is a backend-for-frontend that keeps tokens out of the page altogether.
 
 ### Issuer and Resource Binding
 
-- **Issuer identification.** A client that talks to more than one authorization server can be tricked into sending a code issued by one to another, a mix-up attack. **Documented, RFC 9207:** the authorization response carries an `iss` parameter, and the client compares it with the issuer it started the flow with.
-- **Resource indicators.** **Documented, RFC 8707:** the client names the target API with the `resource` parameter, and the authorization server issues a token whose audience is that API alone. One token per resource server prevents a compromised or malicious API from replaying a token to a neighbor.
-- **Protected resource metadata.** **Documented, RFC 9728:** a resource server publishes a document at `/.well-known/oauth-protected-resource` listing its authorization servers, supported scopes, and token-binding methods, and points to it from the `WWW-Authenticate` header of a 401 response. A client that has never seen the API can discover where to obtain a token without out-of-band configuration. This is the discovery mechanism the Model Context Protocol adopted, described in [Workload and Agent Identity Delegation](12-workload-and-agent-identity.md).
-- **Typed access tokens.** **Documented, RFC 9068:** JWT access tokens carry `typ` of `at+jwt`, so an ID token can never validate as an access token.
+Four smaller extensions tie a token to where it came from and where it is going. Each is cheap and each closes an attack that is difficult to see without being told about it.
+
+**Issuer identification.** A client that supports more than one authorization server faces a problem that sounds impossible on first hearing: it can receive a response and be mistaken about who sent it. The response arrives at the client's redirect URI through the browser, carrying a code and nothing that names its origin. The mix-up attack exploits this, and a full trace appears later in the chapter. **Documented, RFC 9207:** the authorization response carries an `iss` parameter, and the client compares it with the issuer it recorded when it started the flow.
+
+**Resource indicators.** If one access token is accepted by every API in an organization, then every API is trusted with the authority of every other. The least-defended service, once compromised, can collect the tokens it receives and replay them against the most valuable one. **Documented, RFC 8707:** the client names the target API with the `resource` parameter, and the authorization server issues a token whose audience is that API alone.
+
+**Protected resource metadata.** **Documented, RFC 9728:** a resource server publishes a document at `/.well-known/oauth-protected-resource` listing its authorization servers, supported scopes, and token-binding methods, and points to it from the `WWW-Authenticate` header of a 401 response. A client that has never seen the API can then discover where to obtain a token with no out-of-band configuration. This is the discovery mechanism the Model Context Protocol adopted, described in [Workload and Agent Identity Delegation](12-workload-and-agent-identity.md).
+
+**Typed access tokens.** An ID token and a JWT access token from the same issuer are signed by the same key and look alike to a careless validator. **Documented, RFC 9068:** JWT access tokens carry `typ` of `at+jwt`, so an ID token can never validate as an access token. The check costs one string comparison. Its absence produces token confusion, in which a token a user obtained merely by signing in to one application is accepted somewhere else as authority to call an API.
 
 ### Step-Up Authentication
 
-Some operations need stronger or more recent authentication than the session has. **Documented, RFC 9470:** the resource server answers with a 401 whose `WWW-Authenticate` header carries `error="insufficient_user_authentication"` and the required `acr_values` or `max_age`. The client starts a new authorization request with those parameters, and the new token carries `acr` and `auth_time` claims the resource server can check.
+Not every operation behind one API is worth the same. Reading a balance and adding a payee differ in consequence, and the session that was adequate for the first may be too old or too weakly authenticated for the second. The party that knows what an operation is worth is the resource server. The party that can do something about it is the client. They need a way to talk.
 
-This gives the API, which knows what the operation is worth, a standard way to demand a passkey ceremony or a fresh sign-in without the client hard-coding which endpoints are sensitive. Guard against loops: a client that cannot satisfy the requested level must fail with an error instead of redirecting forever.
+**Documented, RFC 9470:** the resource server answers with a 401 whose `WWW-Authenticate` header carries `error="insufficient_user_authentication"` and the required `acr_values` or `max_age`. The client starts a new authorization request with those parameters, and the new token carries `acr` and `auth_time` claims the resource server can check.
+
+The value of standardizing this is that sensitivity stays where it is known. The client does not hard-code a list of dangerous endpoints that drifts out of date. The API can raise its requirements for an operation, or for a particular risky request, and conforming clients follow. One guard is essential: a client that cannot satisfy the requested level must fail with an error and must not redirect again, or the result is the loop traced below.
 
 ## FAPI 2.0 as a Reference Profile
 
-**Documented, FAPI 2.0 Security Profile (final, 2025):** the profile targets an attacker who controls the network and the user's browser traffic, and was accompanied by a formal security analysis. Its requirements read as a checklist of this chapter:
+Each extension above is optional, and each has options of its own. An organization assembling them independently makes dozens of small decisions, any one of which can reopen a hole, and then must convince a reviewer that the combination is sound. A profile makes those decisions once, in public, and submits the result to analysis.
+
+**Documented, FAPI 2.0 Security Profile (final, 2025):** the profile targets an attacker who controls the network and the user's browser traffic, and was accompanied by a formal security analysis. Its requirements read as a summary of this chapter:
 
 - authorization code flow only, with PKCE `S256` and pushed authorization requests;
 - confidential clients authenticated with `private_key_jwt` or mutual TLS, never a shared secret;
@@ -101,11 +146,11 @@ This gives the API, which knows what the operation is worth, a standard way to d
 - the `iss` response parameter, exact redirect URIs, and short-lived authorization codes;
 - restricted signing algorithms and TLS versions.
 
-A companion Message Signing profile adds signed requests, signed responses, and HTTP message signatures (RFC 9421) where non-repudiation is a legal requirement. Open-banking and health ecosystems mandate FAPI, but its value outside regulation is as a pre-argued configuration: adopting it replaces dozens of local design decisions with one conformance test suite.
+A companion Message Signing profile adds signed requests, signed responses, and HTTP message signatures (RFC 9421) where non-repudiation is a legal requirement. Open-banking and health ecosystems mandate FAPI. Outside regulation, we value it as a pre-argued configuration with a conformance test suite: it replaces "we believe our settings are safe" with "we pass the tests for a profile that has been formally analyzed."
 
 ## Client Identity Without Pre-Registration
 
-Classic OAuth assumes each client was registered by hand. Open ecosystems, where any client may meet any server, break that assumption.
+Classic OAuth assumes that someone registered each client by hand and received a `client_id`. That is workable when a company's own apps talk to its own server. It fails in open ecosystems, where any client may meet any server for the first time at run time, as happens with mail clients, federated social software, and AI agents connecting to tool servers.
 
 | Approach | How the client is identified | Status and risk |
 |---|---|---|
@@ -113,19 +158,25 @@ Classic OAuth assumes each client was registered by hand. Open ecosystems, where
 | Client ID Metadata Document | The `client_id` is an HTTPS URL; the server fetches metadata from it | IETF Internet-Draft in 2026; the fetch is a server-side request and needs SSRF defenses, size limits, and caching |
 | Attestation-based client authentication | A platform or backend attests the app instance's key | IETF Internet-Draft; fits mobile apps and wallets that cannot keep a shared secret |
 
+Dynamic registration has the authorization server create a record for every client that asks, which makes the server a database that strangers can write to. The metadata-document approach inverts the relationship. The client's identifier is a URL that the client controls, the server fetches the metadata when it needs it, and no record has to exist beforehand. The identity is then anchored in control of a domain, the same anchor the web already uses. The server takes on a new duty in exchange: it is now making outbound requests to URLs supplied by strangers, and must defend that fetch like any other server-side request.
+
 For browser-based applications, the IETF guidance in *OAuth 2.0 for Browser-Based Applications* ranks architectures by exposure: a backend-for-frontend that holds tokens server-side and gives the browser only a cookie is strongest, a token-mediating backend is next, and tokens handled entirely in script come last.
 
-**GNAP (RFC 9635)** deserves one sentence: it is a 2024 redesign with key-bound clients and negotiated interaction built in from the start. It is technically cleaner, and the installed base of OAuth libraries, servers, and auditors means most systems will reach the same properties through the extensions above.
+**GNAP (RFC 9635)** deserves a sentence. It is a 2024 redesign with key-bound clients and negotiated interaction built in from the start. It is technically cleaner, and the installed base of OAuth libraries, servers, and auditors means most systems will reach the same properties through the extensions above.
 
 ## Capacity and State Model
 
-Hardening converts stateless checks into small amounts of shared state. Plan for it.
+There is a pattern in the cost of everything described so far. Plain OAuth with JWT access tokens is close to stateless at the resource server: verify a signature against a cached issuer key and check some claims. Each hardening step replaces a stateless check with a small amount of shared state, or adds a signature. None of the amounts is large, but each is a new dependency on a request path, and it is better to plan for them than to discover them.
 
-- **Pushed-request store.** One entry per started authorization, deleted on first use. **Illustrative:** 500 authorizations per second with a 60-second lifetime is at most 30,000 live entries.
-- **DPoP replay cache.** A resource server must remember each `jti` for the acceptance window. **Illustrative:** 5,000 requests per second with a 60-second window is 300,000 entries per resource server cluster; at about 64 bytes each that is roughly 20 MB. Server nonces let the window shrink, and a per-node cache is acceptable only if the residual replay to another node is tolerable for that API.
-- **Verification CPU.** Each request now carries two signatures to verify: the access token and the proof. Proof keys are per client, so they cannot be cached like issuer keys; budget one ES256 verification per request.
-- **Token minting.** One audience per token means more tokens per client. Cache tokens client-side per resource until near expiry instead of requesting one per call.
-- **Authorization-server availability.** Pushed requests and step-up add calls to the authorization server on user-facing paths, while local token validation keeps resource servers running through an outage for as long as existing tokens last.
+The pushed-request store holds one entry per started authorization, deleted on first use. **Illustrative:** 500 authorizations per second with a 60-second lifetime is at most 30,000 live entries.
+
+The DPoP replay cache holds each `jti` for the acceptance window. **Illustrative:** 5,000 requests per second with a 60-second window is 300,000 entries per resource server cluster; at about 64 bytes each that is roughly 20 MB. The memory is trivial. The design question is whether the cache is shared across nodes. A shared cache adds a network call to every API request. A per-node cache adds none, and allows a proof to be replayed once against each other node within the window. Server nonces shrink the window, and for most APIs a short window with per-node caches is a defensible choice, provided it is made deliberately and written down.
+
+Verification CPU roughly doubles. Each request carries two signatures: the access token and the proof. Issuer keys are few and their verification results can be cached per token. Proof keys are per client and every proof is new, so we budget one ES256 verification per request with no caching.
+
+Token minting increases, because one audience per token means a client calling five APIs holds five tokens. Clients should cache each token until it nears expiry and should not request one per call.
+
+Finally, availability shifts. Pushed requests and step-up put additional authorization-server calls on user-facing paths, so its outage now blocks new sign-ins sooner. In the other direction, local validation of tokens lets resource servers continue to serve existing sessions through such an outage for as long as their tokens last. The access token lifetime is therefore also the length of time the system can coast.
 
 ## Failure Traces
 
@@ -136,6 +187,8 @@ Hardening converts stateless checks into small amounts of shared state. Plan for
 3. A issues a code and redirects to the client.
 4. The client, believing it is in a B flow, sends the code and its PKCE verifier to B's token endpoint.
 
+The attacker now holds a code for the user's account at the honest issuer, along with the verifier needed to redeem it. No party misbehaved except B, and A was never compromised. The client's error was to infer the sender of a response from its own memory of what it had started, when the response itself said nothing on the matter.
+
 **Prevention:** check the `iss` response parameter against the issuer stored with the pending transaction; use a distinct redirect URI per issuer.
 
 ### DPoP Proof Rejected Behind a Proxy
@@ -144,7 +197,9 @@ Hardening converts stateless checks into small amounts of shared state. Plan for
 2. A gateway rewrites the path and forwards over plain HTTP on an internal host name.
 3. The resource server reconstructs a different URL and rejects every proof, or an engineer disables the check.
 
-**Prevention:** reconstruct the external URL from trusted forwarding configuration, not from request headers a client can set; test through the real edge.
+The second outcome in step 3 is the dangerous one, and it is common. A control that fails closed for every request on its first day in production is under great pressure to be switched off, and a DPoP deployment with the `htu` check disabled looks healthy in every dashboard.
+
+**Prevention:** reconstruct the external URL from trusted forwarding configuration and not from request headers a client can set; test through the real edge.
 
 ### Token Reused at a Second API
 
@@ -164,6 +219,8 @@ Hardening converts stateless checks into small amounts of shared state. Plan for
 
 ## Verification
 
+Each control in this chapter rejects something, so each can be tested by presenting the thing it should reject:
+
 1. Send an authorization request with a redirect URI that differs by one character or a trailing slash: rejected.
 2. Reuse a `request_uri`: rejected on the second use.
 3. Present a DPoP-bound token with no proof, with a proof for another method or URI, and with a replayed `jti`: all rejected.
@@ -174,7 +231,7 @@ Hardening converts stateless checks into small amounts of shared state. Plan for
 
 ## Decision Framework
 
-Adopt in this order; each step is useful without the next.
+We recommend adopting in this order. Each step is useful without the next, and the order follows the ratio of risk removed to operational cost added.
 
 1. **Meet the baseline.** PKCE everywhere, exact redirects, no implicit or password grants, rotated or bound refresh tokens. This is RFC 9700 and is not optional.
 2. **Bind audiences.** Resource indicators and typed access tokens stop cross-API replay at almost no cost.
@@ -184,7 +241,7 @@ Adopt in this order; each step is useful without the next.
 6. **Add step-up challenges** when APIs differ in sensitivity and the client should not own that knowledge.
 7. **Adopt FAPI 2.0 wholesale** when a regulator, partner ecosystem, or security review needs a named, testable target.
 
-Choose a maintained authorization server that already implements the profile. The engineering effort belongs in resource-server enforcement and client key handling, which no product can do for you.
+Choose a maintained authorization server that already implements the profile. The engineering effort belongs in resource-server enforcement and client key handling, which no product can do on a team's behalf.
 
 ## References
 

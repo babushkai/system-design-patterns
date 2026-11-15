@@ -18,9 +18,15 @@ A cache design must state its policy, tier placement, sizing, and economics. Fre
 
 ---
 
-## 1. Start With the Cache Contract
+## Start With the Cache Contract
 
-### 1.1 A cache entry is derived state
+Caching is the first thing most teams reach for when a system is slow, and with good reason: keeping a copy of an expensive result near where it is needed is the most effective performance technique there is. It is also where a large share of subtle production bugs originate. The reason is that adding a cache converts a system with one copy of each fact into a system with two, and nothing keeps the two in agreement except the code the team writes. Every cache bug is some version of the copy and the original disagreeing in a way nobody planned for: a user who changes their email and still sees the old one, a price that was corrected in the database and is still wrong on the site, one customer's data shown to another because a key omitted the tenant.
+
+The second hazard is quieter. A system that has run behind a cache for a year has usually come to depend on it for capacity as well as speed. The database was sized for the trickle of requests that miss, and nobody remembers what the full load looks like. When the cache is restarted or emptied, the full load arrives at a database that has never carried it. A component that was introduced as an optimization has become a dependency whose loss takes the service down.
+
+Both hazards are managed by deciding, before choosing any technology, exactly what the cache is permitted to do.
+
+### A cache entry is derived state
 
 For an authoritative value $S(k)$, a cache entry is better modeled as metadata plus a value, not merely a byte string:
 
@@ -47,7 +53,7 @@ The useful invariants are:
 
 If the first invariant is false (for example, acknowledged writes live only in Redis), the component is a database or durable write buffer. It needs durability, recovery, and consistency analysis beyond ordinary caching.
 
-### 1.2 Contract worksheet
+### Contract worksheet
 
 Record a contract per cacheable object or query class:
 
@@ -68,9 +74,9 @@ A statement such as “profiles use Redis for one hour” is not a contract. It 
 
 ---
 
-## 2. Read and Write Policies
+## Read and Write Policies
 
-### 2.1 Cache-aside versus read-through
+### Cache-aside versus read-through
 
 Both policies normally have the same state transition:
 
@@ -105,7 +111,7 @@ read(key, deadline):
 
 The phrase **protected origin load** is deliberate. A raw fallback during a cache outage can turn a cache incident into a database incident. [Stampede, Cold Start, and Warming](04-cache-stampede.md) covers coalescing, concurrency budgets, stale serving, and warming.
 
-### 2.2 Write policy semantics
+### Write policy semantics
 
 | Policy | Acknowledged authority | Cache action | Principal risk |
 |---|---|---|---|
@@ -124,9 +130,11 @@ For ordinary derived caches, the most auditable default is:
 3. delete the cached projection;
 4. let a protected reader repopulate it.
 
-Updating instead of deleting can avoid a miss, but only when the updater has the committed value and source version and the cache can reject an older write.
+The preference for deleting over updating surprises people, since writing the new value into the cache seems both simpler and faster. The trouble is concurrency. Suppose two requests update the same record almost simultaneously. The first commits value A to the database, and the second commits value B a moment later, so the database ends at B. Each then writes its value to the cache, and nothing guarantees that those two cache writes arrive in the same order as the commits. If the second request's cache write lands first and the first request's lands after it, the cache holds A while the database holds B, and it will go on holding A until the entry expires. A delete has no such problem, because deletes carry no value: whichever order they arrive in, the entry is gone, and the next reader loads whatever the database currently holds.
 
-### 2.3 Write-behind changes the system boundary
+Updating in place can still be worth doing to avoid the miss, but only when the updater has the committed value together with its source version, and the cache is able to reject a write carrying an older version than the one it already holds.
+
+### Write-behind changes the system boundary
 
 Returning success before the authoritative database accepts a write means the buffer is now authoritative for some interval. The minimum design includes:
 
@@ -140,7 +148,7 @@ Returning success before the authoritative database accepts a write means the bu
 
 An in-memory dirty-key set is not write-behind durability. It is acknowledged data-loss risk.
 
-### 2.4 Negative caching
+### Negative caching
 
 Caching an authoritative “not found” result protects the origin from repeated misses, typo traffic, and enumeration attacks. Use a distinct sentinel rather than overloading null.
 
@@ -148,9 +156,9 @@ The negative key must include the same tenant and authorization dimensions as th
 
 ---
 
-## 3. Place Each Cache Tier Deliberately
+## Place Each Cache Tier Deliberately
 
-### 3.1 A request may cross several coherence domains
+### A request may cross several coherence domains
 
 ~~~mermaid
 flowchart LR
@@ -175,7 +183,7 @@ These are not interchangeable copies:
 
 Add a tier only when a measured latency, bandwidth, or origin-load problem remains after the preceding tier. Every tier adds another failure mode, key definition, metric, and invalidation path.
 
-### 3.2 HTTP cache semantics are part of system design
+### HTTP cache semantics are part of system design
 
 For HTTP responses:
 
@@ -199,7 +207,7 @@ Cache-Control: public, max-age=31536000, immutable
 
 Mutable APIs should usually use validation or short bounded freshness rather than pretending their URL is immutable.
 
-### 3.3 L1 plus L2
+### L1 plus L2
 
 L1 removes a network hop; L2 shares capacity across instances. Their contract should be asymmetric:
 
@@ -212,7 +220,7 @@ L1 removes a network hop; L2 shares capacity across instances. Their contract sh
 
 Server-assisted tracking, when supported by the client and cache, can target invalidations more precisely. Its disconnect behavior must be understood: local entries generally need flushing or revalidation when tracking continuity is lost.
 
-### 3.4 Freshness does not reset at every tier
+### Freshness does not reset at every tier
 
 Suppose an edge stores a response for 60 seconds, refills from a proxy holding a 5-minute-old copy, and then resets its own timer. The user can see data older than the apparent edge TTL.
 
@@ -226,9 +234,9 @@ Do not grant a fresh TTL to a value merely because it moved between caches. [Cac
 
 ---
 
-## 4. Hit Rate, Latency, and Origin Load
+## Hit Rate, Latency, and Origin Load
 
-### 4.1 Conditional hit rates
+### Conditional hit rates
 
 In a hierarchy, report the hit rate at each tier **conditioned on reaching that tier**. If $h_i$ is the conditional hit rate at tier $i$, then:
 
@@ -251,7 +259,7 @@ effective hit rate = 1 - (1 - 0.80)(1 - 0.90) = 98%
 
 Calling both tiers “90% hit rate” without saying whether rates are conditional leads to double-counting.
 
-### 4.2 Expected latency
+### Expected latency
 
 Let $l_i$ be the lookup cost at tier $i$, $m_i$ the probability of missing every preceding tier, and $L_o$ the origin service time. A first-order model is:
 
@@ -263,7 +271,7 @@ Averages are insufficient when a miss consumes a database connection, fans out t
 
 A cache can reduce average latency while worsening tail latency if cache timeouts are long enough that requests pay both the failed cache lookup and the full origin lookup.
 
-### 4.3 Useful hit rate
+### Useful hit rate
 
 Count a hit as useful only if it:
 
@@ -288,7 +296,7 @@ bypass
 
 A high raw hit rate can hide stale responses, oversized objects, or a cache that is slower than the origin for cheap queries. Byte hit rate and avoided-origin-work rate are often more informative than object hit rate.
 
-### 4.4 Cold-cache envelope
+### Cold-cache envelope
 
 For request rate $\lambda$ and effective hit rate $h$:
 
@@ -296,13 +304,15 @@ $$
 \lambda_{\text{origin}} = \lambda(1-h) + \lambda_{\text{refresh}}
 $$
 
-The design must be safe at the lowest hit rate expected during restart, failover, resharding, or deploy, not only at steady state. If zero-hit traffic exceeds origin capacity, the service needs admission control, staged traffic, pre-warming, stale serving, or a smaller cacheable surface.
+The formula has a consequence that is easy to state and routinely underestimated. Origin load is proportional to the miss rate, and at high hit rates the miss rate is a small number that changes by large factors. A cache hitting 99 percent of requests sends one percent to the origin. If its hit rate falls to 98 percent, which would hardly register on a dashboard, the origin's load doubles. If the cache is emptied, the origin's load rises a hundredfold. The better a cache performs, the more violently the system behind it reacts to any degradation, and a database provisioned comfortably for the steady-state trickle has no chance against the full flow.
+
+The design must therefore be safe at the lowest hit rate expected during restart, failover, resharding, or deploy, and steady state is the least interesting case. If zero-hit traffic exceeds origin capacity, the service needs admission control, staged traffic, pre-warming, stale serving, or a smaller cacheable surface.
 
 ---
 
-## 5. Economic Model
+## Economic Model
 
-### 5.1 Break-even equation
+### Break-even equation
 
 Evaluate a cache against the work it avoids:
 
@@ -322,7 +332,7 @@ Do not paste a cloud instance price into a timeless design rule. Measure the mar
 
 A cache is justified when the cache's total operating cost is lower than the value of avoided origin work **and** its failure modes fit the service objective.
 
-### 5.2 Miss-ratio curve, not folklore
+### Miss-ratio curve, not folklore
 
 The working set is not “20% of the database.” Derive a miss-ratio curve from representative access traces:
 
@@ -335,7 +345,7 @@ The working set is not “20% of the database.” Derive a miss-ratio curve from
 
 Choose the knee of the measured curve. A power-law workload may have a small valuable hot set; a uniform or scan-heavy workload may not.
 
-### 5.3 Capacity equation
+### Capacity equation
 
 A practical memory estimate is:
 
@@ -364,7 +374,7 @@ required memory = 5.12 * 1.25 * 1.30 * 2 = 16.64 GB
 
 Validate with production-shaped serialized values and the cache's own memory-accounting command. Include replication/AOF buffers, fork copy-on-write exposure, client buffers, operating-system memory, and failover headroom where applicable.
 
-### 5.4 Admission and eviction are different decisions
+### Admission and eviction are different decisions
 
 - **Admission** asks whether a new object deserves cache space.
 - **Eviction** chooses what to discard when space is needed.
@@ -378,13 +388,15 @@ Validate with production-shaped serialized values and the cache's own memory-acc
 | Uniform random | Small or no cache | Memory buys little reuse |
 | Objects with different costs | Cost/size-aware admission | Large cheap objects evict small expensive ones |
 
+The first row describes the classic weakness of least-recently-used eviction. LRU keeps whatever was touched most recently, on the assumption that recent use predicts future use. A batch job or a crawler that reads every record once defeats that assumption completely: each record it touches becomes the most recently used, and by the time the scan finishes it has pushed out the entire hot set in favor of records that will never be read again. Frequency-based policies resist this, since one access does not make an item popular, and they have the opposite weakness of holding on to items that were popular last week. The policies in the third row combine the two. They keep a compact probabilistic estimate of how often each key has been requested, and when the cache is full they admit a new item only if its estimated frequency exceeds that of the item it would displace. A record seen once by a scan loses that comparison against an established hot key and is never admitted.
+
 Redis's LRU and LFU policies are approximations. A **volatile** eviction policy considers only keys with expiration; non-expiring keys can consume the memory and leave no useful eviction candidates. For a pure derived cache, an all-keys policy is usually easier to reason about. For mixed durable and cache data, split workloads rather than depending on TTL discipline to create safety.
 
 ---
 
-## 6. Key and Value Design
+## Key and Value Design
 
-### 6.1 Key schema
+### Key schema
 
 A key should encode all semantic dimensions and no accidental ones:
 
@@ -405,7 +417,7 @@ Requirements:
 
 A schema generation changes reachability without scanning and deleting old keys. Old generations still consume memory until expiry, so set a TTL and monitor orphaned bytes.
 
-### 6.2 Payload schema
+### Payload schema
 
 Store enough metadata to reject unsafe reuse:
 
@@ -422,15 +434,15 @@ Store enough metadata to reject unsafe reuse:
 
 During rolling deploys, readers must either understand both old and new payloads or use different key generations. Deserialization failures are misses, not request crashes. Compression saves memory and network bytes but consumes CPU and can make small objects slower; choose it from measured payload distributions.
 
-### 6.3 Do not cache authorization decisions blindly
+### Do not cache authorization decisions blindly
 
 A response cache and an authorization system have different failure consequences. If a permission revocation must take effect immediately, validate a current authorization version or bypass the cache. Never share a personalized object solely because the URL matches. Include the principal or a reviewed authorization cohort in the key, and avoid caching sensitive responses in shared HTTP caches.
 
 ---
 
-## 7. Rollout and Verification
+## Rollout and Verification
 
-### 7.1 Safe introduction
+### Safe introduction
 
 1. **Baseline:** measure origin QPS, service time, dependency fan-out, and capacity without the cache.
 2. **Shadow keying:** compute proposed keys and sizes without serving cached values; detect cardinality and privacy mistakes.
@@ -442,7 +454,7 @@ A response cache and an authorization system have different failure consequences
 
 Never validate a cache only with a warm benchmark. Run the miss path and recovery path at production concurrency.
 
-### 7.2 Required telemetry
+### Required telemetry
 
 Per tier, key class, tenant, and region:
 
@@ -458,7 +470,7 @@ Per tier, key class, tenant, and region:
 
 Use sampling for per-key telemetry; logging every key can create a new cost and privacy incident.
 
-### 7.3 Decision checklist
+### Decision checklist
 
 - [ ] Cache is derived from a named authoritative source.
 - [ ] Freshness, stale serving, and negative caching are product decisions.

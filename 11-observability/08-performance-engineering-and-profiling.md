@@ -8,6 +8,10 @@ The order of operations matters more than the tools. Establish steady-state evid
 
 ## Workload and Measurement Contract
 
+Engineers are notoriously poor at guessing where a program spends its time. The part of the code that looks expensive is often negligible, and the real cost lies somewhere nobody thought to examine, such as a logging call, a lock, or a conversion between data formats. Optimizing by intuition therefore tends to make code more complicated without making it faster. The discipline of performance engineering starts from the rule that nothing is optimized until it has been measured.
+
+Measurement has its own traps. An average hides the slow requests that matter most to users, so latency has to be examined as a distribution, with particular attention to its tail. A benchmark that sends each request only after the previous one has returned will quietly stop sending during a stall, and so fails to record exactly the delays it was meant to detect. And a measurement taken on an idle test machine describes a situation that production never sees. Profiling answers the question measurement raises, which is where the time went, by sampling what the program is doing many times a second and aggregating the results. The standard display, the flame graph, shows at a glance which call paths account for most of the samples.
+
 A performance chapter without a workload description is a set of anecdotes. Write the contract down before choosing a tool:
 
 | Field | What it pins down | Why it changes the answer |

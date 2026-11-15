@@ -8,6 +8,12 @@ A production DNS and connection contract must define **DNS delegation and cache 
 
 ## Primary Evidence and Scope
 
+Before a client can send a request it has to find out where to send it and then open a connection. Both steps are so routine that they are easy to leave out of a design, and both are frequent contributors to outages and to latency that nobody can account for.
+
+DNS turns a name into an address, and it is a cache distributed across the entire internet. Each answer carries a lifetime, during which resolvers everywhere may reuse it without asking again. That is what allows the system to scale, and it means that a change to a record does not take effect at once. Clients go on using the old address until their cached copy expires, and some software holds on to it for much longer than the stated lifetime. Moving traffic by changing DNS is therefore slow and imprecise, and a mistaken change cannot be recalled from the caches that have already stored it.
+
+Opening a connection has a cost as well. A new encrypted connection takes several round trips before the first request can be sent, so clients keep connections open and reuse them. Pools of reused connections bring their own problems. A long-lived connection continues to point at the server it was opened to, however the DNS record or the load balancer's membership has changed since, and a server that is restarted loses all its connections at once and must then absorb a wave of new handshakes.
+
 | Primary evidence | What it establishes | Boundary |
 |---|---|---|
 | RFC 1034 and RFC 1035 (1987) | DNS namespace, delegation, iterative/recursive resolution, RRsets, caching, and wire protocol foundations | Later RFCs update details; an implementation must follow the current standards set, not these two documents alone |

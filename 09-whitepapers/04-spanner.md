@@ -6,6 +6,10 @@ Spanner's distinguishing contribution is not merely “a database synchronized b
 
 ## Publication Identity and Version Discipline
 
+Before Spanner it was widely accepted that a database spread across continents had to choose between strong consistency and practicality. Systems that scaled globally offered weak guarantees, and systems with real transactions lived in one place. Spanner provided transactions that are consistent across the whole world, and the way it did so is the reason the paper is studied.
+
+The obstacle to ordering transactions globally is that machines in different places do not agree on the time, so their timestamps cannot be compared reliably. Spanner's answer was to stop pretending that they could and to measure the disagreement instead. Its time service, built on atomic clocks and satellite receivers in every data center, reports the current time as an interval that is guaranteed to contain the true time. When a transaction commits, it is assigned a timestamp and the system then waits until that timestamp is certainly in the past everywhere before releasing the result. After that wait, any transaction that begins later is certain to receive a later timestamp, so the order of timestamps matches the order in which things really happened. The wait is only as long as the clock uncertainty, a few milliseconds, which is why so much effort went into keeping that uncertainty small.
+
 - **Paper:** *Spanner: Google's Globally-Distributed Database*
 - **Authors:** James C. Corbett, Jeffrey Dean, Michael Epstein, Andrew Fikes, Christopher Frost, J. J. Furman, Sanjay Ghemawat, Andrey Gubarev, Christopher Heiser, Peter Hochschild, Wilson Hsieh, Sebastian Kanthak, Eugene Kogan, Hongyi Li, Alexander Lloyd, Sergey Melnik, David Mwaura, David Nagle, Sean Quinlan, Rajesh Rao, Lindsay Rolig, Yasushi Saito, Michal Szymaniak, Christopher Taylor, Ruth Wang, and Dale Woodford
 - **Venue and base version:** 10th USENIX Symposium on Operating Systems Design and Implementation (OSDI), 2012, pages 251–264

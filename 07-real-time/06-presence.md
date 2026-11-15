@@ -8,6 +8,12 @@ Presence is a viewer-specific projection, not a boolean on a user row. It derive
 
 ## Separate the Dimensions
 
+The green dot beside a name appears to be the simplest feature in any chat product. It is a deceptively difficult one, for two reasons that have little to do with each other.
+
+The first is that "online" is not something a server can observe. The server can see that a connection is open, and it can see when one closes cleanly. When a phone loses signal or a laptop goes to sleep, nothing is sent. The connection just falls silent, and the server learns that the user has gone only when an expected heartbeat fails to arrive. Presence is therefore always an inference from the absence of a signal, and it is always out of date by up to the heartbeat interval. The interval is a direct trade between how quickly a departure is noticed and how much traffic and battery are spent on heartbeats.
+
+The second is fan-out. Each change of a user's status is of interest to everyone who can see that user. In a large organization, where everyone may be visible to everyone, the number of updates grows with the square of the number of users, and most of them describe people whom the recipient is not looking at. Workable designs send presence only for the users actually shown on a screen, and treat the whole feature as approximate, expiring information that can be dropped under load.
+
 Products often compress several independent facts into one colored dot:
 
 | Dimension | Examples | Source of truth |

@@ -8,6 +8,10 @@ The property that makes sketches a system design tool, and not only an algorithm
 
 ## Primary Evidence and Scope
 
+Some questions are easy to ask and expensive to answer exactly. Counting the distinct visitors to a site requires remembering every visitor already seen, and for a billion visitors that set occupies gigabytes. Finding the most frequent items in a stream requires a counter for every distinct item. Computing a median requires keeping all the values. For data that arrives continuously and without bound, the exact answer needs memory in proportion to the data, which is often more than the answer is worth.
+
+Sketches give up exactness for a very large saving in space. A sketch is a small, fixed-size summary that is updated as each item arrives and can afterward answer one kind of question approximately, with an error that is known and can be chosen in advance. A few kilobytes are enough to estimate the number of distinct items among billions to within about one percent. The trick in each case is to keep a statistical trace of the data that is governed by the quantity of interest. To count distinct items, for example, each item is hashed and the sketch remembers only the longest run of leading zeros it has seen among the hashes. A long run is improbable unless many different items have been hashed, so its length indicates how many there were. Most sketches can also be merged, which lets them be computed separately on many machines and then combined.
+
 | Source | What it establishes | Boundary |
 |---|---|---|
 | Flajolet, Fusy, Gandouet, and Meunier (2007) | HyperLogLog estimates cardinality with standard error about 1.04/sqrt(m) using m small registers | Assumes a hash that behaves uniformly; raw estimator is biased at small cardinalities |

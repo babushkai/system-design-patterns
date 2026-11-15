@@ -17,9 +17,11 @@ The central invariant is stronger than “an attacker cannot read the ciphertext
 
 ---
 
-## 1. Start With the Protection Contract
+## Start With the Protection Contract
 
-Cryptography can only enforce a stated boundary. Before selecting a primitive, identify:
+Modern ciphers are almost never the part of a system that fails. An attacker who wants data protected by AES-256 does not attack AES. They read the key from an environment variable, ask a service that holds the key to decrypt on their behalf, restore a backup whose key was never rotated, or find the plaintext copy that a debugging tool wrote to a log. Encryption converts the problem of protecting a large amount of data into the problem of protecting a small key and controlling who may use it. That is a good trade only if the second problem is actually solved, and most of this chapter is about solving it.
+
+Cryptography can only enforce a boundary that someone has stated. Before selecting a primitive, we identify:
 
 - the data class: public, internal, confidential, credential, regulated, or customer-managed;
 - the attacker: stolen disk, database reader, backup operator, cloud administrator, compromised application process, neighboring tenant, network observer, or malicious client;
@@ -44,7 +46,7 @@ protect(
 
 The corresponding open operation must verify the same semantic context. A blob copied from tenant A into a row owned by tenant B must not decrypt merely because both rows happen to use the same key.
 
-### 1.1 System invariants
+### System invariants
 
 1. **Authenticated encryption:** protected content is confidential and tampering is detected before plaintext is released.
 2. **Nonce uniqueness:** a nonce is never reused with the same AEAD key. Random generation is acceptable only when collision probability stays within a reviewed bound.
@@ -59,9 +61,9 @@ The corresponding open operation must verify the same semantic context. A blob c
 
 ---
 
-## 2. Use Primitives for Their Actual Contract
+## Use Primitives for Their Actual Contract
 
-### 2.1 Authenticated encryption
+### Authenticated encryption
 
 Use an established AEAD construction. AES-GCM is widely accelerated and standardized; ChaCha20-Poly1305 is often attractive when AES hardware acceleration is absent. Both produce ciphertext plus an authentication tag and accept **additional authenticated data** (AAD) that is authenticated but not encrypted.
 
@@ -87,9 +89,11 @@ aad = canonical_encode({
 
 Canonical encoding matters. If the writer and reader serialize the same fields differently, legitimate data becomes undecryptable. Store or derive a stable AAD schema identifier.
 
-### 2.2 Nonce allocation is state management
+### Nonce allocation is state management
 
-With AES-GCM, reusing a nonce under the same key can reveal relationships between plaintexts and undermine authentication. “Generate 12 random bytes” is not an architectural explanation; it is a probabilistic allocator.
+The nonce requirement is usually stated as a rule, and it is easier to respect once the mechanism is clear. AES-GCM does not encrypt the plaintext directly. It uses the key and the nonce to generate a stream of pseudorandom bytes, the keystream, and XORs that stream with the plaintext. The same key and nonce always generate the same keystream. If two messages are encrypted under one key and nonce, an observer who XORs the two ciphertexts finds that the keystream cancels, leaving the XOR of the two plaintexts, and from there known or guessable content in one message reveals the other. The damage does not stop at confidentiality. The authentication tag depends on a secret value derived from the key, and two messages under one nonce give an attacker enough equations to solve for it, after which they can forge valid tags for messages of their choosing. A single repetition therefore compromises both properties the cipher was chosen for.
+
+Nonce allocation is consequently a state-management problem with a correctness requirement, and “generate 12 random bytes” is one particular allocator, a probabilistic one, whose failure rate can be computed.
 
 For uniformly random 96-bit nonces, the approximate collision probability after $n$ encryptions is:
 
@@ -101,7 +105,7 @@ At $n=2^{32}$ encryptions under one key, this approximation is roughly $2^{-33}$
 
 Never invent a nonce scheme inside each service. Put the rule in the crypto library and make maximum messages/bytes per key part of policy.
 
-### 2.3 Hashes, passwords, MACs, and signatures are different
+### Hashes, passwords, MACs, and signatures are different
 
 | Need | Primitive | Important property |
 |---|---|---|
@@ -113,7 +117,7 @@ Never invent a nonce scheme inside each service. Put the rule in the crypto libr
 
 Password hashing is intentionally one-way; data encryption is reversible. A plain fast hash of a password is not a password verifier. A signature does not hide its message. A checksum is not a MAC.
 
-### 2.4 Public-key encryption and hybrid encryption
+### Public-key encryption and hybrid encryption
 
 Public-key operations are normally used to establish or wrap symmetric key material, not encrypt a large payload directly. In a hybrid construction, a sender derives or generates a content-encryption key, encrypts bulk data symmetrically, and encapsulates that key for the recipient. HPKE standardizes a modern public-key hybrid construction.
 
@@ -121,9 +125,9 @@ This is related to but distinct from cloud-style **envelope encryption**, where 
 
 ---
 
-## 3. Envelope Encryption Architecture
+## Envelope Encryption Architecture
 
-Calling a remote KMS for every 4 KiB record is usually slow, expensive, and an availability hazard. The KMS should protect a key hierarchy; local audited code should perform high-volume AEAD operations.
+Two requirements pull against each other here. The most valuable keys should never leave a hardened key service, which suggests sending all data to that service for encryption. But a remote call for every 4 KiB record is slow and expensive, and it places the key service in the path of every read and write, so that its outage becomes the outage of everything. Envelope encryption resolves the conflict with one level of indirection. Data is encrypted locally with a data key, and only that small data key is sent to the key service to be encrypted, or wrapped, under a key that never leaves it. The wrapped data key is stored beside the ciphertext. The key service handles a few bytes per key, and local audited code performs the high-volume AEAD operations.
 
 ```mermaid
 flowchart LR
@@ -156,7 +160,7 @@ Typical read path:
 5. Verify and decrypt in one AEAD operation.
 6. Release plaintext only after tag verification.
 
-### 3.1 A durable ciphertext envelope
+### A durable ciphertext envelope
 
 ```text
 EnvelopeV2 {
@@ -179,9 +183,9 @@ The parser is part of the security boundary. Cap every variable-length field, re
 
 ---
 
-## 4. Key Hierarchy and Lifecycle
+## Key Hierarchy and Lifecycle
 
-### 4.1 Scope is a blast-radius decision
+### Scope is a blast-radius decision
 
 A common hierarchy is:
 
@@ -203,7 +207,7 @@ Choose scope from:
 - number of simultaneous active keys the service can safely cache;
 - KMS throughput during cold start and regional recovery.
 
-### 4.2 State machine
+### State machine
 
 Treat a key version as durable state:
 
@@ -223,7 +227,7 @@ stateDiagram-v2
 
 Every transition should record actor, reason, policy, approval, inventory snapshot, and affected scopes. Emergency compromise rotation may skip normal timing but must not skip dependency accounting.
 
-### 4.3 Rotation, rewrapping, and re-encryption
+### Rotation, rewrapping, and re-encryption
 
 These operations solve different problems:
 
@@ -238,7 +242,7 @@ Run migration as resumable, idempotent work. Store source and target versions, c
 
 ---
 
-## 5. KMS and HSM as a Control Boundary
+## KMS and HSM as a Control Boundary
 
 A KMS manages logical keys, policy, versions, audit, and cryptographic operations. An HSM provides tamper-resistant execution and protection for high-value key material. A managed KMS may itself be backed by HSMs; the terms describe different layers, not competing algorithms.
 
@@ -253,7 +257,7 @@ Key policy should bind:
 
 The service that can update key policy should not automatically be able to read production ciphertext. The database administrator should not automatically be a KMS decrypt principal. CI should not receive production decrypt permission because it deploys the service.
 
-### 5.1 Plaintext DEK cache
+### Plaintext DEK cache
 
 A bounded local DEK cache can remove KMS latency from the hot path, but it changes the threat model. Define:
 
@@ -269,7 +273,7 @@ Cache entries must be keyed by immutable key version plus scope and purpose, not
 
 ---
 
-## 6. Transport Encryption Is a Different Layer
+## Transport Encryption Is a Different Layer
 
 TLS 1.3 protects a connection against network observation and active tampering when certificate and hostname validation succeed. Its normal ephemeral (EC)DHE handshakes provide forward secrecy: later compromise of a certificate private key does not reveal previously recorded sessions. Session resumption, ticket-key rotation, termination points, and exported logs still affect the real boundary.
 
@@ -283,11 +287,19 @@ client -> edge TLS termination -> proxy hop -> service -> database driver
 
 “TLS enabled” can still leave plaintext between an ingress and a service, inside debug capture, or at an unexpected load balancer. Conversely, encrypting each application field does not authenticate the service endpoint or hide traffic metadata.
 
+### Post-quantum migration
+
+A sufficiently large quantum computer would break the elliptic-curve and RSA key exchange that TLS relies on. No such machine exists, and the threat is nonetheless a present one for a specific reason. An adversary can record encrypted traffic today and keep it until decryption becomes possible, a strategy known as harvest now, decrypt later. Data that must stay confidential for ten or twenty years is therefore exposed by the key exchange used to transmit it this year.
+
+NIST finalized its first post-quantum standards in August 2024: ML-KEM (FIPS 203) for key establishment, and ML-DSA (FIPS 204) and SLH-DSA (FIPS 205) for signatures. Deployment has begun with key exchange, since that is where recorded traffic is at risk, and it takes a hybrid form in which a classical exchange and ML-KEM are run together and their outputs combined. The session is then secure if either holds, which protects against a quantum attacker without staking everything on algorithms that have had far less scrutiny than the ones they replace. The cost is size. An ML-KEM-768 key share is over a kilobyte where an elliptic-curve share is 32 bytes, enough to push a TLS ClientHello across more than one packet, and some older middleboxes mishandle that.
+
+Symmetric encryption is much less affected. The best known quantum attack on AES roughly halves its effective key length, so AES-256 retains an ample margin, and stored data under an envelope scheme is exposed mainly through whatever asymmetric step wraps or transports its keys. The practical preparation is an inventory of where asymmetric cryptography is used and how long the data it protects must remain secret, together with the ability to change algorithms without a flag day, which the versioned envelope in this chapter already provides.
+
 Certificate lifecycle is a control plane: issuance, trust-bundle distribution, renewal, revocation posture, overlap, and clock tolerance. Prefer short-lived automated workload credentials over static certificates copied into images. The workload-identity architecture is covered in [Zero-Trust Service and Workload Architecture](./05-zero-trust-architecture.md).
 
 ---
 
-## 7. Choose the Plaintext Boundary Deliberately
+## Choose the Plaintext Boundary Deliberately
 
 | Pattern | Protects against | Does not protect against | Operational consequence |
 |---|---|---|---|
@@ -304,7 +316,7 @@ Client-side encryption transfers recovery, sharing, device synchronization, and 
 
 ---
 
-## 8. Multi-Tenant, Multi-Region, Backup, and Deletion Design
+## Multi-Tenant, Multi-Region, Backup, and Deletion Design
 
 Per-tenant logical keys make access policy and audit clearer and can reduce blast radius. They do not by themselves prevent cross-tenant reads: tenant identity must also bind application authorization, storage lookup, AAD, cache keys, and KMS policy.
 
@@ -323,7 +335,7 @@ Backups create long-lived cryptographic dependencies. Inventory both ciphertext 
 
 ---
 
-## 9. Capacity and Cost Model
+## Capacity and Cost Model
 
 Consider an illustrative workload, not a vendor price claim:
 
@@ -359,9 +371,9 @@ Track:
 
 ---
 
-## 10. Concrete Failure Traces
+## Concrete Failure Traces
 
-### 10.1 Snapshot rollback reuses a nonce
+### Snapshot rollback reuses a nonce
 
 1. A writer allocates nonces from an in-memory counter.
 2. The virtual machine snapshot captures counter 8,000 and the active DEK.
@@ -371,7 +383,7 @@ Track:
 
 Recovery is not “restart with a higher number” unless the maximum is durable and trustworthy. Retire the affected DEK, stop new writes, determine the exposure window, re-encrypt affected data, and treat authenticity as suspect. Prevention requires crash-safe allocation or a fresh key whenever allocator state may rewind.
 
-### 10.2 KMS outage becomes a fleet outage
+### KMS outage becomes a fleet outage
 
 1. A regional KMS endpoint is unreachable.
 2. Existing instances continue on cached DEKs.
@@ -381,7 +393,7 @@ Recovery is not “restart with a higher number” unless the maximum is durable
 
 Design an explicit degraded mode: bounded cache extension for pre-authorized low-risk reads, write rejection, region failover, or complete fail-closed. Do not improvise by persisting plaintext keys. Alert on time-to-cache-expiry and test the policy.
 
-### 10.3 Cross-tenant ciphertext substitution
+### Cross-tenant ciphertext substitution
 
 1. Two tenants use the same coarse DEK.
 2. An internal bug reads a ciphertext blob through an unscoped object key.
@@ -391,7 +403,7 @@ Design an explicit degraded mode: bounded cache extension for pre-authorized low
 
 Storage authorization and tenant-scoped keys help, but binding tenant and resource identifiers into AAD makes this substitution cryptographically fail.
 
-### 10.4 Early key destruction breaks recovery
+### Early key destruction breaks recovery
 
 1. Online records are rewrapped to KEK version 9.
 2. A query confirms no version-8 envelopes in the primary database.
@@ -403,9 +415,9 @@ Destruction gates must query backup catalogs, regional replicas, archives, and l
 
 ---
 
-## 11. Operations, Observability, and Verification
+## Operations, Observability, and Verification
 
-### 11.1 Safe telemetry
+### Safe telemetry
 
 Record key reference/version, operation, workload identity, policy decision, region, latency, result class, and correlation ID. Avoid plaintext, raw DEKs, full ciphertext, passwords, and bearer credentials. Hashing a low-entropy secret before logging it may still permit guessing.
 
@@ -422,7 +434,7 @@ Useful alerts include:
 
 Tag failures are security and integrity signals, not records to skip silently.
 
-### 11.2 Test the protocol, not just round trips
+### Test the protocol, not just round trips
 
 A useful verification suite includes:
 
@@ -441,7 +453,7 @@ Review the library and configuration against an approved cryptographic profile. 
 
 ---
 
-## 12. Decision Framework
+## Decision Framework
 
 Use server-side storage encryption as a baseline, then add application or client-side protection only for a stated attacker and product constraint.
 
@@ -468,6 +480,7 @@ Reject a design that says only “AES-256 at rest and TLS in transit.” It name
 - [RFC 8439: ChaCha20 and Poly1305 for IETF Protocols](https://www.rfc-editor.org/rfc/rfc8439): ChaCha20-Poly1305
 - [RFC 8446: The Transport Layer Security Protocol Version 1.3](https://www.rfc-editor.org/rfc/rfc8446): TLS 1.3 handshake and key schedule
 - [RFC 9180: Hybrid Public Key Encryption](https://www.rfc-editor.org/rfc/rfc9180): standardized hybrid public-key construction
+- [FIPS 203: Module-Lattice-Based Key-Encapsulation Mechanism Standard](https://csrc.nist.gov/pubs/fips/203/final): ML-KEM, the post-quantum key-establishment standard
 - [NIST SP 800-57 Part 1: Recommendation for Key Management](https://csrc.nist.gov/pubs/sp/800/57/pt1/r5/final): key lifecycle and protection guidance
 - [OWASP Cryptographic Storage Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Cryptographic_Storage_Cheat_Sheet.html): application threat-model and implementation guidance
 - [AWS KMS Cryptographic Details](https://docs.aws.amazon.com/kms/latest/cryptographic-details/intro.html) and [Google Cloud envelope encryption](https://cloud.google.com/kms/docs/envelope-encryption): concrete managed-key hierarchy designs

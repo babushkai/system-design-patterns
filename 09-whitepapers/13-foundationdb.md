@@ -8,6 +8,10 @@ Optimistic concurrency buys high throughput under light contention and makes hot
 
 ## Publication Boundary
 
+FoundationDB is unusual in two respects, and both are worth study. The first is architectural. Most databases bundle a data model, a query language, a transaction system, and a storage engine into one product. FoundationDB provides only the bottom of that stack: an ordered key-value store with strict transactions across any keys. Richer data models, such as documents or tables, are built as layers on top. Within the system itself the same separation applies, with the components that order transactions, check them for conflicts, make them durable, and store data all running as distinct roles that scale and fail independently.
+
+The second is how it was built. The team wrote a simulator before they wrote the database. The entire system, including many machines, their disks, and the network between them, can be run deterministically inside a single process, with a random number generator deciding when machines crash, packets are dropped, and disks fail. Because the run is deterministic, any failure the simulator finds can be reproduced exactly from its random seed and debugged. The database was subjected to vastly more simulated failure than it could ever meet in production, and the paper attributes its reputation for correctness chiefly to this practice.
+
 - **Paper:** *FoundationDB: A Distributed Unbundled Transactional Key Value Store*
 - **Venue and version:** ACM SIGMOD 2021, DOI 10.1145/3448016.3457559, 14-page proceedings paper
 - **Evaluated system:** production deployments and controlled experiments described in the paper, including a 58-machine production cluster and a separate 27-machine test cluster

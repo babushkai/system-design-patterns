@@ -8,6 +8,10 @@ A defensible capacity plan combines **technical demand estimation, resource serv
 
 ## Primary Evidence and Scope
 
+Capacity planning answers a question that sounds simple: how much hardware does this system need? The simple answer, dividing expected load by the measured throughput of one machine, is wrong in a consistent direction, and understanding why is most of the subject. A server does not behave like a pipe that carries traffic happily until it is full. As utilization rises, requests increasingly arrive to find the server busy and have to wait, and the waiting time grows far faster than the utilization does. A service that responds in ten milliseconds at half load may take a hundred at ninety percent and seconds at ninety-eight. The usable capacity of a machine is therefore well below its maximum throughput, and how far below depends on how variable the arrivals and the work are.
+
+The second source of error is that the question is usually asked about the wrong moment. Average load on an ordinary day is the easy case. The system has to be sized for the peak, with a deployment in progress, after losing a zone, while a backlog drains. A plan that covers the average and none of these will fail at the first coincidence of two of them.
+
 | Primary evidence | What it establishes | Boundary |
 |---|---|---|
 | Little, *Operations Research* 1961 | Under stated stationarity/finite-mean conditions, average in-system work is arrival rate times average residence time | An average identity, not a percentile or burst model |

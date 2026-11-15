@@ -19,9 +19,13 @@ Cold-cache resilience depends on controlling refill amplification, stampedes, co
 
 ---
 
-## 1. Model the Miss Amplification
+## Model the Miss Amplification
 
-### 1.1 One hot key
+A cache protects its origin by answering most requests itself, and the origin is provisioned accordingly. The arrangement has a weak moment, which is the instant an entry disappears. Consider a single popular key that is read two thousand times a second and takes half a second to recompute. While the entry is present, the origin sees none of that traffic. When it expires, the next request misses and begins recomputing. So does the one after it, and every other request for the next half second, because none of them can see that a recomputation is already under way. A thousand identical queries reach the origin where one was needed, each of them slower than usual because of the other nine hundred and ninety-nine, which lengthens the window and admits still more.
+
+The load on the system has not changed at all. The same two thousand requests a second are arriving as before. What changed is that for a short interval the cache stopped absorbing them, and the requests had no way to coordinate. A stampede is this failure of coordination, and the protections in this chapter are all ways of ensuring that when many requests discover the same missing entry, only one of them does the work.
+
+### One hot key
 
 Let a hot key receive $\lambda_k$ requests per second and take $C_k$ seconds to recompute. With no coalescing, approximately:
 
@@ -40,7 +44,7 @@ duplicates during one fill window = 20,000 * 0.25 = 5,000
 
 Those 5,000 operations may each hold a database connection, allocate a large object, and call downstream services. The cache outage is only the trigger; queueing at the origin is the destructive feedback loop.
 
-### 1.2 A cold working set
+### A cold working set
 
 For total request rate $\lambda$ and effective useful hit rate $h$:
 
@@ -58,7 +62,7 @@ where $W_{\text{origin}}$ is origin service time. As origin utilization rises, $
 
 The recovery condition is therefore not simply “cache fills faster than before.” Live misses, foreground refreshes, retries, and warming work together must remain below the origin's safe work budget.
 
-### 1.3 Distinguish miss causes
+### Distinguish miss causes
 
 Track at least:
 
@@ -77,7 +81,7 @@ Each cause has a different fix. Increasing TTL does not repair a node-loss surge
 
 ---
 
-## 2. Layered Protection
+## Layered Protection
 
 ~~~mermaid
 flowchart TD
@@ -111,9 +115,9 @@ No single mechanism covers every failure:
 
 ---
 
-## 3. Request Coalescing
+## Request Coalescing
 
-### 3.1 Process-local singleflight
+### Process-local singleflight
 
 For each key, a coalescer maintains one in-flight future:
 
@@ -139,7 +143,7 @@ Required semantics:
 
 Do not hold a global mutex while running the loader. A coalescer prevents duplicate work; it does not make the origin call safe at unlimited distinct-key concurrency.
 
-### 3.2 Distributed lease
+### Distributed lease
 
 When many processes can miss the same expensive key, use a lease or a cache primitive that elects one recacher:
 
@@ -165,7 +169,7 @@ Use a bounded renewal protocol only while the loader is healthy and the request 
 
 A cache lease is not a fencing mechanism for external side effects. If the leader charges a card, sends an email, or mutates another system, use that system's idempotency or a durable workflow.
 
-### 3.3 Waiter behavior
+### Waiter behavior
 
 Waiters should not spin on a fixed interval. Prefer:
 
@@ -177,15 +181,15 @@ Waiters should not spin on a fixed interval. Prefer:
 
 A lock that moves 10,000 duplicate database queries into 10,000 synchronized polling requests merely relocates the stampede.
 
-### 3.4 Failure caching
+### Failure caching
 
 If an origin repeatedly returns a deterministic absence, negative-cache it briefly. If it returns a transient error, do not turn that error into “not found.” A very short failure backoff marker can prevent immediate retries, but preserve the error class and never serve it as successful data.
 
 ---
 
-## 4. Serve Stale Deliberately
+## Serve Stale Deliberately
 
-### 4.1 Two deadlines
+### Two deadlines
 
 Store separate freshness and availability boundaries:
 
@@ -200,7 +204,7 @@ generated_at ---- fresh_until -------- stale_until
 
 Do not reset these times when copying between CDN, proxy, L2, and L1. Preserve the authoritative generation time.
 
-### 4.2 When stale is safe
+### When stale is safe
 
 | Data | Stale policy |
 |---|---|
@@ -215,7 +219,7 @@ Do not reset these times when copying between CDN, proxy, L2, and L1. Preserve t
 
 A stale response should carry internal telemetry such as age, source version, and stale reason even if those fields are not exposed publicly.
 
-### 4.3 stale-if-error
+### stale-if-error
 
 Stale-on-error can preserve availability when the origin times out or returns a server error. It must not hide:
 
@@ -228,13 +232,15 @@ HTTP defines **stale-while-revalidate** and **stale-if-error** controls. Reverse
 
 ---
 
-## 5. Probabilistic Early Recompute
+## Probabilistic Early Recompute
 
-### 5.1 Why fixed refresh thresholds synchronize
+Coalescing and stale serving limit the damage once an entry has expired. A different approach is to refresh the entry before it expires, so that no request ever finds it missing. The obvious way to do this, refreshing when some fixed fraction of the lifetime has elapsed, moves the stampede to an earlier moment without removing it, since every process applies the same threshold at the same time. The remedy is to make the decision random, and to weight the randomness so that the chance of refreshing rises as expiry approaches.
+
+### Why fixed refresh thresholds synchronize
 
 If every request refreshes when 10 seconds remain, many concurrent requests can cross that threshold together. A lock can elect one, but probabilistic early recompute spreads election attempts over time without a separate scheduler.
 
-### 5.2 XFetch decision
+### XFetch decision
 
 The XFetch family uses the previous recomputation duration $\Delta$, a tuning factor $\beta$, and a random $U$ uniformly distributed in $(0,1)$:
 
@@ -252,7 +258,7 @@ if now + early_window >= fresh_until:
 
 Store the measured compute duration with the value. A formula that compares a dimensionless random value directly with seconds but omits recomputation duration is dimensionally wrong.
 
-### 5.3 Operational properties
+### Operational properties
 
 - XFetch greatly reduces synchronized expiry but does not guarantee one leader.
 - Combine it with local coalescing or a distributed lease for very hot keys.
@@ -260,7 +266,7 @@ Store the measured compute duration with the value. A formula that compares a di
 - $\beta$ is a workload parameter. Tune it from recomputation cost, request rate, and acceptable early work rather than fixed folklore.
 - Reject an early result if its source version is older than the cache's current version floor.
 
-### 5.4 TTL jitter
+### TTL jitter
 
 For groups written together, choose:
 
@@ -272,9 +278,11 @@ Use a random source independent across entries and bound the result above zero. 
 
 ---
 
-## 6. Admission Control Is the Last Safety Boundary
+## Admission Control Is the Last Safety Boundary
 
-### 6.1 Origin work budget
+Every mechanism described so far reduces how often the origin is asked to do duplicate work. None of them bounds it. Coalescing fails if the process holding the lease stalls, stale serving fails if there is no stale copy, and early recomputation fails for keys that were never cached. The origin therefore needs a limit of its own that holds whatever the cache layer does, because the situations in which the cache protections fail are the same situations in which the origin is most exposed.
+
+### Origin work budget
 
 Express origin capacity in work units when queries have different costs. Let:
 
@@ -292,7 +300,7 @@ $$
 
 When the right-hand side is zero, warming pauses. Live critical traffic receives priority.
 
-### 6.2 Budgets to enforce
+### Budgets to enforce
 
 - per-key loader concurrency;
 - global origin loader concurrency;
@@ -305,7 +313,7 @@ When the right-hand side is zero, warming pauses. Live critical traffic receives
 
 A circuit breaker that bypasses a failed cache but has no origin limiter is incomplete.
 
-### 6.3 Overload response
+### Overload response
 
 After the budget is exhausted, choose deliberately:
 
@@ -320,9 +328,9 @@ Queueing without a bound is not graceful degradation; it converts overload into 
 
 ---
 
-## 7. Failure Traces
+## Failure Traces
 
-### 7.1 Lease holder pauses
+### Lease holder pauses
 
 ~~~text
 t0 leader A acquires 2 s lease
@@ -333,7 +341,7 @@ t3 A resumes with version 11
 
 If A blindly sets, the cache regresses. Conditional fill by source version rejects version 11. Token-checked release prevents A from deleting B's new lease.
 
-### 7.2 Leader fails and waiters retry
+### Leader fails and waiters retry
 
 ~~~text
 leader origin call fails
@@ -343,25 +351,25 @@ all retry immediately
 
 Coalescing reduced the first wave but can synchronize the second. Add failure backoff with jitter, retry budgets, and a stale/degraded response.
 
-### 7.3 Cache cluster is unreachable
+### Cache cluster is unreachable
 
 Local coalescing still protects each process, but 200 processes can each elect a leader for the same key. A service-wide origin budget and stale store remain necessary even when the distributed coordination layer is gone.
 
-### 7.4 Invalidation of a hot namespace
+### Invalidation of a hot namespace
 
 A generation bump makes millions of old entries unreachable at once. The event is operationally equivalent to a cold cluster. Use soft invalidation, staged generation rollout, or pre-warm the new generation within the origin budget.
 
-### 7.5 Refill from a lagging replica
+### Refill from a lagging replica
 
 An invalidation for source version 50 arrives before a regional read replica reaches 50. The refiller must wait, read a sufficiently current source, or decline the fill. Otherwise a “successful” rebuild restores version 49.
 
-### 7.6 Warming job competes with users
+### Warming job competes with users
 
 A fixed-rate warmer keeps issuing 5,000 queries/s while a traffic spike consumes all origin headroom. Live latency grows and retries begin. The warmer must use feedback from current origin saturation and pause automatically.
 
 ---
 
-## 8. Cold-Start Taxonomy
+## Cold-Start Taxonomy
 
 | Event | Cold scope | Preferred first response |
 |---|---|---|
@@ -379,9 +387,9 @@ A fixed-rate warmer keeps issuing 5,000 queries/s while a traffic spike consumes
 
 ---
 
-## 9. Warming Sources
+## Warming Sources
 
-### 9.1 Heavy-hitter manifest
+### Heavy-hitter manifest
 
 Build a manifest from sampled access logs or telemetry:
 
@@ -399,17 +407,17 @@ priority and expiry
 
 Use a streaming heavy-hitter algorithm or trace analysis rather than retaining every raw key indefinitely. Protect personal data in logs and manifests.
 
-### 9.2 Access-log replay
+### Access-log replay
 
 Replay canonical cache keys, not raw HTTP requests with side effects. Deduplicate, remove expired tenants, respect authorization boundaries, and sample by expected future traffic. Historical logs can be wrong for launches or seasonal changes.
 
-### 9.3 Predictive/event-driven manifest
+### Predictive/event-driven manifest
 
 Known releases, scheduled events, and product launches can add keys before historical traffic exists. A forecast should remain a hint: low-value predictions must not evict proven hot entries.
 
 For event-sourced read models, stream catch-up may build the projection more correctly than point-reading every key. Consumer lag is one readiness input, but lag zero alone does not prove that writes to the cache succeeded or that payloads are valid.
 
-### 9.4 Peer or snapshot copy
+### Peer or snapshot copy
 
 Copying entries from a healthy peer avoids origin recomputation. Preserve:
 
@@ -420,7 +428,7 @@ Copying entries from a healthy peer avoids origin recomputation. Preserve:
 
 Do not restore an unrestricted serialized snapshot into a new code version. Native Redis migration or dump/restore preserves cache bytes, not application schema compatibility. Validate a sample and reject incompatible entries.
 
-### 9.5 Shadow traffic
+### Shadow traffic
 
 A new cache can observe a copy of read-only traffic and fill without serving responses. Ensure shadow requests:
 
@@ -432,9 +440,9 @@ A new cache can observe a copy of read-only traffic and fill without serving res
 
 ---
 
-## 10. Warming Capacity and Priority
+## Warming Capacity and Priority
 
-### 10.1 Maximum warm rate
+### Maximum warm rate
 
 For approximately uniform warm operations:
 
@@ -458,7 +466,7 @@ $$
 
 Batching and pipelining reduce round trips but do not reduce database work. Bound batch bytes and transaction duration.
 
-### 10.2 Prioritize saved work per byte
+### Prioritize saved work per byte
 
 A useful first-order score is:
 
@@ -473,7 +481,7 @@ $$
 
 This favors small, frequently used, expensive-to-recompute, important entries. Do not assume a universal 80/20 distribution; calculate weighted coverage from the actual trace.
 
-### 10.3 Partial warming
+### Partial warming
 
 Full warming is often wasteful because long-tail entries expire before reuse. Warm until projected origin load fits the safe budget:
 
@@ -484,7 +492,7 @@ projected live misses + refresh + reserve <= safe origin capacity
 
 Lazy-fill the remaining tail under normal admission control.
 
-### 10.4 Feedback-controlled warmer
+### Feedback-controlled warmer
 
 The coordinator should:
 
@@ -501,9 +509,9 @@ Fixed worker count is not sufficient because origin capacity changes with live t
 
 ---
 
-## 11. Deployment and Topology Rollouts
+## Deployment and Topology Rollouts
 
-### 11.1 New application instances
+### New application instances
 
 For an L1 cache:
 
@@ -517,7 +525,7 @@ For an L1 cache:
 
 Blocking readiness until every possible key is loaded can make deployment impossible. Joining fully cold at full weight is the opposite error.
 
-### 11.2 Blue-green and key-generation rollout
+### Blue-green and key-generation rollout
 
 1. Dark-fill the new generation from authoritative reads or validated old entries.
 2. Shadow-read old and new generations and compare source versions/digests.
@@ -529,13 +537,13 @@ Blocking readiness until every possible key is loaded can make deployment imposs
 
 Do not globally flush the old generation at cutover.
 
-### 11.3 Cache-node addition and reshard
+### Cache-node addition and reshard
 
 Prefer the cache product's native key migration or a peer copy for moved ranges. Warming from the database should be the fallback because it consumes origin work and can read a different version.
 
 Rate-limit migration and warming together; both consume destination network, memory, and event-loop time. Verify moved-key hit rate and routing convergence before removing the old owner.
 
-### 11.4 Regional failover
+### Regional failover
 
 A region is ready when:
 
@@ -547,15 +555,15 @@ A region is ready when:
 
 Fleet-wide average hit rate can hide a cold region or instance. Gate per failure domain.
 
-### 11.5 CDN purge
+### CDN purge
 
 Prefer content-addressed URLs for assets. For mutable content, soft purge so edges can serve bounded stale while one request revalidates. An origin shield collapses simultaneous point-of-presence misses. Rate-limit broad purges and observe origin requests before expanding them.
 
 ---
 
-## 12. Readiness and Temperature
+## Readiness and Temperature
 
-### 12.1 Weighted coverage
+### Weighted coverage
 
 Raw “keys present / keys planned” treats a once-a-day object like a 10,000-QPS object. Use request-weighted valid coverage:
 
@@ -570,7 +578,7 @@ $$
 
 Validity includes key generation, payload schema, source version, and remaining hard age.
 
-### 12.2 Projected origin load
+### Projected origin load
 
 Replay a representative trace against the warmed cache or manifest:
 
@@ -584,7 +592,7 @@ p95/p99 miss fan-out
 
 Traffic may ramp only if projected plus observed origin work remains inside the declared budget after a failure reserve.
 
-### 12.3 Readiness gates
+### Readiness gates
 
 - weighted valid coverage;
 - origin QPS/work and p99 under canary traffic;
@@ -600,9 +608,9 @@ A synthetic GET hit rate after writing the manifest proves only that writes retu
 
 ---
 
-## 13. Observability
+## Observability
 
-### 13.1 Stampede signals
+### Stampede signals
 
 - misses per key and miss-rate derivative;
 - leaders, coalesced joiners, waiters, and waiter timeouts;
@@ -616,7 +624,7 @@ A synthetic GET hit rate after writing the manifest proves only that writes retu
 
 Aggregate hit rate can remain healthy while one hot key is stampeding. Preserve sampled key-class and top-key visibility.
 
-### 13.2 Warming signals
+### Warming signals
 
 - manifest entries and weighted request coverage;
 - keys/bytes/work warmed per second;
@@ -626,13 +634,13 @@ Aggregate hit rate can remain healthy while one hot key is stampeding. Preserve 
 - projected and observed origin miss load;
 - per-instance/region temperature and convergence time.
 
-### 13.3 Alerts should express coupling
+### Alerts should express coupling
 
 A useful alert detects cache miss growth **and** protected-origin stress, or a rising lease-waiter count with leader failure. A fixed global hit-rate threshold is workload-dependent and can page on harmless traffic changes while missing a single-key incident.
 
 ---
 
-## 14. Verification Matrix
+## Verification Matrix
 
 | Test | Required assertion |
 |---|---|

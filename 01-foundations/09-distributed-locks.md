@@ -8,6 +8,10 @@ A distributed-lock contract must specify **lock API semantics, critical-section 
 
 ## Primary Evidence and Scope
 
+A lock within a single process is a simple and trustworthy thing. A thread that holds a mutex really does have exclusive access, because the operating system that grants the lock also schedules the threads and can guarantee that no other thread proceeds. A lock shared between machines looks the same in code and offers a much weaker guarantee, for a reason that is easy to overlook. If the process holding a distributed lock crashes, the lock must eventually be released or the system halts forever, so distributed locks expire after a timeout. The holder can then be mistaken about whether it still holds the lock. A process that pauses for longer than the timeout, in a garbage collection or a stalled virtual machine, wakes with no knowledge that the lock expired and was granted to someone else, and continues with the work it believed the lock protected.
+
+It follows that a distributed lock cannot, by itself, guarantee mutual exclusion. It can make conflict unlikely, which is enough when the lock is only there to avoid duplicated effort. Where correctness depends on exclusion, the resource being protected has to take part, by rejecting operations from a holder whose claim is out of date. Most of this chapter concerns that distinction and how to enforce it.
+
 | Primary evidence | What it establishes | Boundary |
 |---|---|---|
 | Gray and Cheriton, SOSP 1989 | Time-bounded leases trade renewal traffic against recovery delay and clock uncertainty | File-cache leases, not a universal lock implementation |

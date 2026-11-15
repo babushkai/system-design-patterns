@@ -16,9 +16,13 @@ Separate the policy control plane from the decision data plane, make policy and 
 
 ---
 
-## 1. Define the Decision Contract
+## Define the Decision Contract
 
-Authentication establishes a principal; authorization evaluates that principal in context. A decision request should be representable as:
+Authorization usually begins as an `if` statement. A handler checks that the current user's ID matches the owner column of the row it loaded, and for a while that is the whole system. Then the product adds teams, and the check becomes a join. It adds sharing, then folders that inherit sharing, then organizations containing teams containing folders, and the check becomes a recursive query that nobody fully understands, copied with small variations into every service that touches the data. At some point two of the copies disagree, and the disagreement is a security incident.
+
+The systems in this chapter exist to stop that progression. They take the question "may this subject do this to that resource?" out of scattered application code and give it one definition, one store of facts, and one place to be answered. Doing so creates a distributed system that sits in front of every protected operation, with all the usual problems of consistency, latency, and availability, and with the added property that its wrong answers are breaches. The first step is to state precisely what that system is asked.
+
+Authentication establishes a principal, and authorization evaluates that principal in context. A decision request should be representable as:
 
 ```text
 authorize(
@@ -41,7 +45,7 @@ authorize(
 
 `subject` may be an end user, service account, device, or delegated principal. `actor_workload` prevents a confused-deputy design in which any service presenting Alice's identity inherits all of Alice's authority. `minimum_policy_revision` gives a caller a way to reject a decision older than a security-sensitive mutation it has observed.
 
-### 1.1 Threat model
+### Threat model
 
 Assume an attacker may:
 
@@ -56,7 +60,7 @@ Assume an attacker may:
 - compromise one tenant administrator without gaining another tenant;
 - target an unavailable policy dependency to trigger unsafe fallback.
 
-### 1.2 Core invariants
+### Core invariants
 
 1. **Complete mediation:** every protected operation crosses an enforcement point, including batch, export, background, admin, and direct-storage paths.
 2. **Canonical identity:** subject, workload, tenant, action, and resource identifiers come from authenticated or authoritative context, not caller-chosen headers.
@@ -71,9 +75,9 @@ Assume an attacker may:
 
 ---
 
-## 2. Model Semantics: RBAC, ABAC, and ReBAC
+## Model Semantics: RBAC, ABAC, and ReBAC
 
-### 2.1 RBAC: stable role assignment
+### RBAC: stable role assignment
 
 RBAC maps users to roles and roles to permissions:
 
@@ -92,7 +96,7 @@ billing-approver-emea-under-10k-project-red
 
 That is not “more RBAC”; it is an attribute policy encoded into an unmanageable role namespace. Treat role-count growth, overlapping roles, and unexplained indirect grants as model-health metrics.
 
-### 2.2 ABAC: constraints over authoritative attributes
+### ABAC: constraints over authoritative attributes
 
 ABAC evaluates predicates over four namespaces:
 
@@ -115,7 +119,7 @@ Classify attributes by authority, freshness, sensitivity, and failure behavior. 
 
 An arbitrary policy is not generally invertible. A PDP may answer whether one input is allowed but be unable to synthesize an efficient database query for every allowed resource. This becomes decisive for list APIs.
 
-### 2.3 ReBAC: permission derived from relations
+### ReBAC: permission derived from relations
 
 ReBAC represents facts as relation tuples:
 
@@ -142,7 +146,7 @@ The expression is a guided graph query, not unconstrained graph traversal. Type 
 
 ReBAC fits collaborative products, organizations, nested groups, repositories, folders, and delegated administration. Its costs are a new stateful service, graph-query amplification, consistency protocol, and reverse lookup/indexing.
 
-### 2.4 Compose models with an explicit order
+### Compose models with an explicit order
 
 A useful composition is:
 
@@ -159,9 +163,9 @@ The order and deny semantics are part of the policy language. “Explicit deny o
 
 ---
 
-## 3. Authorization State and Revisions
+## Authorization State and Revisions
 
-### 3.1 Tuple and policy data model
+### Tuple and policy data model
 
 A relationship record commonly contains:
 
@@ -186,7 +190,7 @@ The authorization schema is also versioned state. A tuple valid under schema 12 
 
 Canonicalize identifiers at ingestion. Unicode ambiguity, case folding, aliases, and reused numeric IDs can turn a storage quirk into an authorization bypass. Namespace every object and subject by tenant/trust domain and type.
 
-### 3.2 Mutations and idempotency
+### Mutations and idempotency
 
 Tuple writes need an operation identity. Retries after a timeout must not create duplicate grants, extend an expiry unexpectedly, or resurrect a deleted relation. A mutation API should support preconditions:
 
@@ -198,7 +202,7 @@ with operation_id == "membership-change-9f..."
 
 For replacement operations, define whether “remove old, add new” is atomic. A temporary union may overgrant; a temporary gap may deny legitimate work. Security-sensitive ownership transfer often needs one transaction in the authorization store or a staged state machine.
 
-### 3.3 Synchronizing application and authorization state
+### Synchronizing application and authorization state
 
 If a project row is committed in one database and its owner tuple is written to another service, a crash can leave an ownerless or publicly stale object. Options are:
 
@@ -211,7 +215,7 @@ An asynchronous path must define interim behavior. New resources can remain hidd
 
 ---
 
-## 4. Planes and Enforcement Placement
+## Planes and Enforcement Placement
 
 ```mermaid
 flowchart LR
@@ -231,7 +235,7 @@ The **policy administration point** accepts reviewed policy changes. The compile
 
 The **policy information plane** owns tuples and trusted attributes. The **policy decision point** (PDP) evaluates a request. The **policy enforcement point** (PEP) prevents the operation when the PDP does not return a valid allow.
 
-### 4.1 PEP placement
+### PEP placement
 
 | Boundary | Appropriate decisions | Missing context |
 |---|---|---|
@@ -243,7 +247,7 @@ The **policy information plane** owns tuples and trusted attributes. The **polic
 
 Use complementary enforcement. A gateway can reject unauthenticated traffic, but the resource service must still authorize the canonical object after lookup. Database row-level security can contain query bugs, but it does not replace workflow authorization.
 
-### 4.2 Local, sidecar, and remote decisions
+### Local, sidecar, and remote decisions
 
 An embedded policy engine avoids a network hop but needs trustworthy policy and data distribution. A sidecar isolates the engine and provides a local API, but its lifecycle and identity must be secured. A central service provides consistent state and global indexes but becomes a tier-zero latency and availability dependency.
 
@@ -254,11 +258,19 @@ Hybrid designs are common:
 - a local cache or replica with revision bounds;
 - highly sensitive actions requiring a current central decision.
 
-Define three outcomes. `deny` is a valid policy result; `indeterminate` means the engine could not safely decide. Treating PDP timeout as a policy deny may be operationally acceptable for a protected mutation but should preserve a distinct reason. Treating it as allow widens authority during failure and requires an exceptional, narrowly documented risk decision, not a generic availability fallback.
+### A standard interface between enforcement and decision
+
+For most of the history of externalized authorization, every decision engine has had its own API, so that choosing an engine meant writing its request format into every enforcement point, and changing engines meant rewriting them all. The OpenID Foundation's AuthZEN working group addressed this with the Authorization API 1.0, which became a final specification in January 2026. It standardizes the conversation between a PEP and a PDP and deliberately leaves the policy language alone.
+
+A request is a JSON object with four parts that will be familiar from the decision contract at the start of this chapter: a `subject`, an `action`, a `resource`, and an optional `context`. The response carries a boolean `decision` and may carry additional context, such as a reason. A batch form evaluates many requests in one call, which matters for the page that renders a hundred resources, and search endpoints cover the listing questions: which resources a subject may act on, and which subjects may act on a resource.
+
+The value of the standard lies in what it decouples. Gateways, frameworks, and SaaS applications can ship one enforcement integration that works against any conforming decision engine, and an organization can run a relationship engine for one domain and an attribute policy engine for another behind the same interface. It does not settle any of the hard questions in this chapter. Consistency, revision floors, list performance, and failure behavior remain properties of the engine behind the interface, and a team adopting it still has to answer them.
+
+We define three outcomes. `deny` is a valid policy result; `indeterminate` means the engine could not safely decide. Treating PDP timeout as a policy deny may be operationally acceptable for a protected mutation but should preserve a distinct reason. Treating it as allow widens authority during failure and requires an exceptional, narrowly documented risk decision, not a generic availability fallback.
 
 ---
 
-## 5. Relationship-Check Execution
+## Relationship-Check Execution
 
 For a request `check(document:design, viewer, user:bob)`, the engine expands only schema-defined alternatives:
 
@@ -271,7 +283,7 @@ viewer(document:design)
           -> user:bob
 ```
 
-### 5.1 Execution algorithm
+### Execution algorithm
 
 A distributed evaluator generally needs:
 
@@ -286,7 +298,7 @@ A distributed evaluator generally needs:
 
 An `allow` is valid only if the branches needed to prove it were evaluated at compatible policy and tuple revisions. Mixing a fresh parent relation with a stale group membership can produce a state that never existed.
 
-### 5.2 Hot groups and recursive membership
+### Hot groups and recursive membership
 
 A group with millions of members or a deeply nested organizational graph can overload both checks and reverse lookups. Defenses include:
 
@@ -299,7 +311,7 @@ A group with millions of members or a deeply nested organizational graph can ove
 
 Do not expose “graph too complex” as an allow. Return a stable indeterminate/deny behavior, emit a diagnostic with the exhausted budget, and provide operators a way to identify the relation path responsible.
 
-### 5.3 Explain without leaking the graph
+### Explain without leaking the graph
 
 Operators need a proof path such as:
 
@@ -315,7 +327,7 @@ End users may receive a coarser reason. Full paths can reveal hidden group names
 
 ---
 
-## 6. Consistency and the New-Enemy Problem
+## Consistency and the New-Enemy Problem
 
 Authorization consistency is not simply “strong versus eventual.” The critical question is which orderings must be preserved across content and permission state.
 
@@ -337,7 +349,7 @@ check(..., minimum_revision = R)
 
 The exact protocol depends on where domain content and tuples commit. A token is useful only if callers propagate it and the PDP enforces it across all graph subqueries.
 
-### 6.1 Staleness modes
+### Staleness modes
 
 Offer explicit consistency modes rather than a boolean “consistent” flag:
 
@@ -348,7 +360,7 @@ Offer explicit consistency modes rather than a boolean “consistent” flag:
 
 Adding permission can also be security-sensitive. For example, a malicious admin can grant an attacker access, so do not assume positive changes are harmless while only revocation matters. Classify mutations and resource operations by risk.
 
-### 6.2 Revocation SLO
+### Revocation SLO
 
 Measure:
 
@@ -361,13 +373,13 @@ Break it down into outbox/CDC lag, replication lag, cache lifetime, client propa
 
 ---
 
-## 7. Check, Batch Check, List, and Query Shaping
+## Check, Batch Check, List, and Query Shaping
 
-### 7.1 Point checks
+### Point checks
 
 `Check(subject, action, resource)` fits opening one known object. A page that renders 100 resources should use a batch API or query plan, not 100 unrelated network calls. Batch evaluation can share snapshot, policy parse, subject expansion, and cache entries.
 
-### 7.2 Listing resources
+### Listing resources
 
 “Show all documents Alice may view” is not solved by a fast point check. Fetch-then-check breaks pagination: a 50-row database page may contain only two authorized rows, and later authorized rows remain hidden.
 
@@ -383,7 +395,7 @@ Viable strategies are:
 
 A list API must return a continuation token bound to subject, action, policy/schema revision, filters, and sort order. Otherwise a caller can combine a cursor from one authorization context with another.
 
-### 7.3 Intersection with domain predicates
+### Intersection with domain predicates
 
 Real queries combine authorization and product filters:
 
@@ -399,7 +411,7 @@ Pulling all authorized IDs into application memory is not a scalable query plan.
 
 ---
 
-## 8. Caching Without Losing the Decision Meaning
+## Caching Without Losing the Decision Meaning
 
 A decision-cache key must represent every semantic input:
 
@@ -427,7 +439,7 @@ Invalidation by relation dependency is precise but expensive. Revision floors av
 
 ---
 
-## 9. Capacity, Partitioning, and Latency
+## Capacity, Partitioning, and Latency
 
 Suppose an illustrative service handles:
 
@@ -453,7 +465,7 @@ $$
 
 This is a planning model, not a substitute for a trace-derived fan-out distribution. Averages hide recursive-group outliers. Capacity tests should preserve the joint distribution of object types, group sizes, cache temperature, tenant concentration, and consistency modes.
 
-### 9.1 Latency budget
+### Latency budget
 
 For a 150 ms application p99 objective, four sequential 10 ms p99 checks already consume 40 ms before business work. Batch or parallelize independent checks, but never execute the protected side effect before all required decisions complete.
 
@@ -467,7 +479,7 @@ Measure:
 - list candidate count and reverse-index amplification;
 - per-tenant resource consumption and throttling.
 
-### 9.2 Partitioning
+### Partitioning
 
 Object-key partitioning serves forward checks but can scatter reverse lookups. Subject indexes serve lists but amplify writes to large groups. Production systems often maintain both, with versioned asynchronous indexes and a protocol for verifying candidates against authoritative state.
 
@@ -475,7 +487,7 @@ Avoid global hot objects such as `organization:all#member` without a scaling pla
 
 ---
 
-## 10. Multi-Region and Failure Semantics
+## Multi-Region and Failure Semantics
 
 Authorization is usually tier zero: when it is unavailable, protected business operations cannot safely proceed. Multi-region design must state:
 
@@ -487,7 +499,7 @@ Authorization is usually tier zero: when it is unavailable, protected business o
 - how policy artifacts and trust roots roll forward and back;
 - whether list indexes lag authoritative check state.
 
-### 10.1 Failure traces
+### Failure traces
 
 **Stale allow after revocation**
 
@@ -527,7 +539,7 @@ Never reuse authorization object identities. Tombstone/delete with immutable gen
 
 ---
 
-## 11. Security and Multi-Tenant Controls
+## Security and Multi-Tenant Controls
 
 - Bind tenant at authentication, routing, authorization, storage lookup, and audit. Do not trust a body field to select it.
 - Authorize delegation: a service acting for a user needs both workload permission and user permission, with audience and purpose preserved through asynchronous work.
@@ -542,7 +554,7 @@ Authentication, token verification, and workload identity are covered separately
 
 ---
 
-## 12. Policy Delivery, Audit, and Migration
+## Policy Delivery, Audit, and Migration
 
 Policy is deployable code:
 
@@ -562,7 +574,7 @@ A decision-diff system should classify changes:
 
 Sampled production shadow traffic is useful, but it cannot replace adversarial negative cases because rare protected paths may not appear. Policy test fixtures should name the security invariant they enforce.
 
-### 12.1 Model migration
+### Model migration
 
 Moving from application RBAC tables to a central ReBAC service is a data migration:
 
@@ -577,7 +589,7 @@ Moving from application RBAC tables to a central ReBAC service is a data migrati
 
 Dual-writing both systems directly creates two authorities and undefined conflict resolution. Prefer one source plus an ordered propagation path.
 
-### 12.2 Audit event
+### Audit event
 
 An audit record should include:
 
@@ -596,9 +608,9 @@ Avoid copying full sensitive resource data or tokens. Define retention, access, 
 
 ---
 
-## 13. Verification Strategy
+## Verification Strategy
 
-### 13.1 Model tests
+### Model tests
 
 - Table-driven allow and deny cases for every action and object type.
 - Negative tests for cross-tenant IDs, forged actors, unsupported actions, and hidden resources.
@@ -607,7 +619,7 @@ Avoid copying full sensitive resource data or tokens. Define retention, access, 
 - Differential tests between old and new policy artifacts.
 - List/check equivalence: every listed resource must pass a check at the same revision, and a generated bounded universe can detect missing results.
 
-### 13.2 Distributed-system tests
+### Distributed-system tests
 
 - Race content publication against membership removal.
 - Delay tuple replication and require a minimum revision.
@@ -618,7 +630,7 @@ Avoid copying full sensitive resource data or tokens. Define retention, access, 
 - Test pagination tokens across policy changes and subject changes.
 - Restore authorization state from backup and verify revision/token behavior.
 
-### 13.3 Enforcement coverage
+### Enforcement coverage
 
 Inventory routes and consumers automatically. Tests should attempt the same operation through REST, RPC, batch, queue consumer, export job, support tool, and direct internal endpoint. A perfect PDP cannot protect a bypass path.
 
@@ -626,7 +638,7 @@ Use static middleware conventions where possible, but verify at runtime that pro
 
 ---
 
-## 14. Decision Framework
+## Decision Framework
 
 Keep authorization in the domain database when the model is small, transactional coupling dominates, and every query can enforce tenant/resource predicates consistently. Introduce an embedded policy language when rules change independently and authoritative attributes are locally available. Introduce a ReBAC service when sharing, hierarchy, group nesting, cross-product permissions, or centralized explainability justify another tier-zero stateful system.
 
@@ -654,6 +666,7 @@ The architecture is incomplete if it demonstrates only an SDK call returning `tr
 - [NIST SP 800-162: Guide to Attribute Based Access Control](https://csrc.nist.gov/pubs/sp/800/162/upd2/final): ABAC concepts and enterprise considerations
 - [Cedar policy language specification](https://docs.cedarpolicy.com/) and [Cedar design and formal analysis](https://arxiv.org/abs/2403.04651): analyzable authorization-policy semantics
 - [Open Policy Agent documentation](https://www.openpolicyagent.org/docs/latest/): policy decision APIs, bundles, and partial evaluation
+- [OpenID Foundation, *Authorization API 1.0*](https://openid.net/specs/authorization-api-1_0.html): the AuthZEN standard interface between enforcement points and decision points
 - [SpiceDB documentation](https://authzed.com/docs) and [OpenFGA documentation](https://openfga.dev/docs): production implementations of relationship-based authorization
 - [PostgreSQL row security policies](https://www.postgresql.org/docs/current/ddl-rowsecurity.html): database-level row predicate enforcement
 - [Google Cloud IAM consistency](https://cloud.google.com/iam/docs/access-change-propagation): concrete operational treatment of authorization propagation

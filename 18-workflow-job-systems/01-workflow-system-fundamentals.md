@@ -8,6 +8,10 @@ Workflow fundamentals define workload and durability contracts, execution identi
 
 ## Primary Evidence and Scope
 
+Many business processes cannot be completed within a single request. Fulfilling an order involves charging a card, reserving stock, arranging shipment, and sending a confirmation, which together may take seconds or days, involve several outside systems, and wait on people. Each step can fail, and the process as a whole has to arrive at a sensible outcome whatever happens along the way.
+
+Written as ordinary code, such a process is fragile in a specific way. Its progress is held in the memory of whatever machine is running it. If that machine restarts between charging the card and reserving the stock, the knowledge that the card was charged is lost, and the customer has paid for an order nothing will fulfil. Teams usually respond by recording progress in a database and writing code to resume from each possible state, and over time they build, piece by piece, an incomplete workflow engine. A workflow system provides this as a service. It records every step durably as it completes, so that the process can be resumed after any failure from exactly where it stopped, and it takes over the retries, timers, and timeouts that would otherwise be scattered through application code.
+
 | Primary evidence | What it establishes | Boundary |
 |---|---|---|
 | Amazon SQS documentation | A durable queue can retain accepted messages, hide received messages temporarily, and redeliver when processing is not acknowledged | Broker semantics, not a multi-step workflow state model |

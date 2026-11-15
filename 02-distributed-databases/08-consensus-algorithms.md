@@ -8,6 +8,10 @@ Consensus design must preserve **replicated-state-machine safety, quorum interse
 
 ## The Contract and Failure Model
 
+Many problems in distributed systems reduce to getting a group of machines to agree on one thing: which node is the leader, whether a transaction committed, what the next entry in a log is. Agreement would be easy if machines never failed and messages were never delayed. With failures it is hard for a specific reason. A machine that has heard nothing from a peer cannot tell whether the peer has crashed or is merely slow, and if it guesses wrong in either direction the group may split into two parts that each make a different decision.
+
+Consensus algorithms solve this with one idea. A decision takes effect only when a majority of the group has accepted it. Any two majorities of the same group share at least one member, so two conflicting decisions cannot both be made: the node in the overlap would have had to accept both, and it will not. The group can lose any minority of its members and continue, and a minority cut off from the rest can decide nothing, which is what keeps it from deciding wrongly. Paxos, Raft, and their relatives are all elaborations of this argument, and most of their complexity lies in what happens when a leader fails partway through and a successor must find out what was already decided.
+
 For a single consensus instance, the usual properties are:
 
 - **Agreement:** no two correct processes decide different values.

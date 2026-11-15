@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-Ride fulfillment applies distributed-systems correctness to a physical world that keeps moving while packets are delayed. Driver location is an estimate, an offer is not an assignment, and payment must follow an authoritative trip lifecycle. Public sources describe several generations, not every current service.
+Ride fulfillment applies distributed-systems correctness to a physical world that keeps moving while packets are delayed. Three distinctions organize the whole design. A driver's location is an estimate that is already out of date when it arrives. An offer sent to a driver is a proposal and does not yet assign anyone. And payment must follow an authoritative record of what happened on the trip, whatever any screen displayed. Public sources describe several generations of Uber's systems and do not describe every current service.
 
 Claims are labeled:
 
@@ -21,11 +21,11 @@ Claims are labeled:
 | Fulfillment on Spanner, September 2021 | Uber described Cloud Spanner as storage for the rebuilt Fulfillment Platform to obtain transactional consistency and horizontal scale | Not every Uber workload uses Spanner |
 | Reinforcement-learning matching post, July 2025 | Uber reported deployment of a value-function signal in matching in more than 400 cities | Does not expose the full matching objective or allocation system |
 
-Do not combine these snapshots into an “Uber today” diagram; the reference architecture declares its own assumptions.
+These are snapshots of a system that was rebuilt more than once, and they should not be assembled into a single diagram of "Uber today." The reference architecture below declares its own assumptions.
 
 ## Workload and Requirements
 
-The marketplace has several clocks:
+Most systems in this book manage records, and a record stays where it was put. This one manages cars, which do not. By the time a driver's position has been measured by a phone, sent over a cellular network, and written to an index, the car is somewhere else, and by the time a match computed from that index reaches the driver, the driver may have turned onto a highway or gone offline. The marketplace runs on several clocks at once, none of them synchronized:
 
 - Provider devices send noisy, delayed, and sometimes duplicated location updates.
 - Consumers request quotes and trips against a rapidly changing supply set.
@@ -45,7 +45,7 @@ An **explicit reference-design contract**:
 | Advance trip | Only legal state transitions under the current entity version commit | Retry the command; never skip validation |
 | Complete/cancel | Produce one authoritative terminal outcome and auditable adjustments | Downstream billing can catch up from events |
 
-Location and ETA favor freshness; assignment and trip state favor consistency. Treating both with one consistency model creates either stale matching or double assignment.
+The contract contains two kinds of row. Location and ETA favor freshness: a slightly wrong answer now is better than a correct one in two seconds, and a lost update is harmless because another follows shortly. Assignment and trip state favor consistency, since two drivers dispatched to one rider, or a trip charged twice, is a real failure with a cost attached. A design that applies one consistency model to both gets one of them wrong. If everything is made strongly consistent, location updates become too slow to be useful, and if everything is made eventually consistent, drivers are double-booked. The architecture is largely the working out of where the boundary between the two falls.
 
 ## State, Authority, and Invariants
 
@@ -71,6 +71,8 @@ Core invariants:
 6. A retry carries the same command identity; duplicates return the prior result or re-evaluate safely.
 7. Derived ETA, map, and marketplace outputs cannot mutate trip authority directly.
 
+The fourth invariant addresses a problem that grows with the product. A trip begins as a row with a status column, and code throughout the system updates that column. As products multiply, with shared rides, deliveries with several stops, and scheduled trips, the set of statuses and the rules for moving between them spread across dozens of services, and nobody can say with confidence which transitions are legal. A statechart writes the lifecycle down as an explicit graph of states and permitted transitions, and every change to a trip must be an edge of that graph.
+
 **Documented (2021):** Uber's Fulfillment rearchitecture says it used hierarchical statecharts for fulfillment entities, a Business Transaction Coordinator for multi-entity writes, and an ORM over ACID storage. This is direct evidence that explicit lifecycle modeling replaced scattered implicit state in that generation.
 
 ## Data Plane and Control Plane
@@ -92,17 +94,23 @@ flowchart LR
     EL --> B[Billing, safety, support, analytics]
 ```
 
-The **data plane** ingests locations, creates quotes and intents, retrieves candidates, computes offers, commits assignment and trip transitions, and emits events.
+The **data plane** ingests locations, creates quotes and intents, retrieves candidates, computes offers, commits assignment and trip transitions, and emits events. The diagram has two stores, and they correspond to the two kinds of row in the contract. The location index is ephemeral, approximate, and fast. The fulfillment store is durable, transactional, and authoritative. Matching reads from the first to find candidates and commits to the second to make a decision binding.
 
-The **control plane** manages city/product policy, geofence and H3 resolution versions, model rollout, shard/region placement, capacity quotas, statechart schema, experiment assignment, routing graph versions, and failover authority. A control-plane outage should pin signed known-good configuration and stop risky policy changes; it should not erase active trips.
+The **control plane** manages city and product policy, geofence and H3 resolution versions, model rollout, shard and region placement, capacity quotas, statechart schema, experiment assignment, routing graph versions, and failover authority. During a control-plane outage, the data plane pins its signed known-good configuration and risky policy changes stop. Active trips are unaffected.
 
-Configuration is safety-critical. A city-level rule change can affect eligibility, price, or legal behavior. Version it, stage it, audit it, and bind each quote/trip transition to the evaluated version.
+Configuration is safety-critical in this domain, more so than in most. A rule change for one city can alter who is eligible to drive, what a ride costs, or whether the service is operating legally. Every such change is versioned, staged, and audited, and each quote and trip transition records the version under which it was evaluated, so that a disputed fare can be explained months afterward.
 
 ## Location Ingestion and Spatial Indexing
 
 **Documented historical design (2016):** Uber said its Geospatial service kept active vehicle locations in memory because the state was fleeting. Ringpop supplied SWIM-style membership, consistent hashing, and request forwarding so workers could own partitions and rebalance as membership changed.
 
+Keeping this data in memory, with no durable store behind it, is a sound choice for a particular reason. A location is superseded within seconds by the next one. If a worker crashes and loses every position it held, the drivers' phones will have reported fresh positions before any recovery procedure could complete. Durability here would mean paying for disk writes to protect data that expires faster than it could be restored.
+
+Ringpop let application servers divide that in-memory state among themselves without a separate coordination service. Each server learns which other servers are alive by gossip: it periodically checks a random peer and passes along what it has heard, so that news of a failure spreads through the cluster in a number of rounds that grows only logarithmically with its size. Given an agreed membership list, consistent hashing tells every server which of them owns a given key, and a request arriving at the wrong server is forwarded to the right one.
+
 **Documented (2018):** H3 maps latitude/longitude at a resolution into hierarchical hexagonal cells and supports neighborhood operations. Uber described using it for analysis and marketplace optimization. It does not establish that every live dispatch query simply scans an H3 ring.
+
+To find drivers near a rider, the system needs to turn continuous coordinates into discrete buckets that can be looked up, and the shape of the bucket matters. With a square grid, a cell has eight neighbors at two different distances: the four that share an edge are closer than the four that touch only at a corner. Any computation over "nearby cells" must account for that. A hexagon has six neighbors, and the centers of all six are the same distance away, so expanding a search by one ring of cells is a uniform step outward in every direction. That property is the reason for choosing hexagons, and it has a price. Hexagons do not subdivide cleanly into smaller hexagons, so a cell at one resolution only approximately contains its children at the next.
 
 An **explicit reference-design update flow**:
 
@@ -114,15 +122,19 @@ An **explicit reference-design update flow**:
 6. Append a sampled or compacted location event for ETA, safety, and analytics according to retention policy.
 7. Expire the provider from matching if no acceptable update arrives within the product's measured freshness bound.
 
-Keep accuracy and age with the coordinate. “Nearest” without uncertainty can prefer a GPS outlier. Candidate retrieval should expand cells until it meets a quality/work budget, then score road travel time and marketplace value; straight-line distance is only a coarse filter.
+Step 4 exists because mobile networks deliver packets late, twice, and out of order. Without the sequence comparison, an update from ten seconds ago that was delayed in transit would overwrite one from two seconds ago, and the driver would appear to jump backward. The device numbers its updates, and the server accepts only a higher number than it already holds.
 
-During ownership changes, either transfer a checkpoint plus buffered delta or allow short dual reads while fencing writes by partition epoch. Consistent hashing limits moved keys, but it does not transfer state or prevent stale owners by itself.
+Step 7 is the liveness half of the same concern. A phone that loses signal in a tunnel sends nothing, and the index cannot distinguish a parked car from a silent phone. If entries never expired, the map would gradually fill with drivers who are no longer there, and riders would be matched to them.
+
+Accuracy and age are stored with each coordinate. GPS in a dense city can be wrong by a hundred meters, and a search for the "nearest" driver that ignores uncertainty will sometimes prefer a measurement error. Candidate retrieval expands outward through cells until it has enough candidates or has spent its budget, and then scores them by travel time on the road network together with marketplace value. Straight-line distance is used only as a coarse first filter, because the nearest car in a straight line may be on the far side of a river.
+
+Ownership changes need care. When membership shifts and a partition moves to another worker, either a checkpoint and the buffered updates are transferred, or readers briefly consult both owners while writes are fenced by a partition epoch. Consistent hashing keeps the number of moved keys small. It does not transfer their state, and it does not stop a worker that has not yet learned of the change from continuing to answer for keys it no longer owns.
 
 ## Quote, Match, and Assignment Flows
 
 ### Quote
 
-The quote path is an **explicit reference design**:
+Before a trip is requested, the rider is shown a price and an estimated arrival time. The quote path is an **explicit reference design**:
 
 1. Normalize pickup/drop-off and bind map/geofence versions.
 2. Retrieve eligible product and provider-supply aggregates.
@@ -130,22 +142,26 @@ The quote path is an **explicit reference design**:
 4. Evaluate a versioned pricing policy and return a signed quote ID with expiry and assumptions.
 5. Persist only the compact quote contract needed for later verification; high-volume diagnostic features can go to a separate event stream.
 
-**Documented historical evidence (2015):** Uber described an evolution from external/open routing engines plus a learned ETA adjustment to its Gurafu routing engine and Flux traffic data. It reported that the production path targeted fast route calculations and compared ETA with actual arrival using Kafka logs. This establishes iterative, measured ETA engineering, not the current algorithm.
+The quote is signed and carries an expiry because it is a commitment made under conditions that will change. When the rider confirms thirty seconds later, the system must be able to verify that this price was really offered, for this route, and that the offer has not lapsed. Recomputing the price at confirmation would yield a different number from the one the rider agreed to.
 
-### Candidate generation and offer
+**Documented historical evidence (2015):** Uber described an evolution from external/open routing engines plus a learned ETA adjustment to its Gurafu routing engine and Flux traffic data. It reported that the production path targeted fast route calculations and compared ETA with actual arrival using Kafka logs. This establishes that ETA engineering was iterative and measured against outcomes. It does not describe the current algorithm.
 
-An **explicit reference design** uses a two-stage marketplace decision:
+### Candidate Generation and Offer
+
+An **explicit reference design** makes the marketplace decision in two stages:
 
 - Retrieve providers from expanding spatial/time cells, filtering session freshness, product eligibility, capacity, and safety constraints.
 - Score a bounded set using pickup ETA, acceptance likelihood, provider fairness, consumer wait, downstream marketplace balance, and uncertainty.
 
-The objective is multi-party and time-dependent. A greedy nearest-provider rule can increase future imbalance; a global optimizer can miss its latency budget. Use a bounded optimization window, publish its objective/version, and keep a simple eligible-nearest fallback.
+The obvious rule is to send the nearest available driver, and it is worth understanding why that rule is not optimal. Matching is not a sequence of independent decisions. Suppose two riders request at nearly the same moment and two drivers are available. Giving the first rider their nearest driver may leave the second rider with a driver far away, when swapping the two would have served both in less total time. Decisions also affect the future: a driver sent across the city now is absent from a neighborhood where demand is about to rise. The objective involves several parties and extends over time.
 
-**Documented (2025):** Uber described a DQN-inspired value-function signal incorporated into matching and reported deployment in more than 400 cities. **Inference:** a learned future-value signal complements rather than replaces eligibility and assignment invariants.
+A full global optimization, on the other hand, cannot finish within the latency a rider will tolerate. The practical design optimizes over a bounded window, collecting the requests and drivers of a few seconds and solving for that batch. It publishes the objective and version in use, and it keeps a simple eligible-nearest rule as a fallback for when the optimizer is unavailable.
+
+**Documented (2025):** Uber described a DQN-inspired value-function signal incorporated into matching and reported deployment in more than 400 cities. **Inference:** a learned future-value signal complements eligibility and assignment invariants and does not replace them. The model estimates how valuable it is to have a driver in a given place at a given time, which informs the choice among eligible matches. Whether a match is eligible, and whether it commits exactly once, remain matters of rule.
 
 ### Assignment
 
-The assignment commit is the consistency boundary:
+Everything up to this point has been approximate and reversible. The assignment commit is the consistency boundary, where an approximate proposal becomes a binding fact:
 
 1. Create offer `(offer_id, trip_id, provider_session, assignment_epoch, expires_at)`.
 2. Deliver it through a retryable channel; delivery is not acceptance.
@@ -154,7 +170,9 @@ The assignment commit is the consistency boundary:
 5. Emit the authoritative assignment event after commit.
 6. Revoke losing offers; late acceptances observe the committed winner and fail safely.
 
-Do not use a distributed lock without a fenced state version. A paused client can resume after a lease expires and otherwise overwrite the new owner.
+Step 3 carries the weight. The matching stage worked from a location index that may have been stale, and it may have offered the same driver to two riders or offered a driver who had just accepted something else. None of that causes harm, because acceptance is a conditional write against authoritative state: it succeeds only if the offer is still live, the trip is still unassigned, and the driver is still available, with all three checked and updated together. Of two concurrent acceptances, one finds the conditions true and commits. The other finds them changed and is refused.
+
+A plain distributed lock is not a substitute. Suppose a matching worker acquires a lock on a driver with a ten-second lease and then pauses for fifteen seconds, in a garbage collection or a stalled virtual machine. The lease expires, another worker acquires the lock and assigns the driver, and the first worker then wakes, still believing it holds the lock, and writes its own assignment over the top. The lock gave the first worker no means of discovering that it had lost. A version number checked by the store at write time does: the first worker's write names a version that is no longer current and is rejected, however confident the worker is.
 
 ## Fulfillment Lifecycle and Eventing
 
@@ -162,13 +180,13 @@ A **reference statechart** might contain:
 
 `requested → matching → assigned → provider_arriving → pickup_ready → in_progress → completed`
 
-with explicit cancellation and failure substates. This is illustrative, not Uber's private state enumeration.
+with explicit cancellation and failure substates. This is illustrative and is not Uber's private state enumeration.
 
-Each transition command includes expected entity version, actor, location/time evidence, policy version, and idempotency key. The commit produces an ordered event such as `TripTransitioned(trip_id, from, to, entity_version, event_id)`.
+Each transition command includes the expected entity version, the actor, location and time evidence, the policy version, and an idempotency key. The commit produces an ordered event such as `TripTransitioned(trip_id, from, to, entity_version, event_id)`.
 
-Downstream billing, receipt, safety, support, notification, and analytics consumers own their projections and retry independently. A transactional outbox prevents a committed transition from losing its event. Consumers that require order partition by trip ID; global order is unnecessary and expensive. See [Message Ordering](../05-messaging/03-message-ordering.md) and [Event Sourcing](../05-messaging/05-event-sourcing.md).
+Billing, receipts, safety, support, notifications, and analytics each consume those events, own their projections, and retry independently. A transactional outbox ensures that a committed transition cannot lose its event. Consumers that need order partition by trip ID, which keeps each trip's events in sequence. Ordering events across different trips would be expensive and nothing requires it, since the trips are independent of one another. See [Message Ordering](../05-messaging/03-message-ordering.md) and [Event Sourcing](../05-messaging/05-event-sourcing.md).
 
-**Documented historical storage (2016):** Schemaless used immutable cells keyed by row, column, and reference key; buffered writes and sharded indexes supported trip storage. **Documented evolution (2021):** Uber described Docstore as a multi-model database with partition-level strict serializability, transactions, materialized views, and CDC. These are different generations, not simultaneous universal truths.
+**Documented historical storage (2016):** Schemaless used immutable cells keyed by row, column, and reference key; buffered writes and sharded indexes supported trip storage. **Documented evolution (2021):** Uber described Docstore as a multi-model database with partition-level strict serializability, transactions, materialized views, and CDC. These belong to different generations and should not be read as simultaneously true.
 
 ## Partitioning and Illustrative Capacity
 
@@ -181,11 +199,13 @@ These numbers are **illustrative assumptions**, not Uber measurements:
 - 24 spatial partitions consulted per match after routing and expansion.
 - 10,000 authoritative trip-transition writes/s at peak.
 
-Location ingress is `3,000,000 / 4 = 750,000 updates/s`. Keeping only the latest normalized record requires about `458 MiB` raw (`3,000,000 × 160 B`) before hash/index allocator overhead and replicas. Replicating every raw location indefinitely would be far more expensive: at only 100 bytes/event, ingress is about `6.0 TiB/day` before replication and compression. Retention and compaction are architectural decisions.
+Location ingress is `3,000,000 / 4 = 750,000 updates/s`. Keeping only the latest normalized record requires about `458 MiB` raw (`3,000,000 × 160 B`) before hash/index allocator overhead and replicas. Replicating every raw location indefinitely would be far more expensive: at only 100 bytes/event, ingress is about `6.0 TiB/day` before replication and compression.
 
-Naively scattering each match to 24 partitions creates `2.88 million partition queries/s`. Coarse supply summaries, request routing, and adaptive cell expansion reduce scatter. Capacity must model cell skew around airports, stations, concerts, and storms; a global mean is useless.
+The two figures describe the same stream of data under different retention. The current position of every driver on the platform fits in half a gigabyte of memory, less than a laptop has. The history of every position is six terabytes a day. The decision about what to keep therefore determines what kind of system is being built, and it has to be made as part of the architecture.
 
-If each trip transition averages 3 KiB across canonical row, indexes, and log before replication, 10,000/s produces about `2.4 TiB/day`. The critical constraint may be transactional write IOPS and hot city partitions rather than bytes.
+Naively scattering each match to 24 partitions creates `2.88 million partition queries/s`, twenty-four times the request rate. Coarse supply summaries, request routing, and adaptive cell expansion reduce the scatter. The capacity model must also account for skew, because demand in a city is concentrated at airports, stations, stadiums, and wherever it is raining. A partition covering an airport at the end of a concert has a load unlike that of the average partition, and a model built on the mean will be wrong in the places where capacity is most needed.
+
+If each trip transition averages 3 KiB across the canonical row, indexes, and log before replication, 10,000/s produces about `2.4 TiB/day`. The binding constraint is likely to be transactional write throughput and hot city partitions, with bytes a secondary concern.
 
 | State | Primary partition | Why | Skew response |
 |---|---|---|---|
@@ -195,6 +215,8 @@ If each trip transition averages 3 KiB across canonical row, indexes, and log be
 | Offers | Trip ID or provider ID by commit query | Resolve winner efficiently | Maintain query-specific index |
 | Events | Trip ID | Preserve per-trip order | Partition count independent of storage shards |
 | ETA graph | Region and graph version | Locality and atomic rollout | Immutable version plus delta overlays |
+
+Location is partitioned by geography and trips are partitioned by trip ID. Location queries are spatial, so data that is near on the ground should be near in storage. Trip state is always accessed by its own identifier, and partitioning it by city would create one enormous hot partition for every large city.
 
 See [Capacity Planning](../01-foundations/10-capacity-planning.md), [Partitioning Strategies](../02-distributed-databases/05-partitioning-strategies.md), and [Secondary Indexes](../02-distributed-databases/06-secondary-indexes.md).
 
@@ -209,6 +231,8 @@ This is a **reference-design failure trace**, not a documented Uber incident.
 5. The provider accepts one; the other request repeatedly retries acceptance after a timeout.
 6. Without an assignment epoch and conditional commit, both trips could appear assigned.
 
+Steps 1 through 3 will happen in any real deployment. Partitions become isolated, indexes go stale, and a driver appears in two places at once. No amount of engineering on the location index prevents this entirely, because the index is approximate by design. What decides whether it becomes an incident is step 4, where a stale read is either treated as authoritative or checked against something that is.
+
 The safe design has layered defenses:
 
 - Location membership carries provider-session and partition epochs; readers discard stale owners.
@@ -218,13 +242,13 @@ The safe design has layered defenses:
 - Reconciliation scans detect one provider referenced by multiple active assignments and page before pickup.
 - Metrics separate “offer delivered,” “accept attempted,” and “assignment committed.”
 
-This illustrates a general rule: an approximate index can propose candidates, but it cannot own scarce-resource allocation.
+The trace illustrates a rule that extends well beyond ride-hailing: an approximate index can propose candidates, but it cannot own the allocation of a scarce resource. The same structure appears wherever a fast, stale read path feeds a decision about something that can be given out only once, such as inventory, seats, or usernames. The read path may be as approximate as performance requires, provided the final allocation is a conditional write against the authority.
 
 ## Multi-Region and Regional Authority
 
-Physical marketplaces are naturally regional, but global identity, travel, support, and finance cross boundaries.
+A physical marketplace is naturally regional, since a driver in one city is of no use to a rider in another. Identity, travel, support, and finance, however, cross regional boundaries.
 
-An **explicit reference design** assigns live fulfillment to a home region chosen by pickup market and an authority epoch:
+An **explicit reference design** assigns live fulfillment to a home region chosen by pickup market, with an authority epoch:
 
 - Location ingestion, matching, and active-trip commands stay near that market.
 - Identity, payment tokens, risk signals, and product configuration replicate under their own consistency and residency contracts.
@@ -233,11 +257,13 @@ An **explicit reference design** assigns live fulfillment to a home region chose
 - Devices include observed authority/version on commands and reconnect to the promoted region.
 - Completed-trip events flow to global finance and analytics through idempotent consumers.
 
-A city cannot fail over safely merely because compute is available elsewhere. The destination also needs map/config versions, live provider reconnection, database write authority, notification routes, payment dependencies, and headroom. See [Multi-Region Architecture](../06-scaling/09-multi-region-architecture.md).
+The fourth item applies the lock-and-version argument at the scale of a region. If the recovery region begins accepting writes while the original region, cut off but still running, continues to accept them too, there are two authorities for the same trips. The old region must be fenced, made unable to commit, before the new one is given a higher epoch.
+
+A city cannot fail over safely merely because compute is available elsewhere. The destination also needs the right map and configuration versions, a way for live drivers to reconnect, database write authority, notification routes, payment dependencies, and capacity headroom. See [Multi-Region Architecture](../06-scaling/09-multi-region-architecture.md).
 
 ## Operations, Security, and Observability
 
-Observe the physical outcome, not just RPC health:
+What must be observed is the physical outcome. RPC health can be perfect while riders stand on street corners:
 
 - Location accepted/rejected by reason, age distribution, sequence regressions, cell skew, and ownership epoch mismatch.
 - Quote coverage, route/model/config version, ETA error versus actual arrival, and fallback rate.
@@ -246,7 +272,9 @@ Observe the physical outcome, not just RPC health:
 - Pickup wait, cancellation, rematch, duplicate-offer, and “assigned provider unavailable” rates.
 - Regional authority, replication position, recovery headroom, and device reconnect rate.
 
-Trace IDs must join device sample, quote, request, trip, offer, assignment epoch, and transition event without putting raw precise location into broadly accessible logs.
+ETA error against actual arrival is an unusually good metric, because the physical world supplies the ground truth for free. Every trip ends with a measured arrival time that can be compared with the prediction, so the quality of the estimate is known continuously and for every city.
+
+Trace identifiers join the device sample, quote, request, trip, offer, assignment epoch, and transition event, and they do so without placing raw precise location in broadly accessible logs.
 
 Security and privacy requirements include:
 
@@ -258,11 +286,15 @@ Security and privacy requirements include:
 - Rate limits by actor, device, market, action cost, and target, plus synthetic-location and collusion detection.
 - Data-residency classification carried into logs, backups, features, and disaster-recovery copies.
 
+Location history is among the most sensitive data a consumer company holds, since it reveals where a person lives, works, and spends their nights. The third item, coarse location for analytics, is the practical form of data minimization here. Most analysis needs to know which neighborhood a trip started in and has no need of the building. Synthetic-location detection in the sixth item addresses a fraud specific to this domain, in which a device reports GPS coordinates it is not at.
+
 ## Evolution and Migration
 
-Uber's sources document an instructive sequence: a PostgreSQL bottleneck; the 2014 Mezzanine/Schemaless migration described in 2015–2016; Ringpop-based application partitioning; H3 as a reusable spatial index; and a 2021 Fulfillment rewrite with statecharts, ACID storage, and a controlled product migration.
+Uber's sources document an instructive sequence: a PostgreSQL bottleneck; the 2014 Mezzanine and Schemaless migration, described in 2015 and 2016; application partitioning with Ringpop; H3 as a reusable spatial index; and a 2021 rewrite of Fulfillment with statecharts, ACID storage, and a controlled migration of every product.
 
 **Documented (2015):** Mezzanine changed trip IDs to UUIDs, backfilled, mirrored writes, replayed queries in the background, validated results, and switched reads after incremental refactoring. **Documented (2021):** the Fulfillment rewrite says every product and city migrated with support from more than 100 engineers across more than 30 teams.
+
+The technique of replaying queries in the Mezzanine account is worth borrowing. Comparing rows between an old and a new store shows that the data was copied. It does not show that the new store answers the application's actual questions correctly. Replaying real production queries against the new store and comparing the results tests the property the migration is supposed to preserve.
 
 A reusable migration plan is:
 
@@ -275,11 +307,13 @@ A reusable migration plan is:
 7. Reconcile active trips before each cohort and drain old in-flight work.
 8. Stop old writes, hold rollback history, then remove compatibility code.
 
+Step 7 reflects a constraint that purely digital systems do not have. A trip in progress cannot be paused for a migration, because there is a person in the car. Migration proceeds market by market, and within each market the trips already under way are allowed to finish on the old system while new ones begin on the new.
+
 This is covered generally in [Database Migrations](../15-deployment/03-database-migrations.md) and [Migration Strategies](../15-deployment/06-migration-strategies.md).
 
 ## Verification and Design Lessons
 
-Verify with deterministic state-machine tests, property-based command reordering, and market-shaped load:
+We verify with deterministic state-machine tests, property-based reordering of commands, and load shaped like a real market:
 
 - Older and duplicate location samples never replace newer state.
 - Two simultaneous acceptances yield one assignment winner.

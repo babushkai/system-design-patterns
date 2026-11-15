@@ -8,6 +8,10 @@ Outbox/inbox design includes transactional rows, polling or CDC relay, and consu
 
 ## Workload and Contract
 
+A service very often has to do two things in response to one request: change its own database, and tell other systems that it did. Saving an order and publishing "order placed" is the standard example. The two actions go to different systems, a database and a message broker, and no transaction covers both. Whichever is done first, the process may crash before doing the second. If the database commits and the publish is lost, the order exists and nobody downstream ever hears of it. If the publish goes first and the commit fails, the rest of the company acts on an order that does not exist.
+
+This is known as the dual-write problem, and careful ordering of the two calls does not solve it, since some sequence of failures defeats every ordering. The outbox pattern solves it by not making two writes. The event is inserted into a table in the service's own database, in the same transaction as the business change, so the two succeed or fail together. A separate process then reads that table and publishes what it finds to the broker, repeating until the broker confirms. An event may be published more than once as a result, and can never be lost or invented, which is the better failure to have, since consumers can discard duplicates.
+
 The producer transaction is:
 
 ```text

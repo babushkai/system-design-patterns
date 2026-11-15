@@ -8,7 +8,11 @@ Use batch execution when the input can be bounded and recomputation fits the fre
 
 ---
 
-## 1. Begin With the Workload Contract
+## Begin With the Workload Contract
+
+Batch processing is the oldest form of large-scale computation and still the commonest. A job reads a bounded set of input, such as a day of events, transforms it, and writes a result. Because the input is fixed, the job can be run again whenever necessary, and this property is the source of both the simplicity and the reliability of the approach. If a machine fails partway through, the affected part is recomputed. If a bug is found in the logic a month later, the job is corrected and run again over the old input.
+
+That property holds only if the job is written to preserve it. A job that appends its output to a table produces duplicates when it is run twice. A job that reads "the latest" data gives a different answer each time. The discipline of batch engineering is largely the discipline of keeping jobs repeatable: reading a fixed, named input, and writing output in a way that replaces a whole partition atomically. The main cost inside a job is the shuffle, the step in which records are regrouped across machines by key so that related records meet. It moves nearly all the data over the network, and its performance is dominated by skew, since a key with a disproportionate share of the records sends them all to one machine.
 
 “Run this SQL every day” is a schedule, not a contract. Before choosing an engine, define:
 
@@ -44,7 +48,7 @@ These invariants are more precise than “the engine is exactly once.”
 
 ---
 
-## 2. Batch, Replay, and the Lambda/Kappa Choice
+## Batch, Replay, and the Lambda/Kappa Choice
 
 Batch and stream execution answer different questions about **when input is considered available**. Neither is inherently more accurate.
 
@@ -70,7 +74,7 @@ The Kappa approach keeps one retained event log and rebuilds with another consum
 
 ---
 
-## 3. Execution Model: Control Plane and Data Plane
+## Execution Model: Control Plane and Data Plane
 
 ~~~mermaid
 flowchart TB
@@ -125,7 +129,7 @@ The critical path is the longest chain of stage completion barriers. Adding para
 
 ---
 
-## 4. Shuffle Is a Distributed External Sort
+## Shuffle Is a Distributed External Sort
 
 A hash aggregation or equi-join usually follows this physical sequence:
 
@@ -170,7 +174,7 @@ Object-store request count and temporary retention can dominate small-file jobs 
 
 ---
 
-## 5. Skew: The Slowest Partition Sets the Barrier
+## Skew: The Slowest Partition Sets the Barrier
 
 Uniform hashing balances keys, not work. One customer may own half the events; one JSON value may be ten times larger; a join key such as null may collect unrelated rows into one partition.
 
@@ -202,7 +206,7 @@ Increasing the partition count cannot split a single indivisible key in a hash p
 
 ---
 
-## 6. Memory, Spill, and Local-Disk Failure
+## Memory, Spill, and Local-Disk Failure
 
 Memory pressure occurs in execution buffers, hash tables, sort runs, deserialized objects, caches, and language runtimes. A job can have free aggregate cluster memory while one task exceeds its container.
 
@@ -230,7 +234,7 @@ Caching an intermediate is useful when reuse saves more CPU and I/O than materia
 
 ---
 
-## 7. Stragglers and Speculative Execution
+## Stragglers and Speculative Execution
 
 A straggler is an unusually slow attempt caused by skew, a degraded host, noisy neighbors, remote reads, or runtime pauses. Speculative execution launches another attempt and accepts a winner.
 
@@ -254,7 +258,7 @@ The scheduler did exactly what speculation promises; the output protocol was wro
 
 ---
 
-## 8. Commit Protocols: Visibility Is a Metadata Decision
+## Commit Protocols: Visibility Is a Metadata Decision
 
 A safe file-producing job separates **write** from **publish**:
 
@@ -275,7 +279,7 @@ If the coordinator crashes after all files exist but before metadata publication
 
 ---
 
-## 9. Backfill and Reprocessing Protocol
+## Backfill and Reprocessing Protocol
 
 Never repair history by deleting or overwriting the live output first. Treat a backfill as a migration:
 
@@ -300,7 +304,7 @@ Retention must exceed detection delay + provisioning + replay time + validation 
 
 ---
 
-## 10. Operations, Security, and Governance
+## Operations, Security, and Governance
 
 ### Orchestration and migrations
 
@@ -334,7 +338,7 @@ Do not alert only on “job failed.” A successful job that published incomplet
 
 ---
 
-## 11. Verification and Failure Injection
+## Verification and Failure Injection
 
 Before trusting a pipeline:
 
@@ -353,7 +357,7 @@ Verification should assert invariants at the protocol boundary, not only compare
 
 ---
 
-## 12. Decision Framework
+## Decision Framework
 
 | Question | Favors bounded batch | Favors continuous stream | May justify both |
 |---|---|---|---|
