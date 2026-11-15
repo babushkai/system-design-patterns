@@ -335,6 +335,19 @@
         {"route": "21-reference-designs/05-ticketing-inventory-reservation", "title": {"en": "Ticketing & Inventory Reservation", "ja": "チケット販売と在庫予約"}},
         {"route": "21-reference-designs/06-order-matching-engine", "title": {"en": "Order Matching Engine", "ja": "注文マッチングエンジン"}}
       ]
+    },
+    {
+      "number": 22,
+      "dir": "22-always-on-agents",
+      "title": {"en": "Always-On Agents", "ja": "常時稼働エージェント"},
+      "chapters": [
+        {"route": "22-always-on-agents/01-always-on-agent-fundamentals", "title": {"en": "Always-On Agent Fundamentals", "ja": "常時稼働エージェントの基礎"}},
+        {"route": "22-always-on-agents/02-wake-triggers-scheduling", "title": {"en": "Wake Sources & Scheduling", "ja": "起動ソースとスケジューリング"}},
+        {"route": "22-always-on-agents/03-session-log-durable-runtime", "title": {"en": "Session Log & Durable Runtime", "ja": "セッションログと耐久ランタイム"}},
+        {"route": "22-always-on-agents/04-memory-lifecycle", "title": {"en": "Memory Lifecycle", "ja": "メモリのライフサイクル"}},
+        {"route": "22-always-on-agents/05-standing-authority-containment", "title": {"en": "Standing Authority & Containment", "ja": "常設権限と封じ込め"}},
+        {"route": "22-always-on-agents/06-attention-evaluation-operations", "title": {"en": "Attention, Evaluation & Operations", "ja": "アテンション・評価・運用"}}
+      ]
     }
   ]
 }

@@ -238,3 +238,4 @@ The sixth test should be run with the assumption that the model obeys the inject
 - [Authorization at Scale](07-authorization-patterns.md): a delegated token is only an upper bound, and the object-level decision still happens here
 - [Identity Lifecycle and Continuous Access Evaluation](13-identity-lifecycle-and-continuous-access.md): revoking a user must also revoke the authority that agents and services derived from them
 - [LLM Agent Fundamentals](../17-llm-systems/01-agent-fundamentals.md): the tool-calling loop whose every call needs the actor, subject, and scope defined in this chapter
+- [Standing Authority and Containment](../22-always-on-agents/05-standing-authority-containment.md): delegated authority for agents that act while the principal is away
