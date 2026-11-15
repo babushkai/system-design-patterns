@@ -481,3 +481,4 @@ Then require the operating design to answer:
 - [GPU Inference Internals](../17-llm-systems/11-gpu-inference-internals.md): the same hardware run as a throughput pipeline instead of a synchronized job
 - [Dataset Management and Versioning](11-dataset-management-versioning.md): an input pipeline that must replay identical bytes to count as reproducible
 - [Object Storage Architecture and Commit Protocols](../03-storage-engines/08-object-storage.md): checkpoints as large immutable objects, where restore bandwidth sets the failure budget
+- [Embedding Tables and Sparse Model Infrastructure](17-embedding-tables-sparse-models.md): the sparse half of the model, bounded by memory and not FLOPs

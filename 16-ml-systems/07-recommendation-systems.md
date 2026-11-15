@@ -382,3 +382,5 @@ Candidate count is a budget allocation, not a universal constant. Increase it un
 - [Feature Stores](02-feature-stores.md): point-in-time correctness, and the gap between offline and online features
 - [Online Experiments](08-online-experiments.md): the only credible answer to whether the list you produced was better
 - [Cache Invalidation and Coherence](../04-caching/02-cache-invalidation.md): embedding freshness as an invalidation problem with a staleness budget
+- [Embedding Tables and Sparse Model Infrastructure](17-embedding-tables-sparse-models.md): where the ranker's billions of parameters actually live
+- [Continual Learning and Model Freshness](16-continual-learning-model-freshness.md): closing the feedback loop in minutes without poisoning it

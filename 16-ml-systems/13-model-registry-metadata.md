@@ -245,16 +245,7 @@ Approvals should bind to evidence, not only to a model name. “Alice approved v
 
 Rollback is only real if the registry can name and validate the rollback target. For model systems, this is harder than code rollback because the previous model's dependencies may have rotted.
 
-A rollback target must include:
-
-- artifact hash and storage URI,
-- runtime image digest,
-- feature schema versions,
-- preprocessing version,
-- threshold policy,
-- fallback policy,
-- last load-test result,
-- capacity status if it must stay warm.
+A rollback target is a complete serving configuration and not only an older set of weights. The registry therefore records, for each target, the artifact hash and storage URI, the runtime image digest, the feature schema versions and preprocessing version it expects, the threshold policy and fallback policy it was approved with, its last load-test result, and its capacity status if it must stay warm. Any one of these can go stale while the weights sit untouched: a feature the old model needs may have been retired, or the image may no longer pass admission. A target missing one of them is a hope and not a rollback.
 
 ```yaml
 rollback:
@@ -365,17 +356,7 @@ During a control-plane partition, existing workers keep serving their verified g
 
 ## Audit Log: Who Changed What, When, and Why
 
-Every registry mutation that affects production must be audited:
-
-- model registered,
-- evaluation attached,
-- approval granted,
-- eligibility state changed,
-- traffic percentage changed,
-- active version changed,
-- threshold policy changed,
-- rollback executed,
-- model retired.
+Every registry mutation that can change what production does is audited. That covers the whole path of a version through the system: registration, the attachment of an evaluation, the granting of an approval, a change of eligibility state, a change of traffic percentage or of the active version, a change of threshold policy, the execution of a rollback, and retirement. The list is deliberately wider than "deployments," because a threshold edit can change more decisions than a new model does.
 
 The audit event should record actor, timestamp, previous state, new state, reason, and request ID. For regulated systems, threshold changes are as important as model changes. A score cutoff can alter thousands of decisions without changing the model artifact at all.
 

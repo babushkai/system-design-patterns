@@ -412,6 +412,8 @@ High-cardinality labels need restraint. `run_id` belongs in traces and logs; mod
 
 ## Retraining: How Often, and How Automatically
 
+This section covers retraining as a sequence of discrete runs. Training on a stream, where the interval shrinks to minutes and versions must be minted deliberately, is the subject of [Continual Learning and Model Freshness](16-continual-learning-model-freshness.md).
+
 Deciding when to retrain is a risk-management question disguised as a scheduling question. Retrain too rarely and the model drifts away from a changing world; retrain too eagerly and you spend money relearning a world that has not changed, while exposing yourself to the risk that bad data quietly becomes a bad model.
 
 The strategies form a clear progression of automation and risk. *Manual retraining* suits low-change or high-stakes models where a human should be in the loop for every release. *Scheduled retraining* (daily or weekly) fits domains with predictable data arrival, accepting that some runs retrain on data that has not meaningfully changed. *Triggered retraining* fires when a drift or quality metric crosses a threshold, responding to change rather than the calendar, at the cost of noisy triggers. *Continuous training* retrains and redeploys on a tight loop and belongs only to fast-moving domains with mature automation around it.
@@ -532,3 +534,4 @@ Finally prove recovery with fault injection: kill a worker during output upload,
 - [Dataset Management and Versioning](11-dataset-management-versioning.md): reproducibility starts with an immutable dataset version, not with a seed
 - [Model Registry and ML Metadata](13-model-registry-metadata.md): the lineage record that makes a promoted model auditable months later
 - [Idempotency and Operation Identity](../01-foundations/08-idempotency.md): a retried stage has to produce the same artifact, which rules out implicit state
+- [Continual Learning and Model Freshness](16-continual-learning-model-freshness.md): what changes when the retraining interval shrinks to minutes

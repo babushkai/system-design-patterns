@@ -194,11 +194,7 @@ manifest fraud_training_set@2026-06-24.3
 manifest_hash sha256:ccc...
 ```
 
-The manifest gives three properties:
-
-1. **Reproducible reads**: a training job reads the files named in the manifest, not whatever files happen to match a prefix.
-2. **Integrity checking**: corrupted or replaced files are detected by hash mismatch.
-3. **Cacheability**: pipeline steps can key on manifest hash, not path or timestamp.
+The manifest gives three properties. Reads become reproducible, because a training job reads the files the manifest names and not whatever files happen to match a prefix at the moment it runs. Integrity becomes checkable, because a corrupted or replaced file fails its hash. And pipeline steps become cacheable, because they can key on the manifest hash, which changes exactly when the content does, where a path or timestamp changes for unrelated reasons or fails to change when it should.
 
 Content addressing also prevents a subtle cache bug. If a dataset path is reused for new contents, a pipeline cache keyed on path may return stale features or stale evaluation results. If the key includes the manifest hash, new bytes create a new cache key automatically.
 
@@ -208,15 +204,9 @@ Content addressing also prevents a subtle cache bug. If a dataset path is reused
 
 Dataset validation usually starts with schema checks: required columns, types, nullability. These are necessary and insufficient. Most dangerous dataset changes are schema-compatible semantic changes.
 
-Examples:
+A column named `amount` changes from dollars to cents. `country` switches from billing country to IP-derived country. `active_user` moves from a 7-day to a 30-day definition. `label=1` stops meaning confirmed fraud and starts meaning suspected fraud. Rows now include test accounts that an upstream filter used to exclude.
 
-- `amount` changes from dollars to cents.
-- `country` switches from billing country to IP-derived country.
-- `active_user` changes from 7-day active to 30-day active.
-- `label=1` changes from confirmed fraud to suspected fraud.
-- rows now include test accounts that were previously excluded.
-
-Every one of these can pass type checks. A dataset contract therefore needs **semantic validation**: distribution checks, known invariants, source-population counts, and owner-reviewed definition changes.
+Every one of these passes type checks, since names, types, and nullability are unchanged, and yet the model trained on the new data is learning a different problem. A dataset contract therefore needs **semantic validation**: distribution checks, known invariants, source-population counts, and owner-reviewed definition changes.
 
 ```yaml
 expectations:
@@ -250,10 +240,7 @@ Compatibility is a relation between producer and consumer contracts, not a prope
 
 ## Dataset Lineage: Provenance and Impact
 
-Dataset lineage answers two questions:
-
-1. **Provenance**: what produced this dataset?
-2. **Impact**: what depends on this dataset or source?
+Dataset lineage answers two questions that point in opposite directions. *Provenance* looks backward and asks what produced this dataset. *Impact* looks forward and asks what depends on this dataset or on one of its sources.
 
 Provenance is needed for debugging and audit. Impact is needed during incidents. If a source table double-counted transactions for a week, the platform must answer which datasets included that source version, which models trained on those datasets, and which deployments served those models.
 

@@ -10,11 +10,7 @@ Offline evaluation rejects candidates against a pinned dataset; it cannot establ
 
 Offline evaluation exists because live traffic is expensive and risky. Before a model reaches shadow, canary, or experiment, the team needs evidence that it is not obviously worse than the incumbent. Offline evaluation provides that first filter.
 
-The filter has three jobs:
-
-1. **Reject regressions cheaply**: do not spend production risk on candidates that lose on historical data.
-2. **Compare model variants quickly**: choose among architectures, features, hyperparameters, and training windows.
-3. **Prepare deployment decisions**: estimate threshold behavior, calibration, slice risk, and expected operating trade-offs.
+The filter has three jobs. It rejects regressions cheaply, so that we do not spend production risk on candidates that already lose on historical data. It lets us compare variants quickly, across architectures, features, hyperparameters, and training windows, at a rate no online experiment could match. And it prepares the deployment decision by estimating threshold behavior, calibration, slice risk, and the operating trade-offs we should expect once the model is live.
 
 The key word is *filter*. Offline evaluation is not proof. It is a necessary but insufficient gate. The offline dataset is historical, logged under old policies, labeled by imperfect processes, and often missing the outcomes the new model would have caused. A candidate can win offline and lose online because the metric measured the wrong objective, the split leaked, the logs were biased by the incumbent model, or the world changed.
 
@@ -257,13 +253,7 @@ Ranking metrics evaluate ordered lists, not independent examples. NDCG, MRR, MAP
 
 The hidden issue is candidate availability. Offline ranking evaluation typically uses logged impressions or sampled negatives. That means the evaluation only knows about items the previous system retrieved or showed. A new retrieval model may find excellent candidates the old system never logged; offline evaluation may not credit it. Conversely, sampled negatives may be too easy, inflating metrics.
 
-For recommenders and search systems, a serious offline report should state:
-
-1. candidate source used for evaluation,
-2. negative sampling strategy,
-3. whether exposure and position bias are corrected,
-4. whether metrics are computed per user/query then averaged,
-5. coverage and diversity metrics, not only relevance.
+For recommenders and search systems, a ranking metric is uninterpretable without the conditions it was computed under, so a serious offline report states them. It names the candidate source used for evaluation, because a ranker scored against candidates that the production retriever would never surface is being graded on a different problem. It gives the negative sampling strategy, since sampled negatives can reorder models relative to full-corpus evaluation. It says whether exposure and position bias were corrected, and whether metrics were computed per user or query and then averaged, which prevents heavy users from dominating the number. And it reports coverage and diversity alongside relevance, because a model can raise NDCG by recommending the same popular items to everyone.
 
 A ranking metric without candidate-set context is incomplete. If the candidate generator changed, ranking evaluation over the old candidate set answers the wrong question.
 
@@ -286,15 +276,7 @@ Two computation conventions silently change results across teams and libraries: 
 
 Leakage happens when evaluation examples contain information that would not be available at prediction time. It is worse than ordinary data bugs because it makes the model look better.
 
-Common leakage sources:
-
-- random splits for time-dependent problems,
-- joining latest feature values instead of point-in-time values,
-- using post-action fields as features,
-- duplicates across train and test,
-- same user or entity appearing in both train and test when generalization to new entities matters,
-- labels or label proxies included as features,
-- preprocessing fit on the full dataset before splitting.
+Leakage has a small number of recurring sources, and most of them are join or split mistakes and not modeling mistakes. A random split on a time-dependent problem lets the model train on the future of its own test set. Joining the latest feature values where point-in-time values were required does the same thing through the feature path. Fields that are populated only after the action, such as a chargeback flag or a resolution code, leak the outcome directly, as do labels or label proxies that slip in as features. Duplicates across train and test, or the same user or entity on both sides when the claim is generalization to new entities, turn memorization into apparent skill. And preprocessing fit on the full dataset before splitting, whether a scaler, a vocabulary, or a target encoder, carries test-set statistics into training.
 
 A good evaluation pipeline runs leakage checks automatically:
 
@@ -315,16 +297,7 @@ The suspicious-feature check is crude but useful: if one feature alone makes the
 
 Aggregate metrics hide regressions. A candidate can improve overall AUC while harming new users, a small country, a protected class, a large tenant, or high-value transactions. If that slice is important, the aggregate is not a defense.
 
-Slices should be pre-declared, not discovered only after a metric looks good. Common slices:
-
-- geography and language,
-- device and platform,
-- new vs returning users,
-- traffic source,
-- tenant or merchant,
-- item/content category,
-- amount or risk band,
-- protected or regulated groups where legally and ethically appropriate.
+Slices should be declared before the evaluation runs, and not discovered after a metric looks good, because a slice chosen after the fact is a hypothesis and not a test. The usual dimensions are geography and language, device and platform, new versus returning users, traffic source, tenant or merchant, item or content category, amount or risk band, and protected or regulated groups where that is legally and ethically appropriate.
 
 The challenge is multiple comparisons. If you inspect hundreds of slices, some will regress by chance. The solution is not to avoid slices; it is to separate **guardrail slices** from **exploratory slices**. Guardrail slices are pre-registered and can block promotion. Exploratory slices generate hypotheses and require confirmation.
 
@@ -381,13 +354,7 @@ Slice multiplicity is a policy choice. Pre-declared safety slices may each have 
 
 Every evaluation needs baselines. The strongest baseline is the current production model evaluated on the same dataset. Without it, the team cannot distinguish absolute quality from improvement.
 
-Useful baselines include:
-
-1. **Current production model**: the real incumbent.
-2. **Simple heuristic**: catches overengineered models that barely beat rules.
-3. **Previous training run with same code**: estimates training variance.
-4. **Ablation models**: measure whether a feature group actually helps.
-5. **Oracle-ish upper bound** where available: estimates room for improvement.
+A candidate is only as good as what it was compared against, and each baseline answers a different question. The current production model is the real incumbent, and beating anything else does not justify a launch. A simple heuristic catches overengineered models that barely beat rules. A previous training run with the same code and a different seed estimates training variance, without which a small delta cannot be told from noise. Ablation models measure whether a feature group actually contributes. And where one is available, an approximate oracle bounds the remaining headroom, which tells us whether further modeling work is worth funding at all.
 
 The heuristic baseline is underrated. If a complex ML system barely beats "rank by popularity" or "review transactions above amount threshold," it may not justify its operational cost. ML should earn complexity.
 
@@ -437,14 +404,7 @@ An attacker can target the evaluator as well as the model: inject easy examples,
 
 ## Offline-to-Online Gap
 
-Offline metrics fail to predict online impact for structural reasons:
-
-1. **Logged-policy bias**: the evaluation data was generated by the old model.
-2. **Feedback loops**: the new model changes future data.
-3. **Proxy mismatch**: offline label is not the real product goal.
-4. **Distribution shift**: production traffic has moved.
-5. **Interference**: users/items/markets affect each other.
-6. **Implementation skew**: serving computes features differently.
+Offline metrics fail to predict online impact for structural reasons, and none of them is cured by a larger test set. The evaluation data was generated by the old model, so it describes what happened under the old policy and is silent about items the old policy never showed. Once deployed, the new model changes the data that future models and future evaluations will see. The offline label is usually a proxy and not the product goal, so a model can win on the proxy and lose on the goal. Production traffic may have moved since the snapshot was taken. Users, items, and markets interfere with one another in ways a per-example metric cannot represent. And serving may compute a feature differently from training, in which case the model evaluated offline is not quite the model that runs.
 
 This is why offline evaluation should gate exposure, not replace online experiments. The handoff should be explicit:
 
