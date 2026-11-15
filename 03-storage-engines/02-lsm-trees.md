@@ -103,6 +103,8 @@ Large memtables reduce flush frequency but enlarge the failure replay window. Fr
 
 Use separate quantities rather than one vague “write amplification.” Let `F` be incoming encoded bytes/s that initially flush to files. Let `WA_file` be `(flush output + compaction output) / initial flush bytes`, as defined in [SSTables and Compaction](./03-sstables-compaction.md). If WAL and data files share a device, approximate write demand is:
 
+These three costs cannot all be minimized at once, and every compaction strategy chooses a point among them. Merging aggressively keeps few files to search and little dead data on disk, which helps reads and space, and rewrites each byte many times. Merging lazily writes each byte fewer times and leaves more files to consult and more superseded data stored. Leveled compaction, which keeps each level fully merged, favors reads and space. Tiered compaction, which lets several runs accumulate before merging, favors writes. The right choice depends on whether the workload is dominated by ingestion or by queries.
+
 ```text
 device write bytes/s ~= F * WAL_factor + F * WA_file
 ```
