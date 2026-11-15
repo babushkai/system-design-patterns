@@ -123,6 +123,8 @@ Controller freshness must not be confused with endpoint liveness. If discovery s
 
 No algorithm balances “load” without defining what load means and when it is observed.
 
+The algorithms differ mainly in how much they know and how old that knowledge is. Round robin knows nothing about load and so cannot be misled by stale information, but it cannot adapt to servers that are slower or busier than others. Least-connections uses a real signal, the number of requests in progress, and works well when every balancer sees all the traffic. When there are many independent balancers, each sees only its own share and its information about each server lags reality, and a policy that always picks the apparently least loaded server makes every balancer converge on the same choice at the same moment. Choosing two servers at random and sending the request to the less loaded of the two avoids that herd behavior, because different balancers pick different pairs, while still steering most traffic away from busy servers. Its effectiveness relative to perfect knowledge is one of the more surprising results in the field.
+
 | Policy | Useful when | Hidden failure mode |
 |---|---|---|
 | Round robin / random | Interchangeable endpoints and narrow request-cost distribution | Equal assignment counts can produce unequal CPU or completion time |
@@ -141,6 +143,8 @@ For uniform independent assignment of `m` requests to `n` endpoints, the expecte
 
 Health is a claim about eligibility for a particular class of work:
 
+The hazard in health checking is correlated ejection. A health check that probes a shared dependency, such as the database, will fail on every server at once when that dependency is slow, and a balancer that removes every failing server will remove the whole pool. A partial degradation, in which many requests would still have succeeded, becomes a total outage caused by the protective mechanism. Balancers therefore need a limit on how much of the pool may be ejected, and health checks should reflect the server's own ability to serve, not the state of everything it depends on.
+
 - **Startup/readiness:** dependencies, configuration, and warm state are sufficient to accept new work.
 - **Active check:** an independent probe reaches a representative path.
 - **Passive observation:** real traffic produces local failures, application failures, latency, or resets.
@@ -156,6 +160,8 @@ Never let a shared dependency failure make every application instance look indiv
 ## Connections, Draining, and Skew
 
 Balancing happens only when the data plane gets a choice. Adding a backend does not redistribute established TCP connections, WebSockets, database sessions, or QUIC connections. Removing an endpoint from new-flow selection likewise does not finish its existing work.
+
+Long-lived connections defeat balancing in a way that is easy to miss. A balancer distributes new connections, and a client using HTTP/2 or gRPC may open one connection and send every request over it for hours. Adding servers to the pool then has no effect on existing traffic, which remains attached to the servers it started on, while the new servers sit idle. The remedies are to give connections a maximum age so that clients periodically reconnect and are redistributed, or to balance individual requests at layer 7 instead of connections at layer 4.
 
 Let `λc` be new connections/s and `Wc` mean connection lifetime. Under the stationarity assumptions of Little's Law:
 

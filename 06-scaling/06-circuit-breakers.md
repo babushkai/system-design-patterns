@@ -83,6 +83,8 @@ The data plane makes decisions without a synchronous control-plane round trip. I
 
 A single breaker for “all outbound HTTP” lets a payment outage block search. One breaker per physical host can be too granular when calls are load-balanced across an elastic cluster and hosts churn. Useful scopes include:
 
+Scope is the first decision because a breaker suppresses everything inside its scope at once. Too broad, and one failing dependency shuts off calls to healthy ones that happened to share the breaker. Too narrow, for example one breaker per backend instance, and each breaker sees so little traffic that it cannot gather enough evidence to decide anything, while the load balancer already handles bad instances anyway. The right scope is usually one breaker per dependency and operation class, so that it trips when a particular path is broken and leaves the rest of the caller's work alone.
+
 - logical cluster plus operation class;
 - endpoint for outlier ejection;
 - shard/partition when failures are localized;
@@ -94,6 +96,8 @@ Membership changes should retire stale endpoint state. Do not let an old ejectio
 ### Classify causality
 
 Count outcomes that imply the protected path is unhealthy:
+
+Classification matters because a breaker that counts the wrong outcomes will open for the wrong reasons. A dependency that correctly returns "not found" for a missing record, or "forbidden" for a caller without permission, is working perfectly, and those responses should never move the breaker toward open. Counting them would let one client sending bad requests switch off the dependency for every other caller. Only outcomes that indicate the dependency itself cannot do its job, such as timeouts, connection failures, and explicit overload responses, are evidence of ill health.
 
 - connect failure, reset, protocol failure;
 - dependency timeout while useful deadline remained;
@@ -140,6 +144,8 @@ Ordinary calls fail fast or use a bounded fallback. The breaker continues to rec
 
 A small, capped number of representative calls test the real path. Probe concurrency, not just total probe count, matters: simultaneous probes can overload a barely recovered dependency.
 
+The probe state exists because an open breaker has a problem of its own: it has stopped calling the dependency, so it no longer receives any evidence about whether the dependency has recovered. It must deliberately let a few calls through to find out. The cap on concurrent probes is essential. A breaker that reopens the floodgates on its first successful probe sends the full load of a recovering dependency's callers at it at once, and a dependency that has just come back from overload will often be pushed straight back into it.
+
 Close only after enough successful/acceptable-latency evidence for the workload’s risk. Ramp concurrency rather than jumping from a handful of probes to the entire fleet.
 
 ### Count-based versus time-based windows
@@ -165,6 +171,8 @@ An exponentially weighted estimate reacts smoothly but does not provide a finite
 ## Concurrency Limits and Bulkheads
 
 An error breaker reacts too late to pure slowness. When latency rises, in-flight work grows:
+
+This is the most important limitation of a breaker driven by error rates. A dependency that has become slow without failing produces few errors until callers' timeouts begin to fire, and by then each caller may have hundreds of requests waiting on it, each holding a thread or connection. The damage to the caller, exhausted resources, happens before the breaker sees anything to react to. A limit on the number of concurrent calls to the dependency acts much earlier. As latency rises, more calls are in flight at once, the limit is reached, and further calls are refused immediately, so the slow dependency can occupy only a bounded share of the caller's resources. This is the bulkhead, named after the partitions that keep a breach in one compartment of a ship from flooding the rest.
 
 > in-flight concurrency ≈ admitted calls/s × mean service time
 
@@ -214,6 +222,8 @@ Rate limiting in [Rate Limiting](./05-rate-limiting.md) controls admitted entitl
 ## Probe and Recovery Design
 
 An open interval should be backoff with jitter, not one fleet-wide timer. If thousands of clients all probe at the same instant, recovery traffic becomes another outage.
+
+Synchronization is the hazard here, in the same way as with retries. If every instance of a large calling service opens its breaker at the same moment, because they all saw the same outage, and every one waits exactly thirty seconds before probing, then thirty seconds later the dependency receives a probe from every instance in the same instant. Randomizing the interval spreads those probes out, so that recovery is tested gradually and the dependency is not overwhelmed by the act of checking whether it is well.
 
 Probe choices:
 
@@ -284,6 +294,8 @@ Global telemetry should advise, not erase, local evidence without a clear author
 ## Fallbacks Are Dependencies
 
 A fallback may return:
+
+A fallback is code that runs only during failures, and that is reason enough to be wary of it. It is rarely exercised, so it is rarely tested, and when it finally runs it may itself fail. Worse, a fallback often calls a different dependency, such as a cache or a secondary service, which then receives, all at once, the full load that was previously going to the primary. A fallback must be designed and capacity-planned as a real dependency with its own limits, or it converts one outage into two.
 
 - cached data with stated age;
 - a reduced feature set;

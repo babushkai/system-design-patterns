@@ -105,6 +105,8 @@ workflow-51/step-reserve-inventory/sequence-3
 
 Do not include retry attempt number or random value generated inside each attempt. That turns duplicates into distinct operations.
 
+The rule about where the key is generated is the one most often broken, and usually by accident. Many HTTP client libraries have a retry option, and a developer who generates an idempotency key inside the function that makes the request will find that each retry calls that function again and produces a fresh key. Every attempt then looks to the server like a new operation, and the protection silently disappears. The key has to be created once, at the point where the application decides to perform the operation, and stored or passed down so that every subsequent attempt carries the same value. For an operation that may be retried across a process restart, that means persisting the key before the first attempt.
+
 ---
 
 ## Key Scope and Request Identity
@@ -154,6 +156,10 @@ Do not hash raw JSON bytes if semantically equivalent encodings should match. Do
 
 If an existing key has a different digest, return a conflict. Replaying the old outcome would falsely claim that the new parameters executed.
 
+The digest guards against a failure that looks harmless and is not. Suppose a client sends a payment of 40 under some key, and later, because of a bug or a reused variable, sends a payment of 55 under the same key. A server that only checks whether it has seen the key will reply that the operation already succeeded, and the client will record that 55 was charged when in fact 40 was. The server has told the truth about the first request and the client has drawn a false conclusion about the second. Comparing a digest of the request's meaning makes this case detectable, and a conflict response turns a silent accounting error into a visible bug.
+
+Canonicalization exists so that the digest compares meaning and not bytes. Two SDKs in different languages may serialize the same request with fields in a different order or numbers in a different format, and a digest of the raw bytes would treat those as different requests. Defining the canonical form precisely, and testing it across every client implementation, is what makes the comparison trustworthy.
+
 ---
 
 ## Deduplication State Machine
@@ -202,6 +208,8 @@ Policy options:
 
 Do not immediately run the effect again.
 
+The concurrent duplicate is the case that check-then-act designs get wrong. Two attempts with the same key arrive within milliseconds of each other, typically because a client timed out and retried while the first attempt was still running. If each one checks whether the key has been seen, both find that it has not, and both proceed. The insert of an `IN_PROGRESS` record under a unique constraint is what makes the decision atomic: exactly one insert succeeds, and the other attempt learns that it is the duplicate before it has done anything. What it then does is a product choice. Waiting briefly for the first attempt to finish gives the cleanest experience to the caller, while returning a status the caller can poll keeps server resources free.
+
 ### Terminal duplicate
 
 Verify tenant/caller authorization and request digest, then return the stored semantic outcome. The response may need re-encoding for a newer API version; preserve the original business result separately from transient headers.
@@ -209,6 +217,8 @@ Verify tenant/caller authorization and request digest, then return the stored se
 ### Abandoned `IN_PROGRESS`
 
 An owner may crash. Use a lease and monotonically increasing `owner_epoch`; a new attempt claims after expiry. Any local commit accepts only the current epoch. A timeout alone does not prove the old worker stopped, so fencing or effect-level idempotency is still necessary.
+
+This is the same problem that distributed locks face, and it has the same answer. An `IN_PROGRESS` record with a lease is a lock on the operation. If its holder stalls for longer than the lease, another attempt will take over, and the stalled holder may then wake and continue. The epoch number on the record lets the commit step reject work from a holder that has been superseded: the final update succeeds only if the epoch it carries is still the current one. Where the effect is in another system that cannot check epochs, the effect itself has to be idempotent, so that two holders racing to perform it produce one result.
 
 ---
 
@@ -246,6 +256,8 @@ The unique operation identity can be embedded directly in a ledger/event row. A 
 4. retry returns false success.
 
 Only a shared atomic transaction closes both gaps. Across external systems, use their idempotency contract, an outbox/inbox, or reconciliation; see [Effect Commit Protocols for Workflows](../18-workflow-job-systems/06-retry-idempotency-compensation.md).
+
+The two traces above are mirror images, and together they explain why idempotency cannot be bolted on as a separate check. Whichever of the two writes happens first, there is an instant between them in which a crash leaves the system in a state that lies about what happened. One ordering lies by omission, losing the record that the effect occurred. The other lies by commission, recording an effect that never happened. The gap closes only when the deduplication record and the effect are written by the same transaction, so that they become durable at the same instant. That is why the simplest robust design is often to put the operation key directly on the business row, as a unique column on the ledger entry or the order, so that the database's own constraint enforces the guarantee.
 
 ---
 
@@ -292,6 +304,8 @@ Possible policy:
 
 Authorization can change. Always authenticate the duplicate request before returning a stored outcome, and decide whether current authorization is required to reveal it.
 
+The distinction between deterministic and transient failures matters because a stored failure is permanent for the life of the key. If a payment attempt fails because a downstream service was briefly unavailable, and that failure is stored as the outcome, every retry under the same key will be told that the payment failed, and the only way to pay will be to start a new operation with a new key. That defeats the purpose of retrying. A rejection that will recur under the same conditions, such as insufficient funds, is worth storing. A failure that says nothing about the request itself is not.
+
 ### Status resource
 
 ```text
@@ -329,6 +343,8 @@ ack broker after commit
 If the broker redelivers before ack, the inbox detects the committed event. If the database transaction fails, the broker redelivery retries.
 
 Inbox scope includes the logical consumer/effect. Two independent projections may both legitimately process one event; a global `event_id` unique constraint across all consumers would suppress valid work.
+
+Message consumers need the inbox because brokers deliver at least once. A consumer that processes a message and crashes before acknowledging it will receive the message again, and from the broker's side there is no way to know that the processing completed. Recording the event identity in the same transaction as the consumer's own state change converts the redelivery into a no-op: the second attempt finds the event already in the inbox and does nothing. The acknowledgement to the broker comes after that commit, so the worst outcome of a crash is one redundant delivery that the inbox absorbs.
 
 Ordering and idempotency are separate. Deduplication does not repair out-of-order state transitions; use sequence/precondition handling from [Message Ordering](../05-messaging/03-message-ordering.md).
 
@@ -377,6 +393,8 @@ Document what happens after expiry:
 
 Separate hot outcome response from long-lived identity. Terminal records can compact to key, digest, outcome code/reference, and audit metadata.
 
+The guarantee lasts exactly as long as the record does, and this is the most common place where a correct design is undermined by an operational decision made later. A team sets a one-day expiry on idempotency records to save storage. Months later another team configures the message broker to retain messages for a week so that consumers can recover from long outages. Neither change is wrong on its own. Together they mean that a message redelivered on the third day finds no record and is processed again. The retention horizon therefore has to be derived from the longest path by which a request can be repeated, and it has to be revisited whenever any of those paths changes.
+
 ### Cleanup race
 
 Cleanup must not delete a record while an attempt can still commit. Use `retention_until` after terminal state, partition lifecycle, and compare state/epoch during deletion. Coordinate with backups: restoring a database snapshot without more recent dedup records can resurrect repeatable effects.
@@ -404,6 +422,8 @@ Regions may race locally, but the effect provider deduplicates the global key. S
 Safe only if the business effect itself is region-scoped. Prefixing a global payment key with region makes duplicates more likely, not safer.
 
 Two eventually consistent regional `seen` sets do not guarantee global uniqueness. Both regions can observe absence and execute.
+
+The reason is the same one that makes multi-leader replication produce conflicts. Uniqueness is a property that requires knowing about every other attempt, and two regions that replicate asynchronously do not know about each other's recent writes. If a retry is routed to a different region from the original attempt, which is exactly what happens when the first region is slow or failing, both regions check their local copy, both find the key absent, and both execute. Global uniqueness requires either that every attempt for a key goes to one place, or that the decision is made by a store that is strongly consistent across regions, or that the final effect is deduplicated by a system that sees every attempt.
 
 During disaster recovery, restore business state, operation records, outbox/inbox state, and external outcome references as one consistency set. Replay should query known outcomes before reissuing effects.
 

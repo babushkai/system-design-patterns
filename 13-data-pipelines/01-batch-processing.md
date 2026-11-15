@@ -116,6 +116,8 @@ The **control plane** decides what should run, records state, retries attempts, 
 
 A logical query becomes a directed acyclic graph of operators. The engine pipelines **narrow dependencies** when each output partition depends on a small, known set of input partitions. A **wide dependency** requires redistribution (join, group, distinct, sort, or repartition) and usually creates a stage boundary.
 
+The graph is divided into stages at the points where data must be redistributed. Within a stage, each task reads one portion of the input and passes records straight through a chain of operations such as filtering and projecting, with no need to talk to any other task. Between stages lies a shuffle, in which every task in one stage sends each of its records to the task in the next stage responsible for that record's key. The shuffle is where nearly all the cost of a batch job concentrates: it writes intermediate data to disk, moves most of it across the network, and cannot complete until the slowest task feeding it has finished.
+
 For each stage, record:
 
 - input and output partitioning;
@@ -181,6 +183,8 @@ Uniform hashing balances keys, not work. One customer may own half the events; o
 ### Detect skew before changing the plan
 
 Inspect distributions at several levels:
+
+Skew is the usual reason a batch job that ought to take twenty minutes takes six hours. A shuffle sends all records with the same key to the same task, and real data is rarely uniform: a small number of customers, products, or null values can account for a large share of the records. The task that receives the largest key does far more work than the rest, and since the stage cannot complete until every task has, the whole job waits on that one. Adding machines does nothing, because the oversized key still goes to one task. The remedy has to change how that key is processed, for example by splitting it across several tasks and combining the partial results.
 
 - bytes and records per input partition;
 - output bytes per map task and destination partition;
@@ -248,6 +252,8 @@ Speculation is safe only when attempts are isolated:
 ### Concrete failure trace: the losing attempt publishes
 
 1. Task attempt A writes <code>part-17</code> slowly to the final directory.
+
+The background to this trace is speculative execution. When one task runs much slower than its peers, the engine may start a second copy of it elsewhere and take whichever finishes first. That is a sound defense against a slow machine, and it means that two attempts of the same task are writing at the same time. If both write directly to the final output location, the slower one may overwrite or add to the result of the faster, and the output depends on timing. Correct engines have each attempt write to a private location and let a coordinator promote exactly one attempt's output when the stage commits.
 2. The scheduler launches speculative attempt B.
 3. B finishes first and writes another object named <code>part-17</code>.
 4. The job succeeds and readers start scanning.

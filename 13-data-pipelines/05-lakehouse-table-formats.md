@@ -171,6 +171,8 @@ Two appends to disjoint data may be compatible. A partition overwrite can confli
 ### Concrete failure trace: blind retry loses a concurrent write
 
 1. Writers A and B both plan from table state 40.
+
+Concurrency control in a table format is optimistic. Writers do not lock the table. Each reads the current version, prepares its changes, and then attempts to commit a new version that names the one it started from. The atomic swap at commit succeeds for only one of them, and the other must find out what changed and decide whether its own work is still valid. The trace shows what happens when the loser simply tries again without that check.
 2. A rewrites partition P and commits state 41.
 3. B finishes a stale rewrite of P based on state 40.
 4. B sees a commit conflict.
@@ -192,6 +194,8 @@ Immutable files require logical indirection or rewriting.
 ### Copy-on-write
 
 Read affected files, apply mutations, write replacement files, and atomically replace metadata references. This moves cost to writes and usually simplifies reads.
+
+The two strategies for row-level changes divide the cost differently. Copy-on-write rewrites every file that contains a changed row, so an update to one row in a file of a million rewrites the million, and reads afterward are simple and fast because the files contain the final data. Merge-on-read writes only a small record of the change, so updates are cheap, and every reader must then combine the base files with the accumulated changes until a compaction folds them in. Tables that change rarely and are read constantly favor the first. Tables receiving a steady stream of updates favor the second.
 
 ### Merge-on-read and delete metadata
 
@@ -301,6 +305,8 @@ Manage these lifecycle operations separately:
 ### Concrete failure trace: orphan cleaner races a writer
 
 1. Writer W creates data files at 10:00 and performs a long validation.
+
+Orphan cleanup exists because a writer that fails partway through leaves data files that no committed version refers to, and these accumulate as wasted storage. A cleaner removes files that no version references. The trace shows the hazard: from the cleaner's point of view, the files of a writer that is still working look exactly like the leftovers of one that crashed, since in both cases no committed version mentions them yet. The safe rule is to delete only unreferenced files older than the longest time any writer can take to commit.
 2. Files are not yet referenced by a committed table state.
 3. Orphan cleanup lists unreferenced files at 10:05.
 4. Cleanup deletes W’s files.

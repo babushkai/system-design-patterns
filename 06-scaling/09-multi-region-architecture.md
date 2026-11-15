@@ -99,6 +99,8 @@ The data plane should operate from locally cached, versioned maps/configuration 
 
 One region serves writes and usually reads; another receives replication or backups. This minimizes concurrent-write complexity but standby readiness decays unless exercised.
 
+Active-passive is the simplest posture and the most commonly misjudged. Its cost is low because the passive region does little, and its weakness follows from the same fact: the passive region is rarely exercised, so the first real failover is also the first real test of whether it works. Configuration drifts, capacity is not kept at parity, and runbooks go stale. Organizations that rely on active-passive and never fail over on purpose tend to discover during an actual regional outage that the standby cannot take the load or is missing something essential.
+
 Decide whether passive means:
 
 - hot and receiving a small safe traffic slice;
@@ -125,6 +127,8 @@ Solutions include a session/causal token, minimum source position, temporary rou
 ### Partitioned active-active
 
 Assign each key/tenant/jurisdiction one write home. Regions can write different partitions concurrently while each key remains single-writer. The partition map is critical control state.
+
+Partitioned active-active is the usual sweet spot, and the reason is that it sidesteps the hardest problem in multi-region design. Every region accepts writes, so all regions do useful work and every user is served nearby, but no single piece of data has two writers, so there are no conflicts to resolve. A customer in Europe has a home in the European region and all of that customer's writes go there. The cost appears when a region fails: its customers must be moved to another home, which requires that their data has been replicated there and that the old home is fenced so that it cannot accept writes after the move.
 
 Re-homing is a migration:
 
@@ -195,6 +199,8 @@ Give each a source-of-truth and rebuild/replay boundary.
 
 Failure detectors cannot distinguish a dead region from an isolated but running region. Therefore “cannot reach primary” is insufficient authority to promote.
 
+This sentence states the central difficulty of regional failover, and it deserves to be taken literally. From the vantage point of the healthy regions, a region that has lost power and a region whose network links to the others have been cut look identical: both stop responding. But the second is still running and still serving any users who can reach it, and if it is still accepting writes while another region is promoted to replace it, the system has two primaries for the same data. Every write accepted by the isolated region during that interval will conflict with or be lost to the new primary. Failover must therefore include fencing, a mechanism that prevents the old region from committing writes regardless of whether it believes it is still in charge.
+
 A promotion authority can be:
 
 - a consensus quorum across independent failure domains;
@@ -225,6 +231,8 @@ If the outcome of an authority write is ambiguous, read/resolve current epoch be
 ### DNS and global load balancing
 
 DNS-based steering is affected by authoritative TTL, recursive resolver behavior, client/OS/application caches, connection reuse, and health-evaluation delay. Measure end-to-end convergence; changing one record is not the RTO.
+
+DNS is the commonest way to move traffic between regions, and it is a blunt instrument. A change to a record takes effect only as the cached copies of the old answer expire in resolvers around the world, and some resolvers and client libraries hold answers well past their stated lifetime. A failover by DNS therefore completes gradually over minutes, with a long tail of clients still sending traffic to the old region. That is acceptable for moving reads and harmful for moving writes, which is why routing decisions about authority belong in the application layer, where a request that reaches the wrong region can be redirected or rejected immediately.
 
 Anycast/BGP can route to a topologically reachable edge quickly, but the nearest edge may not hold the user’s authority or data. Network convergence is not application/data failover.
 
@@ -387,6 +395,8 @@ Use cells/cohorts so one bad global configuration does not fail every region. A 
 ### Returned region
 
 Do not let it rejoin automatically. It may contain:
+
+A region that has been cut off and comes back is one of the most dangerous moments in a failover, because it returns with a view of the world that was correct before the failure and is now wrong. It may hold writes that were accepted while it was isolated and never replicated, its caches describe a past state, and its scheduled jobs may run tasks that the replacement region has already run. If it simply rejoins and resumes serving, those discrepancies leak into production. It has to be treated as a new region being introduced: drained, reconciled against the current authority, and brought back deliberately.
 
 - stale authority epoch;
 - accepted local writes not in the promoted history;

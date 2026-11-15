@@ -139,6 +139,8 @@ Document the watermark generator:
 
 The trigger answers **when to emit**:
 
+Triggers exist because of the tension described at the start of the chapter between promptness and completeness. A window over the last minute could emit its result once, after a generous wait for late events, which is complete and slow. It could emit at the end of the minute and then emit corrections as stragglers arrive, which is prompt and requires downstream consumers to handle results that change. It could emit early estimates while the minute is still in progress. The trigger states which of these the job does, and the accumulation mode states whether each emission replaces the previous one or adds to it, which every consumer has to know in order to interpret the stream correctly.
+
 - early processing-time panes for responsiveness;
 - an on-time pane when the watermark passes the window end;
 - late panes when accepted late input arrives.
@@ -213,6 +215,8 @@ Operational checkpoints are runtime-managed recovery artifacts and may be delete
 
 Recovery restores state and replays input from the checkpointed positions. Records after the recovery cut may physically traverse operators again. Correctness requires the resulting committed state and effects to be equivalent to one logical application.
 
+This is the mechanism behind the exactly-once claims of stream processors, and its scope is worth stating precisely. Periodically the processor takes a consistent snapshot of every operator's state together with the position it had reached in each input. After a failure it restores the latest snapshot and rewinds the inputs to the recorded positions, so every event after the snapshot is processed again. The internal state therefore reflects each event exactly once. Anything the job did outside itself between the snapshot and the failure, such as writing to a database or calling a service, has been done and will be done again during replay, which is why the sinks described next matter.
+
 ---
 
 ## Define the Scope of Exactly Once
@@ -241,6 +245,8 @@ The comparison and update must be atomic at the sink. Event ID deduplication is 
 ### Irreversible external effect
 
 Consider an HTTP payment call:
+
+A payment call is the clearest case of an effect that replay cannot be allowed to repeat, and the processor's checkpointing offers no help with it. The call happened, the snapshot did not record it, and after recovery the event that triggered it will be processed again. The only defenses are the ones from the idempotency chapter: a key derived from the event identity that the payment provider deduplicates on, or a durable intent recorded before the call and checked before any retry.
 
 1. Operator calls the provider with no idempotency key.
 2. Provider commits the charge.

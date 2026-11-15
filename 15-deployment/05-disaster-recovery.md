@@ -116,6 +116,8 @@ For every asset label it **authoritative**, **derived/rebuildable**, **external 
 
 Suppose an order database is restored to 10:00:00, its payment-outbox log to 09:59:40, and the payment provider has charges through 10:00:05. Every individual asset may meet a one-minute RPO while the combined business state loses charge intents and risks incorrect refunds or duplicates.
 
+The point of this example is that a recovery point objective stated for each store separately says nothing about whether the stores agree with each other after recovery. Each was restored within its target, and together they describe a world that never existed: orders whose payment records are missing, or payment instructions for orders that are gone. Systems that span several stores need a recovery boundary drawn around all of them, and a reconciliation step after restoring that finds and repairs the disagreements before traffic is admitted.
+
 Define consistency groups or a reconciliation protocol:
 
 - coordinated snapshots/transactional log positions;
@@ -257,6 +259,8 @@ Tenant deletion through key destruction conflicts with backup retention and lega
 ## Corruption-Point Analysis
 
 For region loss, “latest good copy” may be clear. For silent corruption, selecting the recovery point is often the longest step.
+
+Corruption is the scenario that defeats most disaster recovery designs, because it is the one that replication spreads. A bug that writes wrong values is faithfully copied to every replica and every standby region within seconds, and continuous backups record it too. Recovery then requires going back to a point before the corruption began, which first means discovering when that was, and the longer the corruption went unnoticed, the more legitimate work has been done on top of it and must be preserved or replayed. Long retention of point-in-time backups is what makes this possible at all.
 
 ```mermaid
 flowchart LR
@@ -423,6 +427,8 @@ Standing warm capacity costs more but buys bootstrap and restore bandwidth. Comp
 
 Region or account isolation may prevent proving the old site stopped. New write authority needs an epoch/fencing mechanism enforced at the durable system or external provider. DNS change alone creates routing preference, not exclusive authority; old clients and queues can continue.
 
+Disaster recovery inherits the central difficulty of failover. A site that cannot be reached may be dead, or it may be running and accepting writes from users who can still reach it. Promoting a recovery site without first preventing the old one from committing creates two authorities for the same data, and the reconciliation afterward can be far worse than the original outage. Fencing, by revoking the old site's credentials or its access to storage, comes before any redirection of traffic.
+
 For multi-writer designs, conflict/merge semantics may permit continued writes, but disaster declaration can still change which region owns non-mergeable resources, background jobs, and external effects.
 
 ### DNS and client convergence
@@ -447,6 +453,8 @@ Each mode states correctness and durability. “Accept writes locally and figure
 ## Failback Is Another Migration
 
 After recovery, the original site may return with stale or contaminated state. Do not simply reverse DNS.
+
+Failback is often treated as the easy part, a return to normal once the emergency is over, and that framing is a mistake. Moving authority back to the original site is itself a migration, with all the risks of one, and it is performed by tired people under pressure to restore the usual configuration. It deserves the same planning, verification, and willingness to wait as the failover did.
 
 1. Decide whether the recovered site becomes the new primary permanently.
 2. Rebuild the old site from trusted current state rather than assuming its data is valid.
