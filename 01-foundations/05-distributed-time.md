@@ -12,12 +12,7 @@ Much of everyday programming assumes that there is a single "now" and that times
 
 The response to this, developed over several decades, has two branches. One gives up on physical time for ordering and tracks causality directly, recording which events could have influenced which. The other keeps physical time and makes its uncertainty explicit, so that a system knows how long it must wait before a timestamp can be trusted. This chapter covers both.
 
-Clock semantics cover event ordering, causal metadata, and time-synchronization failure; they do not make timeout-based ownership safe.
-
-- [Consistency Models](04-consistency-models.md) owns the client-visible ordering guarantee.
-- [Leader Election](../02-distributed-databases/09-leader-election.md) and [Distributed Locks](09-distributed-locks.md) own epochs and fencing.
-- [Conflict Resolution](../02-distributed-databases/04-conflict-resolution.md) owns merge policy once concurrent versions are identified.
-- [Distributed Scheduling and Timers](../18-workflow-job-systems/03-distributed-cron-scheduling.md) owns durable timer dispatch.
+Clock semantics cover event ordering, causal metadata, and the ways time synchronization fails. They do not make timeout-based ownership safe, and several neighboring questions belong to other chapters. [Consistency Models](04-consistency-models.md) owns the client-visible ordering guarantee. [Leader Election](../02-distributed-databases/09-leader-election.md) and [Distributed Locks](09-distributed-locks.md) own epochs and fencing. [Conflict Resolution](../02-distributed-databases/04-conflict-resolution.md) owns merge policy once concurrent versions have been identified, and [Distributed Scheduling and Timers](../18-workflow-job-systems/03-distributed-cron-scheduling.md) owns durable timer dispatch.
 
 A lease may use time as one input, but a resource must reject stale owners using a monotonic epoch or equivalent authority. Better clock synchronization reduces uncertainty; it does not turn “my timeout expired” into proof that another process stopped acting.
 
@@ -41,11 +36,7 @@ Store the semantic type, not merely an integer called `timestamp`. A schema with
 
 ## Physical Clocks Are Estimates
 
-A machine clock estimates UTC using an oscillator and periodic observations of reference clocks. Three quantities matter:
-
-- **offset:** current difference between local clock and the reference;
-- **frequency error/drift:** how quickly that offset changes;
-- **uncertainty:** a bound or confidence interval for the unknown true time.
+A machine clock estimates UTC using an oscillator and periodic observations of reference clocks. Three quantities describe how good the estimate is. The *offset* is the current difference between the local clock and the reference. The *frequency error*, or drift, is how quickly that offset changes when nothing corrects it. The *uncertainty* is a bound or confidence interval on the true time, which the machine can never observe directly. Most bugs involving time come from code that reads the first quantity as though the third were zero.
 
 If a free-running oscillator has fractional frequency error $\rho$, uncertainty grows approximately with time since the last trusted synchronization:
 
@@ -92,7 +83,7 @@ UTC occasionally represents an inserted leap second. Implementations may step, r
 
 An attacker who moves a host's time can affect certificate validation, token expiry, log correlation, replay windows, signed artifacts, scheduler decisions, and database timestamp assumptions.
 
-Operate time synchronization as infrastructure:
+A service that trusts its clock is trusting whoever can influence that clock, so we operate time synchronization as infrastructure with its own threat model:
 
 1. use multiple independent, authorized sources and monitor source selection;
 2. authenticate exchanges where supported: Network Time Security (NTS) protects NTP client/server authentication and packet integrity;
@@ -139,10 +130,7 @@ The converse is false. `L(a) < L(b)` does not prove that `a` caused `b`; two ind
 
 ### Operational rules
 
-- Persist the counter or pair it with a boot/session epoch if values survive restart.
-- Use a fixed-width representation with an explicit overflow policy.
-- Authenticate the sender when a remote value can advance local state.
-- Do not treat a Lamport value as an age, deadline, or UTC timestamp.
+A Lamport counter is simple enough that its operational hazards are easy to miss. If values must survive a restart, we persist the counter or pair it with a boot or session epoch, since a counter that restarts from zero orders new events before old ones. The representation is fixed-width with an explicit overflow policy. Because a remote value can advance local state, the sender is authenticated; otherwise one malicious or broken peer can push every counter in the system toward its maximum. And a Lamport value is never treated as an age, a deadline, or a UTC timestamp, because it carries order and nothing else.
 
 ---
 
@@ -168,12 +156,7 @@ A does not dominate B; B does not dominate A
 
 The hard problem is not the comparison; it is membership. Naive vectors grow with every writer identity ever observed. Replica replacement, mobile clients, and elastic fleets make that unbounded.
 
-Practical variants change the identity scope:
-
-- **version vectors** track durable replica/actor identities rather than requests;
-- **dotted version vectors** separate one new event (“dot”) from the causal context, representing siblings more compactly;
-- version-vector-with-exceptions or interval schemes compress contiguous event ranges;
-- retirement protocols prune an actor only after every relevant replica has learned that its epoch is dead.
+The cost of a vector clock is its width, which grows with the number of identities that have ever written. Practical variants reduce it by changing what counts as an identity. *Version vectors* track durable replica or actor identities and not individual requests. *Dotted version vectors* separate the one new event, the "dot," from the causal context, and so represent siblings more compactly. Version-vector-with-exceptions and interval schemes compress contiguous ranges of events. Retirement protocols prune an actor's entry, but only after every relevant replica has learned that the actor's epoch is dead, since pruning earlier makes old writes look concurrent with new ones.
 
 Pruning without such a protocol can manufacture false concurrency or, worse, make a genuinely concurrent update appear dominated and lose data. The merge policy itself belongs in [Conflict Resolution](../02-distributed-databases/04-conflict-resolution.md).
 
@@ -194,11 +177,7 @@ An HLC is **not** an uncertainty interval and does not by itself guarantee exter
 
 ### HLC failure containment
 
-- cap or reject remote physical components beyond the accepted future-skew window;
-- include a node/epoch tie-breaker when a total order must be unique;
-- monitor logical-counter growth: sustained high values can indicate a stuck/future clock;
-- define encoding overflow and rollback behavior before deployment;
-- retain original event time separately when HLC is an ingestion/order coordinate.
+An HLC accepts a physical component from remote peers, so one node with a clock far in the future can drag the whole cluster forward. Containing that failure takes several measures. We cap or reject remote physical components beyond an accepted future-skew window. Where a total order must be unique, we include a node or epoch tie-breaker. We monitor the growth of the logical counter, because sustained high values indicate that the physical component is stuck or ahead. Encoding overflow and rollback behavior are defined before deployment and not during the incident. And when the HLC is used as an ingestion or ordering coordinate, the original event time is retained separately.
 
 ---
 
@@ -289,15 +268,7 @@ A retired vector-clock component is deleted before an offline replica returns. I
 
 ## Observability and Incident Evidence
 
-Time telemetry must answer both “is the daemon synchronized?” and “can this application still uphold its promise?” Track:
-
-- offset estimate, uncertainty/root dispersion, round-trip delay, frequency correction, stratum/source, and last good update;
-- source changes, falseticker/outlier decisions, NTS failures, and unsynchronized duration;
-- wall-clock steps and process/VM suspend intervals;
-- HLC logical component, rejected future timestamps, and maximum peer skew;
-- vector width, retired identities, sibling/concurrency rate, and merge outcomes;
-- commit-wait duration or other application-visible uncertainty cost;
-- event-time versus ingestion-time lag for data pipelines.
+Time telemetry must answer two questions: whether the daemon is synchronized, and whether this application can still uphold its promise. For the first we track the offset estimate, uncertainty or root dispersion, round-trip delay, frequency correction, stratum and source, and the time of the last good update, together with source changes, falseticker and outlier decisions, NTS failures, and time spent unsynchronized. We also record wall-clock steps and process or VM suspend intervals, which the daemon's own metrics tend to miss. For the second we track what the application's clock scheme exposes: the HLC logical component, rejected future timestamps, and maximum peer skew; vector width, retired identities, the sibling or concurrency rate, and merge outcomes; commit-wait duration or any other uncertainty cost visible to users; and, for data pipelines, the lag between event time and ingestion time.
 
 Preserve the raw synchronization observations and configuration around an incident. Correcting the clock erases the symptom but not invalid decisions already made under the bad interval.
 
@@ -305,16 +276,7 @@ Preserve the raw synchronization observations and configuration around an incide
 
 ## Verification and Fault Injection
 
-Test clock semantics as protocols, not helper functions:
-
-- step wall time backward and forward while monotonic time advances;
-- slew slowly, suspend/resume the process, and reboot with lost local state;
-- inject asymmetric delay, source disagreement, loss, and an authenticated-but-delayed peer;
-- cross a leap/smear window and daylight-saving boundary;
-- deliver duplicate, reordered, and concurrent causal messages;
-- introduce a future HLC and verify quarantine rather than cluster-wide advance;
-- retire and later revive a vector-clock actor;
-- verify that stale lease holders are rejected by epoch even with a “valid” local clock.
+We test clock semantics as protocols and not as helper functions, which means making the clock misbehave while the system runs. We step wall time backward and forward while monotonic time advances. We slew slowly, suspend and resume the process, and reboot with local state lost. We inject asymmetric delay, disagreement between sources, packet loss, and a peer that is authenticated but delayed. We cross a leap or smear window and a daylight-saving boundary. We deliver duplicate, reordered, and concurrent causal messages. We introduce a future HLC and verify that it is quarantined and does not advance the cluster. We retire a vector-clock actor and later revive it. Finally we verify that a stale lease holder is rejected by epoch even when its local clock says the lease is still valid.
 
 Property tests should assert the clock condition: whenever the harness creates a send/receive causal edge, the receive timestamp orders after the send. Vector tests additionally assert that incomparable vectors are never reported as ancestors. For bounded-time protocols, test the fail-safe path when the uncertainty service cannot maintain its advertised bound.
 

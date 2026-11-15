@@ -180,15 +180,7 @@ Two eventual replicas apply concurrent values through a resolver that depends on
 
 Capture client-side invocation and response events, values, stable operation IDs, requested model, tokens, and unknown outcomes. Do not reconstruct real-time order solely from unsynchronized server timestamps. Inject process crashes, pauses, asymmetric partitions, reordered and duplicate delivery, clock faults, disk faults, lease expiry, replica migration, and mixed software/configuration versions.
 
-Use a checker matched to the claim:
-
-- linearizability: search for a legal real-time-respecting history, partitioned by object only when the API is truly local;
-- sequential consistency: preserve program order but deliberately omit cross-client real-time edges;
-- causal: generate explicit reads-from dependencies and ensure descendants never appear without predecessors;
-- session: roam clients among replicas and assert each of the four token/frontier properties independently;
-- bounded staleness: compare the served frontier with the authoritative frontier under the declared metric;
-- convergence: deliver the same operation set in duplicated and permuted orders and compare state;
-- transactions: infer dependency cycles and isolation anomalies with an isolation checker such as Elle.
+A checker has to match the claim, because a test for one model says nothing about another. For linearizability, the checker searches for a legal history that respects real time, and partitions the search by object only when the API is truly local. For sequential consistency it preserves program order and deliberately omits the real-time edges between clients. For causal consistency we generate explicit reads-from dependencies and verify that a descendant never appears without its predecessors. For session guarantees we roam clients among replicas and assert each of the four token or frontier properties independently, since a system can keep one and break another. For bounded staleness we compare the served frontier with the authoritative frontier under the declared metric. For convergence we deliver the same operation set in duplicated and permuted orders and compare the resulting state. For transactions we infer dependency cycles and isolation anomalies with an isolation checker such as Elle.
 
 Check safety and liveness separately. A finite test finding no violation is evidence, not proof; a concise counterexample is decisive. Preserve the exact binary, configuration, topology, and checker model with every history so a claimed guarantee is reproducible.
 

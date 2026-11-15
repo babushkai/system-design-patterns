@@ -251,14 +251,7 @@ Runbooks cover hot-key overload, stuck waiter, lost session, mass expiry, coordi
 
 ## Observability and Verification
 
-Measure by namespace and resource class:
-
-- acquire attempts, success, timeout, cancellation, and ambiguous outcomes;
-- wait and hold distributions, queue depth/age, utilization, and hottest keys;
-- active sessions, renewal margin, expiry, reconnect, and watch backlog;
-- grant generation, rejected stale effects, unfenced effects, and release mismatches;
-- deadlocks, victim selection, priority starvation, and emergency breaks;
-- coordinator revision lag, quorum health, restore epoch, and capacity saturation.
+We measure by namespace and resource class, and the measurements fall into four groups. The first describes acquisition: attempts, successes, timeouts, cancellations, and ambiguous outcomes. The second describes contention: wait and hold distributions, queue depth and age, utilization, and the hottest keys. The third describes liveness of holders and of the service: active sessions, renewal margin, expiries, reconnects, and watch backlog, along with coordinator revision lag, quorum health, restore epoch, and capacity saturation. The fourth describes correctness, and it is the group most often missing: grant generations, rejected stale effects, effects that arrived with no fencing token, release mismatches, deadlocks and victim selection, priority starvation, and emergency lock breaks. A lock service can look healthy on the first three while the fourth shows that it is not protecting anything.
 
 Verification includes linearizability/history tests for incompatible grants, deterministic key encoding, acquire-response loss, duplicate release, cancellation races, process pauses beyond expiry, asymmetric partitions, session loss, coordinator failover and restore, queue herds, cross-resource deadlocks, and generation enforcement at every side effect.
 

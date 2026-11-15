@@ -8,7 +8,7 @@ ACID names four properties of a transaction, but the label alone is not a comple
 
 ## The Problem ACID Solves
 
-Consider a bank transfer: move USD 100 from Account A to Account B.
+Before looking at each property, it helps to see what a database is being asked to protect us from. Take the standard example, a bank transfer that moves USD 100 from Account A to Account B. Written as the steps a program would actually perform, it looks like this:
 
 ```text
 1. Read balance of A: $500
@@ -19,21 +19,15 @@ Consider a bank transfer: move USD 100 from Account A to Account B.
 6. Write new balance to B
 ```
 
-What can go wrong without transactional guarantees?
+Each of these six steps is individually simple, and the sequence is correct if it runs alone, to completion, on hardware that never fails. Production gives us none of those three conditions, and each one that is missing produces its own class of failure.
 
-**Crash failures:**
-- Crash after step 3 → A lost USD 100, B gained nothing. Money vanished from the system.
-- Crash during step 6 → Disk has partial write. B's balance is corrupted bytes, not USD 200 or USD 300.
+The first class is the crash. If the process dies after step 3, A has lost USD 100 and B has gained nothing, so money has vanished from the system. If it dies during step 6, the disk may hold a partial write, and B's balance is then neither USD 200 nor USD 300 but a block of corrupted bytes.
 
-**Concurrency failures:**
-- Two transfers from A execute concurrently. Both read USD 500, both subtract USD 100, both write USD 400. A should be USD 300, but is USD 400. The bank created USD 100 from nothing.
-- A reporting query runs between steps 3 and 6. It sees A debited but B not yet credited. The books don't balance.
+The second class is concurrency. Suppose two transfers out of A run at the same time. Both read USD 500, both subtract USD 100, and both write USD 400. A should now hold USD 300, and the bank has created USD 100 from nothing. A milder version involves a reader: a reporting query that runs between steps 3 and 6 sees A debited and B not yet credited, and produces books that do not balance.
 
-**Durability failures:**
-- The database says COMMIT succeeded. Power dies. The kernel had the write in its page cache but never called fsync. On restart, the write is gone.
-- The device firmware acknowledged the write but the data remained in a volatile cache. Power loss means the "confirmed" write never reached persistent media.
+The third class is the most uncomfortable, because it happens after the database has said that everything is fine. The database reports that COMMIT succeeded, and then power fails. If the kernel was holding the write in its page cache and nobody had called fsync, the write is gone on restart. Even when fsync was called, a device whose firmware acknowledged the write while the data sat in a volatile cache will lose it in the same way.
 
-These are not theoretical failure classes. Correctly implemented and configured transactions address them for writes inside the database's transactional boundary. They do not make an external API call, message-broker publish, filesystem write, or incorrectly configured storage device atomic with the database transaction.
+None of these is a theoretical failure. A correctly implemented and correctly configured transaction addresses all of them, for writes inside the database's transactional boundary. That qualification matters as much as the guarantee. A transaction does not make an external API call, a message-broker publish, a filesystem write, or an incorrectly configured storage device atomic with the database commit. Most of the difficult bugs involving transactions come from an effect that somebody assumed was inside that boundary and was not.
 
 ---
 
@@ -41,32 +35,23 @@ These are not theoretical failure classes. Correctly implemented and configured 
 
 ### What It Actually Means
 
-Atomicity does NOT mean "all operations happen instantaneously." That is closer to isolation.
+Atomicity is often misread as "all the operations happen at the same instant." That idea is closer to isolation. Atomicity makes a narrower promise.
 
-**Atomicity means: all-or-nothing for the database-managed effects in the transaction.** If a transaction commits, all those effects commit. If it aborts, none become committed state. Atomicity says nothing about side effects performed outside that transactional resource.
+**Atomicity means all-or-nothing for the database-managed effects in the transaction.** If the transaction commits, all of those effects commit. If it aborts, none of them become committed state. The word "atom" here refers to indivisibility with respect to failure: an observer after a crash finds either the whole transaction or no trace of it. Atomicity says nothing about side effects performed outside that transactional resource.
 
 ### Why It Matters
 
-Without atomicity, every multi-statement operation is a potential source of data corruption. Any crash, network timeout, or constraint violation mid-transaction leaves the database in an inconsistent intermediate state. The alternative (writing manual cleanup and rollback logic in application code) is prohibitively error-prone.
+Without atomicity, every multi-statement operation is a place where data can be corrupted. A crash, a network timeout, or a constraint violation partway through leaves the database in an intermediate state that no line of the application ever intended to be visible. The alternative is for application code to detect the partial state and clean it up. That code has to work correctly when it is itself interrupted, and has to cover every pair of statements that might be separated by a failure. In practice nobody gets this right, which is why we push the problem down into the database, where it can be solved once.
 
 ### Undo Log vs Redo Log
 
-Undo and redo are two complementary logging techniques used by many databases. They are not the only implementation choices, and a specific engine can combine them with MVCC, shadow paging, copy-on-write, or transaction-status metadata.
+To promise all-or-nothing, the database needs to be able to do two things after a failure: remove the effects of transactions that did not finish, and reinstate the effects of transactions that did. Undo and redo logging are the two complementary techniques most engines use for these. They are not the only implementation choices, and a specific engine can combine them with MVCC, shadow paging, copy-on-write, or transaction-status metadata.
 
-**Undo log (rollback log):**
-- Records enough prior state to reverse a change and, in MVCC engines such as InnoDB, to reconstruct older visible versions
-- On explicit rollback, traversed to reverse the transaction's changes; crash recovery combines redo and undo/transaction-status processing
-- Used by InnoDB (MySQL) as the primary mechanism for atomicity
-- InnoDB stores undo logs in the system tablespace or dedicated undo tablespaces
+An *undo log* (or rollback log) records enough prior state to reverse a change. In an MVCC engine such as InnoDB it has a second job, which is to let a reader reconstruct the older version of a row that its snapshot is entitled to see. On an explicit rollback the engine walks the transaction's undo records and reverses each change; crash recovery combines redo with undo and transaction-status processing. InnoDB uses undo as its primary mechanism for atomicity and stores it in the system tablespace or in dedicated undo tablespaces.
 
-**Redo log (write-ahead log / WAL):**
-- Records enough information to reproduce page or logical changes; it is not necessarily a copy of the new row value
-- The relevant log record must reach the configured durability boundary before the corresponding data page is allowed to be the sole durable copy
-- On crash recovery, replay restores the database to a state from which transaction commit/abort visibility can be resolved
-- Used by PostgreSQL as the primary mechanism (pg_wal directory)
-- PostgreSQL WAL is append-only, sequential I/O: much faster than random page writes
+A *redo log*, also called a write-ahead log or WAL, records enough information to reproduce a page change or a logical change. It is not necessarily a copy of the new row value. The rule that gives the write-ahead log its name is that the relevant log record must reach the configured durability boundary before the corresponding data page is allowed to become the sole durable copy of the change. On crash recovery, replaying the log restores the database to a state from which each transaction's commit or abort status can be resolved. PostgreSQL uses its WAL (the `pg_wal` directory) as the primary mechanism. The log is append-only, so writing it is sequential I/O, which is far cheaper than the random page writes it allows the engine to defer.
 
-**InnoDB uses both undo and redo:**
+InnoDB uses both logs, and the order of operations shows why:
 
 ```text
 InnoDB transaction lifecycle:
@@ -89,11 +74,11 @@ PostgreSQL transaction lifecycle:
 6. Old row versions cleaned up by autovacuum (async)
 ```
 
-The key difference: InnoDB needs undo logs for rollback because it updates pages in-place. PostgreSQL uses MVCC (old row versions remain in the heap until vacuumed), so it doesn't need a separate undo log for atomicity.
+The two lifecycles differ because of one design decision. InnoDB updates rows in place, so the old value is overwritten and must be saved somewhere else if the transaction is to be rolled back; that place is the undo log. PostgreSQL does not overwrite. An UPDATE writes a new version of the row and leaves the old one in the heap until vacuum removes it, so the "undo" information is the old row itself, and no separate undo log is needed for atomicity. The price is paid later and elsewhere, in vacuum work and table bloat.
 
 ### How ROLLBACK Works: Undo Chains and Transaction Status
 
-**InnoDB rollback:**
+InnoDB's rollback follows directly from its undo design. Each transaction keeps a linked list of its undo records, newest first:
 
 ```text
 Transaction T1 modifies rows R1, R2, R3:
@@ -111,13 +96,13 @@ ROLLBACK T1:
   7. Follow prev_undo_ptr to NULL → done
 ```
 
-Each transaction maintains a linked list of its undo records. Rollback traverses this chain in reverse order. This is why rolling back a transaction that modified millions of rows can take as long as the transaction itself: it must undo each change individually.
+Rollback walks this chain backward, undoing one change at a time. This is why rolling back a transaction that modified millions of rows can take as long as the transaction itself took to run, and why killing a long-running batch job in MySQL does not free its resources promptly.
 
-**PostgreSQL rollback** normally avoids physically reversing each heap change in the foreground. The transaction is recorded or treated as aborted; its tuple versions are invisible to later transactions and are reclaimed later by vacuum. That can make the client-visible abort fast, but it defers cleanup work and can leave substantial table/index bloat after a large aborted transaction.
+PostgreSQL normally avoids physically reversing each heap change in the foreground. The transaction is recorded or treated as aborted, its tuple versions are invisible to every later transaction, and vacuum reclaims them at some later time. The abort the client sees can therefore be fast. The work has been deferred and not avoided, and a large aborted transaction can leave substantial table and index bloat behind it.
 
 ### Savepoints and Partial Rollback
 
-Savepoints allow rolling back part of a transaction without aborting the entire thing. This is critical for complex business logic with conditional paths.
+All-or-nothing is sometimes coarser than the business logic needs. An order workflow may want to try one fulfillment path, find that it fails, and try another without discarding the order row it has already written. Savepoints provide this by letting us roll back part of a transaction without aborting the whole.
 
 ```sql
 -- PostgreSQL
@@ -140,13 +125,13 @@ UPDATE inventory SET quantity = quantity - 1 WHERE product_id = 7 AND warehouse 
 COMMIT;
 ```
 
-**Implementation detail:** PostgreSQL implements savepoints with subtransactions and tracks overflowed subtransaction relationships in `pg_subtrans`. InnoDB records a position in the transaction's existing undo history; it does not create a new undo-log segment for every savepoint. `ROLLBACK TO SAVEPOINT` reverses later changes but may retain locks, so a savepoint is not a resource-isolation boundary.
+The two engines implement this differently. PostgreSQL implements savepoints with subtransactions and tracks overflowed subtransaction relationships in `pg_subtrans`. InnoDB records a position in the transaction's existing undo history; it does not create a new undo-log segment for every savepoint. In both, `ROLLBACK TO SAVEPOINT` reverses the later changes but may retain the locks they acquired, so a savepoint is not a resource-isolation boundary.
 
-**Warning:** deeply nested savepoints have overhead. PostgreSQL's pg_subtrans can become a bottleneck with thousands of subtransactions. If you need savepoints in a loop, reconsider your transaction design.
+Deeply nested savepoints carry a cost that is easy to overlook. With thousands of subtransactions, PostgreSQL's `pg_subtrans` lookups can become a bottleneck that slows unrelated sessions. A savepoint inside a loop is usually a sign that the transaction design should be reconsidered.
 
 ### Distributed Atomicity: Two-Phase Commit (2PC)
 
-When a transaction spans multiple database nodes, local undo logs are not enough. The classic solution is the **two-phase commit protocol**.
+When a transaction spans several database nodes, a local undo log is not enough. Each node can make its own part all-or-nothing, but nothing yet ensures that the nodes reach the same outcome. If shard A commits the debit and shard B aborts the credit, each node is locally atomic and the transfer as a whole is not. The classic solution is the **two-phase commit protocol**, which separates the question "can you commit?" from the instruction "commit."
 
 ```text
 Coordinator (transaction manager)
@@ -181,9 +166,7 @@ COMMIT PREPARED 'transfer_1001_partA';
 ROLLBACK PREPARED 'transfer_1001_partA';
 ```
 
-**The coordinator failure problem:**
-
-The liveness vulnerability of basic 2PC is losing access to the coordinator's decision after participants have prepared:
+The important property of the prepare phase is that a participant that votes YES gives up its right to abort. It has made the changes durable and holds the locks, and from that point it must do whatever the coordinator decides. That is what makes the outcome atomic, and it is also the protocol's weakness. If participants lose access to the coordinator's decision after they have prepared, they cannot make progress:
 
 ```text
 Timeline:
@@ -198,7 +181,7 @@ Timeline:
     operator resolves the transaction from authoritative evidence
 ```
 
-**In-doubt transactions** are operationally dangerous. They hold locks, block other transactions, and require manual intervention if the coordinator cannot recover.
+**In-doubt transactions** are operationally dangerous. They hold locks, they block other transactions that touch the same rows, and if the coordinator cannot recover they need manual resolution by someone who can establish the right outcome from authoritative evidence.
 
 ```sql
 -- PostgreSQL: find in-doubt transactions
@@ -209,13 +192,9 @@ FROM pg_prepared_xacts;
 COMMIT PREPARED 'transfer_1001_partA';
 ```
 
-**Mitigations for coordinator failure:**
-- Coordinator writes the decision to a replicated, durable log before phase 2
-- Participants timeout and query the coordinator (or its replicas) for the decision
-- Three-phase commit adds another state but does not solve consensus in an asynchronous, partitionable network; it is uncommon in database deployments
-- Some distributed databases replicate transaction records with a consensus protocol. That removes a single-machine coordinator as the only copy of the decision, but does not make distributed commit free of blocking, retries, or unavailable quorums
+Several mitigations exist, and none removes the problem entirely. The coordinator can write its decision to a replicated, durable log before starting phase 2, so that the decision survives the loss of one machine. Participants can time out and ask the coordinator, or its replicas, what was decided. Three-phase commit adds a further state to the protocol, but it does not solve consensus in an asynchronous network that can partition, and it is uncommon in database deployments. Some distributed databases replicate the transaction record itself with a consensus protocol. This removes the single-machine coordinator as the only copy of the decision. It does not make distributed commit free of blocking, retries, or unavailable quorums.
 
-**2PC performance cost:** prepare and decision phases add messages, durable metadata, and longer lock retention. The number of round trips and log flushes depends on the database's protocol, replication topology, batching, and parallelism. Measure the implementation you operate; a fixed latency multiplier is not portable.
+Two-phase commit also has a performance cost in the normal case. The prepare and decision phases add messages and durable metadata, and locks are held for longer than a local transaction would hold them. The number of round trips and log flushes depends on the database's protocol, replication topology, batching, and parallelism, so we measure the implementation we operate. A fixed latency multiplier is not portable from one system to another.
 
 ---
 
@@ -223,26 +202,15 @@ COMMIT PREPARED 'transfer_1001_partA';
 
 ### What the Database Enforces vs What It Can't
 
-In the ACID acronym, **consistency means that a transaction preserves the invariants the system claims**. It is a property of the transaction program plus the database guarantees, not a promise that the engine understands every business rule. The engine can reject violations only for rules represented in its schema, transaction logic, or trusted stored code.
+Consistency is the odd letter in the acronym, because the database alone cannot provide it. In ACID, **consistency means that a transaction preserves the invariants the system claims**. It is a property of the transaction program together with the database's guarantees, and not a promise that the engine understands every business rule. The engine can reject a violation only for rules that have been expressed in its schema, in transaction logic, or in trusted stored code.
 
-The database enforces:
-- NOT NULL, CHECK constraints
-- UNIQUE and PRIMARY KEY
-- FOREIGN KEY referential integrity
-- EXCLUDE constraints (PostgreSQL)
-- Trigger-based invariants
+What the engine can enforce is whatever we have declared to it: NOT NULL and CHECK constraints, UNIQUE and PRIMARY KEY constraints, FOREIGN KEY referential integrity, EXCLUDE constraints in PostgreSQL, and invariants implemented in triggers. What it cannot do is infer rules we never stated. It does not know that an account balance should equal the sum of its ledger entries, that every submitted order must have at least one line item, or that the total across all accounts must stay constant. A rule that exists only in application code is invisible to the engine.
 
-The database does not automatically infer:
-- "Account balance should match the sum of all ledger entries"
-- "Every submitted order must have at least one line item"
-- "The total across all accounts must remain constant"
-- Any business rule expressed only in application code
-
-Some of these can be encoded with constraints, triggers, materialized state, or serializable transaction logic; others require a different data model. The important boundary is not "database rule versus impossible rule," but **which invariant is encoded where, under which isolation level, and how it is tested under concurrency**.
+Some of those rules can be encoded with constraints, triggers, materialized state, or serializable transaction logic, and others need a different data model. The useful question is therefore not whether a rule is a "database rule" or an impossible one. It is **which invariant is encoded where, under which isolation level, and how it is tested under concurrency**.
 
 ### The "C" Overloading Problem
 
-The letter C means completely different things in different contexts:
+The letter C carries a second difficulty, which is that the same word names different ideas in different parts of the field:
 
 | Context | "Consistency" means | Enforced by |
 |---------|-------------------|-------------|
@@ -250,13 +218,11 @@ The letter C means completely different things in different contexts:
 | CAP theorem | A read/write object remains linearizable while messages may be lost or delayed | Usually quorum/consensus protocols |
 | Replica convergence | Replicas that receive the same updates eventually compute the same state | Replication and merge protocol |
 
-→ see [Consistency Models](04-consistency-models.md) for linearizability, causal consistency, and eventual consistency.
-
-These are three fundamentally different concepts sharing one word. When someone says "this system is consistent," always ask which definition they mean.
+These three concepts have little in common beyond the word. → see [Consistency Models](04-consistency-models.md) for linearizability, causal consistency, and eventual consistency. When someone says "this system is consistent," we ask which definition they mean before agreeing or disagreeing.
 
 ### Deferred Constraints
 
-Some constraints can't be checked row-by-row. Consider mutual foreign keys:
+Some invariants hold at the end of a transaction and cannot hold at every step within it. Mutual foreign keys are the standard case: whichever row we insert first refers to a row that does not exist yet.
 
 ```sql
 -- PostgreSQL
@@ -281,7 +247,7 @@ INSERT INTO employees (id, name, department_id) VALUES (100, 'Alice', 1);
 COMMIT;
 ```
 
-You can also defer constraints per-transaction:
+A constraint declared deferrable can also be deferred for a single transaction:
 
 ```sql
 BEGIN;
@@ -290,13 +256,9 @@ SET CONSTRAINTS fk_department DEFERRED;
 COMMIT;  -- constraint checked here
 ```
 
-**Use cases for deferred constraints:**
-- Circular foreign keys (as above)
-- Bulk data loading where intermediate states violate uniqueness
-- Graph structures with parent-child self-references
-- Schema migrations that reorder data
+Deferral is useful in a small number of situations: circular foreign keys such as the one above, bulk loads in which intermediate states violate uniqueness, graph structures with parent-child self-references, and schema migrations that reorder data.
 
-**Caveat:** deferred unique constraints in PostgreSQL use a different index mechanism and can have performance implications on large tables. Test with production-scale data.
+There is a caveat. A deferred unique constraint in PostgreSQL uses a different index mechanism from an immediate one and can perform differently on large tables, so we test it with data at production scale.
 
 ### Foreign Keys Across Shards
 
@@ -316,24 +278,15 @@ Problem: order on application shard A references a catalog on independent shard 
     that serializes the referencing insert with referenced-row updates
 ```
 
-**Practical approaches:**
-- **Use database-enforced distributed constraints:** strongest semantics, with extra index, locality, and write-path cost
-- **Denormalize:** copy referenced data into the local shard (accept eventual staleness)
-- **Application-level enforcement:** check before write, accept race conditions
-- **Event-driven cleanup:** detect and repair broken references asynchronously
-- **Avoid cross-shard references:** co-locate related data on the same shard
+There are several ways to handle a reference that crosses shards, and they differ in what they give up. A database-enforced distributed constraint gives the strongest semantics and charges for it in extra index maintenance, locality constraints, and write-path cost. Denormalizing copies the referenced data into the local shard and accepts that the copy can be stale. Application-level enforcement checks before writing and accepts the race. Event-driven cleanup lets broken references occur, then detects and repairs them asynchronously. The simplest option, where the data model allows it, is to avoid the cross-shard reference by placing related data on the same shard.
 
-The choice is a data-placement and correctness tradeoff, not proof that distributed databases cannot preserve referential integrity.
+The choice is a tradeoff between data placement and correctness. It is not evidence that distributed databases cannot preserve referential integrity.
 
 ### Constraint Enforcement Becomes Distributed Work
 
-When constrained rows or indexes are remote, validation can require:
+On a single node, checking a constraint is an index lookup. When the constrained rows or indexes live on another node, the same check becomes distributed work. Every cross-shard constraint check adds network round trips. Locks held across nodes make deadlock detection expensive. The system must also maintain the extra indexes and the distributed transaction metadata that the check depends on.
 
-- Every cross-shard constraint check adds network round-trips
-- Distributed deadlock detection is expensive
-- Extra index maintenance and distributed transaction metadata
-
-Some systems deliberately omit or relax these constraints for latency, availability, or operational simplicity; distributed SQL systems may preserve them and charge the coordination cost. "ACID" does not imply that constraints are local to one shard, and CAP does not require abandoning invariants during normal operation. → see [CAP Theorem](03-cap-theorem.md)
+Some systems deliberately omit or relax these constraints for latency, availability, or operational simplicity. Distributed SQL systems may preserve them and charge the coordination cost. "ACID" does not imply that constraints are local to one shard, and CAP does not require abandoning invariants during normal operation. → see [CAP Theorem](03-cap-theorem.md)
 
 ---
 
@@ -341,7 +294,7 @@ Some systems deliberately omit or relax these constraints for latency, availabil
 
 ### The Core Challenge
 
-Isolation answers: "What do concurrent transactions see?" The ideal (serializability) means transactions behave as if they ran one-at-a-time. The reality: full isolation is expensive, so databases offer weaker levels.
+Isolation answers the question "what do concurrent transactions see of one another?" The ideal answer is serializability: the result is the same as if the transactions had run one at a time, in some order. This is simple to state and expensive to provide, because the database must either prevent conflicting transactions from overlapping or detect the overlap and abort one of them. Both cost throughput. Databases therefore offer weaker levels that permit specific anomalies in exchange for more concurrency, and the level in force is very often a default that nobody on the team chose.
 
 ### Isolation Levels Summary
 
@@ -352,23 +305,19 @@ Isolation answers: "What do concurrent transactions see?" The ideal (serializabi
 | Repeatable Read | No | No | Implementation-dependent; PostgreSQL and InnoDB snapshot implementations prevent them | Often possible under snapshot isolation |
 | Serializable | No | No | No | No |
 
-This table is a starting point, not a portable specification. Engines map SQL level names to different mechanisms; PostgreSQL also promotes `READ UNCOMMITTED` to `READ COMMITTED`. Serializable prevents these anomalies for committed transactions, but applications must retry serialization failures.
+This table is a starting point and not a portable specification. Engines map the SQL level names onto different mechanisms, and PostgreSQL, for one, silently promotes `READ UNCOMMITTED` to `READ COMMITTED`. Serializable prevents these anomalies for transactions that commit, but it does so partly by refusing to commit some of them, and the application must retry on a serialization failure.
 
-**Implementation approaches:**
-1. **Locking (2PL):** transactions acquire locks, block each other. Used by SQL Server for Serializable.
-2. **MVCC:** keep multiple row versions so ordinary reads usually avoid blocking ordinary writes; locks are still required for some writes, constraints, and schema operations. Used by PostgreSQL and InnoDB for most levels.
-3. **OCC (Optimistic Concurrency Control):** assume no conflicts, validate at commit time. Used by some in-memory databases.
-4. **SSI (Serializable Snapshot Isolation):** MVCC + dependency tracking. PostgreSQL's Serializable implementation since 9.1.
+Four implementation approaches are in common use. *Two-phase locking* has transactions acquire locks and block one another; SQL Server uses it for Serializable. *MVCC* keeps multiple versions of each row so that ordinary reads usually do not block ordinary writes, although locks are still needed for some writes, for constraints, and for schema operations; PostgreSQL and InnoDB use it for most levels. *Optimistic concurrency control* assumes conflicts are rare, lets transactions run without locks, and validates at commit time; some in-memory databases use it. *Serializable snapshot isolation* adds dependency tracking to MVCC and aborts a transaction when the tracked dependencies could form a non-serializable cycle; it has been PostgreSQL's Serializable implementation since 9.1.
 
 → see [Isolation Levels](02-isolation-levels.md) for MVCC internals, locking protocols, SSI implementation details, and anomaly deep dives.
 
 ### Connection Pool Gotcha: Transaction-Scoped vs Session-Scoped Settings
 
-A common production bug when using connection pools (PgBouncer, HikariCP):
+Connection pools such as PgBouncer and HikariCP introduce a production bug that is easy to create and hard to see, because it depends on which connection a request happens to borrow.
 
-PostgreSQL's `SET TRANSACTION` applies only to the current transaction and must run after `BEGIN` and before the first query. It does **not** leak into later transactions. By contrast, `SET SESSION CHARACTERISTICS AS TRANSACTION ...` changes the default for subsequent transactions on that backend session. A pool that does not reset session state can expose that session default to another borrower.
+PostgreSQL's `SET TRANSACTION` applies only to the current transaction and must run after `BEGIN` and before the first query. It does **not** leak into later transactions. By contrast, `SET SESSION CHARACTERISTICS AS TRANSACTION ...` changes the default for every subsequent transaction on that backend session. If the pool does not reset session state when a connection is returned, the next borrower inherits that default without knowing it.
 
-**Correct approach:**
+The safe forms keep the scope visible in the statement itself:
 
 ```sql
 -- Preferred: make the scope explicit in one statement.
@@ -385,7 +334,7 @@ SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;
 COMMIT;
 ```
 
-Prefer a transaction API or `BEGIN ... ISOLATION LEVEL` so scope is visible. If code changes session defaults or any other session state, configure and test the pool's reset behavior rather than assuming transaction pooling makes arbitrary session commands safe.
+We prefer a transaction API or `BEGIN ... ISOLATION LEVEL`, so that the scope is visible where the transaction starts. If code changes session defaults or any other session state, we configure and test the pool's reset behavior. Transaction pooling does not make arbitrary session commands safe.
 
 ---
 
@@ -393,11 +342,11 @@ Prefer a transaction API or `BEGIN ... ISOLATION LEVEL` so scope is visible. If 
 
 ### Why It Matters
 
-Durability defines which failures a successful commit is promised to survive. A local WAL flush may cover process, OS, and power failure on one host while still not cover device loss, an availability-zone outage, operator error, or regional disaster. The acknowledgement policy and failure model must be stated together.
+Durability defines which failures a successful commit is promised to survive, and the answer is never "all of them." A local WAL flush may cover a process crash, an OS crash, and a power failure on one host, and still not cover the loss of the device, an availability-zone outage, an operator error, or a regional disaster. Every stronger promise costs latency, because the commit must wait for more things to happen before it can be acknowledged. The acknowledgement policy and the failure model have to be stated together, or the word "durable" means nothing in particular.
 
 ### fsync Deep Dive
 
-`fsync()` is one common local durability boundary. Understanding its contract and the storage stack beneath it is critical.
+`fsync()` is the most common local durability boundary, and most misunderstandings about durability are misunderstandings about what it does. A `write()` call does not put data on disk. It copies data into the kernel's page cache and returns. Only `fsync()` asks the kernel to push that data through the filesystem and the device and to wait until they report that it is persistent.
 
 ```text
 Application writes data:
@@ -412,7 +361,7 @@ What fsync actually forces:
   - Return only after that stack acknowledges the requested durability boundary
 ```
 
-**Where the durability contract can break:**
+That description assumes every layer beneath the database honors the request. There are three places where the contract can break:
 
 ```text
 Failure point 1: Device or controller acknowledgement
@@ -431,17 +380,15 @@ Failure point 3: Virtualized or network storage
     corruption, credentials misuse, or application-level deletion
 ```
 
-**PostgreSQL and fsync: the 2018 incident:**
+The second failure point is not hypothetical. In 2018 the PostgreSQL community found that the database had been handling fsync errors unsafely for about twenty years. When `fsync()` failed, PostgreSQL retried it, on the assumption that the dirty page was still in the kernel page cache waiting to be written. On some Linux kernels (before 5.2) that assumption was false: after a failed writeback the kernel marked the page clean and reported the error once. The retry then found nothing dirty to write and succeeded. PostgreSQL concluded that the data was durable when it had never reached the disk.
 
-PostgreSQL before v12 had a critical bug: if fsync() failed, PostgreSQL retried the fsync, assuming the dirty page was still in the kernel page cache. But some Linux kernels (pre-5.2) removed the dirty page from the page cache on fsync failure. The retry fsync'd a clean page, succeeding without writing anything. This meant PostgreSQL thought data was durable when it wasn't.
-
-PostgreSQL 12+ responds to fsync failure by performing a PANIC (crash recovery) rather than retrying, because the kernel state is untrustworthy.
+Since version 12, PostgreSQL responds to an fsync failure with a PANIC and goes through crash recovery, replaying the WAL, because after such an error the state of the kernel's cache cannot be trusted. The lesson applies beyond PostgreSQL: an error on the durability path cannot be retried like an ordinary error, because the retry may succeed without doing the work.
 
 ### WAL Mechanics
 
-The Write-Ahead Log is the cornerstone of durability in PostgreSQL (and redo logs serve the same role in InnoDB).
+The write-ahead log is what makes durability affordable. Without it, a commit would have to write every modified page to its place in the data files, which means many random writes per transaction. With it, a commit only has to append a description of the changes to one sequential file and flush that file; the data pages can be written later, in bulk. InnoDB's redo log serves the same role.
 
-**WAL segment files (PostgreSQL):**
+In PostgreSQL the WAL is a sequence of fixed-size segment files:
 
 ```text
 $PGDATA/pg_wal/
@@ -454,7 +401,7 @@ Segment naming: TimelineID + (LSN >> 24)
 Default segment size: 16 MB (configurable at initdb with --wal-segsize)
 ```
 
-**WAL record structure:**
+Each record in those segments describes one change in enough detail to repeat it:
 
 ```text
 Each WAL record contains:
@@ -466,9 +413,7 @@ Each WAL record contains:
   - CRC checksum
 ```
 
-**Checkpoint frequency and crash recovery:**
-
-Checkpoints write all dirty buffers from shared_buffers to data files, then record the checkpoint LSN. On crash recovery, PostgreSQL only needs to replay WAL from the last checkpoint forward.
+If the WAL only ever grew, recovery after a crash would have to replay it from the beginning of time. Checkpoints bound that work. A checkpoint writes all dirty buffers from `shared_buffers` to the data files and then records the checkpoint's LSN. Everything before that position is known to be in the data files, so crash recovery only has to replay the WAL from the last checkpoint forward. The checkpoint interval is therefore a tradeoff between steady-state write load and recovery time:
 
 ```text
 Tuning tradeoffs:
@@ -481,7 +426,7 @@ Measure restart time under the production WAL rate and dataset; do not derive an
 RTO from WAL bytes divided by advertised sequential bandwidth.
 ```
 
-**InnoDB redo log:**
+InnoDB makes the same tradeoff with a different structure. Its redo log is a fixed-size ring and not a growing sequence of files:
 
 ```text
 InnoDB uses a bounded circular redo-log space. File layout and configuration
@@ -500,9 +445,7 @@ quiet system wasteful and a bursty system unsafe.
 
 ### Group Commit: Batching WAL Flushes
 
-Every locally durable commit requires its commit record to be covered by a durable WAL flush, but it does not require a dedicated `fsync` call. Concurrent commits can share one flush; read-only transactions and asynchronous commit policies follow different paths.
-
-**Group commit** batches multiple concurrent commits into a single WAL flush.
+A flush is the slowest step of a commit, often by orders of magnitude, and a naive design would pay for one per transaction. It does not have to. Every locally durable commit requires its commit record to be covered by a durable WAL flush, but it does not require a flush of its own. Because the log is sequential, flushing up to a given position makes every record before that position durable, whichever transaction wrote it. **Group commit** exploits this by letting many concurrent commits share a single flush. Read-only transactions and asynchronous commit policies follow different paths.
 
 ```text
 Without batching (illustrative):
@@ -518,7 +461,7 @@ With group commit:
   One flush covers all three commit records
 ```
 
-**PostgreSQL group commit tuning:**
+PostgreSQL forms groups naturally under load, since commits that arrive while a flush is in progress wait for the next one. It can also be told to wait deliberately so that the group is larger:
 
 ```text
 # postgresql.conf
@@ -533,12 +476,9 @@ commit_siblings = <measured concurrency threshold>
 # Benchmark with the actual storage and concurrency distribution.
 ```
 
-**When to tune group commit:**
-- Commit latency is dominated by WAL flush waits under concurrent small transactions
-- Storage with high fsync latency (network-attached, cloud volumes)
-- Workloads with many small transactions
+Tuning group commit is worthwhile when commit latency is dominated by WAL flush waits under many concurrent small transactions, and especially when the storage has high fsync latency, as network-attached and cloud volumes do. On a lightly loaded system the delay only adds latency, because no other commits arrive to share the flush.
 
-**InnoDB and binary-log group commit:**
+MySQL has an additional complication, which is that it may have two logs to keep in step:
 
 ```text
 MySQL coordinates InnoDB redo durability with binary-log ordering when the binary
@@ -550,7 +490,7 @@ a commit durability boundary.
 
 ### synchronous_commit = off: When Acceptable
 
-PostgreSQL's `synchronous_commit` controls whether COMMIT waits for WAL fsync.
+PostgreSQL lets us give up the flush wait altogether. The `synchronous_commit` setting controls whether COMMIT waits for the WAL to be flushed, and it can be changed per transaction:
 
 ```sql
 -- Per-transaction override (PostgreSQL)
@@ -559,25 +499,15 @@ SET LOCAL synchronous_commit = off;
 -- The loss window depends on WAL-writer scheduling and configuration.
 ```
 
-**What you lose:** an OS or database crash before the asynchronous flush can erase transactions that already returned success. PostgreSQL documents the normal maximum delay in relation to `wal_writer_delay`, but scheduler and storage behavior make a fixed millisecond claim inappropriate. The recovered database remains transactionally consistent; acknowledged transactions can be absent.
+With the setting off, an OS or database crash before the asynchronous flush can erase transactions that have already returned success. PostgreSQL documents the normal maximum delay in terms of `wal_writer_delay`, but scheduler and storage behavior make a fixed millisecond figure inappropriate. What we do not lose is consistency. The recovered database is transactionally consistent, and every transaction is either wholly present or wholly absent. Some acknowledged transactions are simply among the absent ones. This is quite different from turning `fsync` off, which can corrupt the database.
 
-**When this is acceptable:**
-- Logging/analytics inserts where losing a few seconds of data is tolerable
-- Session state or cache writes that can be reconstructed
-- High-throughput event ingestion with downstream consumers that handle replays
+That trade is acceptable when the acknowledged write can be lost without harm: logging and analytics inserts where a few seconds of data is tolerable, session state or cache writes that can be reconstructed, and high-throughput event ingestion whose downstream consumers handle replays. It is not acceptable for financial transactions, for any write whose acknowledgement promises survival of a host crash, or for a write that triggers an irreversible side effect such as an email or an external API call, since the outside world would then remember something the database has forgotten.
 
-**When this is NOT acceptable:**
-- Financial transactions
-- Any write whose acknowledgement contract promises survival of a host crash
-- Writes that trigger irreversible side effects (sent emails, API calls)
-
-The throughput difference is entirely workload- and storage-dependent. Benchmark commit-latency distributions and the business value of the enlarged acknowledgement window; do not reuse a generic commits-per-second multiplier.
+The throughput gain depends entirely on workload and storage. We benchmark the commit-latency distribution and weigh it against the business cost of the enlarged loss window, and we do not reuse a generic commits-per-second multiplier.
 
 ### Cloud Gotchas: Not All fsync Is Equal
 
-Cloud block storage introduces a layer of abstraction that changes durability guarantees.
-
-Provider volume names, limits, and service-level objectives change. At design and deployment time, record:
+On a cloud volume, the "disk" that fsync flushes to is a network service, and what its acknowledgement means is defined by the provider's contract and not by anything the database can observe. Provider volume names, limits, and service-level objectives also change over time. At design and deployment time we therefore record:
 
 - whether acknowledgement means one device, replicated storage in one zone, or multiple zones;
 - whether an outage makes the volume unavailable versus permanently loses it;
@@ -585,11 +515,11 @@ Provider volume names, limits, and service-level objectives change. At design an
 - snapshot/backup consistency and restore time; and
 - the lifecycle of ephemeral local disks on stop, host replacement, and termination.
 
-Tools such as `fio` can measure latency and throttling, but a successful benchmark cannot prove the provider's durability implementation. Use the provider contract for the failure guarantee and fault/restore exercises for operational evidence.
+Tools such as `fio` can measure latency and throttling, but a successful benchmark cannot prove how the provider implements durability. We rely on the provider's contract for the failure guarantee and on fault and restore exercises for operational evidence.
 
 ### Replication as Second Tier of Durability
 
-A single disk (or single EBS volume) is not enough for production durability. Disks fail, AZs go offline, and entire regions can have outages.
+A single disk, or a single network volume, is not enough for production durability. Disks fail, availability zones go offline, and whole regions have outages. Replication extends the durability boundary past one machine, and each step outward adds to what a commit must wait for:
 
 ```text
 Durability tiers (PostgreSQL):
@@ -619,19 +549,17 @@ Tier 3: Synchronous replication to multiple standbys across AZs
   - Use: critical financial/healthcare systems
 ```
 
-Replication is not a backup: it also propagates accidental deletes, bad migrations, and some forms of corruption. Point-in-time recovery and regularly tested restores are separate requirements.
+Replication is not a backup. A replica faithfully applies whatever the primary does, including an accidental delete, a bad migration, and some forms of corruption. Point-in-time recovery and regularly tested restores are separate requirements, and they protect against the failures that replication copies.
 
 ---
 
 ## Production Failure Modes (Transaction-Specific)
 
-These are failure patterns specific to transaction misuse. → see [Failure Modes](06-failure-modes.md) for the general taxonomy.
+The failures in this section come from how applications use transactions, and not from faults in the database. → see [Failure Modes](06-failure-modes.md) for the general taxonomy.
 
 ### Lost Update Without Proper Isolation
 
-The most common transaction bug in production.
-
-**The pattern (read-then-write):**
+The lost update is the most common transaction bug in production. It occurs whenever the application reads a value, computes a new one, and writes it back, and two requests do this at the same time:
 
 ```python
 # DANGEROUS: Python with psycopg2 (PostgreSQL)
@@ -648,14 +576,14 @@ cur.execute("UPDATE counters          cur.execute("UPDATE counters
 # Final value: 11 (should be 12)
 ```
 
-**The fix: atomic UPDATE:**
+Wrapping these statements in a transaction at the default isolation level does not help, because neither transaction's read conflicts with anything. The simplest fix removes the gap between the read and the write by having the database do the arithmetic in a single statement:
 
 ```sql
 -- Correct: single atomic statement, no read-then-write race
 UPDATE counters SET count = count + 1 WHERE id = 1;
 ```
 
-**When you must read-then-write (complex logic):**
+When the new value depends on logic that cannot be expressed in one statement, we take a row lock at the time of the read, so that the second transaction waits until the first has committed:
 
 ```sql
 -- Use SELECT FOR UPDATE to acquire a row lock
@@ -669,7 +597,7 @@ COMMIT;
 
 ### Partial Commit Visibility in Read Committed
 
-Read Committed is the default in PostgreSQL. Each **statement** in a transaction sees a fresh snapshot. This causes subtle bugs in long transactions.
+Read Committed is the default in PostgreSQL, and it has a property that surprises people: each **statement** in a transaction sees a fresh snapshot. Two queries in the same transaction can therefore observe different committed states of the database.
 
 ```sql
 -- Session 1 (reporting query)
@@ -685,7 +613,7 @@ SELECT sum(balance) FROM accounts WHERE region = 'EU';
 COMMIT;
 ```
 
-**The fix:** use Repeatable Read for reporting queries that must see a consistent snapshot.
+Neither query saw uncommitted data, so no rule of Read Committed was broken, and the report is still wrong. A report that must be internally consistent should run at Repeatable Read, where the snapshot is taken once and used for the whole transaction:
 
 ```sql
 BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ;
@@ -697,6 +625,8 @@ COMMIT;
 ```
 
 ### Long-Running Transactions Holding Resources
+
+An open transaction is not free while it sits idle. It holds its locks, and in an MVCC engine it also pins the oldest snapshot that vacuum must preserve, so one forgotten transaction can cause bloat in tables it never touched.
 
 ```text
 Symptoms:
@@ -725,7 +655,7 @@ ORDER BY duration DESC;
 SELECT pg_terminate_backend(pid);
 ```
 
-**Prevention:**
+The cure is a limit and not a cleanup script. The database can be told to end transactions and statements that exceed a bound, so that a single forgotten COMMIT cannot degrade the whole system:
 
 ```text
 # postgresql.conf
@@ -736,7 +666,7 @@ lock_timeout = '5s'                            # fail fast on lock waits
 
 ### Autocommit Misuse
 
-Most database drivers default to autocommit=on, wrapping each statement in its own transaction. This is correct for simple queries but causes problems when developers don't realize multi-statement logic needs explicit transactions.
+Most database drivers default to autocommit, which wraps each statement in its own transaction. That is correct for single-statement work. It becomes a bug when a developer writes multi-statement logic without realizing that nothing ties the statements together:
 
 ```python
 # DANGEROUS: each statement is a separate transaction
@@ -758,7 +688,7 @@ except Exception:
     raise
 ```
 
-**SQLAlchemy context manager pattern (recommended):**
+The explicit form is correct but relies on every code path remembering to commit or roll back. A context manager makes the transaction boundary a property of the block's structure, so that it cannot be forgotten:
 
 ```python
 from sqlalchemy import create_engine
@@ -796,11 +726,7 @@ with Session(engine) as session, session.begin():
 | **Saga** | Durable sequence of local transactions; compensation is semantic recovery, not rollback | Usually asynchronous step latency | Ambiguous side effects and compensation design | Long-lived workflows and APIs that cannot join one transaction |
 | **Outbox** | Atomic local state + publication intent; relay is normally at least once | Relay/CDC delay | Duplicate handling and backlog operations | A local transaction must eventually produce a broker message |
 
-**Decision heuristic:**
-- Can all participants be in the same database? → Use a local transaction. No 2PC needed.
-- Do all participants support prepare, and can you operate in-doubt recovery? → 2PC may be viable after failure and latency testing.
-- Does the workflow involve external services (payment, email, APIs)? → Use a durable workflow/saga with idempotency, reconciliation, and explicit compensation where possible.
-- Do you need to publish an event atomically with a database write? → Outbox pattern.
+A short sequence of questions settles most cases. If all participants can live in the same database, we use a local transaction and need nothing else. If they cannot, but every participant supports prepare and we are able to operate in-doubt recovery, 2PC may be viable once we have tested its failure behavior and latency. If the workflow involves external services such as payment, email, or third-party APIs, which cannot join a transaction at all, we use a durable workflow or saga with idempotency, reconciliation, and explicit compensation where compensation is possible. If the need is only to publish an event atomically with a database write, the outbox pattern does that with the least machinery.
 
 ---
 
@@ -808,16 +734,14 @@ with Session(engine) as session, session.begin():
 
 ### PostgreSQL: Two Sessions Showing Isolation
 
-Open two `psql` sessions connected to the same PostgreSQL database.
-
-**Setup:**
+The behavior of isolation levels is easiest to believe after watching it. Open two `psql` sessions connected to the same PostgreSQL database and create a small table:
 
 ```sql
 CREATE TABLE accounts (id INT PRIMARY KEY, balance NUMERIC NOT NULL);
 INSERT INTO accounts VALUES (1, 500), (2, 200);
 ```
 
-**Demo: Read Committed prevents dirty reads but allows non-repeatable reads:**
+At Read Committed, session B never sees A's uncommitted change, but it does see the committed change in the middle of its own transaction:
 
 ```text
 Session A (default Read Committed):      Session B:
@@ -839,7 +763,7 @@ COMMIT;
                                           COMMIT;
 ```
 
-**Demo: Repeatable Read provides snapshot consistency:**
+At Repeatable Read, session B keeps the snapshot it started with, whatever A commits in the meantime:
 
 ```text
 Session A:                                Session B (Repeatable Read):
@@ -911,17 +835,13 @@ def transfer(from_id: int, to_id: int, amount: Decimal) -> None:
     # COMMIT happens here; ROLLBACK on exception
 ```
 
-Key details in this example:
-- **Lock ordering** (`sorted([from_id, to_id])`) prevents the opposite-transfer cycle for these rows; it does not prove the whole transaction is deadlock-free
-- **`FOR UPDATE`** acquires row-level exclusive locks, blocking concurrent modifications
-- **`session.begin()` context manager** ensures ROLLBACK on exception
-- **`pool_pre_ping=True`** handles connections dropped by PgBouncer or network timeouts
+Four details in this example carry the correctness. Sorting the IDs gives every transfer the same lock order, which prevents the cycle in which one transfer locks A then B while the opposite transfer locks B then A; it does not prove the whole transaction deadlock-free, since other resources can still form a cycle. `FOR UPDATE` takes row-level exclusive locks, so a concurrent transfer on the same accounts waits instead of reading a stale balance. The `session.begin()` context manager guarantees a ROLLBACK on any exception. And `pool_pre_ping=True` detects connections that PgBouncer or a network timeout has dropped, before the transaction begins on one.
 
 ---
 
 ## Verify the Deployed Contract
 
-Verify the deployed release and settings. This table lists contract dimensions, not universal defaults.
+The theme of this chapter is that ACID is a set of configurable contracts, so the last step is to check what the running system is actually configured to do. This table lists the dimensions of the contract for common databases. The entries are not universal defaults, and we verify the deployed release and settings.
 
 | Database | Common Default Isolation | Durability Mechanism | Verify Before Claiming a Guarantee |
 |----------|--------------------------|----------------------|------------------------------------|

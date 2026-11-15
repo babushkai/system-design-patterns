@@ -43,10 +43,7 @@ sequenceDiagram
     R-->>CR: return 0, wait, or reject
 ```
 
-R cannot distinguish two executions from its local state and received messages:
-
-- `E0`: no write occurred at L.
-- `E1`: L completed `write(x, 1)`, but the partition hid every message about it from R.
+The argument rests on what R can know. From its local state and the messages it has received, R cannot distinguish two executions. In `E0`, no write occurred at L. In `E1`, L completed `write(x, 1)`, and the partition hid every message about it from R. R's inputs are identical in both, so whatever R does in one it must do in the other.
 
 In `E0`, a legal register read returns `0`. If R makes the same decision in `E1`, returning `0` violates linearizability because the write completed before the read began. Returning `1` unconditionally makes `E0` invalid. Waiting for L or rejecting the read preserves consistency but violates CAP availability. Guessing cannot guarantee correctness in every admissible execution.
 
@@ -54,25 +51,17 @@ More replicas do not remove the construction. A partition can still separate rea
 
 ## Production Partitions Are Not Clean Cable Cuts
 
-The proof needs only missing communication, not a symmetric network split. Production protocols face several forms:
+The proof needs only missing communication, and it does not require a clean, symmetric split of the network. Real partitions are usually messier, and the messier forms are harder to detect.
 
-- **Symmetric partition:** neither side receives the other’s traffic.
-- **Asymmetric partition:** A can reach B while B cannot reach A, so observers disagree about health and replication progress.
-- **Partial or protocol-specific partition:** small packets, health checks, or one port work while large frames, TLS handshakes, DNS, or the replication protocol fail.
-- **Gray failure:** a node is healthy from one observer and unusable from another because a disk, NIC queue, runtime, or dependency degrades selectively.
-- **Overload-induced coordination failure:** queues and timeouts may prevent coordination within the operation’s useful window even though messages eventually arrive. This is operationally partition-like, but finite delay alone is not the indefinite message loss in CAP’s model.
-- **Control-plane partition:** expired credentials, inconsistent membership, bad routes, or stale configuration block the messages that establish authority.
+A *symmetric partition*, in which neither side receives the other's traffic, is the textbook case and the rarest. In an *asymmetric partition*, A can reach B while B cannot reach A, so observers disagree about health and about replication progress. A *partial or protocol-specific partition* lets small packets, health checks, or one port through while large frames, TLS handshakes, DNS, or the replication protocol fail, which means the monitoring reports a healthy link over which no real work can be done. A *gray failure* makes a node healthy from one observer's position and unusable from another's, because a disk, NIC queue, runtime, or dependency is degrading selectively. *Overload* can prevent coordination within the operation's useful window even though the messages eventually arrive; this is partition-like in operation, although finite delay alone is not the indefinite message loss of CAP's model. Finally, a *control-plane partition* arises when expired credentials, inconsistent membership, bad routes, or stale configuration block the messages that establish authority, while the data path looks fine.
 
 Diagnosis and repair differ across these failures. The operational question is whether the operation can obtain the evidence required by its contract before its deadline; the formal CAP question also covers executions in which required communication may never arrive. A green process health check is not evidence of current authority.
 
 ## What CAP Does and Does Not Say
 
-CAP applies at the operation and data scope affected by missing communication:
+CAP applies at the scope of the operation and the data affected by missing communication, and several consequences follow that the "pick two" summary obscures.
 
-- A consensus majority may continue serving linearizable operations while a minority rejects them. That is useful service availability, but it is not CAP availability for requests delivered to live minority nodes.
-- A separately typed stale-read endpoint can remain available because its contract is weaker than linearizability. It must expose a version, frontier, or `as_of` time rather than present stale state as current.
-- A commutative data type may accept writes on both sides because its contract permits concurrent versions and deterministic convergence.
-- Different keys, tenants, commands, and endpoints may use different policies. A database-wide `CP` or `AP` label hides these boundaries.
+A consensus majority may continue serving linearizable operations while a minority rejects them. That is useful service availability, but it is not CAP availability for requests delivered to live minority nodes. A separately typed stale-read endpoint can remain available because its contract is weaker than linearizability, provided it exposes a version, frontier, or `as_of` time and does not present stale state as current. A commutative data type may accept writes on both sides because its contract permits concurrent versions and deterministic convergence. And different keys, tenants, commands, and endpoints may use different policies, which is why a database-wide `CP` or `AP` label hides more than it tells.
 
 CAP says nothing by itself about durability, multi-object atomicity, transaction isolation, Byzantine behavior, bounded staleness, normal-operation throughput, or reconciliation after healing.
 
@@ -90,7 +79,7 @@ Silence cannot distinguish a crashed peer from delayed messages, a paused runtim
 
 Safety must come from positive authority evidence such as a quorum certificate, term, epoch, or lease backed by stated clock-error bounds. Every protected side effect must validate that evidence. A process can be healthy and still hold an obsolete generation.
 
-For each operation, define a product deadline and an externally meaningful outcome:
+The caller, too, needs more than success or failure. For each operation we define a product deadline and a small set of externally meaningful outcomes:
 
 - `succeeded`: the requested guarantee was established and the operation completed; for a mutation, this includes establishing its durable effect;
 - `rejected`: the operation definitely did not take effect under this identity;
@@ -99,7 +88,7 @@ For each operation, define a product deadline and an externally meaningful outco
 - `unavailable`: the requested guarantee could not be established and no effect was attempted;
 - `unknown`: an attempt may have committed, but the caller lacks decisive evidence.
 
-Do not collapse `pending`, `unknown`, and `succeeded` into a generic success or failure response. For mutations, stable operation identity and outcome lookup are part of the partition contract, not an optional retry convenience.
+We do not collapse `pending`, `unknown`, and `succeeded` into a generic success or failure response. For mutations, stable operation identity and outcome lookup are part of the partition contract, not an optional retry convenience.
 
 ## Partition Policies
 
@@ -169,7 +158,7 @@ At `p = 0.01`, the result is `0.000298`, or about `0.0298%`. This is an illustra
 
 Record decisions at the semantic boundary: operation class, requested consistency mode, authority epoch and evidence, contacted replicas, commit frontier, deadline, stable request ID, and outcome category. Alert on quorum loss, one-way reachability, mode changes, fenced-write rejection, ambiguous retries, pending-intent age, divergence backlog, reconciliation failures, and recovery activation frontier. Aggregate uptime cannot show which promise was served.
 
-Test safety and liveness as separate claims:
+Safety and liveness are separate claims, and we test them separately:
 
 - Inject symmetric, asymmetric, partial, and protocol-specific message loss; long delay; process pause; clock movement; credential failure; coordinator crash; storage stall; and topology change.
 - Check strong-operation histories with a linearizability checker across timeouts, retries, failover, and membership changes.
@@ -182,7 +171,7 @@ A passing chaos run demonstrates behavior only for the implementation, execution
 
 ## Design Decision
 
-For every operation, specify:
+A design review can skip the CP-or-AP argument entirely. For every operation, we specify:
 
 1. the invariant and client-visible history model;
 2. the authority evidence required for success;
