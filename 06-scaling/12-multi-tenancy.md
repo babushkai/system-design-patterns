@@ -140,6 +140,8 @@ flowchart LR
 
 Shared tables, services, queues, and infrastructure minimize marginal cost and simplify fleet-wide rollout. Costs:
 
+The pool, bridge, cell, and silo models are points on a single line between cost and isolation. At one end, every tenant shares everything, which is the cheapest arrangement and gives the weakest isolation, since any defect or overload anywhere touches everyone. At the other, each tenant has dedicated infrastructure, which gives strong isolation and multiplies the cost and the operational burden by the number of tenants. Most services end up with a mixture, pooling small tenants and isolating large or regulated ones, which is why the choice is best made per dimension rather than once for the whole system.
+
 - every index/query/cache/object/message needs tenant scope;
 - a missing predicate can leak data;
 - large tenants cause hot partitions and maintenance skew;
@@ -208,6 +210,8 @@ Opaque globally unique IDs reduce guessing but do not authorize access. Composit
 ### Row-level security
 
 Database row policies can contain application-query defects:
+
+Row-level security moves the tenant filter from application code into the database, where it is applied to every query whether or not the developer remembered it. That is the main argument for it: the commonest cause of a cross-tenant leak is a single query that omits the tenant condition, and a database policy makes that omission harmless. It depends on the database knowing which tenant the current request belongs to, usually through a session variable, and that dependency has its own failure, shown in the connection-pool trace below.
 
 ```sql
 ALTER TABLE invoices ENABLE ROW LEVEL SECURITY;
@@ -312,6 +316,8 @@ Estimate before admission and reconcile with actual usage for future enforcement
 ### Fair queues
 
 One global FIFO lets a whale's import place every other tenant behind millions of jobs. Use per-tenant/subqueue state with weighted fair/deficit scheduling and per-tenant concurrency. Preserve priority without starvation: high tiers may have reservations and larger weights, but background work needs an aging/minimum-share policy.
+
+A first-in, first-out queue shared by all tenants is fair to requests and unfair to tenants. One tenant that submits a million jobs places every other tenant's work behind them, and a small customer who submits one job waits hours. Fair queueing gives each tenant its own queue and serves the queues in turn, so that each active tenant receives a share of the workers regardless of how much it has submitted, and a burst from one tenant slows only that tenant.
 
 [Priority, Fairness, and Backpressure](../18-workflow-job-systems/07-priority-fairness-backpressure.md) covers scheduler algorithms; tenant hierarchy and isolation objectives define their policy.
 
@@ -505,6 +511,8 @@ Isolation is not only runtime resources. Stage configuration/schema/deployment b
 ### Connection-pool tenant bleed
 
 1. Request A sets session variable `tenant=A` on a pooled connection.
+
+This trace shows how a sound isolation mechanism can be defeated by an unrelated optimization. Connection pools reuse database connections across requests to avoid the cost of opening new ones, and session state set by one request remains on the connection for the next unless something clears it. If the tenant is held in session state, a request that fails before it can set its own tenant inherits the previous request's, and row-level security then faithfully enforces the wrong tenant.
 2. It returns the connection without transaction-local reset after an error.
 3. Request B checks out the same connection and assumes `tenant=B` was set.
 4. A query runs under A's RLS context.

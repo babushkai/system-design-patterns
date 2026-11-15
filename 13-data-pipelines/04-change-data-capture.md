@@ -181,6 +181,8 @@ Two families of correct protocol are common.
 ### Consistent snapshot with a coordinated log boundary
 
 1. Establish a database-consistent snapshot and the exact log position corresponding to that snapshot according to the source’s replication protocol.
+
+The bootstrap problem arises because a new consumer needs two things that come from different places: the current contents of the tables, which the log no longer holds because it has been truncated, and every change from now on, which only the log provides. If the snapshot is taken and the log is then followed from its current end, changes made while the snapshot was being read fall into the gap between them and are lost. If the log is followed from a point before the snapshot began, some changes are applied twice. The procedure below ties the two together at an exact log position, so that the snapshot contains everything up to that position and the stream supplies everything after it.
 2. Retain log history from that position.
 3. Scan rows from the consistent snapshot, recording chunk progress.
 4. Start or continue decoding from the coordinated position.
@@ -215,6 +217,8 @@ The sink is now stale even though no event was lost. Fix this by attaching snaps
 ### A compacted topic is not automatically a full bootstrap
 
 Log compaction can retain a latest value per key, but completeness depends on compaction progress, delete-tombstone retention, topic retention, key stability, and transaction/read-isolation behavior. Do not discard the source snapshot plan until a test proves the topic can reconstruct the required state (including deletions) over the entire bootstrap duration.
+
+A compacted topic looks like a convenient way to keep the current state of a table in the stream itself, since it keeps the latest record for every key and discards superseded ones. It is a faithful copy only if every key's latest change is in it and nothing has been compacted away that a consumer still needed. Deletes complicate this: a delete is recorded as a marker, and if the marker is eventually compacted away, a consumer that bootstraps from the topic later never learns the row was deleted and keeps it indefinitely.
 
 ---
 
@@ -361,6 +365,8 @@ If continuity cannot be proven, stop advancing the sink and perform a bounded re
 ### Drift repair
 
 CDC is not its own audit. Periodically compare:
+
+A replication stream can drift from its source silently. A bug in a connector, a schema change applied out of order, or a manual repair to the target can leave rows that differ, and nothing in the stream will reveal it, because the stream only carries changes and a row that is wrong but unchanged generates no events. Periodic comparison of the source and the target, by counts and by checksums over ranges of keys, is the only way to find such drift, and its results should be treated as a correctness signal with an owner.
 
 - row/key counts by stable range;
 - checksums or aggregates over canonicalized fields;

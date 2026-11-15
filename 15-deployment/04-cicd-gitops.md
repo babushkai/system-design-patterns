@@ -155,6 +155,8 @@ Separate cache namespaces by trust level, verify returned content digests, make 
 
 Retrying a failing test until it passes converts evidence into selection bias. Record every attempt. Quarantine only with an owner, expiry, impact classification, and release policy. Track:
 
+A flaky test is one that sometimes fails without any change to the code, usually because of timing, shared state, or an external dependency. The tempting remedy is to retry failed tests automatically, and its effect is to make the test suite stop reporting a class of real bugs. A race condition in the code under test produces exactly the same intermittent failure as a race condition in the test, and automatic retry hides both. Flaky tests should be quarantined and fixed, and the retry rate of a suite treated as a signal of its health.
+
 - first-attempt failure rate;
 - rerun pass rate;
 - time in quarantine;
@@ -278,6 +280,8 @@ sequenceDiagram
 ### Reconcile loop
 
 For each owned object:
+
+The reconcile loop is the core of the GitOps model and the reason it is robust. Instead of executing a sequence of steps once, the controller repeatedly compares the desired state in the repository with the actual state of the system and acts to remove any difference. A failed step is simply retried on the next pass. A manual change is reverted. A controller that crashes and restarts picks up exactly where the comparison says it should, since it holds no record of progress beyond what the two states show.
 
 1. read desired revision;
 2. observe actual state at resource versions;

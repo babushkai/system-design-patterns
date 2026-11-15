@@ -130,6 +130,8 @@ This can be simpler and more debuggable than a fully decentralized CRDT. It sacr
 
 Sequence CRDTs replace fragile array positions with stable logical identities and a deterministic rule for ordering concurrent insertions. Families differ:
 
+The difficulty with positions is that they are relative to the document that existed when the edit was made. Alice inserts a word at position 10 at the same moment as Bob deletes the first five characters, and when Alice's edit arrives at Bob's copy, position 10 there refers to a different place. A sequence CRDT gives every character a permanent identifier when it is created, typically combining the identity of the replica that created it with a counter. An insert is expressed as "after the character with identifier X," which means the same thing in every copy regardless of what else has changed, so edits can be applied in any order and every copy converges.
+
 - RGA-like designs reference a stable predecessor and order concurrent children deterministically;
 - Logoot/LSEQ-like designs allocate orderable identifiers between neighbors;
 - YATA/block-based designs group runs and refine ordering/interleaving behavior;
@@ -270,6 +272,8 @@ created-by and verification result
 ### Why tombstone collection is hard
 
 A deleted element can be physically forgotten only when no valid future message can require its removal knowledge or use it as an unresolved reference. In a centralized server log, retention and mandatory snapshot rebase can establish this operationally. In decentralized causal systems, **causal stability** requires evidence that every relevant replica has advanced beyond the operation.
+
+Deleted characters cannot simply be removed, because another replica may still send an edit that refers to them, such as an insertion "after" a character that has since been deleted. The deleted character is kept as a tombstone so that such references still resolve. Tombstones accumulate without limit in a document that is edited heavily, and they can be discarded only once every replica that could still refer to them has caught up, which requires knowing about every replica, including ones that have been offline for weeks.
 
 Long-offline devices make “every replica” unbounded. Define membership:
 

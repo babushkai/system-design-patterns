@@ -244,6 +244,8 @@ Do not compare wall clocks from two nodes to decide which owner is current. Owne
 
 Store the IANA time-zone identifier and schedule revision, not only a UTC offset. Offsets change.
 
+Daylight saving time produces two kinds of trouble for a schedule expressed in local time. In spring an hour is skipped, so a job set for 02:30 local time has a day on which 02:30 never occurs. In autumn an hour is repeated, so a job set for 01:30 has a day on which 01:30 occurs twice. Each schedule must state what it wants on those days, and the scheduler must store the named time zone, not a fixed offset, because offsets change with the season and occasionally by government decree.
+
 For a local time that does not exist during a spring-forward transition, policy might be:
 
 - skip;
@@ -284,6 +286,8 @@ On expiry, a recovery transaction changes `CLAIMED/RUNNING` back to `READY` and 
 ### Why leader election is insufficient
 
 A scheduler leader can pause beyond its lease, recover, and continue dispatching. The new leader also dispatches. Consensus elects a current leader; it cannot erase messages already emitted by the stale one.
+
+The obvious design for a reliable scheduler is to run several instances and elect one as leader, which alone fires the schedules. It fails in the way all lease-based leadership fails. If the leader stalls for longer than its lease, another instance is elected and starts firing, and when the stalled leader resumes it carries on as well, so for a time two schedulers fire the same jobs. The robust design does not rely on there being only one scheduler. Each occurrence of a schedule is given an identity, the time it was meant to run, and is recorded in a store under a unique constraint, so that whichever scheduler records an occurrence first owns it and any other attempt finds it already present.
 
 Downstream state accepts only the current `claim_epoch`, or effects use stable operation identity. See [Leases, Heartbeats, and Recovery](./08-leases-heartbeats-recovery.md) for the ownership protocol.
 
@@ -333,6 +337,8 @@ Catch-up identity must preserve the original logical fire time so retries and do
 ### Backfill amplification
 
 If 100,000 schedules fire every minute and the control plane is down for 30 minutes, “catch up all” creates:
+
+Missed runs accumulate while a scheduler is down, and the decision about what to do with them on recovery is as important as the scheduling itself. Running every missed occurrence at once releases hours of accumulated work in a few seconds, and the systems those jobs call were not sized for that. For many jobs, such as a cache refresh or a report of current state, only the latest occurrence matters and the rest should be skipped. For others, such as a daily billing run, every occurrence must eventually happen, but they should be released at a controlled rate.
 
 ```text
 100,000 * 30 = 3,000,000 occurrences

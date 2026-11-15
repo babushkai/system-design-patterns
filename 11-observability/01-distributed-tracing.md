@@ -191,6 +191,8 @@ Dropping early saves CPU and bytes. Deferring export preserves decision flexibil
 
 Use a uniform trace ID and a stable threshold so every service makes a consistent probability decision:
 
+Head sampling makes the keep-or-discard decision when a request enters the system, before anything is known about it. The decision travels with the trace context, so every service along the path keeps or drops its part consistently and kept traces are complete. Its weakness is that the interesting requests, the slow and the failed, are a small fraction of traffic, and a sampler that keeps one request in a thousand at random keeps one interesting trace in a thousand as well.
+
 $$
 \text{keep} =
 \left[
@@ -209,6 +211,8 @@ Parent-based policy generally respects an upstream decision inside a trusted sys
 ### Tail sampling
 
 A tail sampler groups spans by trace ID, waits for completion or decision timeout, evaluates rules, and retains or drops the trace:
+
+Tail sampling inverts the order: keep everything briefly, wait until the request has finished, and then decide, so that every error and every slow request can be kept while ordinary ones are discarded. The cost is that all spans of a trace must be brought to the same place and held there until the trace completes, which needs memory proportional to traffic multiplied by the waiting time. The trace below shows the characteristic failure: during an outage, nearly every trace qualifies as interesting, and the sampler that was sized for the normal fraction is overwhelmed exactly when its output is most wanted.
 
 ~~~text
 on span:

@@ -142,6 +142,8 @@ The Generic Cell Rate Algorithm represents a conforming schedule with a theoreti
 
 A fixed-window counter is simple but permits a boundary burst: nearly a full allowance just before reset and another just after. A rolling log is exact for recorded events but costs memory and deletion work proportional to activity. A sliding-window counter interpolates adjacent buckets, reducing boundary error without storing every arrival.
 
+The boundary problem is easy to see with numbers. With a limit of a hundred requests per minute counted in fixed calendar minutes, a client can send a hundred requests in the last second of one minute and another hundred in the first second of the next, two hundred requests in two seconds, without violating either window. Sliding windows and token buckets avoid this because they have no fixed boundaries to exploit.
+
 Use window counters for contractual calendar quotas, reporting, or when their error is explicitly acceptable. Do not present one algorithm as universally “best”; state the maximum burst and approximation error the product accepts.
 
 ### Avoid client-clock authority
@@ -162,11 +164,15 @@ Use it when the entitlement is financially or operationally strict and the decis
 
 Each of <code>N</code> replicas enforces a local rate <code>r_local</code>. If every replica uses the full global rate, total admission can reach <code>N × r_global</code>, and autoscaling silently raises the limit. Dividing by an expected replica count fails during rollout, skew, and partial outage.
 
+Local enforcement is fast and needs no coordination, and its accuracy depends on how evenly traffic is spread. If a load balancer distributes a client's requests evenly across ten servers, each enforcing a tenth of the limit, the total is right. If the client's connections happen to land on three servers, it is limited to three tenths of its entitlement, and if the fleet grows to twenty servers without the local limits changing, the effective limit doubles. Local limits are a good approximation for large, evenly spread traffic and a poor one for small or sticky clients.
+
 Independent buckets are appropriate for **per-instance self-protection**, not an exact tenant-global entitlement.
 
 ### Leased credit
 
 A global allocator grants each enforcement point a bounded amount of spend:
+
+Leased credit is the usual compromise between accuracy and coordination. Each enforcement point asks a central allocator for a batch of permits, spends them locally without further communication, and asks for more when it runs low. The central allocator keeps the total within the global limit, and the number of central requests is proportional to the number of batches, not the number of requests. The batch size trades accuracy against coordination: large batches mean little traffic to the allocator, but permits stranded on a server that the client has stopped using.
 
 1. Data plane requests a lease containing policy version, subject/resource, credit, epoch, and expiry.
 2. Allocator atomically subtracts that credit from the parent budget.
