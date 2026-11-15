@@ -47,6 +47,7 @@ The parts are grouped by role, not by difficulty. Pick an entry point, then foll
 | 16-19: [ML](16-ml-systems/01-ml-system-fundamentals.md), [LLM](17-llm-systems/01-agent-fundamentals.md), [Workflow](18-workflow-job-systems/01-workflow-system-fundamentals.md), and [Agent Engineering](19-compound-engineering/01-compound-engineering-fundamentals.md) | Applied domains built on Parts 1-6 | Start with Part 1, then take a track |
 | 20: [Production Readiness](20-production-readiness/01-design-documents-and-decision-records.md) | The layer that turns a working design into an approved, verified, lawful one | Read when a design needs sign-off, a dependency needs an owner, or an audit needs evidence |
 | 21: [Reference Designs](21-reference-designs/01-url-shortener.md) | Complete designs for recurring problems, assembled from the mechanism chapters | Read after the mechanisms a design names; each one closes with the review questions to ask of your own version |
+| 22: [Always-On Agents](22-always-on-agents/01-always-on-agent-fundamentals.md) | Agents that hold a mandate for months and wake on events, timers, and schedules with nobody watching | Read after Parts 17 and 18; it assumes the agent loop and durable execution |
 
 ### Reading one chapter
 
@@ -356,6 +357,14 @@ Each case study starts from a product you can use today and works back to the me
 - [Ad Click Aggregation: Event Time, Deduplication, and Reconciliation](21-reference-designs/04-ad-click-aggregation.md)
 - [Ticketing and Inventory Reservation: Holds, Contention, and Fair Admission](21-reference-designs/05-ticketing-inventory-reservation.md)
 - [Order Matching Engine: Sequencing, Determinism, and Replay](21-reference-designs/06-order-matching-engine.md)
+
+### Part 22: Always-On Agents
+- [Always-On Agents: The Standing Process Model](22-always-on-agents/01-always-on-agent-fundamentals.md)
+- [Wake Sources, Mailboxes, and Scheduling](22-always-on-agents/02-wake-triggers-scheduling.md)
+- [The Session Log and Durable Runtime](22-always-on-agents/03-session-log-durable-runtime.md)
+- [Memory Lifecycle for Standing Agents](22-always-on-agents/04-memory-lifecycle.md)
+- [Standing Authority and Containment](22-always-on-agents/05-standing-authority-containment.md)
+- [Attention, Evaluation, and Operations](22-always-on-agents/06-attention-evaluation-operations.md)
 
 <!-- BOOK_TOC:END -->
 

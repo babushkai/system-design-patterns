@@ -246,3 +246,4 @@ The decisive design artifact is not the system prompt. It is the run state machi
 - [Harness Engineering](09-harness-engineering.md): the harness is where an agent model becomes a program you can operate
 - [LLM Evaluation and Observability](10-llm-evaluation.md): an agent without evaluation is a stochastic distributed system with no tests
 - [Tool and Runtime Contracts for Coding Agents](../19-compound-engineering/02-coding-agent-tool-design.md): the tool contract, where most agent capability claims quietly fail
+- [Always-On Agents](../22-always-on-agents/01-always-on-agent-fundamentals.md): the same loop when nobody starts it, watches it, or reads its result

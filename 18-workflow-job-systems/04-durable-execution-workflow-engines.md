@@ -435,3 +435,4 @@ Verification includes:
 - [Write-Ahead Logging](../03-storage-engines/04-write-ahead-logging.md): an event history is a log, with replay and compaction in its own sense
 - [Multi-Agent Systems](../17-llm-systems/03-multi-agent-systems.md): agents as workflows where a model makes the branch decision
 - [Workflow Observability and Replay](09-workflow-observability-replay.md): debugging a resumable program means replaying it, which demands determinism
+- [The Session Log and Durable Runtime](../22-always-on-agents/03-session-log-durable-runtime.md): journaling applied to an agent whose model calls cannot be replayed
