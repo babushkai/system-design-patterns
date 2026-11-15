@@ -664,3 +664,4 @@ Prefer a maintained, standards-conformant authorization server and mature protoc
 - [Zero-Trust Service and Workload Architecture](05-zero-trust-architecture.md): a token naming a workload rather than a user is the credential shape that architecture needs
 - [Authorization at Scale](07-authorization-patterns.md): scopes delegate coarse authority; deciding one object permission is a different system entirely
 - [API Design and Evolution](../12-service-mesh/04-api-design-patterns.md): the contract that decides which client may hold which scope without breaking during rotation
+- [OAuth 2.1 and High-Assurance Authorization Profiles](11-oauth-security-profiles.md): which extension RFCs to adopt on top of these flows, and in what order
