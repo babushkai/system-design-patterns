@@ -14,6 +14,10 @@ Error-budget policy coordinates release and reliability work; it does not excuse
 
 ## SLO Workload and Contract
 
+How reliable should a service be? The instinctive answer is "as reliable as possible," and it is the wrong one. Each additional increment of reliability costs more than the last, in engineering time, in redundant hardware, and in the speed at which changes can be made. Beyond some point users cannot perceive the improvement, because their own network and device fail more often than the service does. A service made more reliable than its users can notice has spent that effort for nothing.
+
+A service-level objective states the answer as a number, such as 99.9 percent of requests succeeding over thirty days, chosen from what users actually need. The useful consequence comes from looking at the remainder. If 99.9 percent must succeed, then 0.1 percent may fail, and that allowance is a budget which can be spent. Deployments, experiments, and migrations all carry some risk of failure, and the budget says how much risk the service can afford. When most of it remains, the team can move quickly. When it is exhausted, the evidence says the service is less reliable than agreed, and effort moves to reliability until it recovers. This gives product and operations teams a shared, numerical basis for a decision that is otherwise settled by argument.
+
 An SLO document contains:
 
 ~~~text

@@ -8,6 +8,10 @@ This chapter defines client-observable models, including linearizable, sequentia
 
 ## Start With Histories, Not Product Labels
 
+On a single machine, a variable holds whatever was last written to it, and the question of what a read returns does not arise. Once the data is copied to several machines, it does. A write reaches the copies at different times, and a client reading from one of them may see the new value, the old value, or, reading twice from different copies, the new value followed by the old. A consistency model is a statement of which of these outcomes a system promises never to produce.
+
+Vendors describe their products with words such as "strong," "eventual," and "tunable," and these words are not defined the same way from one product to the next. The only reliable way to compare guarantees is to look at what sequences of operations and results a model permits. We therefore begin with the vocabulary for describing those sequences.
+
 An operation has an invocation and a matching response. Its interval lies between them. A history records operations from all clients; each client’s **program order** is the order of its own calls. Operation `a` precedes `b` in real time when `a` responds before `b` is invoked. Overlapping operations are concurrent and may be ordered either way by many models.
 
 For a register, a legal sequential history returns the value of the latest preceding write. A queue, set, compare-and-set register, and transaction have different sequential specifications. A consistency model selects which concurrent histories are equivalent to or compatible with such legal behavior.

@@ -14,6 +14,10 @@ This chapter covers edge mediation, route compilation, dependency failure, and b
 
 ## System Boundary and Invariants
 
+A system made of many services needs a single front door. Without one, every service exposed to the outside would have to handle encryption, authenticate callers, limit request rates, and present a stable address, and each would do so a little differently. Clients would need to know which service to call for each operation, and the internal structure of the system could never change without breaking them. An API gateway takes on those shared concerns and gives the outside world one address and one consistent interface, whatever lies behind it.
+
+The usefulness of the gateway creates its characteristic risk. Every request passes through it, so it is an obvious place to put one more piece of logic, and then another. Over time a gateway can accumulate business rules, data transformations, and knowledge of individual services until it has become a large shared application that every team must change and nobody owns. A gateway that stays healthy is one with a narrow job. It handles what is common to all requests at the edge of the system and leaves decisions about the business to the services that understand them. It is also, by construction, a component whose failure affects everything, and it has to be engineered with that in mind.
+
 The gateway maps the public transport contract to internal destinations; each service retains its domain authorization and invariants. Gateway admission does not confer downstream trust.
 
 ~~~mermaid

@@ -2,9 +2,9 @@
 
 ## TL;DR
 
-A JSON Web Token (JWT) is a claims container. JOSE defines how that container is signed (JWS) or encrypted (JWE). Neither format decides whether a token is appropriate for a request.
+A JSON Web Token (JWT) is a claims container. JOSE defines how that container is signed (JWS) or encrypted (JWE). Neither format decides whether a token is appropriate for a request, and that gap between "the signature is valid" and "this token should be accepted here" is where nearly every JWT vulnerability lives.
 
-Secure use begins with a token-type-specific validation contract:
+Secure use begins with a validation contract written for one type of token:
 
 - expected issuer and audience/resource;
 - allowed signature algorithms fixed by configuration;
@@ -14,13 +14,13 @@ Secure use begins with a token-type-specific validation contract:
 - authorization semantics and maximum lifetime;
 - key-rotation and revocation behavior.
 
-Apply size and format limits before parsing; verify cryptography before trusting claims; then validate the full semantic contract. Never select algorithms, issuer metadata, or key URLs from token content. ID tokens, access tokens, session tokens, email links, and DPoP proofs remain distinct token types even when all are JWTs.
+We apply size and format limits before parsing, verify cryptography before trusting any claim, and then validate the full semantic contract. Algorithms, issuer metadata, and key URLs are never selected from the content of the token. ID tokens, access tokens, session tokens, email links, and DPoP proofs remain distinct token types even when all of them happen to be JWTs.
 
 ---
 
-## 1. Format and Trust Boundary
+## Format and Trust Boundary
 
-A compact JWS has:
+A compact JWS has three parts separated by dots:
 
 ```text
 BASE64URL(protected_header)
@@ -30,7 +30,9 @@ BASE64URL(payload)
 BASE64URL(signature)
 ```
 
-The header and payload are encoded, not encrypted. Anyone holding the token can normally read them.
+The header and payload are encoded and not encrypted. Base64url is a transport encoding that anyone can reverse, so anyone holding the token can read its claims. This surprises people often enough that personal data and internal identifiers turn up regularly in tokens stored in browsers.
+
+The signature is computed over the first two parts exactly as transmitted, the encoded header, a dot, and the encoded payload. That detail matters. The verifier checks the bytes it received and only afterward decodes them, so two JSON documents that mean the same thing but are serialized differently do not share a signature, and no canonicalization step exists for an attacker to exploit.
 
 A compact JWE has five parts:
 
@@ -46,9 +48,11 @@ ciphertext
 authentication_tag
 ```
 
-JWS provides integrity/authenticity when verified with the intended key and algorithm. JWE provides confidentiality and integrity under a configured encryption contract. A JWT may be a JWS, a JWE, or nested.
+JWS provides integrity and authenticity when it is verified with the intended key and algorithm. JWE provides confidentiality and integrity under a configured encryption contract. A JWT may be a JWS, a JWE, or one nested inside the other.
 
-### 1.1 Core invariants
+The qualification "with the intended key and algorithm" carries most of the weight in that paragraph. A JWT describes itself: its header states which algorithm was used and may suggest which key to use. That is convenient for interoperability, and it means that the attacker, who writes the header, takes part in choosing how their own token will be verified. The invariants below are largely ways of taking that choice back.
+
+### Core invariants
 
 1. **Token-type separation:** one validator accepts one semantic token profile.
 2. **Algorithm allowlist:** allowed algorithms come from configuration, never the token alone.
@@ -63,9 +67,11 @@ JWS provides integrity/authenticity when verified with the intended key and algo
 
 ---
 
-## 2. Build a Validator per Token Type
+## Build a Validator per Token Type
 
-Do not expose one generic `verifyJwt(token)` to the whole application. Define profiles:
+The most common structural mistake is a single helper, `verifyJwt(token)`, shared by the whole application. It checks the signature and the expiry and returns the claims. Every caller then receives claims from a token that is genuine and unexpired and may have been issued for an entirely different purpose.
+
+An organization's issuer signs many kinds of token with the same keys. An ID token tells a web application who logged in. An access token authorizes an API call. An email-verification token confirms an address. All verify under the same public key. If one generic function validates them all, an attacker who can obtain any one kind, and a password-reset link is easy to obtain, can present it wherever another kind is expected. We define a validator for each profile instead:
 
 ```text
 OidcIdTokenValidator
@@ -76,7 +82,7 @@ DPoPProofValidator
 WorkloadAssertionValidator
 ```
 
-Each profile fixes:
+Each profile fixes, in configuration, everything the token might otherwise be allowed to say about itself:
 
 ```text
 expected_typ
@@ -92,9 +98,11 @@ subject/client rules
 sender-confirmation rules
 ```
 
-This prevents cross-JWT confusion: a token valid under one protocol is accepted in another context because a generic verifier checked only signature and expiry.
+With this arrangement a token that is valid under one protocol cannot be accepted in another, because a validator checks more than signature and expiry and will reject a token of the wrong type before considering its claims.
 
-### 2.1 Validation pipeline
+### Validation pipeline
+
+The order of the steps is part of the design. Each step runs only on input that the earlier steps have made safe to handle:
 
 ```text
 1. enforce transport/header/token size limits
@@ -110,25 +118,33 @@ This prevents cross-JWT confusion: a token valid under one protocol is accepted 
 11. perform current authorization/resource checks
 ```
 
-Some libraries decode payload before signature verification to locate claims. Treat that data as tainted; do not use an unverified `iss` to fetch arbitrary metadata or an unverified tenant to choose authorization context.
+Size limits come first because parsing is itself an attack surface, and a multi-megabyte token should be refused before any JSON parser sees it. The issuer configuration is chosen from the request context in step 5, before the payload has been decoded, so that the token cannot nominate its own trust anchor. Claims are decoded only in step 8, after the signature has established that the issuer wrote them.
+
+Some libraries decode the payload before verification in order to locate a claim such as `iss`. Whatever is read at that point is attacker-controlled input and must be treated accordingly. An unverified `iss` must not be used to fetch metadata, and an unverified tenant must not choose an authorization context.
 
 ---
 
-## 3. Algorithm and Key Confusion
+## Algorithm and Key Confusion
 
-### 3.1 `alg: none`
+The attacks in this section all exploit the same weakness, a verifier that lets the token's header influence how the token is verified. They are worth studying individually because each appeared in widely used libraries and each looks, in code, like reasonable flexibility.
 
-An unsecured JWT is valid only in an explicitly designed profile. Ordinary authentication/authorization validators reject it. Do not allow a library's default set to include `none`.
+### The `none` algorithm
 
-### 3.2 Symmetric/asymmetric confusion
+The specification defines an algorithm called `none` for unsecured tokens, intended for cases where integrity is provided by other means. A verifier that honors it accepts a token with an empty signature. An attacker writes any claims they like, sets `alg` to `none`, and is believed. Ordinary authentication and authorization validators reject it, and a library's default set of algorithms must not include it.
 
-If a validator accepts both HMAC and RSA/ECDSA algorithms and passes one “key” object generically, an attacker may choose HMAC and use a public verification key as the HMAC secret. Fix algorithm family and key type per issuer/token profile.
+### Symmetric and asymmetric confusion
 
-### 3.3 Header-controlled key locations
+This attack is subtler and repays a careful walk through. A service verifies tokens signed with RSA. It holds the issuer's public key, which is public by design and published for anyone to fetch. The service calls a generic library function with the token and that key.
 
-JOSE headers can contain `jku`, `x5u`, `jwk`, `kid`, and certificate chains. Do not fetch or trust arbitrary attacker-supplied key material.
+The attacker crafts a token whose header says `HS256`, an HMAC algorithm. HMAC is symmetric: the same secret both signs and verifies. The library reads the header, sees HMAC, and uses the key it was handed as the HMAC secret. That key is the RSA public key, whose bytes the attacker also has. So the attacker computes an HMAC over their forged token using the public key's bytes as the secret, and the library, performing the identical computation, finds that it matches.
 
-Use `kid` only as an index inside the issuer's configured, trusted key set. Treat it as untrusted input:
+The cryptography did exactly what it was asked. The flaw is that a single "key" parameter was interpreted according to an algorithm the attacker chose. The fix is to bind the algorithm family and key type to the issuer and token profile in configuration, so that a verifier expecting RSA will not perform an HMAC whatever the header says.
+
+### Header-controlled key locations
+
+JOSE headers can carry `jku` and `x5u`, which are URLs from which to fetch keys, `jwk`, which is the key itself embedded in the token, and certificate chains. A verifier that follows them is asking the bearer of the token which key to trust, and an attacker will answer with a key of their own. A verifier that fetches a URL from the header has, in addition, become a tool for making requests into its own internal network.
+
+The `kid` header is legitimate and necessary, since it tells the verifier which of the issuer's current keys signed the token. It is used only as an index into the trusted, configured key set, and it remains untrusted input:
 
 - cap length;
 - compare exact opaque values;
@@ -136,59 +152,63 @@ Use `kid` only as an index inside the issuer's configured, trusted key set. Trea
 - do not use it as a URL;
 - reject duplicate keys with the same ID/algorithm/use.
 
-### 3.4 Critical headers
+The third item is drawn from experience. Implementations that load keys from disk or a database by `kid` have been attacked through path traversal and SQL injection in that one field. In one known variant the attacker points `kid` at a file with predictable contents and signs with those contents as an HMAC secret.
 
-The `crit` header declares extensions that must be understood. Reject a token containing unsupported critical parameters. Ignoring them can change signing semantics.
+### Critical headers
 
-### 3.5 ECDSA and implementation quality
+The `crit` header lists extensions that the verifier must understand in order to process the token correctly. A token containing a critical parameter the verifier does not support must be rejected. Ignoring it would mean verifying under different semantics from those the issuer intended.
 
-Use maintained cryptographic libraries. Signature encoding, curve validation, randomness, and low-level key checks are not application code. Enforce algorithm/key-size/curve policy through the library and issuer configuration.
+### ECDSA and implementation quality
+
+Signature encoding, curve point validation, randomness, and low-level key checks belong in maintained cryptographic libraries. Elliptic-curve signatures in particular have a history of implementation errors, including verifiers that accepted a signature of all zeros for any message. Application code should restrict itself to stating policy, which algorithms, key sizes, and curves are acceptable, through the library and the issuer configuration.
 
 ---
 
-## 4. Claims Validation
+## Claims Validation
 
-### 4.1 Issuer
+Once the signature has been verified, the claims are known to be what the issuer wrote. Whether they authorize the present request is still open, and each registered claim answers part of it.
 
-`iss` is an exact identifier. Compare against configured issuer value. Do not normalize surprising trailing slashes, case, or aliases unless the profile defines them.
+### Issuer
 
-Key the subject by `(issuer, sub)`; `sub` alone can collide across issuers.
+`iss` is an exact identifier, compared as a string against the configured value. A verifier should not normalize trailing slashes, letter case, or aliases unless the profile defines such rules, because each normalization is an opportunity for two different issuers to be treated as one.
 
-### 4.2 Audience and authorized party
+Subjects are keyed by the pair `(issuer, sub)`. A `sub` value is unique only within its issuer, and two issuers can perfectly well assign the same value to different people.
 
-`aud` can be a string or array. Require the intended consumer/resource. Do not accept any token from a trusted issuer regardless of audience.
+### Audience and authorized party
 
-Profiles such as OIDC may require `azp` checks when multiple audiences exist. OAuth access-token profiles may distinguish client ID, subject, and resource.
+`aud` names the recipients for whom the token was issued, as a string or an array. The consumer requires its own identifier to be present. This check is the most frequently omitted, and its omission means that any token the issuer has ever signed, for any application, is accepted.
 
-### 4.3 Time
+Profiles such as OIDC may additionally require an `azp` check when several audiences are listed. OAuth access-token profiles may distinguish the client ID, the subject, and the resource.
+
+### Time
 
 - `exp`: reject at/after expiry according to profile.
 - `nbf`: reject before token becomes valid.
 - `iat`: validate presence/plausibility and maximum token age where required.
 - `auth_time`: use for recent-authentication/step-up policy, not general expiry.
 
-Clock skew allowance handles bounded operational drift, not arbitrarily old tokens. Monitor clocks and token age distribution.
+Verifiers allow a small clock skew because the issuer's clock and the verifier's are never perfectly aligned. The allowance exists to absorb bounded operational drift, typically seconds. It is effectively added to every token's lifetime, so a generous allowance of several minutes on a five-minute token roughly doubles the exposure. It is better to monitor clocks and the distribution of token ages than to widen the allowance.
 
-### 4.4 Token identity and replay
+### Token identity and replay
 
-`jti` is a token identifier, not automatic replay prevention. Replay protection requires durable or bounded state scoped by issuer/token type plus an operation/nonce policy.
+`jti` gives a token a unique identifier. It does not, of itself, prevent the token from being used twice. Replay protection is a property of the verifier, which must remember which identifiers it has seen, in state scoped by issuer and token type, for as long as the token could be valid.
 
-For one-time action links or DPoP proofs, atomically consume `jti`/nonce. For ordinary bearer access tokens, a unique `jti` mainly aids audit/revocation unless the resource checks current state.
+For one-time action links and DPoP proofs, the verifier consumes the `jti` or nonce atomically. For ordinary bearer access tokens, which are meant to be used many times, a unique `jti` serves mainly for audit and revocation.
 
-### 4.5 Private claims
+### Private claims
 
-Namespace private claims and version their schema. Avoid:
+Private claims should be namespaced and their schema versioned. Several kinds of content do not belong in them:
 
 - mutable complete permission sets with long lifetime;
 - secrets or personal data;
 - large tenant/group lists;
 - claims consumed by only one service but exposed to every holder.
 
-Resource authorization uses current domain state when required. A signed stale role is still stale.
+The first is the most consequential. A signature proves that a claim was true when the issuer wrote it. A role that was signed an hour ago and removed five minutes ago is still, cryptographically, impeccable. Where the answer must be current, authorization consults current domain state.
 
 ---
 
-## 5. JWK Sets and Key Distribution
+## JWK Sets and Key Distribution
 
 ```mermaid
 flowchart LR
@@ -200,7 +220,7 @@ flowchart LR
     ISS --> AUD[(Key-use audit)]
 ```
 
-A JWK set can contain multiple active/retiring public keys. Consumers:
+Local verification requires every verifier to hold the issuer's public keys. The issuer publishes them as a JWK set at a well-known URL, and verifiers cache it. This is a small content-distribution system with security consequences, and the set normally contains several keys at once, some active and some being retired. Consumers:
 
 1. bind JWKS URL to configured issuer metadata;
 2. cache by HTTP semantics plus local bounds;
@@ -209,9 +229,9 @@ A JWK set can contain multiple active/retiring public keys. Consumers:
 5. retain last-known-good keys during transient publication outage;
 6. reject if no unique compatible key exists.
 
-### 5.1 Unknown-key storm
+### Unknown-key storm
 
-An attacker can send tokens with random `kid` values. If every miss triggers a JWKS fetch, the verifier becomes a reflector against the issuer. Use:
+The fourth item, refreshing when a token names a key the verifier has not seen, is necessary for rotation to work without waiting for caches to expire. It is also something an attacker can trigger at will. Anyone can send tokens with random `kid` values. If each miss causes a fetch, the verifier fleet becomes an amplifier pointed at the issuer's key endpoint: one cheap forged request in, one outbound fetch out, multiplied by every verifier. The controls are:
 
 - singleflight refresh;
 - minimum refresh interval;
@@ -220,7 +240,9 @@ An attacker can send tokens with random `kid` values. If every miss triggers a J
 - cached last-known-good set;
 - maximum key-set size.
 
-### 5.2 Rotation protocol
+Singleflight means that when many requests miss on the same key at once, one of them fetches and the others wait for its result. The minimum interval means that having just refreshed and still not found the key, the verifier concludes the key does not exist and declines to ask again for a while.
+
+### Rotation protocol
 
 1. create new key in protected key service;
 2. publish public key;
@@ -230,11 +252,11 @@ An attacker can send tokens with random `kid` values. If every miss triggers a J
 6. retain old public key for maximum remaining token lifetime plus cache/clock margin;
 7. remove old private/public material according to compromise/retention policy.
 
-Publish-before-sign prevents unknown-key outage. Retain-after-stop preserves validation of already issued tokens.
+Two ordering rules account for the whole procedure. Publish before signing, so that no verifier meets a token whose key it cannot find. Retain after stopping, so that tokens already issued remain verifiable until they expire. Violating the first causes an outage at the start of a rotation, and violating the second causes one at the end.
 
-### 5.3 Emergency compromise
+### Emergency compromise
 
-Normal expiry may be too slow. Options:
+If a signing key is stolen, the attacker can mint tokens that verify. Waiting for normal expiry does nothing, because the attacker will simply issue more. The options are:
 
 - revoke tokens/key IDs in a current-state service;
 - shorten accepted maximum age;
@@ -243,31 +265,33 @@ Normal expiry may be too slow. Options:
 - revoke sessions/grants;
 - force reauthentication.
 
-Every option trades availability/state load for response speed. Rehearse it.
+Each trades availability or state load for speed of response. Removing the compromised key from the set immediately also invalidates every legitimate token it signed, which signs out the user base. That may well be the right decision. It should be rehearsed beforehand, so that it is not being worked out for the first time during the incident.
 
 ---
 
-## 6. Access Tokens, ID Tokens, and Sessions
+## Access Tokens, ID Tokens, and Sessions
 
-### 6.1 OAuth access token
+The four common uses of JWTs differ in who consumes the token and what the consumer must check.
 
-Consumed by the resource server. Validate resource/audience, issuer, token type/profile, expiry, client/subject, scopes, and sender binding. Then perform resource authorization.
+### OAuth access token
 
-RFC 9068 defines one JWT access-token profile; not every JWT access token follows it. Agree on a profile between issuer and resources.
+An access token is consumed by the resource server, which validates resource or audience, issuer, token type and profile, expiry, client and subject, scopes, and sender binding, and then performs its own resource authorization.
 
-### 6.2 OIDC ID token
+RFC 9068 defines one JWT profile for access tokens. Not every JWT access token follows it, and many predate it, so the issuer and its resource servers need to agree explicitly on which profile is in use.
 
-Consumed by the OIDC client. Validate client audience, issuer, nonce/profile, subject, authentication time/assurance as required. Do not present it to an API as access authorization.
+### OIDC ID token
 
-### 6.3 Application session
+An ID token is consumed by the OIDC client. The client validates that the audience is itself, along with issuer, nonce, subject, and authentication time or assurance as required. It is a message to the client about a login and should not be presented to an API as authorization.
 
-A session token may be opaque or JWT. A JWT cookie does not remove server state if the application needs revocation, device/session inventory, rolling expiry, or account disable.
+### Application session
 
-For browser sessions, secure cookie delivery, CSRF controls, fixation prevention, and logout behavior matter more than token format. See [Authentication Systems](./01-authentication-fundamentals.md).
+A session token may be opaque or a JWT. Storing the session as a JWT in a cookie is often chosen in order to avoid a session store, and the store tends to come back, because the application turns out to need revocation, a list of the user's devices, rolling expiry, or the ability to disable an account.
 
-### 6.4 One-time action tokens
+For browser sessions, secure cookie delivery, CSRF controls, fixation prevention, and logout behavior matter far more than the format of the token. See [Authentication Systems](./01-authentication-fundamentals.md).
 
-Password reset, email verification, and destructive confirmation tokens need:
+### One-time action tokens
+
+Password reset, email verification, and confirmation of destructive actions are sometimes implemented as signed JWTs. Such tokens need:
 
 - exact action/resource binding;
 - short expiry;
@@ -276,13 +300,13 @@ Password reset, email verification, and destructive confirmation tokens need:
 - no sensitive claims in readable payload;
 - protection against URL/referrer/log leakage.
 
-A signed JWT without consumption state is replayable until expiry.
+A signed JWT with no consumption state can be replayed until it expires. A password-reset link that works a second time, for whoever finds it in a mail archive or browser history, is the usual result. Binding the token to the account's security version gives a simple remedy, since changing the password advances the version and invalidates every outstanding link.
 
 ---
 
-## 7. JWE and Nested Tokens
+## JWE and Nested Tokens
 
-Use JWE when token claims must remain confidential from the holder/intermediary and a token format is appropriate. Encryption does not solve:
+JWE is appropriate when the claims must be hidden from the party holding the token or from intermediaries, and a token is still the right vehicle. It is sometimes adopted in the hope that encryption will make a token design safe in general. Encryption does nothing about:
 
 - replay;
 - overbroad authorization;
@@ -291,31 +315,31 @@ Use JWE when token claims must remain confidential from the holder/intermediary 
 - confused token type;
 - recipient compromise.
 
-Fix key-management and content-encryption algorithms by profile. Use authenticated encryption supported by mature JOSE libraries.
+An encrypted bearer token is still a bearer token. Whoever steals it can present it without ever being able to read it. The key-management and content-encryption algorithms are fixed by the profile, and authenticated encryption from a mature JOSE library is used.
 
-### 7.1 Sign then encrypt
+### Sign then encrypt
 
-A common nested pattern signs claims, then encrypts the JWS for a recipient. The recipient decrypts and then validates the inner signature/profile. Require explicit `cty`/type rules so nesting cannot be confused.
+A common nested pattern signs the claims and then encrypts the resulting JWS for a recipient. The recipient decrypts and then validates the inner signature and profile. Explicit `cty` and type rules are needed so that the layers cannot be confused with one another.
 
-### 7.2 Compression
+### Compression
 
-Compression before encryption can leak secrets when an attacker influences plaintext and observes ciphertext length. It also enables decompression bombs. Disable compression unless a reviewed profile needs it; cap compressed/uncompressed sizes and nesting depth.
+JWE permits compressing the plaintext before encryption, and there are two reasons to leave this disabled. The first is a side channel. Compression makes the length of the output depend on the content. If an attacker can place chosen text in the same plaintext as a secret and observe the length of the ciphertext, they can test guesses: a guess that matches part of the secret compresses better and yields a shorter result. This is the mechanism behind a well-known family of attacks on compressed TLS. The second reason is the decompression bomb, a small ciphertext that expands to gigabytes. Unless a reviewed profile requires compression, we disable it and cap compressed size, uncompressed size, and nesting depth.
 
-### 7.3 Why not put sensitive data in a token?
+### Why Not Put Sensitive Data in a Token?
 
-Tokens travel through clients, proxies, logs, traces, browser storage, support tools, and crash reports. Prefer a reference/opaque handle when data is sensitive or mutable. Encryption centralizes decryption-key access but does not reduce all copies of ciphertext.
+Tokens travel. They pass through clients, proxies, logs, traces, browser storage, support tools, and crash reports, and each of those is a copy the issuer no longer controls. When data is sensitive or likely to change, an opaque reference that the consumer resolves server-side is usually better. Encryption concentrates access in whoever holds the decryption key, which helps, and it leaves just as many copies of the ciphertext in the world.
 
 ---
 
-## 8. Revocation and Freshness
+## Revocation and Freshness
 
-Self-contained validation is a choice:
+Choosing self-contained validation is choosing a bound on how stale an authorization decision can be:
 
 ```text
 authorization freshness <= token lifetime + accepted clock/cache margin
 ```
 
-Revocation mechanisms:
+Everything on the right-hand side is under the designer's control, and nothing on it responds to events. If a user is disabled, the inequality is unaffected. The mechanisms for doing better each add something back to the request path:
 
 | Mechanism | Freshness | Serving dependency | State/cost |
 |---|---|---|---|
@@ -325,13 +349,13 @@ Revocation mechanisms:
 | subject/session version | current per user cache | lookup/cache | compact but coarse |
 | key revocation | broad/emergency | key/deny distribution | revokes many tokens |
 
-Choose by action risk. A public profile read may tolerate bounded expiry; a privileged financial action may require current account/session status and recent authentication.
+The rows run roughly from cheapest and stalest to most expensive and most current, and the appropriate row depends on the action. Reading a public profile can tolerate a decision several minutes old. Moving money may require current account and session status and a recent authentication.
 
-Logout and revocation semantics belong to the protocol using the JWT. Cryptographic validity alone does not mean current authorization.
+Logout and revocation semantics belong to the protocol that uses the JWT. A token that is cryptographically valid has not thereby been shown to carry current authorization.
 
 ---
 
-## 9. Capacity and Availability
+## Capacity and Availability
 
 Assume:
 
@@ -355,7 +379,7 @@ At 60 percent target utilization:
 39.2 / 0.60 = 65.4 CPU cores
 ```
 
-This illustrative lower bound excludes parsing, authorization, and tail behavior. Benchmark exact algorithms/libraries/key types.
+Sixty-five cores for more than a million verifications per second is modest, and that is the reason local verification is attractive. The figure is an illustrative lower bound that excludes parsing, authorization, and tail behavior. The choice of algorithm moves it considerably. RSA verification is very cheap and RSA signing is expensive, while for elliptic-curve algorithms the two costs are closer together, so a fleet that mostly verifies and an issuer that mostly signs may reasonably prefer different algorithms. Exact algorithms, libraries, and key types should be benchmarked.
 
 JWKS average egress:
 
@@ -364,9 +388,9 @@ JWKS average egress:
 = about 500 KiB/s
 ```
 
-Average is easy; synchronized cache expiry or unknown-`kid` attacks cause bursts. Jitter, HTTP caching, regional distribution, and singleflight are availability controls.
+The average is trivially small. The risk lies in the shape of the load. Twenty-five thousand processes started by the same deployment will have caches that expire at the same instant, and an unknown-`kid` attack produces bursts on demand. Jitter, HTTP caching, regional distribution, and singleflight are what keep this system available.
 
-### 9.1 Failures
+### Failures
 
 - cached valid keys can keep verification available through metadata outage;
 - unknown new key should fail safely until trusted publication is obtained;
@@ -374,36 +398,36 @@ Average is easy; synchronized cache expiry or unknown-`kid` attacks cause bursts
 - clock failures can reject valid tokens or accept expired ones;
 - parser/crypto CPU exhaustion requires input bounds and admission controls.
 
-Do not disable signature/audience checks during issuer outage.
+Signature and audience checks are never disabled during an issuer outage. The cached key set exists so that such an outage does not create the temptation.
 
 ---
 
-## 10. Multi-Region and Multi-Tenant Design
+## Multi-Region and Multi-Tenant Design
 
-Issuer identity and key authority should be globally unambiguous. Options:
+Issuer identity and key authority should be globally unambiguous. There are three workable arrangements:
 
 - one issuer with globally replicated key metadata and token state;
 - regional issuers with distinct exact issuer IDs;
 - tenant-specific issuers under controlled registration.
 
-Resource servers select expected issuer from trusted routing/configuration, then validate token `iss`. Do not fetch configuration for an arbitrary unverified issuer string.
+In each of them, resource servers select the expected issuer from trusted routing or configuration and then validate the token's `iss` against it. They do not fetch configuration for whatever issuer string an unverified token presents.
 
-For multi-tenant tokens, bind:
+For multi-tenant tokens, the tenant must be bound consistently at four points:
 
 - tenant in subject/session/grant;
 - resource server lookup;
 - authorization decision;
 - decision/token cache key.
 
-A tenant claim signed by a trusted issuer is not sufficient if the subject is no longer a member. Define claim freshness.
+A tenant claim signed by a trusted issuer shows that the subject was a member when the token was issued. If membership can be removed, the design needs a stated freshness for that claim.
 
-Key rotation must converge across regions before signing switches. Refresh/revocation state needs authority consistent with its replay guarantee; two regions cannot independently accept the same one-time token unless deduplication is global.
+Key rotation must converge across all regions before signing switches to the new key. State for refresh and revocation needs an authority consistent with its replay guarantee. Two regions cannot each independently accept the same one-time token and still call it one-time, unless deduplication is global.
 
 ---
 
-## 11. Security Logging and Privacy
+## Security Logging and Privacy
 
-Record:
+For each validation decision, we record:
 
 - token profile/type;
 - configured issuer;
@@ -415,7 +439,7 @@ Record:
 - policy/key-set revision;
 - sender-binding result.
 
-Never log raw tokens, signatures as reusable artifacts, complete claims, or decryption plaintext. URL/query/header logs are common leak paths.
+Raw tokens, signatures in reusable form, complete claims, and decrypted plaintext are never logged. A logged bearer token is a credential available to everyone with log access. URL, query, and header logs are the common leak paths.
 
 Metrics:
 
@@ -430,13 +454,13 @@ Metrics:
 - revocation/introspection latency and cache age;
 - oversized/malformed token rejection.
 
-Avoid subject, tenant, `jti`, or `kid` of unbounded cardinality in metric labels.
+A breakdown of failures by reason is the most useful diagnostic here. A sudden rise in "unknown key" points to a rotation problem, a rise in "expired" to a clock or refresh problem, and a rise in "algorithm mismatch" to someone probing. Subject, tenant, `jti`, and `kid` values of unbounded cardinality should stay out of metric labels.
 
 ---
 
-## 12. Failure Traces
+## Failure Traces
 
-### 12.1 Signature-only validation
+### Signature-only validation
 
 1. API trusts issuer key.
 2. It verifies signature and expiry.
@@ -445,7 +469,7 @@ Avoid subject, tenant, `jti`, or `kid` of unbounded cardinality in metric labels
 
 **Prevention:** token-profile validator with audience/type contract.
 
-### 12.2 Algorithm confusion
+### Algorithm confusion
 
 1. Validator allows RSA and HMAC.
 2. Attacker chooses HMAC and signs with public RSA key bytes as secret.
@@ -453,7 +477,7 @@ Avoid subject, tenant, `jti`, or `kid` of unbounded cardinality in metric labels
 
 **Prevention:** fixed algorithm/key-type allowlist per profile.
 
-### 12.3 SSRF through key URL
+### SSRF through key URL
 
 1. Token header supplies `jku`.
 2. verifier fetches it.
@@ -461,7 +485,7 @@ Avoid subject, tenant, `jti`, or `kid` of unbounded cardinality in metric labels
 
 **Prevention:** issuer-configured JWKS only; no token-directed fetch.
 
-### 12.4 Unknown-key denial of service
+### Unknown-key denial of service
 
 1. attacker sends random `kid` values.
 2. each request fetches JWKS.
@@ -469,7 +493,7 @@ Avoid subject, tenant, `jti`, or `kid` of unbounded cardinality in metric labels
 
 **Prevention:** coalesced/rate-limited refresh and negative cache.
 
-### 12.5 Key removed too early
+### Key removed too early
 
 1. issuer stops old signing and deletes old public JWK.
 2. unexpired tokens still reference it.
@@ -477,7 +501,7 @@ Avoid subject, tenant, `jti`, or `kid` of unbounded cardinality in metric labels
 
 **Prevention:** retain through maximum token lifetime plus margins.
 
-### 12.6 Stale role remains valid
+### Stale role remains valid
 
 1. admin role removed.
 2. long-lived token embeds role.
@@ -486,7 +510,7 @@ Avoid subject, tenant, `jti`, or `kid` of unbounded cardinality in metric labels
 
 **Prevention:** short lifetime/current-state authorization for high-risk actions.
 
-### 12.7 One-time token replay
+### One-time token replay
 
 1. email action JWT is signed and unexpired.
 2. action endpoint never stores consumption.
@@ -494,7 +518,7 @@ Avoid subject, tenant, `jti`, or `kid` of unbounded cardinality in metric labels
 
 **Prevention:** atomic nonce/`jti` consumption and action/resource binding.
 
-### 12.8 Cross-tenant token cache
+### Cross-tenant token cache
 
 1. authorization cache keys by subject/action only.
 2. same subject has different rights across tenants.
@@ -502,9 +526,11 @@ Avoid subject, tenant, `jti`, or `kid` of unbounded cardinality in metric labels
 
 **Prevention:** tenant/resource/policy revision in semantic cache key.
 
+Read together, the eight traces have one thing in common. In none of them is a signature forged by breaking cryptography. Each succeeds because a verifier asked a narrower question than the situation required.
+
 ---
 
-## 13. Verification
+## Verification
 
 1. **Known-answer vectors:** valid/invalid signatures for every allowed algorithm.
 2. **Cross-profile substitution:** ID/access/session/action/DPoP tokens against every wrong validator.
@@ -519,15 +545,19 @@ Avoid subject, tenant, `jti`, or `kid` of unbounded cardinality in metric labels
 11. **Performance tests:** exact library/algorithm/key set under malformed-input load.
 12. **Differential tests:** compare independent conformant libraries on a corpus to expose parser differences.
 
-Use maintained JOSE libraries, but wrap them in profile-specific validators whose configuration and tests are application-owned.
+The second test is the most productive. It takes every kind of token the issuer produces and presents each to every validator that should refuse it, in the form of a matrix. Any cell that passes is a substitution vulnerability.
+
+The parser tests guard against a quieter problem. JSON does not say what a document with two `"sub"` keys means. Some parsers take the first and some the last. If a gateway and a backend use different parsers, an attacker can construct a token that each reads differently, and the differential test in the final item exists to find such disagreements.
+
+We use maintained JOSE libraries and wrap them in profile-specific validators whose configuration and tests the application owns.
 
 ---
 
-## 14. Decision Framework
+## Decision Framework
 
-Use a signed JWT when multiple consumers need offline verification of bounded, stable claims and can tolerate freshness limited by token lifetime. Use an opaque reference plus introspection when current revocation, claim confidentiality, or centralized policy outweighs request-time dependency. Use a server-side session when browser lifecycle/revocation/device inventory matters. Use JWE only when a reviewed token transport needs claim confidentiality.
+A signed JWT is the right choice when several consumers need offline verification of bounded, stable claims and can tolerate freshness limited by the token lifetime. An opaque reference with introspection is the right choice when current revocation, claim confidentiality, or centralized policy outweighs a dependency at request time. A server-side session is right when browser lifecycle, revocation, and device inventory matter. JWE is for reviewed cases in which a token transport needs claim confidentiality.
 
-Before choosing JWT:
+Before choosing JWT, a team should be able to answer:
 
 1. What exact token type/profile is this?
 2. Who issues it, who consumes it, and what audience/resource is bound?
@@ -542,7 +572,7 @@ Before choosing JWT:
 11. What happens under malformed/unknown-key load?
 12. Why is a self-contained token better than an opaque handle here?
 
-JWT reduces a lookup; it does not eliminate identity, authorization, revocation, key management, or state.
+The last question is worth asking sincerely, because the honest answer is sometimes that it is not. A JWT saves a lookup. Identity, authorization, revocation, key management, and state all remain to be designed.
 
 ---
 

@@ -8,6 +8,10 @@ Two families cover almost all production use. **Cell-based schemes** (geohash, S
 
 ## Primary Evidence and Scope
 
+Ordinary database indexes work on values that can be put in a single order. Numbers and strings can be sorted, and a sorted structure answers range queries efficiently. Locations have two coordinates, and there is no way to sort points on a plane so that points near each other are always near each other in the order. An index on latitude finds everything in a band around the globe, and an index on longitude finds everything in a perpendicular band, and neither finds the restaurants within a kilometre.
+
+The solutions fall into two groups. One builds a tree that divides space itself, recursively, so that a search descends only into the regions that overlap the area of interest. The other turns the two-dimensional problem into a one-dimensional one, by dividing the world into a grid of cells and giving each cell an identifier constructed so that cells close together mostly have identifiers close together. Once that is done, an ordinary index can be used, and a search for nearby points becomes a small number of range lookups over cell identifiers. The second approach is the more widely used in distributed systems, because cell identifiers work as partition keys and need no special index type. Its imperfection is that some neighbouring cells have distant identifiers, so a correct search must examine the cells surrounding the target as well.
+
 | Source | What it establishes | Boundary |
 |---|---|---|
 | Finkel and Bentley (1974) | Quadtrees: recursive four-way subdivision for composite keys | The original point structure; many variants followed |

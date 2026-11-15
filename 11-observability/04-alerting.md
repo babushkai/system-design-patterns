@@ -12,6 +12,10 @@ Page only for required human urgency and user/business impact. [SLOs and Error-B
 
 ## Alert Workload and Contract
 
+An alert interrupts a person, often in the middle of the night, and asks them to act. That is a costly thing to do, and an alerting system should be judged by whether its interruptions are warranted. Most are not. The typical on-call engineer receives a stream of alerts of which few require action, learns to ignore them, and in time ignores the one that mattered. This condition, alert fatigue, is the usual way alerting fails, and it is caused by having too many alerts far more often than too few.
+
+The commonest source of unwarranted alerts is alerting on causes instead of symptoms. High processor use, a full queue, or a restarted process may or may not mean that users are affected, and an alert on each of them fires constantly for conditions that resolve themselves. An alert tied to what users experience, such as the proportion of requests failing or responding slowly, fires only when something is actually wrong, and covers causes nobody thought to anticipate. The second difficulty is mechanical. During a real outage, one underlying fault trips dozens of alerts across dependent systems, and the engineer is buried in notifications at the moment clarity is most needed. Grouping related alerts and suppressing those that follow from a known failure is what makes an outage legible.
+
 An alert rule declares:
 
 ~~~text

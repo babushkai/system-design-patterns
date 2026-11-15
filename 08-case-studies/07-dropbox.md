@@ -12,6 +12,10 @@ Claims use three evidence labels:
 
 ## Workload and Service Contract
 
+File synchronization appears to be a matter of copying files to a server, and at small scale it is. The problems that shape a real design come from three facts. Files are large and mostly unchanged from one edit to the next, so sending a whole file after every save wastes nearly all the bandwidth used. Many users hold identical files, so storing each copy separately wastes most of the storage. And the same folder is edited from several devices that are often offline, so changes arrive late, out of order, and in conflict.
+
+The answers to all three rest on one idea, which is to stop treating a file as the unit of storage. A file is cut into blocks, and each block is named by a hash of its contents. A block with a given name always has the same contents, so it never needs to be sent or stored twice, whether the second copy comes from the same file after an edit, from another device, or from another user. The file itself becomes a small piece of metadata listing which blocks it consists of, and synchronization becomes two separate problems: moving immutable blocks, which is easy to make reliable, and agreeing on the metadata, which is where consistency matters.
+
 **Documented, 2016 architecture.** Dropbox publicly separates file content from metadata. Magic Pocket stores encrypted, immutable file blocks up to 4 MiB, while changes and revision history live above it in metadata systems such as FileJournal. The 2016 article described multi-zone storage, asynchronous cross-zone replication, cells, a block index, and repair machinery. [Dropbox, Inside the Magic Pocket](https://dropbox.tech/infrastructure/inside-the-magic-pocket)
 
 **Documented, 2026 snapshot.** Dropbox describes Magic Pocket as an exabyte-scale immutable blob store and says nearly all data uses erasure coding. This is a dated storage-platform statement, not a current user count or upload rate. [Dropbox, storage efficiency in Magic Pocket](https://dropbox.tech/infrastructure/improving-storage-efficiency-in-magic-pocket-our-immutable-blob-store)

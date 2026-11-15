@@ -8,6 +8,10 @@ Partitioning starts by defining **logical partition boundaries, key-to-partition
 
 ## Workload Contract
 
+Replication copies the same data to several machines. Partitioning, also called sharding, divides the data so that each machine holds a different part. It is the answer to a dataset or a write load too large for any single machine, and it is the only way to scale writes, since replication alone leaves every write going to every copy.
+
+The entire design reduces to one decision, the rule that assigns each record to a partition, and that rule involves a real trade. Assigning by ranges of the key keeps neighbouring keys together, so a query for a range touches one or two partitions, but it concentrates load wherever the keys are concentrated, and keys such as timestamps put every new write on the same partition. Assigning by a hash of the key spreads load evenly and scatters neighbouring keys across the cluster, so that a range query must ask every partition. No rule is good for every access pattern, which is why the chapter begins with the workload. A query that includes the partition key goes to one machine. A query that does not must go to all of them, and its cost grows with the size of the cluster.
+
 Start with the operations, not with hash versus range. For every high-volume request, identify:
 
 - the routing key known before execution;

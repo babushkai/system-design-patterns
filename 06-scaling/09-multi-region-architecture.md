@@ -10,7 +10,11 @@ Do not hard-code “intercontinental latency” or symmetric utilization folklor
 
 ---
 
-## 1. Regional Contract per Data Class
+## Regional Contract per Data Class
+
+A system is run in more than one region for three reasons: to survive the loss of a whole region, to serve distant users with less delay, and to keep certain data within a jurisdiction. Running stateless services in several regions is not difficult. The difficulty is entirely in the data, and it has a physical cause. A message between distant regions takes tens of milliseconds, and nothing can shorten that.
+
+It follows that a write must either wait for another region to confirm it or not wait. If it waits, every write is slower by the cross-region round trip, and writes stop when the regions cannot reach each other. If it does not wait, the write is fast and always available, and a region lost at the wrong moment takes recently acknowledged writes with it, or two regions accept conflicting writes that must later be reconciled. There is no design that is fast, always available, and never loses or conflicts. A sound architecture makes this choice separately for each kind of data according to what that data can tolerate. A user's session and a ledger entry do not deserve the same answer, and treating the choice as a single label for the whole system gets one of them wrong.
 
 One product commonly uses several postures. Define this table for user records, ledger entries, sessions, blobs, search, queues, configuration, analytics, and derived caches separately:
 
@@ -41,7 +45,7 @@ One product commonly uses several postures. Define this table for user records, 
 
 ---
 
-## 2. Data Plane and Control Plane
+## Data Plane and Control Plane
 
 ~~~mermaid
 flowchart TB
@@ -89,7 +93,7 @@ The data plane should operate from locally cached, versioned maps/configuration 
 
 ---
 
-## 3. Topology Choices
+## Topology Choices
 
 ### Active-passive
 
@@ -141,7 +145,7 @@ Use multi-writer only where conflicts are impossible by invariant or merge natur
 
 ---
 
-## 4. Replication and Consistency
+## Replication and Consistency
 
 ### Synchronous quorum
 
@@ -187,7 +191,7 @@ Give each a source-of-truth and rebuild/replay boundary.
 
 ---
 
-## 5. Authority, Epochs, and Fencing
+## Authority, Epochs, and Fencing
 
 Failure detectors cannot distinguish a dead region from an isolated but running region. Therefore “cannot reach primary” is insufficient authority to promote.
 
@@ -216,7 +220,7 @@ If the outcome of an authority write is ambiguous, read/resolve current epoch be
 
 ---
 
-## 6. Routing: Reachability Is Not Authority
+## Routing: Reachability Is Not Authority
 
 ### DNS and global load balancing
 
@@ -251,7 +255,7 @@ A shallow endpoint can route traffic into a region whose database is read-only o
 
 ---
 
-## 7. Failover State Machine
+## Failover State Machine
 
 1. **Detect and scope.** Distinguish instance/AZ failure, region isolation, dependency failure, bad deployment, and data corruption.
 2. **Freeze unsafe automation.** Ensure one failover authority and stop conflicting deploy/scale/routing changes.
@@ -280,7 +284,7 @@ Translate that native difference into business operations through commit/audit l
 
 ---
 
-## 8. Static Stability and Capacity Headroom
+## Static Stability and Capacity Headroom
 
 Let:
 
@@ -322,7 +326,7 @@ Compare against a multi-zone single-region design and a stated business loss. �
 
 ---
 
-## 9. Concrete Failure Trace: Automated Split Brain
+## Concrete Failure Trace: Automated Split Brain
 
 1. A fiber/control-plane partition isolates regions A and B; both data planes still serve local users.
 2. B’s automation cannot reach A and declares it failed.
@@ -335,7 +339,7 @@ The trigger was a network partition; corruption came from the authority protocol
 
 ---
 
-## 10. Residency, Privacy, and Security
+## Residency, Privacy, and Security
 
 Residency applies to:
 
@@ -363,7 +367,7 @@ Availability design must include malicious and accidental control-plane actions,
 
 ---
 
-## 11. Operations, Migration, and Failback
+## Operations, Migration, and Failback
 
 ### Introducing a region
 
@@ -394,7 +398,7 @@ Fence, snapshot evidence, reconcile/reseed, catch up, validate, then reintroduce
 
 ---
 
-## 12. Observability
+## Observability
 
 By region and data class:
 
@@ -414,7 +418,7 @@ Use external probes from multiple networks, but correlate them with data-plane g
 
 ---
 
-## 13. Verification and Game Days
+## Verification and Game Days
 
 - isolate one region’s data plane while its control plane remains reachable, and vice versa;
 - partition regions without powering either off;
@@ -435,7 +439,7 @@ A diagram review is not evidence. Run the state machine with real traffic and co
 
 ---
 
-## 14. Decision Framework
+## Decision Framework
 
 | Requirement | Direction |
 |---|---|

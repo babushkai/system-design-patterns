@@ -6,6 +6,10 @@ The 2011 Kafka paper describes a much smaller system than modern Kafka: brokers 
 
 ## Publication Identity and Historical Boundary
 
+Kafka began at LinkedIn as a way of moving very large volumes of activity data, such as page views and searches, from the services that produced it to the many systems that wanted it. Existing message brokers were designed around individual messages, tracking the delivery of each one to each consumer, and that bookkeeping made them far too slow for the volumes involved.
+
+Kafka's central decision was to treat the stream as a log: an append-only file to which messages are written in order and from which nothing is removed when a message is read. The broker does not track what each consumer has received. A consumer simply remembers its own position in the log, a single number, and reads forward from it. That one change has several consequences. Writing and reading are both sequential, which is what disks and operating-system caches handle best. A consumer can rewind and read old data again, since nothing was deleted. And any number of independent consumers can read the same log at their own pace without affecting the broker or each other. The paper describes the original system of 2011, which lacked the replication and transactional features added later, and should be read with that in mind.
+
 - **Paper:** *Kafka: a Distributed Messaging System for Log Processing*
 - **Authors:** Jay Kreps, Neha Narkhede, and Jun Rao, LinkedIn
 - **Venue and version:** NetDB workshop, 2011

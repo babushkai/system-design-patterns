@@ -6,6 +6,10 @@ Dynamo is a study in making **write acceptance during failure** the primary inva
 
 ## Publication Identity and Reading Boundary
 
+The Dynamo paper is the best-known statement of a deliberate choice: to keep accepting writes when parts of the system cannot reach each other, and to accept the inconsistency that follows. Amazon's reasoning came from the shopping cart. A customer who cannot add an item to their cart is lost revenue, whereas a cart that briefly shows an item twice is a minor annoyance that can be repaired. For that workload, refusing a write was the worse failure.
+
+The paper is valuable less for any single invention than for how it combines known techniques into a working system. Keys are spread over nodes by consistent hashing, so that nodes can be added and removed with little movement of data. Each write goes to several replicas, and the client chooses how many must respond, trading consistency against availability and latency for each request. Since replicas may accept conflicting writes, each value carries a version vector that shows whether one version supersedes another or the two are concurrent, and concurrent versions are returned to the application to be merged. Several background mechanisms then bring replicas back into agreement. The design influenced a generation of databases, and the paper should be read with the understanding that it describes an internal system of 2007 and not the cloud service that later took the name.
+
 - **Paper:** *Dynamo: Amazon's Highly Available Key-value Store*
 - **Authors:** Giuseppe DeCandia, Deniz Hastorun, Madan Jampani, Gunavardhan Kakulapati, Avinash Lakshman, Alex Pilchin, Swaminathan Sivasubramanian, Peter Vosshall, and Werner Vogels
 - **Venue and version:** 21st ACM Symposium on Operating Systems Principles (SOSP), 2007

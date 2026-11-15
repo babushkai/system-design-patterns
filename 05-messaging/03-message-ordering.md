@@ -8,6 +8,10 @@ Message ordering is defined by its scope, partition sequencing, causal metadata,
 
 ## Workload and Order Contract
 
+Messages sent in one order may arrive in another, and when they do, the receiver can end up in a state that never existed at the sender. If "account opened" arrives after "deposit made," the deposit is rejected for an account that does not yet exist. If two updates to one record are applied in reverse, the older value overwrites the newer.
+
+The straightforward cure, a single ordered stream for everything, does not scale, because a total order requires all messages to pass through one point in sequence. The observation that makes ordering affordable is that very few messages need to be ordered relative to each other. Two deposits to the same account must be applied in order. A deposit to one account and a deposit to another are independent, and their relative order affects nothing. Messaging systems therefore divide a stream into partitions and guarantee order only within each. The designer's task is to choose a partitioning key such that everything which must be ordered shares a partition, while everything else is spread out so that the partitions can be processed in parallel.
+
 Start from the invariant, not “FIFO.” Examples:
 
 - every state transition for one account applies in source commit order;

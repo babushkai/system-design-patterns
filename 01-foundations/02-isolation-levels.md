@@ -8,6 +8,10 @@ An isolation level is a contract over **which transaction histories may commit**
 
 ## Scope: Transaction Histories, Not Replica Freshness
 
+A database that ran one transaction at a time would have no isolation problems and very little throughput. Real databases run many transactions at once, and the question is what each is permitted to see of the others' unfinished or recently finished work. The strictest answer is that the result must be the same as if the transactions had run one after another in some order. That answer is correct and expensive, since it requires either making transactions wait for each other or aborting and retrying the ones that conflict. Every weaker isolation level is a decision to permit some particular kind of interference in exchange for less waiting and fewer aborts.
+
+The difficulty for the engineer is that the interference a level permits is defined in terms of anomalies with unfamiliar names, and the same level name means different things in different databases. Two applications that each read a balance, check that it is sufficient, and write a withdrawal can both succeed and overdraw the account under an isolation level whose name suggests nothing of the kind. The purpose of this chapter is to make it possible to say, for a given invariant in a given database, which level actually protects it.
+
 Transaction isolation governs concurrent access to one transactional authority through snapshots, locks, serialization conflicts, and retry behavior.
 
 - [ACID Transactions](01-acid-transactions.md) covers atomic commit, durability, WAL, and recovery.

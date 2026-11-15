@@ -8,6 +8,10 @@ Three mechanisms carry the design. A **hold** is a time-limited claim that reser
 
 ## Requirements and Contract
 
+Selling tickets to a popular event is a problem of extreme contention over a small, fixed supply. A stadium has a certain number of seats, each can be sold once, and at the moment sales open, the number of people trying to buy may exceed the number of seats a hundredfold. Selling the same seat to two people is the one thing the system must never do, and it must hold to that while under a load far above its ordinary level.
+
+The correctness requirement is met at the database, by making the act of claiming a seat conditional on the seat being free, so that of any number of simultaneous attempts exactly one succeeds. That part is well understood. The harder questions concern everything around it. A customer needs time to enter payment details, so a seat has to be held for them, and a hold that is never released is a seat that is never sold. If every buyer attempts the same few seats, nearly all the attempts fail and are wasted. And the surge at the opening of sales will overwhelm any system that tries to serve everyone at once, so the fairest and most stable designs admit buyers gradually through a waiting room, keeping the load on the reservation system within what it can handle.
+
 **Functional.**
 
 - Show availability for an event or product.

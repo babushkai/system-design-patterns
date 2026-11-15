@@ -8,6 +8,10 @@ Polling, long polling, Server-Sent Events (SSE), and WebSockets wake clients whe
 
 ## Start With the Delivery Contract
 
+HTTP was designed around a simple exchange in which the client asks and the server answers. A server cannot begin a conversation. That suits loading a page and is awkward for anything that changes while the user is looking at it, such as a chat, a live score, or a document being edited by someone else, because the client cannot know when there is something new to ask for.
+
+The techniques in this chapter are successive ways around that limitation, each exchanging simplicity for timeliness. The client can ask repeatedly at a fixed interval, which is trivial to build and wastes nearly every request on an answer of "nothing new." It can ask once and have the server hold the request open until there is news. It can open a single response that the server keeps writing to. Or it can upgrade the connection to a protocol in which either side may send at any time. The choice of transport, however, is usually the least consequential part of the design. Every one of these connections will drop, on a phone entering a tunnel or a laptop closing its lid, and what decides whether the product works is what happens next: how the client learns what it missed while it was away.
+
 The transport is the last hop of a larger pipeline:
 
 ```mermaid

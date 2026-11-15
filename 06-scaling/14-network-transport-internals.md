@@ -16,6 +16,10 @@ Transport analysis covers handshake flights, congestion and flow control, loss r
 
 ## Scope, Terms, and Assumptions
 
+Application engineers generally treat the network as a pipe that carries bytes from one place to another with some delay. For most purposes that picture is adequate. It stops being adequate when performance problems appear, because the transport layer makes decisions that shape latency and throughput in ways the application never sees directly.
+
+TCP has no advance knowledge of how fast the path between two machines is, so it finds out by experiment. It begins by sending a small amount, increases the amount for as long as acknowledgements keep arriving, and reduces it sharply when a packet is lost. This probing accounts for several behaviors that otherwise seem strange. A new connection is slow for its first few round trips even on a fast link. A small amount of packet loss on a long-distance path can reduce throughput to a fraction of what the link can carry. And since TCP delivers bytes strictly in order, one lost packet holds up all the data behind it until it has been resent, even where that data belongs to an unrelated request sharing the connection. That last effect, head-of-line blocking, is the main reason newer protocols carry each stream independently over UDP.
+
 Use the following models only within their stated boundaries.
 
 | Symbol | Meaning | Unit and boundary |

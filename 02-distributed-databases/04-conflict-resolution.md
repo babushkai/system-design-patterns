@@ -8,6 +8,10 @@ Conflict resolution must define detection, representation, merge semantics, dele
 
 ## Start With the Contract, Not the Merge Function
 
+Whenever two replicas can accept writes independently, they will sooner or later accept writes that conflict, and the system must produce one state from the two. The commonest rule is the simplest: attach a timestamp to every write and keep the later one. It is easy to implement, it always converges, and it silently destroys data. The write that loses is discarded with no error and no record, though its client was told it had succeeded. Since the clocks that produced the timestamps disagree, the write that wins is not even reliably the one that happened last.
+
+Better approaches start from the observation that a conflict contains information that a timestamp throws away. Two users who each add an item to a shopping cart have not really contradicted each other, and the right result is a cart with both items. Whether a merge of that kind is possible depends on what the data means, and so conflict resolution cannot be delegated wholly to the database. The data types in this chapter that merge automatically do so by restricting the operations allowed on them to ones whose order does not matter.
+
 Four properties are often collapsed into “eventual consistency,” but they are different:
 
 - **Convergence:** replicas that receive the same updates eventually hold equivalent state.

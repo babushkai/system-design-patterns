@@ -8,6 +8,10 @@ That requirement produces an architecture unlike most services in this book. The
 
 ## Requirements and Contract
 
+A matching engine is the core of an exchange. It receives orders to buy and to sell, keeps those that cannot be filled immediately in a book ordered by price and then by time of arrival, and matches incoming orders against it. Its requirements are unlike those of almost any other system in this book. It must be completely deterministic and fair, so that the order in which requests arrive decides the outcome and nothing else does. It must respond in microseconds. And it must never lose or misorder anything.
+
+These requirements lead to a design that reverses most of the usual advice. The usual way to scale is to spread work across many machines and threads. A matching engine typically processes all orders for an instrument on a single thread, one at a time, entirely in memory. Concurrency would introduce exactly the nondeterminism that fairness forbids, and a single thread that never waits on a lock or a disk turns out to be remarkably fast. Durability is obtained by recording every incoming request in a sequenced log before it is processed. Since the engine is deterministic, its entire state is a function of that log, and a standby that reads the same log arrives at the same state and can take over. The log, and not the engine's memory, is the real record of the market.
+
 **Functional.**
 
 - Accept new, cancel, and modify requests for limit and market orders.

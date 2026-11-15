@@ -12,7 +12,11 @@ Durability comes from placement, replication/erasure coding, integrity detection
 
 ---
 
-## 1. API Contract and State Model
+## API Contract and State Model
+
+Object storage looks like the simplest kind of storage there is. It has a flat namespace of keys, each naming a blob of bytes, with operations to put, get, list, and delete, and no directories, no appends, and no partial updates. That simplicity is deliberate, and it is what lets the service scale to trillions of objects with very high durability, because the system makes few promises about the relationships between objects and so needs to coordinate very little.
+
+The same simplicity is the source of most difficulties in building on it. An object is replaced whole or left alone, and there is no rename, so the familiar technique of writing a temporary file and renaming it into place is unavailable. Listing a prefix is a query over an index, and it bears no resemblance to reading a directory. A job that writes a thousand objects has no transaction to make them appear together, and a reader may see some of them. Systems that treat a bucket as a file system meet each of these in turn. The designs that work accept the model as it is: objects are written once and never changed, and a small separate record, updated atomically, states which objects make up the current version of the data.
 
 Object-store APIs differ, but a useful logical model is:
 
@@ -40,7 +44,7 @@ MultipartUpload {
 
 The human-friendly key can refer to a current generation while versioning retains older generations. “Overwrite” usually creates/replaces the key's current object atomically; storage nodes need not mutate old bytes in place.
 
-### 1.1 Core invariants
+### Core invariants
 
 1. **Atomic single-object visibility:** a reader sees a complete committed object generation or the prior/absent state, not partial bytes.
 2. **Stable version identity:** an immutable generation/version ID identifies the bytes and metadata interpretation used by a reader.
@@ -53,7 +57,7 @@ The human-friendly key can refer to a current generation while versioning retain
 9. **Recoverable versions:** every retained encrypted generation has required key material and restore metadata.
 10. **Observable repair:** loss of redundancy, integrity failure, repair debt, and replication lag remain below declared risk/recovery bounds.
 
-### 1.2 Pin provider semantics
+### Pin provider semantics
 
 Verify from versioned service documentation:
 
@@ -72,7 +76,7 @@ S3, Google Cloud Storage, Azure Blob, Swift, Ceph RGW, and compatible gateways a
 
 ---
 
-## 2. Planes and Internal Architecture
+## Planes and Internal Architecture
 
 ```mermaid
 flowchart LR
@@ -109,9 +113,9 @@ The exact order is implementation-specific; the public commitment is the documen
 
 ---
 
-## 3. Namespace and Consistency Semantics
+## Namespace and Consistency Semantics
 
-### 3.1 Prefixes are not directories
+### Prefixes are not directories
 
 The key `customers/42/report.pdf` is commonly a flat byte/string key whose slashes support prefix listing and UI conventions. Consequences:
 
@@ -124,7 +128,7 @@ The key `customers/42/report.pdf` is commonly a flat byte/string key whose slash
 
 Do not use “rename temporary directory to final directory” as a transaction. Publish a manifest/catalog pointer only after all referenced immutable objects exist and validate.
 
-### 3.2 Strong per-key consistency is not a multi-key transaction
+### Strong per-key consistency is not a multi-key transaction
 
 Some managed stores document strong read-after-write and list consistency. That means a completed object mutation becomes visible under the stated contract; it does not atomically commit `part-0001`, `part-0002`, and `manifest.json` together.
 
@@ -139,7 +143,7 @@ For a dataset:
 
 This is the pattern used by lakehouse table formats and object-backed log/database systems. See [Lakehouse Table Formats](../13-data-pipelines/05-lakehouse-table-formats.md).
 
-### 3.3 Conditional operations and fencing
+### Conditional operations and fencing
 
 Create-if-absent or generation/ETag match can serialize updates to one key:
 
@@ -153,7 +157,7 @@ One contender succeeds; losers reread and rebase. The committed generation is a 
 
 Do not infer a safe distributed lease from create-if-absent alone. A lease adds expiry, clock assumptions, renewal ambiguity, stale-holder fencing, and protected-resource enforcement. If an old holder can still mutate another resource, the object-store condition did not fence it. Use a consensus/transaction service when the coordination contract exceeds single-key CAS, or design downstream writes to verify a monotonically increasing epoch. See [Distributed Locks](../01-foundations/09-distributed-locks.md).
 
-### 3.4 Pagination and snapshot identity
+### Pagination and snapshot identity
 
 A multi-page list may or may not represent one snapshot as concurrent writes occur. Continuation tokens usually encode service state/order, not a portable transaction snapshot. A crawler must tolerate duplicate/missing-under-mutation behavior according to the documented API, or list from an immutable manifest rather than an actively changing prefix.
 
@@ -161,7 +165,7 @@ Never use list completion alone to declare a multi-object upload committed. The 
 
 ---
 
-## 4. Multipart and Resumable Upload Protocol
+## Multipart and Resumable Upload Protocol
 
 Large objects should upload in independently retryable ranges/parts:
 
@@ -181,25 +185,25 @@ sequenceDiagram
     O-->>C: V + object checksum/receipt
 ```
 
-### 4.1 Part identity and retries
+### Part identity and retries
 
 A part number or offset has replace/retry semantics defined by the API. Persist the upload ID and accepted part receipts outside process memory for long uploads. Retrying a part should overwrite/reuse its logical slot, not append another semantic part.
 
 Validate part size/order/count, full-object size, and a strong checksum. An ETag may be an opaque concurrency token or multipart construction rather than an MD5 hash. Request a documented checksum algorithm and store it in the producer's manifest.
 
-### 4.2 Completion is an ambiguous commit
+### Completion is an ambiguous commit
 
 If `Complete` times out, the object may have committed. Do not initiate a new logical target blindly. Query upload/object state, retry completion according to the provider contract, or inspect the exact expected version/checksum. Use a unique immutable key when possible so duplicate high-level attempts cannot overwrite unrelated data.
 
-### 4.3 Abandoned uploads
+### Abandoned uploads
 
 Uploaded parts consume capacity/cost but remain invisible as an object until completion. Lifecycle rules should abort old incomplete uploads only after the maximum legitimate pause and recovery procedure. Track bytes, age, and owner; a cleanup job must not race a resumable upload that still owns its ID.
 
 ---
 
-## 5. Durability: Coding, Detection, and Repair
+## Durability: Coding, Detection, and Repair
 
-### 5.1 Replication and erasure coding
+### Replication and erasure coding
 
 Three replicas store roughly $3D$ bytes for logical data $D$ and can survive two replica losses when placement is independent and one valid replica remains. A Reed–Solomon-style $(k,m)$ code creates $k$ data plus $m$ parity shards; any $k$ reconstruct the encoded stripe, with ideal storage overhead:
 
@@ -211,7 +215,7 @@ For $(10,4)$, ideal overhead is $1.4\times$. Real overhead also includes metadat
 
 Erasure coding trades storage for read/repair amplification and tail sensitivity. Reconstructing a missing shard may read $k$ surviving shards and perform decode work. Local reconstruction codes add local parities to repair common failures with fewer reads at some extra space/complexity.
 
-### 5.2 Durability model
+### Durability model
 
 Durability depends on:
 
@@ -233,7 +237,7 @@ $$
 
 before coding amplification, contention, or new failures. Repair capacity and prioritization determine the vulnerable window. Reserve it; do not assume idle foreground capacity appears during a zone/device incident.
 
-### 5.3 Integrity hierarchy
+### Integrity hierarchy
 
 Use checksums at:
 
@@ -247,17 +251,17 @@ A checksum detects unexpected byte change, not semantic corruption produced befo
 
 ---
 
-## 6. Read Path and Performance Model
+## Read Path and Performance Model
 
 The front end resolves metadata, selects healthy shards/copies, and streams full or range bytes. Latency includes authorization, metadata lookup, queueing, storage/network, optional reconstruction, and first-byte transfer.
 
-### 6.1 Range and parallel reads
+### Range and parallel reads
 
 Large analytical/media readers can issue bounded parallel range requests against immutable versions. Pin the version/generation so ranges cannot mix an overwrite. Align ranges with file-format units where possible: Parquet row groups/column chunks, video segments, index blocks.
 
 Parallelism is not free. It increases request charges, connection/port use, metadata QPS, tail amplification, and competition. Determine the concurrency knee from open-loop load against the real region/object-size distribution.
 
-### 6.2 Small-object tax
+### Small-object tax
 
 One billion 1 KiB logical objects contain about 0.93 TiB of payload, but each requires a metadata record, indexes, request operations, encryption/checksum state, and often inefficient coding/packing. If metadata and placement overhead average an illustrative 600 bytes/object, metadata alone is about:
 
@@ -267,11 +271,11 @@ $$
 
 before replicas. Compaction into immutable segment/container files can reduce request and metadata cost, at the price of an index and read amplification. Table/log formats own those segment manifests.
 
-### 6.3 Hot keys and partitions
+### Hot keys and partitions
 
 Modern managed services may repartition automatically; exact limits and ramp behavior change. Still model key and prefix/partition skew, especially for a new bucket, sequential load, one viral object, and `LIST` over one huge prefix. Use CDN/cache for public hot bytes, randomized or natural high-cardinality distribution where documented, and provider load tests rather than stale numeric folklore.
 
-### 6.4 Cost ledger
+### Cost ledger
 
 Track:
 
@@ -289,7 +293,7 @@ Unit cost depends on object-size/request mix and region, not only GiB-month. Sto
 
 ---
 
-## 7. Events and Derived Processing
+## Events and Derived Processing
 
 Object-created/deleted notifications are an asynchronous integration plane, not the object commit transaction. Depending on service/configuration, delivery may be at least once, reordered across keys, delayed, filtered, or occasionally require reconciliation.
 
@@ -310,7 +314,7 @@ Avoid consuming a temporary data object before its manifest commits. Trigger dow
 
 ---
 
-## 8. Lifecycle, Versions, Retention, and Deletion
+## Lifecycle, Versions, Retention, and Deletion
 
 Versioning can make overwrite/delete recoverable by creating a new generation or delete marker. It also multiplies storage and complicates privacy deletion. Lifecycle is a state machine:
 
@@ -322,7 +326,7 @@ legal hold / retention lock blocks deletion
 incomplete multipart aborted
 ```
 
-### 8.1 Safe garbage collection
+### Safe garbage collection
 
 For immutable data plus manifests:
 
@@ -335,17 +339,17 @@ For immutable data plus manifests:
 
 Age alone can delete a slow reader's object or a retained rollback manifest's data. Prefix listing alone can race publication.
 
-### 8.2 Object lock is not complete ransomware protection
+### Object lock is not complete ransomware protection
 
 Retention/WORM controls can prevent version deletion for a period, but recovery also depends on account/control-plane access, key availability, lifecycle configuration, catalog integrity, and independently authorized restore. Replication can copy malicious encryption or delete markers according to policy. See [Disaster Recovery and Data Reconstruction](../15-deployment/05-disaster-recovery.md).
 
-### 8.3 Deletion semantics
+### Deletion semantics
 
 Define whether delete hides the current key, creates a marker, erases one version, or schedules physical removal. Tenant erasure must cover versions, replicas, caches/CDNs, derived indexes, inventory, logs, and encryption keys within legal/backup rules. A restored old bucket must apply current deletion/authorization tombstones before exposure.
 
 ---
 
-## 9. Security and Capability URLs
+## Security and Capability URLs
 
 Authenticate bucket and object operations through workload/user identity and policy. Bind authorization to tenant, bucket, key/prefix, verb, version, size/content constraints where available, network/region, and expiry.
 
@@ -361,7 +365,7 @@ Presigned URLs are bearer capabilities. Scope them narrowly:
 
 Do not let a client turn a presigned upload into trusted published content. Validate/scan in a quarantine namespace, then publish an immutable version/manifest. Downloads can expose secrets through URL logs/referrers; prefer headers and controlled clients where necessary.
 
-### 9.1 Encryption
+### Encryption
 
 Server-side encryption protects storage-media/control boundaries according to provider policy. Customer-managed keys add policy and deletion control but introduce KMS availability and recovery dependencies. Client/application encryption hides plaintext from the store but prevents server-side inspection/transform and requires authenticated metadata/key distribution. Bind tenant, object identity, version, purpose, and schema as authenticated context; see [Cryptographic Key and Data-Protection Architecture](../10-security/06-encryption.md).
 
@@ -369,7 +373,7 @@ Separate data read/write identities from lifecycle, replication, retention, and 
 
 ---
 
-## 10. Multi-Region and Recovery
+## Multi-Region and Recovery
 
 “Multi-region bucket” can mean synchronous/managed placement within a location, asynchronous replication between buckets, or client-visible independent regions. Pin:
 
@@ -381,21 +385,21 @@ Separate data read/write identities from lifecycle, replication, retention, and 
 - egress/latency/residency constraints;
 - whether KMS keys and identity policies are recoverable in target region.
 
-### 10.1 Failover
+### Failover
 
 If one region is authoritative, promotion writes a new epoch/catalog root and fences old writers. DNS/routing alone is not fencing. New readers pin the recovered root; old clients with long-lived credentials cannot commit to a superseded generation.
 
 If multiple regions accept writes to the same logical key, per-region object versions need an explicit conflict policy. Last physical timestamp may converge while losing intent. Prefer immutable unique keys plus a serialized manifest/root or partition ownership when the domain cannot merge.
 
-### 10.2 Restore
+### Restore
 
 Inventory exact object versions, manifests, key versions, and lifecycle state. Measure request-limited as well as bandwidth-limited restore. Millions of small objects can miss RTO despite few total bytes. Verify restored manifests and random/full object checksums, then rebuild derived indexes before traffic.
 
 ---
 
-## 11. Concrete Failure Traces
+## Concrete Failure Traces
 
-### 11.1 Multipart completion times out
+### Multipart completion times out
 
 1. Client uploads all parts and calls complete.
 2. Service commits generation V, but the response is lost.
@@ -404,7 +408,7 @@ Inventory exact object versions, manifests, key versions, and lifecycle state. M
 
 Persist upload and logical object identity. Query/retry completion and verify exact version/checksum before creating another attempt; prefer immutable unique keys plus manifest publication.
 
-### 11.2 Two writers lose a manifest update
+### Two writers lose a manifest update
 
 1. Writers read root generation G pointing to M10.
 2. Each writes valid immutable M11a/M11b.
@@ -413,7 +417,7 @@ Persist upload and logical object identity. Query/retry completion and verify ex
 
 Use conditional update on G; loser rereads/rebases. Garbage-collect its unreachable manifest/data later.
 
-### 11.3 ETag mistaken for MD5
+### ETag mistaken for MD5
 
 1. Client computes MD5 of a large file.
 2. Multipart upload returns an ETag with provider-specific multipart meaning.
@@ -421,7 +425,7 @@ Use conditional update on G; loser rereads/rebases. Garbage-collect its unreacha
 
 Use documented checksum fields/algorithms and store the producer's content digest separately from the concurrency token.
 
-### 11.4 Repair storm extends vulnerability
+### Repair storm extends vulnerability
 
 1. A failure domain becomes unavailable and many stripes lose redundancy.
 2. Repair and foreground reads share the same network/storage limits.
@@ -430,7 +434,7 @@ Use documented checksum fields/algorithms and store the producer's content diges
 
 Reserve/priority-schedule repair, suppress retry amplification, repair the highest-risk stripes first, and alert on exposure bytes × age rather than only failed disk count.
 
-### 11.5 Lifecycle deletes reachable versions
+### Lifecycle deletes reachable versions
 
 1. A rollback manifest references data generation V7.
 2. Lifecycle expires all noncurrent data after 30 days using age alone.
@@ -439,7 +443,7 @@ Reserve/priority-schedule repair, suppress retry amplification, repair the highe
 
 Align retention with manifest reachability and rollback/backup roots, or copy protected release data into a separately governed class.
 
-### 11.6 Event consumer misses dataset membership
+### Event consumer misses dataset membership
 
 1. Producer uploads 1,000 files and receives per-object events.
 2. One event is delayed/quarantined.
@@ -448,7 +452,7 @@ Align retention with manifest reachability and rollback/backup roots, or copy pr
 
 Trigger on an immutable manifest with declared file count/digests and reconcile processed versions. File events are hints/work triggers, not the multi-object commit.
 
-### 11.7 Presigned upload crosses tenant scope
+### Presigned upload crosses tenant scope
 
 1. API accepts a caller-provided key when generating a presigned URL.
 2. Tenant A requests `tenant-B/contracts/current`.
@@ -457,7 +461,7 @@ Trigger on an immutable manifest with declared file count/digests and reconcile 
 
 Server derives canonical tenant destination, constrains size/checksum/type, writes to quarantine, and publishes only after ownership/content validation.
 
-### 11.8 Replication copies destructive state
+### Replication copies destructive state
 
 1. Compromised credentials encrypt/overwrite objects or create delete markers.
 2. Cross-region replication faithfully propagates operations.
@@ -468,9 +472,9 @@ Retain immutable versions under separate authority and rehearse catalog/key-awar
 
 ---
 
-## 12. Operations, Verification, and Migration
+## Operations, Verification, and Migration
 
-### 12.1 Observability
+### Observability
 
 Track by bucket/tenant/class/region without unbounded key cardinality:
 
@@ -487,7 +491,7 @@ Track by bucket/tenant/class/region without unbounded key cardinality:
 - top hot prefixes/objects and throttling;
 - manifest reachability and broken-reference scans.
 
-### 12.2 Test the protocol
+### Test the protocol
 
 - Lose responses after part upload, complete, conditional root update, and delete.
 - Reorder/retry multipart parts and complete calls.
@@ -500,7 +504,7 @@ Track by bucket/tenant/class/region without unbounded key cardinality:
 - Exercise retention/legal hold and prove privileged identities cannot bypass the designed boundary.
 - Fail over regions with stale writers and long-lived clients.
 
-### 12.3 Migrate safely
+### Migrate safely
 
 When moving providers/layouts:
 
@@ -518,7 +522,7 @@ When moving providers/layouts:
 
 ---
 
-## 13. Design Review Framework
+## Design Review Framework
 
 Ask:
 

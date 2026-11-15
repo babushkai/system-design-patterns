@@ -10,6 +10,10 @@ Two disciplines separate this from "breaking things on purpose". Every experimen
 
 ## What Resilience Testing Has to Prove
 
+Systems are built with a great deal of machinery for surviving failure: replicas, retries, failovers, timeouts, and fallbacks. Almost none of it runs in normal operation. Code that is never executed is code that has never been tested, and it decays as the system around it changes. A failover that worked when it was written two years ago may now depend on a configuration that has since been altered, and nobody will know until the day it is needed. Failure-handling code is therefore the least reliable code in most systems, and it is called upon at the worst moment.
+
+Resilience testing addresses this by causing failures on purpose, under controlled conditions, to find out whether the machinery works. A dependency is made slow, a machine is stopped, a network link is cut, and the system's response is compared with what was expected. The practice began with tools that terminated servers at random in production, and it has matured into something closer to experimental science. An experiment states in advance what should remain true, limits how much of the system it can affect, and stops automatically if that limit is exceeded. The aim is to learn where the design is weaker than its authors believed, at a time when the people who can fix it are watching.
+
 Write the claim before choosing the tool, because each tier can prove only some of it:
 
 | Claim | Shape | Tier that can prove it |

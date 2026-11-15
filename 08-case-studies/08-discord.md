@@ -12,6 +12,10 @@ Claims use three evidence labels:
 
 ## Workload and Service Contract
 
+Discord's workload is dominated by an extreme imbalance among its communities. Most servers have a handful of members who exchange a few messages an hour. A few have millions of members and produce a continuous stream of messages, presence changes, and voice activity. A design that treats every community alike is either hopelessly overbuilt for the many or falls over for the few, and the engineering described in the public record is largely a series of responses to those few.
+
+The pressure shows in three places. Stored messages are partitioned by channel, so a very busy channel becomes a partition far larger and hotter than its neighbours. A message or presence update in a large community has to be delivered to everyone connected to it, so the cost of each event grows with the size of the audience. And voice requires low-latency media servers placed near users, which is a different kind of infrastructure from text altogether. The recurring technique is to isolate the heavy communities so that their load cannot degrade the experience of everyone else.
+
 **Documented, 2023 storage snapshot.** Discord reported a message dataset in the trillions. At the beginning of 2022, its Cassandra message cluster had 177 nodes; Discord completed its message-store switch to ScyllaDB in May 2022 and later reported 72 ScyllaDB nodes for that workload. These are dated migration figures, not current fleet size or message rate. [Discord, How Discord Stores Trillions of Messages](https://discord.com/blog/how-discord-stores-trillions-of-messages)
 
 **Documented, 2018 voice snapshot.** Discord reported 2.5 million concurrent voice users and described an SFU-based server architecture. Treat that as a 2018 publication snapshot. [Discord, concurrent voice with WebRTC](https://discord.com/blog/how-discord-handles-two-and-half-million-concurrent-voice-users-using-webrtc)

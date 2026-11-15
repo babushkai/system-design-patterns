@@ -8,6 +8,10 @@ Distributed transaction design centers on **atomic commit across storage partici
 
 ## Define the Outcome Contract
 
+A transaction on one database is all-or-nothing because one machine controls the outcome. It writes its intentions to a log, and a single record in that log marks the moment of commit. When a transaction spans two databases, or two partitions of one, no single machine is in that position. Each participant could commit or abort on its own, and if one commits while the other aborts, money has left one account without arriving in another.
+
+Two-phase commit is the classical remedy. A coordinator first asks every participant to prepare, which means to do everything necessary to commit and to promise that it will be able to. Once all have promised, the coordinator records the decision and tells them to commit. The protocol works, and its weakness lies in the interval between the two phases. A participant that has promised cannot go back on the promise, and it cannot commit until told to. If the coordinator fails at that moment, the participant must wait, holding its locks, for as long as the coordinator is gone. The alternatives in this chapter are different ways of avoiding or shortening that wait, and each gives up something to do so.
+
 Three different problems are commonly called a distributed transaction:
 
 1. **Atomic commit:** every participant commits, or every participant aborts.

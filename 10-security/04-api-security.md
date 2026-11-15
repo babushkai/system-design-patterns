@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-API security is the preservation of request meaning and resource authority across clients, proxies, gateways, services, queues, and data stores. TLS protects a channel; authentication identifies a caller; neither prevents object-level authorization bugs, parser disagreement, mass assignment, SSRF, replay, resource exhaustion, or unsafe webhooks.
+API security is the preservation of request meaning and resource authority across clients, proxies, gateways, services, queues, and data stores. TLS protects a channel and authentication identifies a caller. Neither one prevents object-level authorization bugs, parser disagreement, mass assignment, SSRF, replay, resource exhaustion, or unsafe webhooks, and those are the ways APIs are actually breached.
 
 A production API needs:
 
@@ -17,13 +17,15 @@ A production API needs:
 - stable error semantics without sensitive leakage;
 - abuse telemetry and deterministic adversarial tests.
 
-This chapter covers the API threat boundary. Identity protocols, authorization models, encryption, and generic rate algorithms remain in their canonical chapters.
+This chapter covers the API threat boundary. Identity protocols, authorization models, encryption, and generic rate algorithms are treated in their own chapters.
 
 ---
 
-## 1. Request Contract and Invariants
+## Request Contract and Invariants
 
-Model an accepted request as:
+Most API vulnerabilities share a shape. Two components each handle the same request correctly by their own lights, and they disagree about what the request means. The gateway thinks the path is one thing and the service thinks it is another. The proxy thinks the request ends here and the backend thinks it ends there. The authentication layer establishes who is calling, and the handler assumes this also established what they may touch. No single component is wrong, and the vulnerability is in the difference between them.
+
+For that reason we begin by writing down what an accepted request is, as a single object on which every component must agree:
 
 ```text
 request = (
@@ -38,7 +40,7 @@ request = (
 )
 ```
 
-### 1.1 Core invariants
+### Core invariants
 
 1. **Parser agreement:** every security-relevant hop interprets framing and routing identically.
 2. **Authentication before trust:** caller-provided identity/tenant headers are not authoritative.
@@ -53,7 +55,7 @@ request = (
 
 ---
 
-## 2. Normalize Once, Validate at Every Trust Boundary
+## Normalize Once, Validate at Every Trust Boundary
 
 ```mermaid
 flowchart LR
@@ -67,13 +69,13 @@ flowchart LR
     S --> DOM[Object/action policy and invariants]
 ```
 
-The edge normalizes protocol framing and rejects ambiguity. The gateway authenticates and applies coarse policy. The owning service revalidates identity context and enforces domain/object authorization. The database constrains tenant and data invariants where possible.
+Each layer is suited to a different kind of check, according to what it knows. The edge sees raw bytes, so it normalizes protocol framing and rejects ambiguity. The gateway knows identities and routes, so it authenticates and applies coarse policy. The owning service is the only component that knows what an invoice is and who may read it, so it revalidates the identity context and enforces object and domain authorization. The database, where possible, constrains tenant and data invariants as a final backstop.
 
-Do not assume an internal hop is trusted merely because a gateway usually precedes it. Close direct paths or require the same authenticated, integrity-protected context.
+The recurring error is to treat an internal hop as trusted because a gateway usually stands in front of it. The word "usually" matters here. Services acquire direct paths over time: a debugging port, a batch job, a second gateway added for a partner, a peer service that calls in sideways. Either those paths are closed, or every path carries the same authenticated, integrity-protected context.
 
-### 2.1 Propagated identity
+### Propagated identity
 
-If a proxy injects principal/tenant headers:
+When a proxy authenticates the caller and passes the result inward as headers, a specific sequence is required:
 
 1. strip client-supplied versions;
 2. authenticate at the proxy;
@@ -82,25 +84,31 @@ If a proxy injects principal/tenant headers:
 5. verify at the service;
 6. retain original workload identity as actor/delegation context.
 
-An unsigned `X-User-ID` is input, not identity.
+The first step is the one that gets forgotten, and its omission is among the simplest serious vulnerabilities there is. If the proxy adds `X-User-ID` and does not first remove any `X-User-ID` the client sent, then on any path where the proxy's own header is absent or appended second, the client chooses who they are. An unsigned `X-User-ID` is input, like any other field the client can set, and it becomes identity only when the service can verify who wrote it.
 
 ---
 
-## 3. HTTP Framing and Routing Ambiguity
+## HTTP Framing and Routing Ambiguity
 
-Request smuggling occurs when two hops disagree about where one request ends and the next begins. Defenses:
+Request smuggling is the clearest example of parser disagreement, and its mechanism explains the defenses.
+
+HTTP/1.1 offers two ways to say how long a request body is: a `Content-Length` header giving a byte count, and `Transfer-Encoding: chunked`, in which the body arrives in pieces terminated by a zero-length chunk. A request should use one. Suppose an attacker sends both, and the front-end proxy honors `Content-Length` while the backend honors `Transfer-Encoding`. The proxy forwards what it takes to be one request. The backend reads up to the terminating chunk, considers the request complete, and finds bytes left over on the connection. It treats them as the beginning of the next request.
+
+Proxies reuse backend connections for many users, so the "next request" is completed by whatever arrives next, which is some other user's request. The attacker's leftover bytes become a prefix on a stranger's request, executed with that stranger's cookies. The proxy's access controls were applied to the outer request it saw and never to the hidden one. The defenses are these:
 
 - use maintained HTTP stacks;
 - reject ambiguous/multiple/conflicting framing headers;
 - normalize or reject obsolete transfer encodings;
-- do not forward malformed requests after “repair”;
+- do not forward malformed requests after "repair";
 - align proxy/backend HTTP versions and behavior;
 - test connection reuse and upgrade paths;
 - patch intermediaries as one protocol chain.
 
-### 3.1 Authority and path
+The fourth item reflects a principle that recurs throughout this chapter. A component that receives something ambiguous and helpfully repairs it has chosen one interpretation, and the next component may choose the other. Rejecting the request is the only response that cannot create a disagreement.
 
-Canonicalize before routing/signing/authorization:
+### Authority and path
+
+The same problem arises at the level of URLs. Before routing, signing, or authorizing, the request target has to be reduced to one canonical form, and each of the following is a place where two components may reduce it differently:
 
 - scheme and host/authority;
 - port/default port;
@@ -112,13 +120,13 @@ Canonicalize before routing/signing/authorization:
 - case sensitivity;
 - forwarded host/proto headers from trusted proxies only.
 
-If the gateway authorizes `/admin` but the service normalizes `/%61dmin` differently, enforcement diverges.
+A concrete case: the gateway has a rule denying `/admin` to ordinary users, and it compares the raw path. A request for `/%61dmin` does not match, since `%61` is the percent-encoding of the letter `a`. The gateway passes it. The service decodes the path before routing and serves the admin page. Each component applied a sensible rule and the combination is a bypass.
 
-Reject unsupported methods and method overrides. Route action should come from the matched server route, not a client claim.
+Unsupported methods and method-override headers are rejected. The action being performed is derived from the route the server matched, and never from something the client asserts about its own request.
 
-### 3.2 Header policy
+### Header policy
 
-Set bounds on:
+Headers are bounded in:
 
 - total header bytes;
 - header count;
@@ -126,15 +134,13 @@ Set bounds on:
 - duplicates and combination behavior;
 - trusted forwarding chain length.
 
-Never trust `X-Forwarded-For`, `Forwarded`, or original-host headers from untrusted network peers. The first trusted ingress replaces/sanitizes the chain.
+`X-Forwarded-For`, `Forwarded`, and original-host headers deserve particular suspicion, because applications use them for rate limiting, geolocation, and audit, and a client can send them as easily as a proxy can. They are meaningful only when set by infrastructure we control. The first trusted ingress replaces or sanitizes the chain, and nothing received from an untrusted peer is believed.
 
 ---
 
-## 4. Schema, Content Type, and Input Bounds
+## Schema, Content Type, and Input Bounds
 
-Validate the declared content type and actual parser. Reject ambiguous content negotiation and unsupported charset/encoding.
-
-Schema validation should define:
+The declared content type and the parser actually used must agree, and ambiguous content negotiation and unsupported charsets or encodings are rejected. Beyond that, a schema defines what a well-formed request is:
 
 - required and optional fields;
 - types and numeric bounds;
@@ -147,17 +153,17 @@ Schema validation should define:
 - timestamp/decimal canonical form;
 - cross-field invariants.
 
-Unknown-field tolerance helps forward compatibility but enables hidden mass-assignment if domain binding accepts them later. Parse into an explicit request type, then map allowed fields.
+The unknown-field policy involves a real tension. Tolerating unknown fields helps compatibility, since an old server can accept requests from a newer client. It also means the server is accepting data it has not examined, and if any later stage binds the raw request to a domain object, those unexamined fields become writes. The resolution is to parse into an explicit request type that contains only the known fields and then map from that type, so that tolerance at the parser never reaches the domain.
 
-### 4.1 Decompression and parser bombs
+### Decompression and parser bombs
 
-Bound compressed and expanded bytes, compression ratio, nesting, entity expansion, and parser time. Apply limits before buffering the whole body.
+Some inputs are small on the wire and enormous once processed. A few kilobytes of compressed data can expand to gigabytes, and a deeply nested document can exhaust a recursive parser's stack. We bound compressed and expanded bytes, compression ratio, nesting, entity expansion, and parser time, and we apply the limits while reading, before the whole body has been buffered.
 
-Streaming parsers reduce memory but do not remove semantic limits. Abort on deadline/budget and stop downstream work.
+Streaming parsers reduce memory use and do not remove the need for semantic limits. When a deadline or budget is exceeded, the request is aborted and downstream work is stopped.
 
-### 4.2 Batch and graph APIs
+### Batch and graph APIs
 
-A small request can trigger huge work:
+A request-per-second limit assumes that requests cost roughly the same. Several kinds of API break the assumption, because a single small request can demand a very large amount of work:
 
 - batch of thousands of IDs;
 - GraphQL depth/breadth/aliases;
@@ -167,7 +173,9 @@ A small request can trigger huge work:
 - N+1 backend fan-out;
 - unbounded export.
 
-Use a cost model:
+Graph query languages make the problem acute. A query a few hundred bytes long can ask for a user's friends, each friend's friends, and each of their posts, and aliases let the client request the same expensive field many times in one document. The request count is one. The backend call count may be in the thousands.
+
+The remedy is to estimate cost before executing:
 
 ```text
 estimated_cost =
@@ -177,13 +185,13 @@ estimated_cost =
   + requested_bytes * serialization_cost
 ```
 
-Reject, split, defer, or require an asynchronous job when cost exceeds the request class budget. Measure actual versus estimate and refine.
+A request whose estimate exceeds the budget for its class is rejected, split, deferred, or converted to an asynchronous job. The estimate will be imperfect at first, so actual cost is measured against it and the model refined.
 
 ---
 
-## 5. Object-Level and Function-Level Authorization
+## Object-Level and Function-Level Authorization
 
-Broken object-level authorization (BOLA/IDOR) occurs when a caller can choose an object ID and the service checks only that the caller is authenticated.
+Broken object-level authorization, also known as BOLA or IDOR, has led the OWASP API risk list for years, and it is almost embarrassingly simple. An authenticated caller requests `/invoices/1001`, receives their invoice, and then requests `/invoices/1002`. The service confirms that the caller is logged in, loads invoice 1002, and returns it. It belongs to someone else.
 
 Unsafe:
 
@@ -200,15 +208,17 @@ authorize(subject, action='invoice.read', invoice)
 return filtered representation
 ```
 
-Prefer tenant/resource predicates in the storage query where possible, then domain authorization. This reduces accidental cross-tenant load, but does not replace relationship/action policy.
+The bug persists because it is an absence. No line of code is wrong. A check that should exist does not, the endpoint works perfectly in every functional test, and nothing in a normal code review draws attention to a missing statement. It cannot be fixed at the gateway either, because the gateway does not know who owns invoice 1002. Only the service that owns the data can make this decision.
 
-### 5.1 Never authorize by hidden UI
+Where possible, the tenant or owner predicate goes into the storage query itself, so that a lookup for another tenant's row finds nothing. This guards against accidental cross-tenant loads. It does not replace the domain authorization that follows, which handles relationships and actions a simple predicate cannot express.
 
-Removing an admin button or route from a client does not protect the endpoint. Every server operation enforces action policy.
+### Never authorize by hidden UI
 
-### 5.2 Function-level authorization
+Removing an admin button from a client hides the button. The endpoint behind it remains reachable by anyone who can construct the request, which is everyone. Every server operation enforces its own action policy.
 
-Map each route to a stable action name. Review differences across:
+### Function-level authorization
+
+Each route maps to a stable action name, and the mapping is reviewed for consistency across all the ways the same operation can be reached:
 
 - HTTP methods;
 - versioned routes;
@@ -218,27 +228,27 @@ Map each route to a stable action name. Review differences across:
 - asynchronous equivalents;
 - mobile/legacy APIs.
 
-A read permission does not imply export; update does not imply delete; tenant admin does not imply platform admin.
+These alternate paths are where function-level bugs concentrate. The main endpoint was written carefully and reviewed. The bulk variant was added later under deadline, and the version-one route was kept for an old mobile client and never updated when the policy changed. Permissions also do not imply one another: read does not imply export, update does not imply delete, and administering a tenant does not imply administering the platform.
 
-### 5.3 Relationship changes
+### Relationship changes
 
-Authorize using current resource state and protect against time-of-check/time-of-use races. If membership/ownership can change between check and mutation, enforce the predicate/version in the same transaction or use an expected resource version.
+Authorization is evaluated against current resource state, and it must not be separated from the action it authorizes by a gap in which the state can change. If a user's membership can be revoked between the check and the mutation, a request that started while they were a member completes after they were removed. The predicate or an expected resource version is enforced in the same transaction as the write.
 
 The authorization models and policy distribution belong to [Authorization at Scale](./07-authorization-patterns.md).
 
 ---
 
-## 6. Mass Assignment and Response Exposure
+## Mass Assignment and Response Exposure
 
-Mass assignment binds request fields directly to a domain/database object:
+Web frameworks make it convenient to copy a request body directly into a domain or database object:
 
 ```text
 user.update(request.json)
 ```
 
-An attacker supplies `role=admin`, `tenant_id=other`, `credit_limit`, or `status=approved`.
+The convenience is that adding a field to the model makes it updatable through the API with no further code. That convenience is also the vulnerability. The client decides which fields to send, and so an attacker sends `role=admin`, `tenant_id=other`, a `credit_limit`, or `status=approved`. Fields that were never meant to be client-writable, and that appear in no form or documentation, are written because they exist on the object.
 
-Use explicit command DTOs and mappings:
+The remedy is an explicit command type listing the fields a caller may set, kept separate from the fields the server owns:
 
 ```text
 UpdateProfileCommand:
@@ -252,9 +262,9 @@ server-owned:
   risk_score
 ```
 
-Field-level authorization may depend on current state or caller role. Reject or explicitly ignore unknown fields consistently; silent acceptance can hide client bugs and future privilege escalation.
+Field-level authorization may depend on the current state or on the caller's role. Unknown fields are either rejected or ignored, consistently. Silently accepting them hides client bugs today and becomes a privilege escalation on the day someone adds a model field with the same name.
 
-Responses also need allowlists. Serializing an internal object can leak:
+The same reasoning applies in reverse to responses. Serializing an internal object returns everything on it, which may include:
 
 - password/token hashes;
 - internal notes;
@@ -264,15 +274,15 @@ Responses also need allowlists. Serializing an internal object can leak:
 - deleted fields;
 - third-party secrets.
 
-Version response schemas and test sensitive-field absence.
+Response schemas are versioned allowlists, and tests assert that sensitive fields are absent.
 
 ---
 
-## 7. Injection and Command Boundaries
+## Injection and Command Boundaries
 
-Use parameterized database queries, structured subprocess APIs, and safe templates. The deeper rule: do not cross from data to code/command through string concatenation.
+The standard advice is to use parameterized database queries, structured subprocess APIs, and safe templates. The principle behind all three is worth stating once, because it covers cases the advice does not list. Injection happens when a string that mixes trusted code and untrusted data is handed to an interpreter that cannot tell which characters came from where. Parameterization works because it sends the two through separate channels, so the data is never parsed as code at all.
 
-Boundaries include:
+The boundaries where this arises are numerous:
 
 - SQL/NoSQL queries;
 - shell/process invocation;
@@ -284,19 +294,19 @@ Boundaries include:
 - email/header generation;
 - spreadsheet/CSV export formulas.
 
-Allowlists are preferable when input selects an identifier such as sort column, table, field, command, or algorithm. Parameter binding does not safely parameterize every identifier.
+Parameter binding has a limit that catches people out. It can bind values, and it generally cannot bind identifiers. A sort column, table name, or field name supplied by the client cannot be passed as a bound parameter, and concatenating it reintroduces the problem. For identifiers, the input is checked against an allowlist of permitted names.
 
-Escaping is context-specific. HTML escaping does not secure JavaScript/URL/SQL contexts. Prefer APIs that keep structure.
+Escaping is specific to its context. HTML escaping does nothing useful inside a JavaScript string, a URL, or a SQL statement. APIs that preserve structure are preferable to any amount of escaping.
 
-Log injection matters operationally: encode structured fields and prevent attacker input from forging log lines/severity/tenant.
+Log injection is easy to dismiss and matters operationally. An attacker who can put a newline into a logged field can forge entire log lines, with whatever severity, tenant, or user they choose, and logs are the evidence an investigation will later rely on. Structured fields are encoded so that attacker input stays inside its field.
 
 ---
 
-## 8. SSRF and Outbound Request Security
+## SSRF and Outbound Request Security
 
-Server-side request forgery turns a trusted server into an attacker-controlled network client.
+Server-side request forgery arises whenever a server fetches a URL that a user supplied: to preview a link, import a file, or deliver a webhook. The server sits inside the network. It can reach things the user cannot, and it will reach them on the user's behalf.
 
-Threats:
+The classic target shows why this is serious. Cloud instances can obtain their own credentials from a metadata service at a fixed link-local address, reachable only from the instance itself. That restriction is the service's entire access control. A server that fetches arbitrary URLs is on the instance, so a user who asks it to fetch the metadata address receives the server's cloud credentials in the response. The threats more generally are:
 
 - cloud metadata and node agents;
 - internal admin/control planes;
@@ -308,9 +318,9 @@ Threats:
 - credential leakage to attacker endpoint;
 - large/slow response resource exhaustion.
 
-### 8.1 Safer architecture
+### Safer architecture
 
-Prefer not to accept arbitrary URLs. Use:
+The strongest position is not to accept arbitrary URLs at all, and to use instead:
 
 - named integrations/destinations;
 - pre-registered webhook endpoints;
@@ -320,7 +330,7 @@ Prefer not to accept arbitrary URLs. Use:
 - destination-specific credentials;
 - response size/time limits.
 
-Validation sequence:
+Where arbitrary destinations must be supported, validation follows a specific sequence:
 
 1. parse URL with one maintained parser;
 2. require allowed scheme and explicit/default port;
@@ -331,17 +341,19 @@ Validation sequence:
 7. revalidate redirects and DNS changes;
 8. limit bytes, time, redirects, and decompression.
 
-String prefix/suffix checks are insufficient. DNS names can resolve to private addresses.
+Steps 4 through 6 are there to defeat DNS rebinding, a time-of-check to time-of-use attack. A naive implementation resolves the hostname, checks that the address is public, and then hands the hostname to an HTTP client, which resolves it again. The attacker controls the DNS server for their domain and answers the first query with a public address and the second with `127.0.0.1` or the metadata address. The check passed on one address and the connection went to another. The defense is to resolve once, validate the resulting addresses, and connect to exactly the address that was validated.
 
-### 8.2 Egress identity
+For the same reason, checks on the URL string, such as prefix or suffix matching, are insufficient. A perfectly ordinary-looking domain name can resolve to a private address, and the attacker decides what it resolves to.
 
-Outbound calls use per-integration workload identity/credentials. Do not attach a broad cloud credential to arbitrary destinations. Strip sensitive inbound headers before forwarding.
+### Egress identity
+
+Outbound calls use an identity and credentials specific to the integration. A broad cloud credential must never be attached automatically to requests bound for arbitrary destinations, and sensitive inbound headers are stripped before anything is forwarded.
 
 ---
 
-## 9. Webhooks and Asynchronous Callbacks
+## Webhooks and Asynchronous Callbacks
 
-Incoming webhook verification needs:
+A webhook endpoint is a public URL that accepts instructions such as "this payment succeeded." Anyone on the internet can post to it, so the receiver must establish that a message came from the provider, that it is recent, and that it has not been processed before. Verification of an incoming webhook needs:
 
 ```text
 provider identity/key
@@ -353,9 +365,9 @@ replay/idempotency state
 schema/version
 ```
 
-Verify the signature before JSON reserialization changes bytes. Use constant-time comparison for MACs. Restrict algorithms/keys and rotate with overlap.
+The signature is verified over the exact bytes that were received. This goes wrong in a predictable way: the framework parses the JSON body, the handler re-serializes it to compute the signature, and the re-serialized form differs from the original in whitespace or key order, so verification fails or, worse, is made lenient to compensate. The raw body must be captured before any parsing. MACs are compared in constant time, and algorithms and keys are restricted and rotated with overlap.
 
-The receiver:
+The receiver then proceeds as follows:
 
 1. bounds body;
 2. verifies key/signature/timestamp;
@@ -365,9 +377,11 @@ The receiver:
 6. quarantines deterministic failures;
 7. reconciles provider state for high-value events.
 
-Do not trust an event merely because its source IP matches a published range; signatures provide stronger identity and ranges change.
+A valid signature shows that the provider sent the message at some time. It does not show that this is the first delivery. Providers retry, and an attacker who captures one signed event can send it again, so the event identifier is recorded atomically and a repeat is a no-op.
 
-Outgoing webhooks need:
+The source IP address is weak evidence. Published address ranges change, and a signature identifies the sender far more strongly.
+
+When we are the sender, the obligations are mirrored:
 
 - destination registration/verification;
 - SSRF-safe egress;
@@ -379,11 +393,13 @@ Outgoing webhooks need:
 - secret rotation overlap;
 - redaction and tenant isolation.
 
+An outgoing webhook is also a server-side fetch of a customer-supplied URL, so everything in the previous section applies to it.
+
 ---
 
-## 10. Browser APIs: Cookies, CSRF, and CORS
+## Browser APIs: Cookies, CSRF, and CORS
 
-If a browser automatically sends credentials (cookies, client certificates), state-changing requests need CSRF protection:
+Browsers add a threat that other clients do not have, because a browser will send requests on behalf of a page the user did not intend to trust. When a page at `evil.example` submits a form to `bank.example`, the browser attaches the user's `bank.example` cookies. The bank sees an authenticated request. This is cross-site request forgery, and it follows directly from the fact that cookies are attached according to the destination of a request, whichever page initiated it. Where the browser sends credentials automatically, state-changing requests need protection:
 
 - SameSite cookie policy;
 - unpredictable token bound to session;
@@ -391,21 +407,21 @@ If a browser automatically sends credentials (cookies, client certificates), sta
 - no state change via safe methods;
 - content-type/custom-header strategy for APIs.
 
-Bearer tokens in explicit authorization headers are not automatically attached cross-origin like cookies, but token storage/exfiltration and XSS remain.
+Bearer tokens in an explicit `Authorization` header are not attached automatically, so they are not exposed to this attack. They have a different exposure: script in the page must be able to read them, and so can injected script.
 
-CORS is a browser response-reading policy, not server authentication. Avoid reflecting arbitrary `Origin` with credentials. Configure exact trusted origins, methods, headers, and cache `Vary: Origin` correctly.
+CORS is widely misunderstood as a server-side access control. It is an instruction to browsers about which other origins may read a response. It does not stop a request from being sent or processed, and clients that are not browsers ignore it entirely. Its most dangerous misconfiguration is to reflect whatever `Origin` header arrives while also allowing credentials, which tells the browser that every site on the internet may read authenticated responses. Trusted origins, methods, and headers are configured exactly, and `Vary: Origin` is set so that caches do not serve one origin's response to another.
 
-Servers must enforce authorization regardless of CORS; non-browser clients ignore it.
+Whatever the CORS policy says, the server enforces authorization on every request.
 
 ---
 
-## 11. Replay, Idempotency, and Request Signatures
+## Replay, Idempotency, and Request Signatures
 
-TLS does not prevent a valid request from being repeated by a holder or intermediary.
+TLS protects a request in transit between two endpoints. It does nothing to stop a valid request from being sent twice, whether by a client that retried, an intermediary that duplicated it, or someone who obtained a copy.
 
-For effectful operations use [Idempotency and Operation Identity](../01-foundations/08-idempotency.md). Bind operation key to tenant, caller, action, resource, and semantic request digest.
+For operations with effects, we use [Idempotency and Operation Identity](../01-foundations/08-idempotency.md), binding the operation key to the tenant, caller, action, resource, and a digest of the request's meaning.
 
-HTTP message signatures or application request signatures can bind:
+Where a request must be verifiable independently of the channel it arrived on, HTTP message signatures or application-level signatures can bind:
 
 - method;
 - authority;
@@ -415,15 +431,15 @@ HTTP message signatures or application request signatures can bind:
 - creation/expiry;
 - nonce/key identity.
 
-Both signer and verifier must canonicalize identically and account for proxies that rewrite authority/path/headers. Signature validation does not replace authorization or replay state.
+The canonicalization problem returns here in its sharpest form. Signer and verifier must produce byte-identical input from their respective views of the request, and any proxy between them that rewrites the host, the path, or a covered header breaks the signature. A valid signature also establishes only who sent the request. Authorization and replay state are still required.
 
-Use signed requests where channel termination/intermediaries or webhook/client proof require message-level integrity. Otherwise mTLS/OAuth sender constraint may be simpler.
+Signed requests are worth their complexity where intermediaries terminate the channel, or where webhooks and client proofs need integrity at the message level. Elsewhere, mutual TLS or OAuth sender constraint is usually simpler.
 
 ---
 
-## 12. Resource Exhaustion and Abuse
+## Resource Exhaustion and Abuse
 
-Rate limits are one layer; resource protection also needs:
+Rate limiting is one layer of protection against exhaustion, and several others are needed alongside it:
 
 - request/body/header limits;
 - concurrency limits;
@@ -438,7 +454,7 @@ Rate limits are one layer; resource protection also needs:
 
 The generic algorithms belong to [Rate Limiting](../06-scaling/05-rate-limiting.md) and [Backpressure](../06-scaling/07-backpressure.md).
 
-### 12.1 Capacity example
+### Capacity example
 
 Suppose an endpoint:
 
@@ -465,13 +481,13 @@ Average budget per request at 6,000 rps:
 63,000 / 6,000 = 10.5 lookups/request
 ```
 
-The API must reduce requested fan-out, batch/cache efficiently, defer work, or reject. Adding only a request-per-second limit ignores cost variance.
+The endpoint permits 40 lookups per request and the system can afford about 10. In ordinary operation this goes unnoticed, because typical requests use few. The gap is exposed by anyone, hostile or merely unusual, whose requests all sit at the maximum, and at that point the downstream receives nearly four times its safe load while the request rate looks perfectly normal. A request-per-second limit cannot see this, since it counts requests and the downstream is consumed in lookups. The API must reduce the fan-out it permits, batch or cache more efficiently, defer work, or reject.
 
-Charge retries and cache misses to the initiating tenant/operation budget. Otherwise attackers amplify work indirectly.
+Retries and cache misses are charged to the budget of the tenant and operation that caused them. If they are free, an attacker can amplify work indirectly by inducing them.
 
 ---
 
-## 13. Error and Cache Semantics
+## Error and Cache Semantics
 
 Errors should be stable, machine-readable, and minimally revealing:
 
@@ -484,9 +500,9 @@ request/trace reference
 safe validation details
 ```
 
-Do not expose stack traces, SQL, internal hostnames, key material, policy internals, or whether a sensitive resource exists. For object access, returning the same external result for absent and unauthorized may reduce enumeration, while internal audit keeps distinction.
+Stack traces, SQL, internal hostnames, key material, and policy internals do not belong in responses, where they serve as reconnaissance. Whether a sensitive resource exists is also information. If a request for another tenant's invoice returns "forbidden" and a request for a nonexistent one returns "not found," the difference lets a caller enumerate valid identifiers. Returning the same external result for both closes that channel, while the internal audit log keeps the distinction.
 
-Differentiate:
+Clients do need to be able to tell apart the cases that call for different behavior:
 
 - malformed request;
 - unauthenticated;
@@ -496,15 +512,15 @@ Differentiate:
 - transient unavailable;
 - accepted asynchronous work.
 
-Cache controls are security controls. Prevent shared-cache leakage by including authorization/tenant in cache semantics or marking private/no-store. Do not cache personalized error/success responses under a public key. Normalize `Vary` behavior across CDN/proxy/app.
+Cache controls are security controls. A shared cache stores a response under a key, usually the URL, and serves it to whoever asks next. If the response was personalized and the key was not, the next user receives the first user's data. Either the cache key includes the authorization and tenant context, or the response is marked private or no-store. `Vary` behavior must be consistent across the CDN, the proxy, and the application, for the usual reason: if they disagree about what the key is, one of them will serve something the others would not.
 
 ---
 
-## 14. Multi-Tenant and Multi-Region Control Planes
+## Multi-Tenant and Multi-Region Control Planes
 
-Tenant context must be derived from authenticated grant/host/resource relationship and propagated with integrity. Every database/cache/search/object key includes tenant scope unless the resource is deliberately global.
+Tenant context is derived from the authenticated grant, the host, or the resource relationship, and it is propagated with integrity. Every database, cache, search, and object key includes the tenant scope unless the resource is deliberately global.
 
-API policy/config includes:
+API policy is itself configuration that must be distributed:
 
 - routes and versions;
 - schema/size/cost rules;
@@ -515,15 +531,15 @@ API policy/config includes:
 - rate/admission classes;
 - CORS/cache policy.
 
-Publish versioned, signed snapshots; validate and activate atomically. A partial policy rollout where a new route exists before its authorization mapping can create a bypass.
+It is published as versioned, signed snapshots that are validated and activated atomically. Atomicity matters because these pieces depend on one another. If a new route becomes live a moment before its authorization mapping does, there is an interval during which the route exists with no policy, and depending on the default that is a bypass.
 
-Regions need last-known-good policy with a staleness bound. Emergency denies and key revocations need convergence telemetry. Do not independently resolve concurrent security policy with last-write-wins if one update removes access and another adds it.
+Regions hold a last-known-good policy with a bound on its staleness. Emergency denies and key revocations need telemetry showing when every region has converged. Concurrent security policy changes should not be reconciled by last-write-wins. If one administrator removes an access right while another adds an unrelated one, a merge that keeps only the later write may silently restore what the first removed.
 
 ---
 
-## 15. Failure Traces
+## Failure Traces
 
-### 15.1 BOLA across tenants
+### BOLA across tenants
 
 1. authenticated user changes `/tenants/A/invoices/9` to tenant B's ID.
 2. service loads by invoice ID alone.
@@ -532,7 +548,7 @@ Regions need last-known-good policy with a staleness bound. Emergency denies and
 
 **Prevention:** tenant-scoped load plus resource/action authorization.
 
-### 15.2 Proxy/backend parser disagreement
+### Proxy/backend parser disagreement
 
 1. edge and backend disagree on request framing.
 2. attacker embeds a second request.
@@ -541,7 +557,7 @@ Regions need last-known-good policy with a staleness bound. Emergency denies and
 
 **Prevention:** reject ambiguous framing and test the full proxy chain.
 
-### 15.3 Mass assignment
+### Mass assignment
 
 1. profile update deserializes directly into user record.
 2. attacker includes `role=admin`.
@@ -549,7 +565,7 @@ Regions need last-known-good policy with a staleness bound. Emergency denies and
 
 **Prevention:** explicit command fields and server-owned attributes.
 
-### 15.4 SSRF through redirect
+### SSRF through redirect
 
 1. initial URL resolves to allowed host.
 2. host redirects to metadata IP.
@@ -558,7 +574,7 @@ Regions need last-known-good policy with a staleness bound. Emergency denies and
 
 **Prevention:** validate each hop/address and isolate egress.
 
-### 15.5 Webhook replay
+### Webhook replay
 
 1. valid signed payment event is captured.
 2. signature verifies on repeat.
@@ -567,7 +583,7 @@ Regions need last-known-good policy with a staleness bound. Emergency denies and
 
 **Prevention:** freshness plus transactional event idempotency.
 
-### 15.6 Query-cost attack
+### Query-cost attack
 
 1. attacker submits deeply aliased graph query under normal request-rate quota.
 2. one request causes thousands of backend calls.
@@ -575,7 +591,7 @@ Regions need last-known-good policy with a staleness bound. Emergency denies and
 
 **Prevention:** structural cost model, depth/breadth/fan-out limits, and concurrency admission.
 
-### 15.7 CORS credential leak
+### CORS credential leak
 
 1. server reflects arbitrary origin and allows credentials.
 2. attacker site sends browser request with victim cookie.
@@ -583,7 +599,7 @@ Regions need last-known-good policy with a staleness bound. Emergency denies and
 
 **Prevention:** exact origin policy and CSRF/session controls.
 
-### 15.8 Shared cache leaks authorization
+### Shared cache leaks authorization
 
 1. authenticated response cached by URL only.
 2. next tenant requests same URL.
@@ -593,9 +609,9 @@ Regions need last-known-good policy with a staleness bound. Emergency denies and
 
 ---
 
-## 16. Observability and Incident Response
+## Observability and Incident Response
 
-Track:
+We track:
 
 - rejected requests by stage/reason;
 - parser/framing anomalies;
@@ -612,9 +628,9 @@ Track:
 - cache authorization anomalies;
 - rate/concurrency/admission outcomes.
 
-Avoid raw tokens, credentials, request bodies, personal data, and attacker-controlled high-cardinality fields in metrics/logs.
+Several of these are useful because their normal value is zero. A legitimate client does not send server-owned fields, request another tenant's resource, or ask the server to fetch a link-local address, so any nonzero count is either a client bug or a probe, and both are worth a look. Raw tokens, credentials, request bodies, personal data, and attacker-controlled high-cardinality fields stay out of metrics and logs.
 
-Incident controls:
+Incident controls should exist before they are needed:
 
 - disable route/client/integration;
 - publish emergency deny;
@@ -625,11 +641,11 @@ Incident controls:
 - identify affected resources/tenants from audit evidence;
 - replay quarantined work only after repair.
 
-Security logging must survive the incident without becoming the resource-exhaustion vector. Buffer/bound and preserve critical audit separately.
+Security logging has to survive the incident it is recording. An attack that generates a rejection log line for every request can exhaust the logging pipeline, so logging is buffered and bounded, and critical audit events travel on a separate path that the flood cannot crowd out.
 
 ---
 
-## 17. Verification
+## Verification
 
 1. **Protocol-chain tests:** edge/gateway/backend parse the same corpus.
 2. **Route inventory:** every method/version/admin/async path maps to an action policy.
@@ -646,13 +662,15 @@ Security logging must survive the incident without becoming the resource-exhaust
 13. **Security regression corpus:** every disclosed incident class becomes a test.
 14. **End-to-end adversarial review:** prove no bypass path reaches protected state.
 
-Test semantic invariants, not only status codes. A `403` on one route proves nothing about its bulk or legacy equivalent.
+The first test is the direct check on parser agreement. A corpus of unusual requests is fed through the real chain of edge, gateway, and backend, and the test fails wherever two hops interpret one differently.
+
+Tests should assert semantic invariants and go beyond status codes. A `403` on one route says nothing about its bulk or legacy equivalent, which is why the route inventory in the second test has to be complete.
 
 ---
 
-## 18. Decision Framework
+## Decision Framework
 
-Before exposing an endpoint:
+Before exposing an endpoint, a team should be able to answer:
 
 1. What exact action and resource does it represent?
 2. Which hop establishes identity, tenant, authority, path, and body meaning?
@@ -668,7 +686,7 @@ Before exposing an endpoint:
 12. How do policy, keys, and integrations rotate across regions?
 13. Which evidence proves the endpoint resists its highest-risk abuse cases?
 
-Secure APIs make illegal states and ambiguous interpretations hard to express. A collection of middleware with no coherent request/resource contract does not.
+A secure API is one in which illegal states and ambiguous interpretations are hard to express. That property comes from a coherent contract for requests and resources, and a collection of security middleware assembled without one does not provide it.
 
 ---
 

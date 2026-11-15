@@ -6,6 +6,10 @@ Aurora's key idea is to treat network I/O, not disks, as the scarce database res
 
 ## Publication Identity and Boundary
 
+A traditional relational database assumes that its storage is a local disk. When such a database is moved to the cloud and its disk becomes a network service replicated across data centers, every page it writes travels over the network several times, and the database writes a great deal: the log, the data pages, and further copies to guard against partial writes. Amazon's observation was that the network had become the bottleneck and that most of what was being sent across it was redundant.
+
+Aurora's central idea is that the log is the database. The database engine sends only its log records to the storage layer and never writes data pages at all. The storage layer, which is a distributed service in its own right, applies the log records to produce pages as they are needed. This reduces network traffic severalfold, and it moves work such as crash recovery out of the database and into storage, where it happens continuously in the background. Durability comes from writing each log record to six storage nodes spread over three data centers and waiting for four to confirm, a quorum chosen so that the system can lose a whole data center and one further node without losing data.
+
 - **Paper:** *Amazon Aurora: Design Considerations for High Throughput Cloud-Native Relational Databases*
 - **Authors:** Alexandre Verbitski, Anurag Gupta, Debanjan Saha, Murali Brahmadesam, Kamal Gupta, Raman Mittal, Sailesh Krishnamurthy, Sandor Maurice, Tengiz Kharatishvili, and Xiaofeng Bao
 - **Venue and version:** ACM SIGMOD International Conference on Management of Data, 2017, pages 1041–1052

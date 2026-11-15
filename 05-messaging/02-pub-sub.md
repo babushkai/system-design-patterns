@@ -8,6 +8,10 @@ A pub/sub contract must define topic semantics, fan-out architecture, subscripti
 
 ## Workload and Contract
 
+A queue delivers each message to one consumer, which suits a task that should be done once. Many situations call for the opposite. When an order is placed, the warehouse, the billing system, the email service, and the analytics pipeline all need to know, and the service that takes orders should not have to know that any of them exist. Publish-subscribe provides this. A publisher announces that something happened, and every subscriber that has expressed an interest receives its own copy.
+
+The value is in the decoupling. A new consumer can be added without any change to the publisher, which is what lets an organization grow new uses for its data without coordinating every team. The same property is the main operational hazard. Since the publisher does not know who is listening, it also does not know who depends on the exact shape and meaning of what it publishes. An event, once published, is a public interface with an unknown number of dependents, and a change to it can break systems whose owners the publisher has never met.
+
 A publisher emits a versioned fact:
 
 ```text

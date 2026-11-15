@@ -8,6 +8,10 @@ An immutable sorted run has a complete lifecycle: file-format state, publication
 
 ## Workload and Storage Contract
 
+The files an LSM tree writes are sorted string tables: immutable files in which keys appear in sorted order. Sorting and immutability each do work. Because a file is sorted, a small index of its blocks is enough to find any key, and several files can be combined in a single pass in the manner of a merge sort, without loading them into memory. Because a file is never modified, it can be read without locks, cached aggressively, copied safely, and checksummed once.
+
+Immutability also means that nothing is ever updated or removed where it lies. An overwrite is a new entry in a newer file, and a delete is a marker, called a tombstone, recording that the key is gone. Old values and the markers that supersede them pile up, and compaction is the process that merges files, keeps the newest version of each key, and drops the rest. How compaction is scheduled is the main design decision of the engine. Merging eagerly keeps reads fast and space tight and rewrites every byte many times over. Merging lazily writes far less and leaves more files to search and more dead data on disk. Every compaction strategy is a position between those two.
+
 Sorted runs fit workloads where random updates can first become sequential output and reads can tolerate consulting multiple immutable components. The file layer should promise:
 
 - keys ordered by one stable byte comparator;

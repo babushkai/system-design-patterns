@@ -8,6 +8,10 @@ Three properties shape the design. Delivery is **not guaranteed and not ordered*
 
 ## Requirements and Contract
 
+A notification system accepts a request from some service, such as "tell this user their order has shipped," and gets the message onto the user's phone, into their inbox, or both. It looks like a thin layer over the push and email providers, and most of its real work lies in everything that has to be decided before a message is sent.
+
+Each user has preferences about which notifications they want and on which channels, and those preferences have to be honored reliably, since an unwanted message is at best an annoyance and at worst a breach of the law. The same event may be reported twice by an upstream service that retried, and the user must not receive it twice. Too many messages in a short time should be combined or held back. A message to a user in another time zone may need to wait until morning. The providers that actually deliver messages each impose their own rate limits, fail in their own ways, and report success in terms that do not mean the user saw anything. The system also has an awkward traffic profile: steady for most of the day, and then a single campaign or a breaking event requires millions of messages to go out at once, without delaying the password-reset message that someone is waiting for.
+
 **Functional.**
 
 - Accept notification intents from producer services with a recipient, a category, template data, and an idempotency key.

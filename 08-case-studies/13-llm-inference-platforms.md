@@ -8,6 +8,10 @@ Token serving is a memory-systems problem: the KV cache sets feasible batch size
 
 ## Scope and Evidence Contract
 
+Serving a large language model has little in common with serving a conventional web request, and the differences determine the whole design. A response is produced one token at a time, and each token requires a pass through the model, so a single request occupies a graphics processor for seconds where an ordinary request occupies a server for milliseconds. Requests vary enormously in cost, since both the prompt and the reply may be anywhere from a few tokens to many thousands. And the hardware is scarce and expensive enough that leaving it idle is the dominant cost.
+
+The engineering response is to pack as much concurrent work onto each processor as its memory allows. Requests are batched so that one pass through the model advances many of them together, and newly arrived requests join a batch already in progress as others finish. The intermediate results computed for the earlier part of a sequence are kept so that each new token does not recompute them, and that cache, held in the processor's memory, becomes the resource that limits how many requests can run at once. Two measures of latency matter and they pull apart: the time until the first token appears, which governs how responsive the system feels, and the rate at which the rest follow.
+
 No single public “frontier provider architecture” exists. This analysis triangulates peer-reviewed systems: Orca (OSDI 2022), vLLM (SOSP 2023), DistServe (OSDI 2024), SGLang (NeurIPS 2024), and Mooncake (FAST 2025). The following labels distinguish paper evidence from inference and composite design:
 
 - **Documented fact:** a mechanism or result in one named paper and evaluation.

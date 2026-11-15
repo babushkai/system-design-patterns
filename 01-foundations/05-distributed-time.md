@@ -8,6 +8,10 @@
 
 ## Scope: Time Coordinates, Not Coordination by Timeout
 
+Much of everyday programming assumes that there is a single "now" and that timestamps can be compared to find out which of two things happened first. Across machines neither assumption holds. Every computer keeps time with a quartz oscillator that runs slightly fast or slow, by an amount that varies with temperature and age, so that two machines left alone drift apart by milliseconds within minutes. Synchronization protocols pull them back together, imperfectly, and occasionally do so by moving a clock backward. Two events on different machines whose timestamps differ by less than the clocks' disagreement cannot be ordered by those timestamps at all, and a system that orders them anyway will sometimes decide that the later write happened first and discard it.
+
+The response to this, developed over several decades, has two branches. One gives up on physical time for ordering and tracks causality directly, recording which events could have influenced which. The other keeps physical time and makes its uncertainty explicit, so that a system knows how long it must wait before a timestamp can be trusted. This chapter covers both.
+
 Clock semantics cover event ordering, causal metadata, and time-synchronization failure; they do not make timeout-based ownership safe.
 
 - [Consistency Models](04-consistency-models.md) owns the client-visible ordering guarantee.

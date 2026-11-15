@@ -8,6 +8,10 @@ Load-balancing correctness depends on **L4 and L7 data planes, endpoint eligibil
 
 ## Primary Evidence and Scope
 
+A service that runs on more than one machine needs something to decide which machine handles each request. Sharing the load evenly is the obvious aim, and the less obvious part of the job matters more: the load balancer is the component that notices a machine has failed and stops sending it traffic. It is the mechanism through which redundancy turns into availability.
+
+The simple policies fail in instructive ways. Sending requests to each server in turn treats all requests as equal, and they are not, so a server that happens to receive several slow ones falls behind while its neighbours sit idle. Sending each request to the server with the fewest in progress seems better and has a dangerous flaw. A server that is broken in a way that makes it fail instantly always has the fewest requests in progress, and so it attracts the most traffic. There is also a problem of knowledge. Any measure of load that a balancer uses is slightly out of date, and if many balancers act on the same stale reading, they all send their traffic to whichever server looked idle a moment ago and overwhelm it. Picking two servers at random and choosing the less loaded of the pair avoids that herding and performs nearly as well as perfect knowledge would, which is why the technique is so widely used.
+
 | Primary evidence | What it establishes | Boundary |
 |---|---|---|
 | Google, *Maglev* (NSDI 2016) | ECMP distributes traffic to a software L4 fleet; each instance uses a consistent lookup table and connection tracking | A historical Google design, not a universal topology or present-day capacity claim |

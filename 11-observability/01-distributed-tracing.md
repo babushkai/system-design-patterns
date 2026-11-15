@@ -12,6 +12,10 @@ Head sampling decides cheaply before the trace is known. Tail sampling can retai
 
 ## Shared Telemetry Data and Control Planes
 
+When a request is handled by one program, a stack trace shows what happened to it. When it passes through thirty services, no single machine holds the whole story. Each service has its own logs and its own metrics, and a slow request appears in each as an unremarkable entry with no indication that it belongs with the others. Finding out why a particular request took four seconds means reconstructing its path across all of them.
+
+Distributed tracing does this by attaching an identifier to each request as it enters the system and passing it along with every call the request causes. Each service records how long its part took and which call it was made on behalf of, and the records are later assembled into a tree showing the whole request and where its time went. The idea is simple and the difficulty is economic. A busy system produces far more trace data than anyone can afford to keep, so most of it must be discarded, and the traces worth keeping are the unusual ones, which cannot be identified when a request begins. Much of the design of a tracing system is about that decision of what to keep.
+
 The signals have different semantics:
 
 - **traces** preserve causal structure for selected operations;

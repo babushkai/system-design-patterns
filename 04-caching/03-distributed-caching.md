@@ -10,9 +10,13 @@ A distributed cache must define partitioning, replication, topology changes, hot
 
 ---
 
-## 1. System Model
+## System Model
 
-### 1.1 Components
+A cache that lives in one process is a hash table with an eviction policy. A cache shared by a fleet of servers is a distributed system, and it acquires that system's problems. The data no longer fits on one machine, so it must be divided among several, and every client must agree at every moment on which machine holds which key. Machines fail and are added, so the division changes while requests are in flight. Each node has finite memory and a finite number of operations per second, and nothing in a hash function prevents one extremely popular key from directing a large share of all traffic to a single node.
+
+A distributed cache also has one property that sets it apart from a distributed database and shapes most of its design: its contents are disposable. It is permitted to lose data, and it is not required to be consistent in the way a system of record is. That licence is what allows it to be fast and simple. It also means that the consequences of a failure are felt elsewhere. A cache node that dies loses nothing of value in itself, and the requests it was absorbing fall on the origin behind it.
+
+### Components
 
 ~~~mermaid
 flowchart LR
@@ -39,7 +43,7 @@ A production design has at least four concerns:
 
 A topology is not correct merely because every server is healthy. All active clients must converge on compatible ownership, and transitions must preserve bounded miss load.
 
-### 1.2 Cache role classification
+### Cache role classification
 
 | Role | May lose entries? | Eviction acceptable? | Required analysis |
 |---|---:|---:|---|
@@ -54,9 +58,13 @@ Do not use “Redis is already available” to collapse these roles into one clu
 
 ---
 
-## 2. Partitioning and Routing
+## Partitioning and Routing
 
-### 2.1 Stable hashing is a protocol
+The simplest way to divide keys among N nodes is to hash the key and take the remainder modulo N. It distributes keys evenly and has one severe defect. When N changes, the remainder changes for nearly every key. Adding an eleventh node to a ten-node cluster reassigns about ten keys in every eleven, so that the clients look for almost everything on a node that does not have it. The cache is, in effect, emptied by the act of enlarging it, at the moment the system was presumably short of capacity.
+
+Consistent hashing was devised to avoid this. Nodes and keys are both hashed onto the same circular space, and each key belongs to the first node found travelling clockwise from the key's position. When a node is added, it takes over only the keys lying between itself and its predecessor, and when one is removed its keys pass to its successor. In either case the fraction of keys that move is about one in N, and the rest stay where they were. Placing each physical node at many points on the circle, as virtual nodes, evens out the shares and spreads a departing node's keys across all the survivors, so that no single neighbour inherits its whole load.
+
+### Stable hashing is a protocol
 
 Never use a language runtime's default hash for distributed placement. Some runtimes randomize it between processes; implementations and versions may differ. Define:
 
@@ -69,7 +77,7 @@ Never use a language runtime's default hash for distributed placement. Some runt
 
 A routing change without a versioned protocol can make two clients store and read the same key on different nodes.
 
-### 2.2 Modular hashing
+### Modular hashing
 
 ~~~text
 owner = stable_hash(key) mod N
@@ -77,7 +85,7 @@ owner = stable_hash(key) mod N
 
 It balances well when hashes are uniform, but changing $N$ remaps approximately $(N-1)/N$ of keys when one node is added. For an ephemeral cache that can be acceptable only when the origin can absorb an almost complete cold start.
 
-### 2.3 Consistent, rendezvous, and jump hashing
+### Consistent, rendezvous, and jump hashing
 
 | Algorithm | Lookup state/cost | Movement | Operational fit |
 |---|---|---|---|
@@ -88,7 +96,7 @@ It balances well when hashes are uniform, but changing $N$ remaps approximately 
 
 Virtual-node count and weights are control-plane parameters, not magic constants. Validate distribution with the real key trace and include object bytes, not only key counts.
 
-### 2.4 Skew-aware placement
+### Skew-aware placement
 
 Uniform hash output does not imply uniform load:
 
@@ -100,7 +108,7 @@ Uniform hash output does not imply uniform load:
 
 Measure per-shard request rate, bytes, CPU, event-loop utilization, and top-key contribution. A balanced key count can hide a saturated shard.
 
-### 2.5 Routing map continuity
+### Routing map continuity
 
 A client should retain the last known good map during a transient control-plane outage. It must also:
 
@@ -115,9 +123,9 @@ Static stability matters: an unavailable topology service should not immediately
 
 ---
 
-## 3. Redis Cluster as a Concrete Slot System
+## Redis Cluster as a Concrete Slot System
 
-### 3.1 Slots and hash tags
+### Slots and hash tags
 
 Redis Cluster maps keys into 16,384 logical hash slots and assigns slots to primary nodes. A hash tag (the non-empty substring inside braces) can co-locate related keys:
 
@@ -128,7 +136,7 @@ Redis Cluster maps keys into 16,384 logical hash slots and assigns slots to prim
 
 Co-location permits multi-key operations for those keys but can create a hot slot. Use it for an operation that genuinely needs atomic same-slot access, not merely because entities look related.
 
-### 3.2 Client behavior
+### Client behavior
 
 A cluster-aware client normally caches the slot ownership map:
 
@@ -138,7 +146,7 @@ A cluster-aware client normally caches the slot ownership map:
 
 Redirections are part of normal resharding, but a persistent rise means stale clients, topology churn, or an incomplete migration.
 
-### 3.3 Live resharding
+### Live resharding
 
 For a slot moving from A to B:
 
@@ -154,13 +162,13 @@ clients eventually receive MOVED and refresh maps
 
 Large values make migration pauses and network usage unpredictable. Bound value and collection size before relying on live resharding.
 
-### 3.4 Multi-key limitations
+### Multi-key limitations
 
 Multi-key commands, transactions, and scripts generally require all involved keys to share a slot. Designing hash tags around every possible transaction can destroy distribution. If an operation spans natural partitions, redesign it as an application workflow rather than forcing a cache cluster to behave like a distributed relational database.
 
 ---
 
-## 4. Memcached as a Client-Partitioned System
+## Memcached as a Client-Partitioned System
 
 Memcached servers do not coordinate a cluster membership or replicate values as part of the core server. Clients or a proxy choose an owner, commonly with consistent hashing.
 
@@ -176,9 +184,9 @@ A routing proxy can centralize membership, replication, failover, request coales
 
 ---
 
-## 5. Replication and Failover Semantics
+## Replication and Failover Semantics
 
-### 5.1 Asynchronous replication
+### Asynchronous replication
 
 Many cache clusters acknowledge a primary write before replicas have applied it. On primary failure:
 
@@ -191,13 +199,13 @@ next read misses or returns older cache state
 
 For a derived cache, the correct reaction is reload or invalidate against the authoritative source. For authoritative use, this is acknowledged data loss and requires a different design.
 
-### 5.2 Redis Cluster write safety
+### Redis Cluster write safety
 
 Redis Cluster uses asynchronous replication and can lose acknowledged writes, especially around failures and minority partitions. It is designed for high performance and best-effort write safety, not linearizable consensus.
 
 Settings that require a primary to observe a minimum number of sufficiently current replicas can reduce the risk of accepting isolated writes. They do **not** create a majority quorum protocol or fencing guarantee. On heal, one lineage wins and cache writes on the discarded lineage can disappear.
 
-### 5.3 Failover preconditions
+### Failover preconditions
 
 A cache failover design should state:
 
@@ -212,7 +220,7 @@ A cache failover design should state:
 
 Do not document a fixed “one-second failover” without measuring detection, election, client refresh, DNS/proxy behavior, and refill under the deployed configuration.
 
-### 5.4 Replicas are not free read scale
+### Replicas are not free read scale
 
 Reading cache replicas can increase throughput but introduces:
 
@@ -226,9 +234,9 @@ Use primary reads when a caller requires a just-written cache value, or attach a
 
 ---
 
-## 6. Capacity and Failure Headroom
+## Capacity and Failure Headroom
 
-### 6.1 Size against three independent resources
+### Size against three independent resources
 
 Let:
 
@@ -253,7 +261,7 @@ $$
 
 Then add replication and enough spare primaries or slots to survive the declared failure. Measure $C_q$ with production command mix, payload sizes, persistence settings, network path, and pipelining. Generic “operations per second” tables are not capacity plans.
 
-### 6.2 N-minus-one test
+### N-minus-one test
 
 If load is evenly distributed, losing one of $N$ primaries multiplies surviving average load by approximately:
 
@@ -271,7 +279,7 @@ Capacity gates should include:
 - origin miss QPS below its protected budget;
 - enough room to reshard or rebuild a replica.
 
-### 6.3 Memory cliffs
+### Memory cliffs
 
 A memory cache does not degrade smoothly when full. It may:
 
@@ -286,9 +294,11 @@ Separate logical dataset bytes from resident memory and from host memory. Leave 
 
 ---
 
-## 7. Hot Keys and Large Objects
+## Hot Keys and Large Objects
 
-### 7.1 A hot key defeats horizontal sharding
+Sharding spreads keys across nodes. It does nothing to spread the requests for one key, all of which go to whichever node owns it. Real workloads are heavily skewed, and a single key such as a celebrity's profile, a global configuration object, or the front page can receive more traffic than an average node handles in total. Adding nodes does not help, since the key still lives on one of them, and a larger cluster only makes the imbalance more conspicuous.
+
+### A hot key defeats horizontal sharding
 
 If one key's request rate exceeds a node's safe capacity, adding ordinary shards does not move that key across CPUs. Detect top-key contribution with sampled access telemetry, frequency sketches, or product-level counters.
 
@@ -302,7 +312,7 @@ Mitigations:
 
 Application replication multiplies write and invalidation work by $K$. Use a stable suffix mapping, update all copies with source versions, and retain TTL safety.
 
-### 7.2 Hot-key budget
+### Hot-key budget
 
 For a key with rate $q_k$ and average command service time $s_k$, its direct server utilization contribution is approximately:
 
@@ -312,7 +322,7 @@ $$
 
 When one key consumes a large fraction of a single execution resource, the shard has little queueing headroom even if aggregate cluster QPS looks low. Monitor p99 and queueing, not only average CPU.
 
-### 7.3 Large objects
+### Large objects
 
 Large values cause:
 
@@ -326,9 +336,9 @@ Set an item-size and collection-cardinality budget. Split objects only when call
 
 ---
 
-## 8. Client and Network Design
+## Client and Network Design
 
-### 8.1 Connections and deadlines
+### Connections and deadlines
 
 Clients should:
 
@@ -341,7 +351,7 @@ Clients should:
 
 A cache timeout followed by an origin read pays both costs. A long cache timeout can therefore make a failure slower than running without a cache.
 
-### 8.2 Pipelining and batching
+### Pipelining and batching
 
 Pipelining amortizes round trips but the server and client must buffer replies. Use bounded batches and cap bytes, not only command count. Very large pipelines can increase tail latency and memory.
 
@@ -349,19 +359,19 @@ Prefer a multi-get or variadic command when it preserves semantics. In a sharded
 
 Pipelining does not make a read-modify-write atomic. Use a server-side atomic primitive where appropriate and same-slot constraints permit it.
 
-### 8.3 Retries
+### Retries
 
 GET and DELETE are normally safe to retry within a deadline. A fill SET should include source version when reordering matters. Increment, append, lock acquisition, and rate-limit operations may not be safe to retry after an ambiguous timeout.
 
 Retry at one layer. Client, proxy, and service retries multiplied together can saturate the cache during the incident they are intended to hide.
 
-### 8.4 Serialization
+### Serialization
 
 Version payloads and treat unknown schema as a miss. Validate size before allocation, bound decompression, and never deserialize untrusted native object formats such as unrestricted language pickles. Measure encode/decode time as part of hit latency.
 
 ---
 
-## 9. L1 and L2 Integration
+## L1 and L2 Integration
 
 An L1 cache is a replication layer in every process. It is valuable for hot, read-mostly values, but fleet size multiplies memory and invalidation endpoints.
 
@@ -380,9 +390,9 @@ Do not perform an L2 version lookup on every L1 hit unless measurement shows the
 
 ---
 
-## 10. Failure Containment
+## Failure Containment
 
-### 10.1 Cache outage does not imply unlimited origin fallback
+### Cache outage does not imply unlimited origin fallback
 
 ~~~text
 steady state:
@@ -404,7 +414,7 @@ Use a protection stack:
 - priority for critical reads;
 - gradual recovery so fills do not compete with live misses.
 
-### 10.2 Failure policy by data class
+### Failure policy by data class
 
 | Cache class | Cache unavailable | Origin unavailable |
 |---|---|---|
@@ -415,15 +425,15 @@ Use a protection stack:
 | Inventory display | Authoritative read with deadline | Unavailable rather than misleading |
 | Negative cache | Bypass | Preserve upstream error, not “absent” |
 
-### 10.3 Cache poisoning
+### Cache poisoning
 
 Validate that a cached value came from the intended tenant, schema, and source version. Restrict write permissions by namespace. A compromised writer or key collision can amplify one bad value across the fleet. Provide targeted purge by key generation and retain an auditable way to trace who filled an entry.
 
 ---
 
-## 11. Topology Change Runbooks
+## Topology Change Runbooks
 
-### 11.1 Planned scale-out or reshard
+### Planned scale-out or reshard
 
 1. Verify N-minus-one and origin headroom.
 2. Add nodes and establish replicas before assigning user load.
@@ -435,7 +445,7 @@ Validate that a cached value came from the intended tenant, schema, and source v
 8. Confirm every client generation has converged before draining old owners.
 9. Keep rollback ownership until moved-key and error audits pass.
 
-### 11.2 Unplanned node failure
+### Unplanned node failure
 
 1. Stop retry amplification.
 2. Determine whether a replica can promote or keys are simply absent.
@@ -445,15 +455,15 @@ Validate that a cached value came from the intended tenant, schema, and source v
 6. Rebuild redundancy before declaring the incident over.
 7. Test failback; a recovered old node must not resume ownership from stale state.
 
-### 11.3 Cross-region failure
+### Cross-region failure
 
 A cold regional cache can be a larger risk than database replication itself. Maintain a warm-enough standby from a safe source, reserve inter-region and origin capacity, and include cache age in traffic-shift readiness. Do not copy entries across regions if residency, tenant, or encryption policy forbids it.
 
 ---
 
-## 12. Observability and Verification
+## Observability and Verification
 
-### 12.1 Metrics
+### Metrics
 
 Per node, shard, command, client version, and key class:
 
@@ -467,7 +477,7 @@ Per node, shard, command, client version, and key class:
 - top-key and top-tenant contribution;
 - cache errors, bypasses, stale serves, and protected-origin QPS.
 
-### 12.2 Verification matrix
+### Verification matrix
 
 Run these under production-shaped traffic:
 
@@ -486,7 +496,7 @@ Run these under production-shaped traffic:
 
 A benchmark on a warm, healthy, single node proves none of these properties.
 
-### 12.3 Checklist
+### Checklist
 
 - [ ] Stable hash protocol and topology epoch are shared by every client.
 - [ ] Partitioning was tested with real key bytes and popularity.

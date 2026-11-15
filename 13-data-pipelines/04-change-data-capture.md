@@ -8,7 +8,11 @@ Bootstrap must join two histories without a gap: **existing rows from a snapshot
 
 ---
 
-## 1. Workload and Replication Contract
+## Workload and Replication Contract
+
+Data that is written to an operational database is nearly always wanted elsewhere as well: in a search index, a cache, a data warehouse, another service. The obvious way to get it there is for the application to write to each destination itself, and that fails for the reason dual writes always fail, since no transaction covers them all. The other common approach, periodically querying the database for rows that have changed, misses deletions, misses intermediate states, and puts load on the database in proportion to how fresh the copy must be.
+
+Change data capture takes the changes from the place where the database already records them. Every database keeps a log of each committed change, in order, for its own recovery and replication. Reading that log yields a complete and ordered stream of every insert, update, and delete, with no change to the application and little load on the database. Downstream systems apply the stream and stay in step. The practical difficulties are at the edges. A new consumer needs the existing contents of the tables as well as subsequent changes, and joining a snapshot to a stream without a gap or an overlap takes care. A change to the table's schema must travel down the same stream. And a consumer that falls far behind can force the database to retain log that it would otherwise discard.
 
 CDC is a replication mechanism. Start with the state that must be reproduced, not the connector product.
 
@@ -37,7 +41,7 @@ CDC is a replication mechanism. Start with the state that must be reproduced, no
 
 ---
 
-## 2. Why Application Dual Writes Diverge
+## Why Application Dual Writes Diverge
 
 An application transaction usually cannot atomically update its database and an unrelated search index, cache, broker, or warehouse:
 
@@ -60,7 +64,7 @@ This does not make the whole path atomic. It makes the database commit the unamb
 
 ---
 
-## 3. Capture Mechanisms and Their Limits
+## Capture Mechanisms and Their Limits
 
 | Mechanism | Strengths | Failure modes and costs | Appropriate use |
 |---|---|---|---|
@@ -75,7 +79,7 @@ Polling can capture deletes if the source has durable tombstones. Triggers can b
 
 ---
 
-## 4. Data Plane, Control Plane, and Durable State
+## Data Plane, Control Plane, and Durable State
 
 ~~~mermaid
 flowchart LR
@@ -115,7 +119,7 @@ If these fields live in different stores, define their crash consistency. Advanc
 
 ---
 
-## 5. Source Coordinates Are Database-Specific
+## Source Coordinates Are Database-Specific
 
 A coordinate identifies progress in a particular source history; it is not a universal timestamp.
 
@@ -137,7 +141,7 @@ A position may only be meaningful with a server, timeline, or topology epoch. Af
 
 ---
 
-## 6. Event Envelope and Schema History
+## Event Envelope and Schema History
 
 A useful change record separates business data from replication provenance:
 
@@ -168,7 +172,7 @@ Stable field IDs or schema versions are safer than inferring meaning from the la
 
 ---
 
-## 7. Bootstrap: Proving Snapshot plus Tail Has No Gap
+## Bootstrap: Proving Snapshot plus Tail Has No Gap
 
 A new target needs existing state and subsequent changes. A naive sequence (scan the table, then start the log) loses transactions committed during the scan. Starting the log first and scanning later can overwrite a newer streamed value with an older snapshot row.
 
@@ -214,7 +218,7 @@ Log compaction can retain a latest value per key, but completeness depends on co
 
 ---
 
-## 8. Ordering and Transaction Boundaries
+## Ordering and Transaction Boundaries
 
 Separate these orders:
 
@@ -240,7 +244,7 @@ Primary-key changes may appear as delete-old-key plus insert-new-key. A sink tha
 
 ---
 
-## 9. Schema and DDL Evolution
+## Schema and DDL Evolution
 
 Schema change affects source decoding, event serialization, and sink application independently.
 
@@ -267,7 +271,7 @@ A schema registry validates serialized messages; it does not prove the sink tran
 
 ---
 
-## 10. Sink Application Protocols
+## Sink Application Protocols
 
 ### Versioned materialized view
 
@@ -293,7 +297,7 @@ Represent deletes explicitly through tombstones, versioned deleted flags, or sin
 
 ---
 
-## 11. Raw CDC versus Transactional Outbox
+## Raw CDC versus Transactional Outbox
 
 Raw CDC describes storage mutation: row inserted, value changed, row deleted. It is appropriate for materialized copies, analytics, cache invalidation, and audit feeds.
 
@@ -310,7 +314,7 @@ Operate outbox retention and publication lag. Deleting outbox rows too soon can 
 
 ---
 
-## 12. Capacity and Cost Model
+## Capacity and Cost Model
 
 Let:
 
@@ -339,7 +343,7 @@ Cost includes source storage and I/O, connector compute, broker replication/rete
 
 ---
 
-## 13. Operations, Failover, and Repair
+## Operations, Failover, and Repair
 
 ### Source failover
 
@@ -379,7 +383,7 @@ Before upgrading a connector or database:
 
 ---
 
-## 14. Security and Governance
+## Security and Governance
 
 - Use a dedicated source principal with only replication and table/schema access required.
 - Encrypt source connections, broker traffic, offset stores, schema history, and sink traffic.
@@ -393,7 +397,7 @@ Masking only the sink is insufficient when the broker contains complete before a
 
 ---
 
-## 15. Observability and Verification
+## Observability and Verification
 
 ### Observe the whole path
 
@@ -427,7 +431,7 @@ The test passes only if source-to-sink invariants hold, not merely if the connec
 
 ---
 
-## 16. Decision Framework
+## Decision Framework
 
 | Requirement | Preferred direction |
 |---|---|

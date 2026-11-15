@@ -8,6 +8,10 @@ The data model is one small immutable record, so storage is not the hard part. T
 
 ## Requirements and Contract
 
+The URL shortener is the traditional first exercise in system design, and it is often treated as trivial: store a mapping from a short code to a long address and look it up. The exercise earns its place because two real design problems lie beneath that description, and they are small enough to be examined completely.
+
+The first is how to generate the short codes. They must be unique, they should be short, and they must be issued by many servers at once without those servers coordinating on every request. Counting upward gives the shortest codes and makes them guessable, so that anyone can enumerate every link in the system. Random codes cannot be guessed and may collide. Hashing the address gives the same code to everyone who shortens the same link, which may or may not be wanted. Each choice has consequences for security, for storage, and for how the system scales. The second problem is the read path. A link is created once and followed many times, perhaps millions, so the system is almost entirely reads, and the design of the redirect, including what is cached and where, and what kind of redirect is returned, determines both its cost and whether clicks can be counted at all.
+
 **Functional.**
 
 - Create a short link for a URL, optionally with a custom alias and an expiry.

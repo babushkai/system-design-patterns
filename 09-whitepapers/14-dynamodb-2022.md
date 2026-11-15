@@ -8,6 +8,10 @@ Predictability comes from admitting work against a customer's logical budget ins
 
 ## Publication Boundary
 
+Fifteen years after the original Dynamo paper, Amazon published an account of DynamoDB, the cloud service that grew from it. The two systems share a name and little else, and the differences record what was learned in between. The original Dynamo favored availability over consistency and left conflict resolution to applications. DynamoDB replicates each partition with a consensus protocol and gives consistent results, because most customers turned out to want a database they did not have to reason so hard about.
+
+The theme of the paper is predictability. Being fast on average was not the goal. The aim was for a customer to get the same performance at any scale and at any time, and much of the engineering served that aim. The most instructive story concerns capacity. Customers buy a certain throughput for a table, and the system originally divided that throughput evenly among the table's partitions. Real workloads are not even, so one busy partition would be throttled while the table as a whole was far below its limit. The paper describes the successive mechanisms introduced to fix this, moving from static allocation toward a global view of each table's consumption. It also explains how the service avoids hidden dependencies on caches whose failure would cause a sudden surge of load.
+
 - **Paper:** *Amazon DynamoDB: A Scalable, Predictably Performant, and Fully Managed NoSQL Database Service*
 - **Venue and version:** USENIX Annual Technical Conference 2022 proceedings paper
 - **Evaluated system:** DynamoDB as described through 2021, with selected production observations and one YCSB microbenchmark

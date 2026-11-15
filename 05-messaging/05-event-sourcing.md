@@ -8,6 +8,10 @@ An event-sourced system must define authoritative aggregate streams, optimistic 
 
 ## Workload and Contract
 
+A conventional database records the current state of things. When an account balance changes, the old figure is overwritten and the new one takes its place, and the fact that the balance was once different, along with the reason it changed, is lost unless someone thought to record it separately. Event sourcing stores the changes themselves. The record of an account is the sequence of deposits and withdrawals, kept permanently in order, and the balance is whatever results from adding them up.
+
+Accountants have worked this way for centuries, never erasing an entry and correcting an error with a further entry, and the advantages carry over. The history is complete and cannot be quietly altered. The state at any past moment can be reconstructed. A new way of looking at the data can be built long after the fact by replaying the events through new logic. The costs are equally definite. The current state is no longer simply there to be queried and has to be derived and kept somewhere. Events, being permanent, must remain interpretable by all future code, so a careless choice of event schema cannot be migrated away. And deleting a person's data on request is awkward in a store whose founding principle is that nothing is deleted.
+
 An event-sourced store supports:
 
 ```text

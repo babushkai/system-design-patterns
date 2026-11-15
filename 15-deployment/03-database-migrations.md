@@ -8,6 +8,10 @@ Schema evolution covers compatibility, engine DDL/lock mechanics, constraints an
 
 ## Primary Evidence and Scope
 
+Application code can be replaced quickly and replaced again if it proves faulty. A database schema cannot. Changing it alters the structure of data that already exists, and often the data itself, and many such changes cannot be undone. The schema is also shared: every version of the application that is running, and every other system that reads the database, has to work with whatever shape it is in.
+
+Two difficulties follow. The first is that old and new application code run side by side throughout any deployment, so there is no moment at which the code and the schema can be changed together. A change such as renaming a column, which would break the old code the instant it took effect, has to be broken into steps that are each compatible with both versions: add the new column, write to both, copy the existing data, move reads over, and only later remove the old one. The second is that altering a large table can itself cause an outage. Many schema changes take a lock that blocks all access to the table, and on a table of hundreds of millions of rows the operation can run for hours. Tools for online schema change avoid this by building a modified copy of the table in the background and switching to it at the end.
+
 | Primary evidence | What it establishes | Boundary |
 |---|---|---|
 | PostgreSQL 18 documentation | `ALTER TABLE` lock levels vary; unspecified forms default to `ACCESS EXCLUSIVE`; concurrent index builds and deferred constraint validation have distinct phases and failure artifacts | PostgreSQL 18 behavior; verify the deployed major/minor version |

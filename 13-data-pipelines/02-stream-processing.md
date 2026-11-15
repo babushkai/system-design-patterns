@@ -8,7 +8,11 @@ An event may be processed more than once after failure even when operator state 
 
 ---
 
-## 1. Specify the Streaming Contract
+## Specify the Streaming Contract
+
+A batch job computes over data that has finished arriving. A streaming job computes over data that never finishes, and must produce results while more is on the way. That one difference brings in a question batch processing never has to face: when is it safe to announce a result?
+
+Suppose a job counts events per minute. Events are generated on phones and servers and reach the job after varying delays, sometimes seconds and sometimes, when a phone has been offline, hours. The job must distinguish the time an event occurred from the time it arrived, and it cannot know whether more events for the minute just past are still in transit. If it reports the count at once, the count is wrong when stragglers arrive. If it waits for them, it does not know how long to wait. Stream processors deal with this through an explicit estimate, called a watermark, of how far event time has progressed, and a policy for what to do with data that arrives after its window has been reported. The other distinguishing problem is state. A streaming job runs for months and accumulates counts and joins in memory, and that state has to survive the failure of a machine without events being counted twice or lost.
 
 Before selecting Kafka, Flink, Beam, or another runtime, write down:
 
@@ -38,7 +42,7 @@ Required invariants:
 
 ---
 
-## 2. Continuous Execution versus Replay
+## Continuous Execution versus Replay
 
 Batch and stream execution compose in three ways:
 
@@ -52,7 +56,7 @@ A batch correction path is justified when a global algorithm needs bounded input
 
 ---
 
-## 3. Data Plane and Control Plane
+## Data Plane and Control Plane
 
 ~~~mermaid
 flowchart LR
@@ -86,7 +90,7 @@ Source parallelism is commonly bounded by source partitions. Downstream operator
 
 ---
 
-## 4. Time Semantics: Which Question Are You Answering?
+## Time Semantics: Which Question Are You Answering?
 
 An event carries several possible clocks:
 
@@ -117,7 +121,7 @@ Window assignment alone does not say when results appear or whether they can cha
 
 ---
 
-## 5. Watermarks, Triggers, and Revisions
+## Watermarks, Triggers, and Revisions
 
 A watermark is a runtime estimate of event-time progress: the system expects that most future events have timestamps later than the watermark. It is **not proof** that no earlier event will arrive.
 
@@ -153,7 +157,7 @@ Allowed lateness is both a product policy and a state-retention policy. When the
 
 ---
 
-## 6. Stateful Operators
+## Stateful Operators
 
 State may include:
 
@@ -186,7 +190,7 @@ Hot keys remain indivisible under ordinary key partitioning. Mitigate them with 
 
 ---
 
-## 7. Checkpoints, Barriers, and Restore
+## Checkpoints, Barriers, and Restore
 
 A checkpoint records a consistent cut of:
 
@@ -211,7 +215,7 @@ Recovery restores state and replays input from the checkpointed positions. Recor
 
 ---
 
-## 8. Define the Scope of Exactly Once
+## Define the Scope of Exactly Once
 
 “Exactly once” can refer to different boundaries:
 
@@ -248,7 +252,7 @@ Operator state can still be exactly-once; the business effect is not. Use a prov
 
 ---
 
-## 9. Backpressure and Overload
+## Backpressure and Overload
 
 Backpressure begins when a downstream task cannot obtain output buffer capacity. The slowdown propagates upstream until sources reduce consumption. This is a safety mechanism: it replaces unbounded in-memory growth with rising lag. It does not create capacity.
 
@@ -274,7 +278,7 @@ Unaligned checkpoints may keep checkpoints completing during backpressure, but t
 
 ---
 
-## 10. Capacity, Replay, and Recovery Math
+## Capacity, Replay, and Recovery Math
 
 Use measured rates at the actual key and payload distribution.
 
@@ -313,7 +317,7 @@ Capacity-test state growth, checkpoint storage request rate, sink transaction ra
 
 ---
 
-## 11. Operations and Migrations
+## Operations and Migrations
 
 ### Safe deployment
 
@@ -336,7 +340,7 @@ Changing key selection redistributes state and is usually a rebuild. Shortening 
 
 ---
 
-## 12. Security and Data Lifecycle
+## Security and Data Lifecycle
 
 Streaming state and checkpoints often contain raw personal or secret data even if the sink contains aggregates.
 
@@ -352,7 +356,7 @@ Immediate erasure can conflict with replay and time-travel guarantees. Resolve t
 
 ---
 
-## 13. Observability
+## Observability
 
 ### Time and freshness
 
@@ -382,7 +386,7 @@ Alert on trends that threaten the contract: retention headroom, state growth bey
 
 ---
 
-## 14. Verification and Failure Injection
+## Verification and Failure Injection
 
 Build a deterministic event corpus with out-of-order records, duplicates, future timestamps, deletes/corrections, idle partitions, hot keys, and session merges. Then:
 
@@ -402,7 +406,7 @@ Verify emitted revisions, not only final values. Two pipelines can converge to t
 
 ---
 
-## 15. Decision Framework
+## Decision Framework
 
 | Design question | Stronger fit |
 |---|---|

@@ -12,7 +12,11 @@ Partition keys co-design locality and load distribution. Aggregate boundaries co
 
 ---
 
-## 1. Build the Operation Catalog
+## Build the Operation Catalog
+
+On a single relational database, data modeling is taught as a matter of describing the entities and their relationships and normalizing away redundancy. The queries come later, and the database will find a way to answer whatever is asked, by joining tables and using indexes. That order of work depends on all the data being in one place, where any row can be combined with any other cheaply.
+
+In a distributed database the order has to be reversed. Data is divided among machines by a partition key, and an operation that names that key is served by one machine while an operation that does not must consult many. Joins across partitions are expensive or unavailable. The model therefore has to be derived from the operations the application will perform, with each important query given a layout that answers it from a single partition, and this frequently means storing the same fact in more than one shape. The redundancy that normalization was meant to remove is reintroduced on purpose, and keeping the copies in agreement becomes part of the design.
 
 List production operations, not entities alone:
 
@@ -43,7 +47,7 @@ Example:
 
 “Get all orders” is not a useful pattern. State the tenant, time bound, pagination, and maximum. Unbounded operations become incidents.
 
-### 1.1 Core invariants
+### Core invariants
 
 1. **Canonical identity:** every entity and version has stable identity; aliases and local IDs cannot collide across tenant/generation.
 2. **One authority per fact:** duplicated shapes name their source and cannot accept independent conflicting writes.
@@ -58,11 +62,11 @@ Example:
 
 ---
 
-## 2. Normalize Authority, Denormalize Work
+## Normalize Authority, Denormalize Work
 
 Normalization and denormalization are not product categories. They are choices about update anomalies and read work.
 
-### 2.1 Normalized authority
+### Normalized authority
 
 Store one fact once when:
 
@@ -74,7 +78,7 @@ Store one fact once when:
 
 Normalization does not make inconsistency impossible (applications can still duplicate semantics, skip constraints, or integrate external systems), but it reduces the number of copies one transaction must maintain.
 
-### 2.2 Denormalized projection
+### Denormalized projection
 
 Materialize a duplicate when measured read cost, cross-boundary locality, latency, availability, or query-engine mismatch justifies it. A projection contract states:
 
@@ -93,7 +97,7 @@ Examples include order summaries, unread counters, timeline entries, search docu
 
 A derived copy is not “just a cache” if product actions write it directly, no rebuild exists, or its loss loses user intent. Name authority honestly.
 
-### 2.3 Read-time versus write-time join
+### Read-time versus write-time join
 
 A relational join resolves relationships during query execution. A denormalized projection performs the relationship expansion when source changes. Neither is free:
 
@@ -108,7 +112,7 @@ The write-time option shifts latency and failure into a pipeline. It can lower o
 
 ---
 
-## 3. Aggregate and Transaction Boundaries
+## Aggregate and Transaction Boundaries
 
 An aggregate is the state that one command must keep consistent, not every object reachable through domain relationships.
 
@@ -129,21 +133,21 @@ Outside:
 
 `order.total == sum(lines)` may belong in one transaction. Inventory allocation or payment confirmation crosses authorities and needs reservation, idempotency, workflow/effect commit, or compensation, not an ever-growing order row that copies the world.
 
-### 3.1 Avoid aggregates that are too large
+### Avoid aggregates that are too large
 
 A tenant, user, conversation, or account containing unbounded children becomes one hot/oversized transaction unit. Store children as separately keyed rows/documents and maintain bounded summaries. Use pagination and explicit versions.
 
-### 3.2 Avoid aggregates that are too small
+### Avoid aggregates that are too small
 
 Splitting every line/property into independent stores can make one command require distributed transactions and partial-state handling. Co-locate data mutated and read together when its size/contention remain bounded.
 
-### 3.3 Contention is part of the boundary
+### Contention is part of the boundary
 
 One aggregate with 10,000 writes/s serializes even if it is small. Shard commutative counters, allocate rights, append events, or redesign the invariant. A primary key defines not only lookup but the contention domain for locks, conditional updates, log ordering, and replicas.
 
 ---
 
-## 4. Key Design
+## Key Design
 
 Separate concepts:
 
@@ -156,7 +160,7 @@ clustering/sort key     order/range within partition
 version/revision        optimistic concurrency/snapshot identity
 ```
 
-### 4.1 Distribution and locality
+### Distribution and locality
 
 A useful partition key balances:
 
@@ -168,7 +172,7 @@ A useful partition key balances:
 
 Hashing distributes but destroys natural range locality. Range partitioning supports ranges but creates hot ends under monotonic time/ID. Composite keys can preserve a useful prefix then add bucket/hash suffix.
 
-### 4.2 Time-series bucketing
+### Time-series bucketing
 
 Instead of one forever-growing device partition:
 
@@ -185,7 +189,7 @@ $$
 
 For 250 events/s and one hour, $rows_{bucket}=900{,}000$. If an average encoded row plus index overhead is 350 bytes, logical data is about 300 MiB before engine replication/compaction. Shorten the bucket or subshard if that exceeds the tested envelope. Do not copy an ecosystem folklore limit; benchmark the exact engine/schema and workload.
 
-### 4.3 Hot-key spreading
+### Hot-key spreading
 
 Write sharding adds suffixes:
 
@@ -195,27 +199,27 @@ Write sharding adds suffixes:
 
 Writes spread across 32 partitions; reads aggregate 32. Use only when write bottleneck justifies read fan-out and when operations are mergeable. Changing shard count needs versioned routing or rendezvous/directory state; `mod N` without version loses lookup ability after N changes.
 
-### 4.4 IDs and ordering
+### IDs and ordering
 
 Random IDs distribute but lack time locality. Time-ordered IDs improve index locality but can concentrate range-partition writes and leak timing. Include a stable unique tie-breaker in any ordered cursor. Never use client wall time alone for last-writer semantics or pagination.
 
 ---
 
-## 5. Modeling Patterns by Store Shape
+## Modeling Patterns by Store Shape
 
-### 5.1 Relational rows
+### Relational rows
 
 Use typed columns and constraints for stable, queried invariants. JSON can hold genuinely variable extension data, but promote frequently filtered/joined fields into typed/indexed columns or generated expressions. Avoid EAV as a default; it moves types, constraints, selectivity statistics, and joins into application code.
 
 Indexes are additional sorted/projection state. Each accelerates named predicates/order while adding write, storage, cache, vacuum/compaction, and migration cost. Use query plans and production cardinality, not “index every foreign key” as the entire model.
 
-### 5.2 Documents: embed versus reference
+### Documents: embed versus reference
 
 Embed when children are owned, bounded, written/read together, and share lifecycle. Reference when data is independently updated/shared, unbounded, large, separately secured, or queried independently.
 
 Large documents amplify writes: updating one field may rewrite/replicate/index a full document or large storage unit. Concurrent writers to different fields may still conflict at document/version granularity. Test maximum and percentile size plus update frequency.
 
-### 5.3 Wide-column/item collections
+### Wide-column/item collections
 
 Composite partition/sort keys can co-locate multiple item types for query-first access:
 
@@ -228,17 +232,17 @@ PK=TENANT#t#ORDER#o     SK=ITEM#line
 
 This may require duplicating order summary under customer and order collections. The two copies need one authoritative command plus transactional write when supported or ordered projection/reconciliation. A new access pattern can require a new secondary index or backfill, but not every query becomes one constant-time lookup: range result size, pagination, hot partitions, index propagation, and filter selectivity still matter.
 
-### 5.4 Graph relationships
+### Graph relationships
 
 Graph models fit variable-hop relationship queries (authorization paths, social connections, dependency graphs) when traversal is central. They do not make unbounded traversal cheap. Bound depth/fan-out, index labels/properties, and decide whether edge/node updates need transactions. For predictable fixed joins, relational adjacency tables may be simpler.
 
-### 5.5 Time-series/event models
+### Time-series/event models
 
 Append immutable event identity, event time, ingestion time, source and schema. Late/corrected events need replacement/retraction semantics rather than silent overwrite. Separate raw event authority from rollups; rollups record window, watermark/completeness, source frontier and version so they can rebuild.
 
 ---
 
-## 6. Secondary Indexes and Query Plans
+## Secondary Indexes and Query Plans
 
 [Secondary Indexes in Distributed Databases](./06-secondary-indexes.md) owns local/global maintenance mechanics. The model decides which queries justify them.
 
@@ -256,7 +260,7 @@ backfill/rebuild plan
 tenant/security scope
 ```
 
-### 6.1 Stable pagination
+### Stable pagination
 
 Offset pagination becomes slower and unstable under inserts/deletes. Prefer keyset cursors:
 
@@ -269,11 +273,11 @@ LIMIT 50
 
 Bind the cursor to tenant, filters, sort and optionally snapshot/index revision. Without a snapshot, document whether later pages reflect concurrent changes and may omit/move results.
 
-### 6.2 Covering versus write cost
+### Covering versus write cost
 
 Including projected columns can avoid base-row fetches, but duplicates every update into the index. Wide covering indexes consume cache/storage and increase migration time. Measure base lookup latency, hit ratio, row width, mutation rate and query volume.
 
-### 6.3 Scatter-gather
+### Scatter-gather
 
 If a query lacks the partition key, a coordinator may contact all shards or a global index. Approximate request work:
 
@@ -285,13 +289,13 @@ At 2,000 queries/s across 200 shards, 400,000 shard RPCs/s occur before retries.
 
 ---
 
-## 7. Projection Publication and Maintenance
+## Projection Publication and Maintenance
 
-### 7.1 Same-transaction projection
+### Same-transaction projection
 
 When source and index/read model share a transactional store, update both atomically. This provides immediate consistency but increases transaction rows, locks, log bytes and failure coupling. Keep the projection derivable and periodically verify it.
 
-### 7.2 Outbox and CDC
+### Outbox and CDC
 
 For external projections:
 
@@ -308,13 +312,13 @@ Projection identity might be `(source_table, primary_key, source_version)` or a 
 
 See [Outbox, Inbox, and Change Data Capture](../05-messaging/07-outbox-pattern.md) and [Change Data Capture](../13-data-pipelines/04-change-data-capture.md).
 
-### 7.3 Rebuild
+### Rebuild
 
 A rebuild pins a source snapshot/frontier, bulk builds under a new projection generation, consumes ordered changes after the frontier, validates, then atomically switches reader alias/pointer. Do not rebuild in place while readers see partial state.
 
 Track old/new dual-read differences by key and reason. Delete old generation only after rollback and reader references expire.
 
-### 7.4 Freshness semantics
+### Freshness semantics
 
 “Eventually consistent” needs a number and behavior:
 
@@ -328,7 +332,7 @@ A stale authorization or price projection may be unsafe even if a stale like cou
 
 ---
 
-## 8. One Model per Workload, One Authority per Fact
+## One Model per Workload, One Authority per Fact
 
 ```mermaid
 flowchart LR
@@ -350,23 +354,23 @@ flowchart LR
 
 Each projection can be authoritative for its own derived artifact at a named source frontier, but product truth remains traceable to owned sources. Never allow analysts, search jobs, or cache repair to write domain authority implicitly.
 
-### 8.1 External systems
+### External systems
 
 Payments, identity providers, shipping, and customer systems may own facts outside your database. Store operation IDs, provider object IDs, receipts, observed versions and reconciliation state. A local row saying `paid=true` is a projection of provider/domain protocol, not proof by itself.
 
 ---
 
-## 9. Schema and Semantic Evolution
+## Schema and Semantic Evolution
 
-### 9.1 Additive compatibility
+### Additive compatibility
 
 Writers add optional/defaulted fields; readers tolerate unknowns; old writers remain valid until retired. Field absence, null and default may have different meanings: document them. Enumerations need unknown/future handling.
 
-### 9.2 Semantic versioning of data
+### Semantic versioning of data
 
 Changing cents to dollars, gross to net, UTC to local, or “active” definition can retain the same type while breaking consumers. Create a new field/feature/version or bind a semantics version and migrate explicitly. Schema validation alone cannot catch it.
 
-### 9.3 Backfill
+### Backfill
 
 Backfills are production workloads:
 
@@ -378,13 +382,13 @@ Backfills are production workloads:
 - monitor old/new coverage and errors;
 - validate before making new readers depend on it.
 
-### 9.4 Contract/removal
+### Contract/removal
 
 Prove old readers/writers/jobs, replicas, exports and backups no longer require a field/index before removing. Deployment inventory and telemetry are stronger than elapsed time. See [Database Schema Migrations](../15-deployment/03-database-migrations.md).
 
 ---
 
-## 10. Capacity and Cost Model
+## Capacity and Cost Model
 
 For each authoritative/projection shape estimate:
 
@@ -419,7 +423,7 @@ $$
 
 before retries, compaction and replication. Denormalization moved work; it did not remove it.
 
-### 10.1 Rebuild capacity
+### Rebuild capacity
 
 If a 12 billion-row projection rebuilds at 150,000 rows/s while source changes add 30,000 relevant rows/s, effective catch-up is 120,000 rows/s and ideal duration is:
 
@@ -430,13 +434,13 @@ $$
 
 If rebuild throughput is not greater than incoming change work, it never converges. Reserve source scan, network, target write/index/compaction and CDC capacity; avoid peak/failover overlap.
 
-### 10.2 Bound rows and fan-out
+### Bound rows and fan-out
 
 The p99 document/partition/index-entry size and relationship degree often matter more than average. Enforce product caps or chunking for line items, group members, attachments, comments, and graph edges. A schema with an unbounded collection has an unbounded latency/cost path even if today's data is small.
 
 ---
 
-## 11. Security, Privacy, and Governance
+## Security, Privacy, and Governance
 
 - Derive tenant/principal context from authenticated/authorized state and include it in primary/index/cache/search/object keys.
 - Enforce row/document/resource policy at the owning service and data layer; projections must not widen visibility.
@@ -451,9 +455,9 @@ Authorization joins can become query design. “List every object Alice can acce
 
 ---
 
-## 12. Concrete Failure Traces
+## Concrete Failure Traces
 
-### 12.1 Hot monotonic partition
+### Hot monotonic partition
 
 1. Events partition by calendar date only.
 2. All current writes target today's one partition.
@@ -462,7 +466,7 @@ Authorization joins can become query design. “List every object Alice can acce
 
 Add a stable entity/hash suffix or finer buckets and query fan-in deliberately. Partition count alone does not distribute a one-key workload.
 
-### 12.2 Async projection applies duplicate increment
+### Async projection applies duplicate increment
 
 1. Source commits `like-added op-9` and outbox event.
 2. Consumer increments `like_count` but crashes before checkpoint.
@@ -470,7 +474,7 @@ Add a stable entity/hash suffix or finer buckets and query fan-in deliberately. 
 
 Apply by stable event identity or derive the count from unique source facts; reconcile periodically. “At least once” requires idempotent projection semantics.
 
-### 12.3 Denormalized authorization goes stale
+### Denormalized authorization goes stale
 
 1. Search document embeds `visible_to_groups`.
 2. Group revocation commits but index update lags.
@@ -478,7 +482,7 @@ Apply by stable event identity or derive the count from unique source facts; rec
 
 Use a freshness/revision fence for security-sensitive reads, authorization-aware candidate filtering against current state, and measurable revocation lag. Not every projection may use the same staleness budget.
 
-### 12.4 Unbounded document reaches engine limit
+### Unbounded document reaches engine limit
 
 1. All messages embed in one conversation document.
 2. Every append rewrites/grows it; concurrent updates conflict.
@@ -486,7 +490,7 @@ Use a freshness/revision fence for security-sensitive reads, authorization-aware
 
 Store messages as bounded individually keyed entries/chunks with a conversation summary/index. Enforce limits before storage rejects.
 
-### 12.5 Mutable cursor skips rows
+### Mutable cursor skips rows
 
 1. Client fetches offset page 1 ordered by `created_at` only.
 2. Concurrent inserts/deletes shift offsets and equal timestamps reorder.
@@ -494,7 +498,7 @@ Store messages as bounded individually keyed entries/chunks with a conversation 
 
 Use total `(created_at,id)` keyset order and state the snapshot/concurrent-change contract; bind cursor to tenant/filter/revision.
 
-### 12.6 In-place rebuild exposes partial generation
+### In-place rebuild exposes partial generation
 
 1. A job truncates/repopulates a search/read table.
 2. Readers query during rebuild.
@@ -502,7 +506,7 @@ Use total `(created_at,id)` keyset order and state the snapshot/concurrent-chang
 
 Build a new generation from snapshot, catch up changes, validate, then atomically switch a pointer/alias.
 
-### 12.7 Re-key dual writes diverge
+### Re-key dual writes diverge
 
 1. Migration writes old and new key layouts independently.
 2. New-layout write times out after commit; old layout succeeds.
@@ -511,7 +515,7 @@ Build a new generation from snapshot, catch up changes, validate, then atomicall
 
 Use one authoritative write plus ordered change propagation or a versioned idempotent dual-write protocol, compare continuously, and fence cutover by source position.
 
-### 12.8 Semantic field change passes schema
+### Semantic field change passes schema
 
 1. `amount` changes from gross cents to net cents under same integer field.
 2. Type/null checks pass and projections rebuild.
@@ -521,9 +525,9 @@ Treat semantic change as new version/field, dual-compute/compare, update owners 
 
 ---
 
-## 13. Observability and Verification
+## Observability and Verification
 
-### 13.1 Signals
+### Signals
 
 Measure:
 
@@ -539,7 +543,7 @@ Measure:
 - deletion/revocation propagation;
 - cross-tenant/isolation denials and missing context.
 
-### 13.2 Model contract tests
+### Model contract tests
 
 - Generate maximum-cardinality/size aggregates and collections.
 - Property-test domain invariants under concurrent commands/retries.
@@ -552,7 +556,7 @@ Measure:
 - Attempt every access pattern with another tenant and colliding local IDs.
 - Verify keyset pagination across concurrent inserts/deletes at a named snapshot mode.
 
-### 13.3 Reconciliation
+### Reconciliation
 
 Use multiple strategies:
 
@@ -566,7 +570,7 @@ Repair through the normal idempotent projection path, record evidence, and keep 
 
 ---
 
-## 14. Design Review Framework
+## Design Review Framework
 
 Ask:
 

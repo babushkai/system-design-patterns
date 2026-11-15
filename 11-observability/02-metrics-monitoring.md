@@ -14,6 +14,10 @@ Scrape, push/OTLP, and remote write solve different transport boundaries. All re
 
 ## Metric Workload and Contract
 
+A metric is a number measured repeatedly over time: requests per second, memory in use, the length of a queue. Metrics are the cheapest kind of telemetry to store and query, because a measurement is a few bytes whatever the volume of traffic behind it, and they are the foundation of dashboards and alerts for that reason.
+
+Their cost is governed by something that is easy to overlook. A metric is usually broken down by labels, such as the endpoint, the status code, and the region, and each distinct combination of label values is stored as a separate series. The number of series is the product of the number of values each label can take. Three labels with ten values each give a thousand series, which is nothing. Add a label holding a user identifier, with a million values, and the same metric becomes a billion series and brings down the monitoring system. This quantity, called cardinality, is the main constraint on metrics, and it is why the detail of individual requests belongs in logs and traces. The other recurring source of error is averaging. An average latency conceals the slow requests that users actually complain about, and percentiles computed on separate machines cannot be averaged to obtain a correct percentile for the whole.
+
 A time series is identified by:
 
 ~~~text

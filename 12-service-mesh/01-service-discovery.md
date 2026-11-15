@@ -14,6 +14,10 @@ This chapter covers endpoint lifecycle and discovery-state distribution. [Load B
 
 ## The Discovery Contract
 
+In a system where services ran on fixed machines, the address of each could be written into a configuration file. That no longer describes how services run. Instances are started and stopped continually by schedulers and autoscalers, and each gets whatever address is free at the time. A client that wants to call a service must first find out where its instances currently are, and the answer changes from minute to minute.
+
+Service discovery maintains that answer. Instances register when they start, are removed when they stop or fail their health checks, and clients are told the current set. Stated so, the problem sounds like bookkeeping. The difficulty is that the registry is a description of the world that is always slightly out of date. An instance may have crashed a second ago and still be listed, or be listed as healthy while unable to serve. Every client holds its own copy of the list, and the copies do not change at the same moment. A discovery system should be judged by how it behaves under those conditions, and especially by what clients do when the registry itself cannot be reached. A client that discards its list of addresses because it cannot refresh them has turned an outage of the registry into an outage of everything.
+
 A discovery result is not “all live processes.” It is the set of endpoints that a named consumer is currently allowed to consider for a named operation.
 
 ~~~text

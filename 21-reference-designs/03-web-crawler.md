@@ -8,6 +8,10 @@ All three meet in one component, the **frontier**: the data structure that holds
 
 ## Requirements and Contract
 
+A web crawler follows a simple loop: fetch a page, extract the links in it, and add those links to the list of pages to fetch. Everything difficult about crawling comes from running that loop at very large scale against a web that the crawler does not control and that is, in places, actively hostile to it.
+
+The list of pages waiting to be fetched, called the frontier, quickly grows to billions of addresses and has to be prioritized, since the crawler will never reach the end of it. Many addresses lead to the same content, and some sites generate an unlimited number of distinct addresses, such as a calendar with a link to the next month on every page, which will absorb a naive crawler forever. The crawler has an obligation not to overload the sites it visits, which means limiting how often it contacts each one. That obligation conflicts with the wish to crawl quickly, and it turns the scheduling problem inside out, since the constraint applies per site while the work is distributed across many machines. Finally, pages change, so the crawl is never finished. Deciding which pages to revisit, and how often, with a fixed budget of fetches, is a problem in its own right.
+
 **Functional.**
 
 - Discover and fetch pages starting from seed URLs and sitemaps.

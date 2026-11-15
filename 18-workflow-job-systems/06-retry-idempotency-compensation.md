@@ -19,7 +19,11 @@ Workflow effect commit and recovery are scoped here. [Retries, Timeouts, and Hed
 
 ---
 
-## 1. The Unavoidable Commit Gap
+## The Unavoidable Commit Gap
+
+A workflow advances by performing a step and then recording that the step is done. Those are two separate actions, the first usually in some other system and the second in the workflow's own store, and a failure can fall between them. The step has then been carried out and the workflow has no record of it. On recovery the workflow sees an unfinished step and does the only thing it can, which is to perform it again.
+
+No engine can close this gap, because it lies between two systems that share no transaction. The gap can only be made harmless, and there are a small number of ways to do that. If the step is idempotent, performing it twice does no damage. If the other system accepts a unique key for the operation and remembers it, the second attempt is recognized and ignored. If neither is possible, the workflow can ask the other system what happened before deciding whether to act. A related problem arises when a later step fails after earlier ones have succeeded, and the process has to be abandoned. The earlier steps cannot be rolled back as a database transaction would be, since they have already taken effect in the world. They have to be reversed by further actions, such as a refund for a charge, and those reversing actions are themselves steps that can fail.
 
 Consider one workflow step:
 
@@ -44,7 +48,7 @@ Reversing the order does not help:
 
 A crash between those operations records success for an effect that never happened. Without a shared atomic transaction, no ordering removes the gap.
 
-### 1.1 System model
+### System model
 
 Assume:
 
@@ -63,7 +67,7 @@ The achievable guarantee is scoped:
 
 That is stronger and more useful than claiming exactly-once execution.
 
-### 1.2 Invariants
+### Invariants
 
 1. **Stable operation identity:** every attempt of one logical effect carries the same key.
 2. **Parameter immutability:** reusing a key with different semantic input is rejected.
@@ -78,7 +82,7 @@ That is stronger and more useful than claiming exactly-once execution.
 
 ---
 
-## 2. Separate Workflow Decisions From Effect Execution
+## Separate Workflow Decisions From Effect Execution
 
 ```mermaid
 flowchart LR
@@ -109,7 +113,7 @@ effect_key =
 
 Do not derive the key from the worker attempt number. Attempt 2 must look like the same operation to the external system. Conversely, a workflow retry that represents a genuinely new business action needs a new business epoch or logical sequence.
 
-### 2.1 Effect state machine
+### Effect state machine
 
 ```text
 PLANNED
@@ -148,7 +152,7 @@ Hash canonical semantic inputs and store the digest. A duplicate request with th
 
 ---
 
-## 3. Protocol A: One Transaction Boundary
+## Protocol A: One Transaction Boundary
 
 If workflow state and the intended effect live in the same database, commit them together:
 
@@ -165,7 +169,7 @@ COMMIT
 
 A unique constraint on `effect_key` makes duplicate attempts return the stored outcome. This is the strongest and simplest protocol because the dedup record and effect share one atomic boundary.
 
-### 3.1 Claiming is not committing
+### Claiming is not committing
 
 A lease or `RUNNING` marker prevents concurrent normal execution, but it does not make the effect safe. A worker may outlive its lease and continue writing. If ownership can change, pass a monotonically increasing fencing token into the database write and accept only the current epoch.
 
@@ -176,13 +180,13 @@ The transaction should distinguish:
 - `FAILED_FINAL`: deterministic rejection committed;
 - absent/expired claim: eligible for another attempt.
 
-### 3.2 Limits
+### Limits
 
 This protocol ends at the database boundary. An email, payment gateway, object store, message broker, or SaaS API cannot join merely because the worker transaction is durable. Use another protocol for the remote effect.
 
 ---
 
-## 4. Protocol B: Idempotent Remote API
+## Protocol B: Idempotent Remote API
 
 The preferred remote contract accepts a caller-supplied operation key:
 
@@ -201,7 +205,7 @@ The provider atomically:
 4. returns the stored result for duplicate requests;
 5. rejects key reuse with a different digest.
 
-### 4.1 Provider state matters
+### Provider state matters
 
 A robust provider does not use a single `seen=true` bit. It needs states such as:
 
@@ -213,7 +217,7 @@ IN_PROGRESS -> FAILED_FINAL
 
 If the first executor dies while `IN_PROGRESS`, another attempt needs a recovery rule: lease expiry plus fencing, provider-side reconciliation, or a queryable operation status. Returning permanent “already seen” would lose the operation; immediately running again without fencing could duplicate it.
 
-### 4.2 Retention window
+### Retention window
 
 The provider must retain operation identities longer than every source of delayed repetition:
 
@@ -229,7 +233,7 @@ retention >= max(
 
 If a workflow can be retried for 30 days but the provider forgets keys after 24 hours, the guarantee expires after one day. Retention is part of the API contract.
 
-### 4.3 Query by operation identity
+### Query by operation identity
 
 For ambiguous timeouts, support:
 
@@ -241,7 +245,7 @@ The response should distinguish `NOT_FOUND`, `IN_PROGRESS`, `SUCCEEDED`, and `FA
 
 ---
 
-## 5. Protocol C: Intent, Dispatch, and Reconciliation
+## Protocol C: Intent, Dispatch, and Reconciliation
 
 Some external APIs do not support caller idempotency. Record intent before calling:
 
@@ -258,7 +262,7 @@ worker:
 
 This does not make the call exactly once. It makes ambiguity durable and recoverable.
 
-### 5.1 Reconciliation strategies
+### Reconciliation strategies
 
 After an ambiguous response:
 
@@ -272,7 +276,7 @@ Never blindly issue a second irreversible effect merely because the first call t
 
 If the provider accepts a merchant reference but does not promise idempotency, use a unique reference and make the reconciler search it before retrying. This is weaker than atomic provider deduplication but gives an evidence path.
 
-### 5.2 Transactional dispatch with outbox
+### Transactional dispatch with outbox
 
 When the “external effect” is message publication, commit business state and an outbox row together, then publish at least once. Consumers use an inbox or effect key at their own commit boundary. The canonical protocol is in [Outbox Pattern](../05-messaging/07-outbox-pattern.md).
 
@@ -289,7 +293,7 @@ The required terminal milestone depends on the workflow's contract.
 
 ---
 
-## 6. Protocol D: Reserve, Confirm, Release
+## Protocol D: Reserve, Confirm, Release
 
 Capacity-constrained effects often support a hold:
 
@@ -300,7 +304,7 @@ AVAILABLE <- RELEASED/EXPIRED <-
 
 Examples include inventory, seats, credit limits, quotas, and appointment slots. Reservation separates reversible allocation from irreversible confirmation.
 
-### 6.1 Reservation invariants
+### Reservation invariants
 
 - a reservation has a stable key and resource identity;
 - capacity is decremented atomically with reservation creation;
@@ -310,7 +314,7 @@ Examples include inventory, seats, credit limits, quotas, and appointment slots.
 - confirmation after expiry is rejected or follows an explicit late-confirm policy;
 - the workflow records the reservation ID before advancing.
 
-### 6.2 Expiry races
+### Expiry races
 
 1. Workflow sends confirmation near expiry.
 2. Provider confirms, but response is delayed.
@@ -329,7 +333,7 @@ About 28,160 of those holds will eventually release or expire. The system must p
 
 ---
 
-## 7. Compensation Is a Forward Effect
+## Compensation Is a Forward Effect
 
 Compensation does not erase history. It creates a new semantic effect such as refund, release, revoke, or issue corrective entry.
 
@@ -338,7 +342,7 @@ forward effect key: order-82/charge
 compensation key:  order-82/refund-charge/v1
 ```
 
-### 7.1 Compensation contract
+### Compensation contract
 
 For every compensable step, define:
 
@@ -354,19 +358,19 @@ For every compensable step, define:
 
 Compensation may be lossy: a refund does not undo exchange-rate movement; cancellation may incur a fee; a sent email cannot be unsent. The workflow must model these as business outcomes, not pretend the original transaction vanished.
 
-### 7.2 Ordering and parallel branches
+### Ordering and parallel branches
 
 Reverse-order compensation is correct only when dependencies require it. In a parallel workflow DAG, build a compensation graph from committed effects and their dependencies. Independent reversals can run concurrently; a child whose reversal depends on its parent's continuing existence must run first.
 
 Record the exact set of committed forward effects. Replaying workflow code to infer what “must have happened” is unsafe if code or conditions changed.
 
-### 7.3 Compensation can fail permanently
+### Compensation can fail permanently
 
 A refund may be rejected after a settlement boundary. A resource may no longer exist. The state machine needs `COMPENSATION_FAILED_FINAL` or `MANUAL_REPAIR`, with an owner and customer-impact workflow. Infinite retries are not recovery.
 
 ---
 
-## 8. Cancellation Races
+## Cancellation Races
 
 Cancellation is a request to transition, not proof that work stopped:
 
@@ -391,7 +395,7 @@ Workers should propagate cancellation to cancellable calls and stop before issui
 
 ---
 
-## 9. Capacity and Cost Model
+## Capacity and Cost Model
 
 Assume:
 
@@ -433,7 +437,7 @@ Retry and compensation load must be admitted separately from new work. During a 
 
 ---
 
-## 10. Multi-Region and Disaster Recovery
+## Multi-Region and Disaster Recovery
 
 Choose where operation identity is authoritative:
 
@@ -458,7 +462,7 @@ Restoring history without the outcome store can cause replay to reissue old effe
 
 ---
 
-## 11. Security and Tenant Isolation
+## Security and Tenant Isolation
 
 Effect workers often hold powerful credentials. Apply:
 
@@ -479,9 +483,9 @@ Do not place provider secrets or raw payment/health data in workflow history sim
 
 ---
 
-## 12. Failure Traces
+## Failure Traces
 
-### 12.1 Stable key, unstable parameters
+### Stable key, unstable parameters
 
 1. First attempt charges EUR 40 under key `order-82/payment`.
 2. Workflow code changes amount to EUR 55 but reuses the key.
@@ -490,7 +494,7 @@ Do not place provider secrets or raw payment/health data in workflow history sim
 
 **Prevention:** bind canonical semantic request digest to the key and reject mismatch.
 
-### 12.2 Dedup record written before remote effect
+### Dedup record written before remote effect
 
 1. Worker marks key complete.
 2. Process crashes before the remote call.
@@ -499,7 +503,7 @@ Do not place provider secrets or raw payment/health data in workflow history sim
 
 **Prevention:** only use atomic local completion when effect shares the transaction; otherwise record `PLANNED`/`DISPATCHED` and reconcile.
 
-### 12.3 Provider forgets the key
+### Provider forgets the key
 
 1. Workflow retries after a week-long incident.
 2. Provider retained idempotency records for only 24 hours.
@@ -508,7 +512,7 @@ Do not place provider secrets or raw payment/health data in workflow history sim
 
 **Prevention:** align retention contracts or query/reconcile before retry beyond the provider window.
 
-### 12.4 Stale worker records failure after success
+### Stale worker records failure after success
 
 1. Attempt epoch 7 times out.
 2. Epoch 8 succeeds and records the outcome.
@@ -517,7 +521,7 @@ Do not place provider secrets or raw payment/health data in workflow history sim
 
 **Prevention:** monotonic terminal state and fenced attempt epochs.
 
-### 12.5 Callback precedes local response
+### Callback precedes local response
 
 1. Provider commits and sends a webhook.
 2. Webhook consumer records success.
@@ -526,7 +530,7 @@ Do not place provider secrets or raw payment/health data in workflow history sim
 
 **Prevention:** compare-and-swap transitions; `SUCCEEDED` dominates `UNKNOWN`.
 
-### 12.6 Compensation is duplicated
+### Compensation is duplicated
 
 1. Refund succeeds but response is lost.
 2. Compensation retries with a new key.
@@ -536,7 +540,7 @@ Do not place provider secrets or raw payment/health data in workflow history sim
 
 ---
 
-## 13. Observability and Repair
+## Observability and Repair
 
 Track by effect type, provider, tenant class, region, and outcome, not by raw operation key in metric labels:
 
@@ -564,7 +568,7 @@ Never let an operator rewrite workflow history or delete a dedup record to “ma
 
 ---
 
-## 14. Verification
+## Verification
 
 1. **State-machine tests:** every event order, duplicate, and illegal transition.
 2. **Property tests:** same key + same input converges; same key + different input rejects.
@@ -581,7 +585,7 @@ Use deterministic fault injection around every durable boundary. A happy-path un
 
 ---
 
-## 15. Decision Framework
+## Decision Framework
 
 Use the narrowest protocol that closes the actual boundary:
 

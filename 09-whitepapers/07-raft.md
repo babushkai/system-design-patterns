@@ -6,6 +6,10 @@ Raft is not merely “leader plus majority”: it reduces legal states and stren
 
 ## Publication Identity and Scope
 
+For two decades the standard consensus algorithm was Paxos, and it had a reputation for being nearly impossible to understand and harder still to implement correctly. The published descriptions covered agreement on a single value, and building a practical system required extensions that each team worked out for itself, usually with mistakes. Raft was designed with the unusual stated aim of being understandable, on the reasoning that an algorithm engineers cannot follow is one they will implement wrongly.
+
+It achieves this by dividing the problem into parts that can be reasoned about separately and by reducing the number of situations that can arise. There is always at most one leader, and all changes flow from the leader to the followers, never the other way. A leader is elected by majority vote, and a candidate can win only if its log is at least as complete as those of the voters, which guarantees that a new leader already holds every entry that was committed. The leader then brings followers into agreement by overwriting whatever in their logs differs from its own. These restrictions make the algorithm slightly less flexible than Paxos and very much easier to get right, which is why it has become the usual choice for new systems.
+
 - **Paper:** *In Search of an Understandable Consensus Algorithm*
 - **Authors:** Diego Ongaro and John Ousterhout
 - **Venue and version:** USENIX Annual Technical Conference, 2014, pages 305–319; Best Paper Award

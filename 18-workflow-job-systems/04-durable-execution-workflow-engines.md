@@ -8,6 +8,10 @@ Durable execution covers event history, deterministic replay matching, orchestra
 
 ## Primary Evidence and Scope
 
+Durable execution makes a striking promise. A developer writes a long-running process as ordinary sequential code, with loops, conditions, and calls to other services, and the system guarantees that the code will run to completion even if the machine running it crashes repeatedly along the way. A function can wait thirty days for a payment and continue on the next line as though nothing had happened.
+
+The mechanism behind the promise is replay. The engine records the result of every interaction the code has with the outside world, each call it makes and each timer it sets, in a durable history. When a process must be resumed on another machine, the engine runs the code again from the beginning, and each time the code reaches an interaction that is already in the history, the engine supplies the recorded result without performing the interaction again. The code thus passes quickly through everything it has already done and arrives at the point where it stopped, with all its local variables restored. One strict requirement follows. The code must make the same decisions on every replay, so it may not consult the clock, generate a random number, or read anything else that could differ between runs, except through the engine. Changing the code of a workflow while instances of it are in flight is difficult for the same reason.
+
 | Primary evidence | What it establishes | Boundary |
 |---|---|---|
 | Temporal workflow/event-history documentation | Commands are checked against event history during replay; history is append-only durable execution state | Temporal semantics and current implementation limits |

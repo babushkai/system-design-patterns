@@ -6,6 +6,10 @@ TAO shows what happens when a company turns a dominant access pattern into a sto
 
 ## Publication Identity and Scope
 
+Facebook's central data is a graph: people, posts, photos, and comments, joined by relationships such as friendship, authorship, and likes. Rendering a single page requires hundreds of small queries against that graph, almost all of them reads, and the volume is enormous. For years the company served them from a general-purpose cache placed in front of its databases, with application code responsible for keeping the cache correct, and that arrangement was both inefficient and a constant source of subtle bugs.
+
+TAO replaced it with a service that understands the data it holds. Its interface is expressed in terms of objects and the associations between them, so that the questions applications actually ask, such as the most recent comments on a post or whether one person follows another, are answered directly from a cache organized for them. The system is unapologetically optimized for reads and for availability. Writes go to a leader region and propagate outward, so a reader elsewhere may briefly see old data, and the design accepts that in exchange for answering quickly from a nearby cache almost all of the time. The paper is a study in fitting a storage system closely to one workload.
+
 - **Paper:** *TAO: Facebook's Distributed Data Store for the Social Graph*
 - **Authors:** Nathan Bronson, Zach Amsden, George Cabrera, Prasad Chakka, Peter Dimov, Hui Ding, Jack Ferris, Anthony Giardullo, Sachin Kulkarni, Harry Li, Mark Marchukov, Dmitri Petrov, Lovro Puzar, Yee Jiun Song, and Venkat Venkataramani
 - **Venue and version:** USENIX Annual Technical Conference, 2013, pages 49–60

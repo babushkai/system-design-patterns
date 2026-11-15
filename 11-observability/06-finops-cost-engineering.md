@@ -14,6 +14,10 @@ Optimization decisions compare net present savings with engineering effort, migr
 
 ## Cost Workload and Contract
 
+When a company owned its hardware, capacity was bought through a procurement process, and the cost of a system was decided months in advance by a small number of people. In the cloud, any engineer can start a hundred machines with a line of configuration, and the bill arrives afterward. Spending has become a consequence of everyday engineering decisions, made by people who usually cannot see what those decisions cost.
+
+That gap is the core of the problem. A cloud bill is itemized by the provider's services, such as compute, storage, and data transfer, and says nothing about which team, product, or customer was responsible. Without that attribution nobody can tell whether a rising bill reflects growth, waste, or a mistake, and nobody in particular is accountable for it. The first task is therefore to connect cost to the things the business cares about, so that it can be stated per customer, per feature, or per request. Once cost is expressed that way, it becomes an engineering measure like latency: a design can be evaluated by what it costs to serve a unit of work, and a regression in that figure can be caught as any other regression would be.
+
 Cost inputs arrive with different semantics:
 
 - invoice and billing-export line items;

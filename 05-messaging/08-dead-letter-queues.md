@@ -8,6 +8,10 @@ A quarantine subsystem must define failure classification, quarantine state, ret
 
 ## Workload and Contract
 
+A consumer that fails to process a message normally retries, and for a passing fault such as a network error or a busy database, retrying is correct. Some messages will never succeed however many times they are tried. The payload is malformed, or it refers to a record that was deleted, or it triggers a bug in the consumer. Such a message is called a poison message, and retrying it forever does harm beyond the wasted effort. In a queue that preserves order, the consumer cannot move past it, and every message behind it waits. One bad message can stop a pipeline completely.
+
+A dead-letter queue is the place such messages are moved to after a bounded number of attempts, so that the rest of the stream can proceed. That solves the immediate problem and creates a quieter one. The dead-letter queue now holds work that was accepted and never carried out, each item of which may be a customer's order or payment. If nobody is responsible for looking at it, moving a message there is a way of losing it while reporting success. The questions that matter are therefore organizational as much as technical: who is alerted, who decides whether a message is repaired, replayed, or discarded, and how a repaired message is put back without being applied twice or out of order.
+
 Quarantine operations should be explicit:
 
 ```text

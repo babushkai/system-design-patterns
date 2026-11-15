@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-Zero trust is an authorization architecture, not a product and not “put mTLS everywhere.” Network location is treated as a weak signal. Every access decision binds an authenticated principal, workload, device or runtime posture, requested action, resource, tenant, and policy revision; enforcement occurs at a boundary that the caller cannot bypass.
+Zero trust is an authorization architecture. It cannot be bought as a product, and it does not mean "put mTLS everywhere." Network location is treated as a weak signal. Every access decision binds an authenticated principal, workload, device or runtime posture, requested action, resource, tenant, and policy revision, and enforcement occurs at a boundary that the caller cannot bypass.
 
 A zero-trust design requires:
 
@@ -18,9 +18,13 @@ Zero trust replaces ambient, transitive trust with a verifiable request contract
 
 ---
 
-## 1. Threat Model and Access Contract
+## Threat Model and Access Contract
 
-Assume an attacker may:
+For most of the history of corporate computing, security architecture rested on a perimeter. A firewall separated the trusted inside from the untrusted outside, and a request that originated inside was treated as legitimate by virtue of where it came from. Internal services often performed no authentication at all, since anything able to reach them was presumed to belong.
+
+The model has one decisive flaw: it gives an attacker nothing more to do after the first success. Once any single machine inside the perimeter is compromised, through a phished employee, a vulnerable service, or a malicious dependency, the attacker is inside, and the inside is trusted. Every internal service is now reachable and most will cooperate. This step, from one foothold to everything else, is called lateral movement, and in a perimeter network it is hardly a step at all. A series of intrusions in the late 2000s followed exactly this course and prompted Google to rebuild its own corporate access on the opposite assumption, in the project published as BeyondCorp: the internal network is to be considered as hostile as the internet.
+
+We therefore assume that an attacker may:
 
 - reach internal network addresses;
 - compromise one user account, device, workload, proxy, or CI runner;
@@ -32,7 +36,7 @@ Assume an attacker may:
 - abuse a support or break-glass path;
 - target a stale region during policy or key rollout.
 
-An access decision is:
+If position on the network no longer confers authority, something else has to, and it has to be evaluated on every request. An access decision becomes a function of everything relevant to it:
 
 ```text
 decision = authorize(
@@ -48,9 +52,9 @@ decision = authorize(
 )
 ```
 
-Authentication establishes which principal or workload presented a credential. Authorization determines whether that identity may perform this action on this resource. The canonical user authentication lifecycle is in [Authentication Systems](./01-authentication-fundamentals.md); policy models are in [Authorization at Scale](./07-authorization-patterns.md).
+Authentication establishes which principal or workload presented a credential. Authorization determines whether that identity may perform this action on this resource. The user authentication lifecycle is in [Authentication Systems](./01-authentication-fundamentals.md), and policy models are in [Authorization at Scale](./07-authorization-patterns.md).
 
-### 1.1 Core invariants
+### Core invariants
 
 1. **No ambient authority:** being on a subnet, cluster, VPN, or host does not by itself grant application access.
 2. **Unforgeable identity:** accepted identity is cryptographically verified against an intended trust domain.
@@ -65,7 +69,7 @@ Authentication establishes which principal or workload presented a credential. A
 
 ---
 
-## 2. Planes and Trust Boundaries
+## Planes and Trust Boundaries
 
 ```mermaid
 flowchart LR
@@ -83,21 +87,17 @@ flowchart LR
     S --> AUDIT[(Decision and access audit)]
 ```
 
-The **identity plane** attests principals and workloads and issues short-lived credentials.
+The architecture divides into four planes, each answering a different question.
 
-The **policy control plane** stores policy, compiles it, validates changes, distributes revisions, and records provenance.
+The **identity plane** answers who is asking. It attests principals and workloads and issues them short-lived credentials. The **policy control plane** answers what the rules are: it stores policy, compiles it, validates changes, distributes revisions, and records where each came from. The **enforcement plane**, which is the data plane, sits in the request path. It authenticates the channel or request, obtains or evaluates policy, and gates the operation. The **resource plane** owns the fine-grained facts that no generic component can know: who owns this record, which tenant it currently belongs to, how it is classified, what state its workflow is in.
 
-The **enforcement/data plane** authenticates the channel or request, obtains/evaluates policy, and gates the operation.
-
-The **resource plane** owns fine-grained facts that generic gateways cannot know: record owner, current tenant, object classification, workflow state, or relationship.
-
-Do not collapse these into a single “zero-trust proxy” box. A gateway can enforce coarse ingress policy, while the owning service enforces resource-specific authorization. If a service accepts a bypass path directly, the gateway is only advisory.
+Vendors tend to draw all of this as a single box labeled "zero-trust proxy," and the simplification does harm. A gateway can enforce coarse ingress policy very well. It cannot decide whether this user may read this invoice, because it has no idea who owns the invoice. That decision belongs to the owning service. And if the service will also accept requests that did not come through the gateway, the gateway's enforcement is advisory.
 
 ---
 
-## 3. Identity Sources
+## Identity Sources
 
-### 3.1 Human identity
+### Human identity
 
 Human sessions normally originate at an identity provider and carry:
 
@@ -108,11 +108,11 @@ Human sessions normally originate at an identity provider and carry:
 - organization/tenant membership;
 - bounded claims needed by the relying party.
 
-Do not encode a complete, long-lived permission graph into a token. Authorization can change before token expiry, and token size/claim exposure grow with every consumer. Use short-lived tokens for stable identity/assurance and query or cache current policy where required.
+It is tempting to go further and encode the user's complete set of permissions in the token, so that no service ever needs to look anything up. This fails in two ways. Permissions change before tokens expire, so the token asserts rights the user no longer has. And the token grows with every consumer's requirements while exposing all of them to each. Tokens work well for facts that are stable over their lifetime, namely identity and assurance. Current policy is queried or cached where the decision requires it.
 
-### 3.2 Workload identity
+### Workload identity
 
-Static API keys and shared client secrets make rotation and attribution weak. Prefer runtime-issued identity derived from attested execution properties:
+Services need identities as much as people do, and the traditional mechanism, a static API key or shared client secret, is poor at it. A key that never changes cannot be rotated without coordination, and a key shared across a fleet cannot say which instance used it. We prefer an identity that the runtime issues to a workload on the basis of attested facts about how it is running:
 
 ```text
 node attestation
@@ -122,31 +122,31 @@ node attestation
   -> mTLS or signed request
 ```
 
-Selectors might include cluster, namespace, service account, image digest, process identity, or cloud instance identity. The selector set is an authorization input to issuance; accepting only a caller-provided service name would let any process self-assert.
+The selectors are facts such as the cluster, namespace, service account, image digest, process identity, or cloud instance identity. What matters is who asserts them. They are observed by trusted infrastructure, the kernel and the orchestrator, and they are never reported by the workload itself. An issuance system that accepted a service name supplied by the caller would let any process claim to be any service.
 
-SPIFFE models a workload identity as a URI in a trust domain and delivers short-lived X.509 or JWT identity documents through a local Workload API. The local endpoint is security-sensitive: a neighboring process that can impersonate selectors or access another workload's credential can assume its identity.
+SPIFFE models a workload identity as a URI within a trust domain and delivers short-lived X.509 or JWT identity documents through a local Workload API. That local endpoint concentrates the risk. A neighboring process that can reach another workload's endpoint, or imitate its selectors, can assume its identity, so the isolation of the endpoint is as important as the cryptography behind it.
 
-### 3.3 Trust domains
+### Trust domains
 
-A trust domain is a root of identity authority, not merely a DNS suffix. Separate domains when administrative control, environment, regulatory boundary, or security posture differs.
+A trust domain is a root of identity authority: the set of identities that one signing root can vouch for. It is an administrative boundary, and it need not correspond to a DNS suffix. Domains should be separate when administrative control, environment, regulatory boundary, or security posture differs.
 
-Federation publishes which roots and identities another domain accepts. It does not imply universal trust between all identities. Authorization still maps federated identities to explicit resources/actions.
+Federation lets one domain accept identities from another by publishing which roots it recognizes. This establishes that a foreign identity is authentic and nothing more. What the foreign identity may do is still a matter for explicit authorization, mapped to specific resources and actions.
 
-Avoid one global root whose compromise authenticates every environment. Equally, avoid so many roots that rotation and policy become unmanageable. Model trust-domain failure as a blast-radius decision.
+The number of roots is a decision about blast radius. With one global root, a single compromise authenticates an attacker into every environment. With a root per team, rotation and policy become unmanageable. The right question to ask is what an attacker would gain from the compromise of each root.
 
 ---
 
-## 4. Credential Forms and Binding
+## Credential Forms and Binding
 
-### 4.1 Mutual TLS
+### Mutual TLS
 
-mTLS authenticates both ends of a connection and protects transport. A workload certificate should include a stable workload identity, short validity, and a chain to the intended trust domain.
+In ordinary TLS the server proves its identity and the client proves nothing. Mutual TLS has the client present a certificate too, so each end knows the other. A workload certificate carries a stable workload identity, has a short validity, and chains to the intended trust domain.
 
-Connection authentication is not request authorization. A proxy may multiplex requests from many users over one authenticated workload connection. The downstream must distinguish “gateway workload called me” from “user X requested action Y,” and must verify any propagated user context rather than trust an arbitrary header.
+mTLS is the most common building block of zero-trust deployments and the source of their most common misunderstanding. It authenticates a connection, and a connection is not a request. Consider a gateway that holds one mTLS connection to a backend and sends requests from ten thousand users over it. The backend knows, with cryptographic certainty, that the gateway is calling. It knows nothing about which user each request is for. It must distinguish "the gateway workload called me" from "user X requested action Y," and it must verify the user context it is given, since a bare header carries no proof of who wrote it.
 
-### 4.2 Bearer tokens
+### Bearer tokens
 
-A bearer token can be replayed by whoever possesses it. Limit:
+A bearer token can be replayed by whoever possesses it. Its exposure is limited by restricting:
 
 - audience;
 - scope/resource;
@@ -155,17 +155,17 @@ A bearer token can be replayed by whoever possesses it. Limit:
 - accepted algorithms and keys;
 - where it may be logged or stored.
 
-Bearer credentials are often necessary across proxies and heterogeneous systems, but their replay boundary must be explicit.
+Bearer credentials are often unavoidable across proxies and heterogeneous systems. Where they are used, the boundary within which a stolen token could be replayed should be stated explicitly.
 
-### 4.3 Sender-constrained credentials
+### Sender-constrained credentials
 
-Bind a token to a key the client proves it possesses. OAuth mTLS certificate-bound tokens, for example, carry confirmation material associated with the client certificate. A stolen token alone is then insufficient.
+A token can be bound to a key that the client must prove it holds. OAuth certificate-bound tokens, for example, carry a confirmation of the client's certificate, and a resource server rejects the token on any connection that was not established with that certificate. The token alone is then insufficient.
 
-Binding adds lifecycle coupling: certificate rotation and token refresh must overlap correctly, TLS termination must preserve proof, and intermediaries cannot silently substitute identities. Model these operational costs before selecting it.
+The binding couples two lifecycles that were previously independent. Certificate rotation and token refresh must overlap correctly, or a client with a new certificate holds tokens bound to its old one. TLS termination must preserve the proof through to the point of verification. These operational costs should be weighed before the mechanism is chosen.
 
-### 4.4 Signed request envelopes
+### Signed request envelopes
 
-For asynchronous queues or multi-hop workflows, a connection-bound identity may be gone when work executes. A signed envelope can bind:
+Connection-level identity has a further limit, which is that it lasts only as long as the connection. When a request is placed on a queue and processed an hour later, or passes through several hops, the connection that authenticated it is gone by the time the work executes. For these cases the request itself is signed, in an envelope that binds:
 
 ```text
 issuer workload
@@ -181,13 +181,15 @@ policy context reference
 signature
 ```
 
-The consumer validates signature, audience, expiry, replay/idempotency semantics, and authorization against current resource state. Do not forward an end-user bearer token into a queue with retention longer than its intended exposure.
+The consumer validates the signature, audience, and expiry, applies its replay or idempotency rules, and then authorizes against the current state of the resource. The end user's bearer token should not be placed on the queue instead. A token meant to live for minutes would then sit in durable storage for as long as the queue retains messages, readable by anything with access to the queue.
 
 ---
 
-## 5. Policy Decision and Enforcement
+## Policy Decision and Enforcement
 
-### 5.1 PEP placement
+### PEP placement
+
+Policy can be enforced at several points, and each knows some things well and others not at all:
 
 | Enforcement point | Knows well | Cannot safely own alone |
 |---|---|---|
@@ -197,9 +199,11 @@ The consumer validates signature, audience, expiry, replay/idempotency semantics
 | Domain service | resource state, relationships, invariants | fleet-wide ingress abuse |
 | Database policy | row/tenant ownership | user intent and cross-service workflow |
 
-Defense in depth is useful only when layers have clear ownership. Repeating the same coarse role check in three places creates drift; enforcing coarse ingress, workload admission, and resource authorization at their natural boundaries creates complementary controls.
+"Defense in depth" is often taken to mean repeating the same check at every layer. Three copies of a coarse role check are three places for the rule to drift out of agreement, and they add nothing that one copy lacked. Depth is useful when the layers are complementary: coarse ingress policy at the edge, workload admission at the proxy, and resource authorization in the service, each enforcing what it alone is positioned to know.
 
-### 5.2 Local versus remote policy decisions
+### Local versus remote policy decisions
+
+A policy decision can be computed inside the enforcing process from a local copy of the policy, or by calling a central decision service. The trade is the familiar one between a cache and its origin.
 
 Local evaluation:
 
@@ -213,11 +217,11 @@ Remote evaluation:
 - simplifies immediate revocation;
 - adds latency, availability, and fan-out dependencies.
 
-A hybrid is common: compiled stable policy locally, with remote lookup for high-risk or highly dynamic facts. The application owns fallback. A generic policy client must not silently convert “PDP unavailable” into allow.
+Most systems settle on a hybrid, with stable policy compiled and evaluated locally and a remote lookup reserved for high-risk or rapidly changing facts. Whatever the arrangement, the application decides what happens when the remote call fails. A generic policy client must not quietly convert "decision service unavailable" into "allow," which is a behavior we will meet again in the failure traces.
 
-### 5.3 Decision cache
+### Decision cache
 
-If decisions are cached, the key must include all semantic inputs:
+If decisions are cached, the cache key must include every input that could change the answer:
 
 ```text
 subject
@@ -229,13 +233,13 @@ assurance/posture class
 policy revision
 ```
 
-Caching only `user_id + permission` can leak across tenant or object boundaries. Bound TTL by revocation requirements and resource-state volatility. Negative and positive decisions may need different budgets.
+The typical bug is a key that is too small. Caching on `user_id + permission` seems natural and is wrong whenever the same user holds different rights in different tenants or on different objects, because a decision made in one context is then served in another. The TTL is bounded by how quickly revocation must take effect and how volatile the resource state is, and allow and deny decisions may deserve different lifetimes.
 
 ---
 
-## 6. Policy Control Plane
+## Policy Control Plane
 
-A policy change is production code. Use:
+A policy change alters what the production system permits, and it can cause an outage or a breach as readily as a code change can. It deserves the same lifecycle:
 
 ```text
 DRAFT
@@ -247,7 +251,7 @@ DRAFT
   -> SUPERSEDED
 ```
 
-An immutable policy revision contains:
+Each revision is immutable and carries its own provenance:
 
 ```text
 policy_revision
@@ -264,7 +268,7 @@ previous_revision
 signature
 ```
 
-### 6.1 Publication
+### Publication
 
 1. parse and type-check policy;
 2. validate referenced actions/resources/attributes;
@@ -275,11 +279,11 @@ signature
 7. evaluators fetch, verify, compile/load, and atomically activate;
 8. report active revision and errors.
 
-Push notifications reduce latency; polling repairs missed events. Evaluators reject rollback to an older revision unless an explicit signed rollback command authorizes it.
+Push notifications get a new revision to evaluators quickly, and polling repairs whatever the notifications missed. Neither should be relied on alone. Evaluators also refuse to move to an older revision unless a signed rollback command says so. Otherwise an attacker able to replay an old distribution message could restore a policy from before their access was removed.
 
-### 6.2 Staleness classes
+### Staleness classes
 
-Not every decision needs the same freshness:
+Local evaluation means every decision is made on a copy of the policy that may be out of date. Different decisions can tolerate very different amounts of that:
 
 | Class | Example | Stale behavior |
 |---|---|---|
@@ -288,15 +292,15 @@ Not every decision needs the same freshness:
 | Privileged role revocation | production admin removed | seconds, remote check if needed |
 | Emergency deny | compromised workload blocked | near-immediate, fail closed beyond budget |
 
-Declare staleness in policy metadata. “Eventually consistent authorization” without a bound is not a security requirement.
+The tolerance is declared in the policy's metadata, where it can be enforced and monitored. "Eventually consistent authorization" with no stated bound amounts to an admission that nobody knows how long a revoked user keeps their access.
 
 ---
 
-## 7. Credential Issuance and Rotation
+## Credential Issuance and Rotation
 
-### 7.1 Bootstrap
+### Bootstrap
 
-The first credential cannot authenticate itself. Bootstrap depends on an attested local or platform identity:
+Every credential is issued to someone who authenticated, which leaves the question of how the first one is obtained. It cannot be obtained with a credential. Bootstrap rests on some fact the platform can attest without a secret from the workload:
 
 - cloud instance/workload identity;
 - orchestrator service account plus node attestation;
@@ -304,11 +308,11 @@ The first credential cannot authenticate itself. Bootstrap depends on an atteste
 - signed workload artifact and trusted launcher;
 - pre-provisioned enrollment credential with narrow one-time use.
 
-Map bootstrap evidence to a workload identity through controlled registration. Protect the registration API; it decides which runtime facts can become which identity.
+Controlled registration maps this evidence to a workload identity. The registration API therefore decides which runtime facts become which identity, and write access to it is equivalent to the ability to mint any identity in the domain. It should be protected accordingly.
 
-### 7.2 Rotation overlap
+### Rotation overlap
 
-For certificates/roots:
+Rotating a trust root across a fleet is a distributed change that cannot happen everywhere at once, so it proceeds through a period in which both old and new are valid:
 
 ```text
 publish new trust root
@@ -319,11 +323,11 @@ publish new trust root
   -> remove old root after maximum credential lifetime + margin
 ```
 
-Removing an old root before all credentials rotate causes an outage. Trusting a compromised old root indefinitely preserves attacker access. Track both safety windows explicitly.
+The rule is that verifiers must trust the new root before anyone presents a credential signed by it. There are two ways to fail, and they pull in opposite directions. If the old root is removed before every credential has rotated, valid workloads are rejected and the result is an outage. If a compromised old root stays trusted indefinitely because removing it is risky, the attacker keeps their access. Both windows need to be tracked explicitly.
 
-### 7.3 Revocation versus short lifetime
+### Revocation versus short lifetime
 
-Short-lived credentials reduce reliance on large revocation lists, but issuance must stop quickly and verifiers must reject beyond expiry. For immediate compromise response, combine:
+Short-lived credentials reduce dependence on revocation lists, since a credential that expires in an hour needs no revoking after an hour. This holds only if issuance to a compromised workload stops promptly and verifiers enforce expiry strictly. For an immediate response to compromise, several measures are combined:
 
 - disabling registration/issuance;
 - emergency deny policy;
@@ -332,11 +336,11 @@ Short-lived credentials reduce reliance on large revocation lists, but issuance 
 - key rotation;
 - workload quarantine.
 
-Connection pools can outlive credential rotation. Define whether an authenticated connection remains valid until close or is periodically reauthorized.
+Connection draining is on the list for a reason that is easy to overlook. A certificate is checked during the TLS handshake, when the connection is established. A connection opened with a valid certificate and kept alive in a pool continues to work after that certificate expires or its workload is disabled, possibly for days. The design must say whether an authenticated connection remains valid until it closes or is re-authorized periodically.
 
 ---
 
-## 8. Capacity and Availability
+## Capacity and Availability
 
 Assume:
 
@@ -365,21 +369,21 @@ Expected in-flight remote work at p99 is roughly:
 720/s * 0.012 s = 8.64 requests
 ```
 
-That suggests concurrency is easy, but averages hide bursts and dependency fan-out. Size from measured distributions and regional failure headroom, not the arithmetic alone. More important: the remote PDP is on a high-risk request path, so provision N-minus-one capacity, bound deadlines, and define fail-closed behavior.
+About nine concurrent requests against replicas that can each handle 500 makes the remote decision service look trivially provisioned, and on capacity alone it is. The arithmetic says nothing about the properties that matter. This service is on the path of every high-risk request, so its availability bounds theirs. It needs enough replicas to lose one, bounded deadlines, and a defined fail-closed behavior. It should also be sized from measured distributions that include bursts and regional failover, and not from an average.
 
-Control-plane fan-out scales with evaluators. A 4 MiB policy snapshot sent every minute to 10,000 processes is:
+The larger cost is less visible and belongs to the control plane, which scales with the number of evaluators. Sending a 4 MiB policy snapshot every minute to 10,000 processes costs:
 
 ```text
 4 MiB * 10,000 / 60 s = 667 MiB/s
 ```
 
-Use content digests, regional relays, compressed artifacts, jittered polling, and deltas with full-snapshot repair. Keep local evaluation artifacts immutable and atomically replaceable.
+That is a great deal of bandwidth spent, almost always, on telling evaluators that nothing has changed. The remedies are standard for content distribution. Evaluators compare content digests and download only when the digest differs, regional relays absorb the fan-out, artifacts are compressed, polling is jittered, and changes are sent as deltas with a full snapshot available for repair. The local artifact is immutable and is replaced atomically, so that an evaluator never runs half of one revision and half of another.
 
 ---
 
-## 9. Multi-Region and Federation
+## Multi-Region and Federation
 
-Identity and policy have different authority requirements:
+Identity and policy have different requirements for where authority lives:
 
 - one globally ordered policy revision per environment;
 - regional distribution and local evaluation;
@@ -388,17 +392,17 @@ Identity and policy have different authority requirements:
 - workload home region or globally unique identity;
 - region-local emergency deny capability with audited convergence.
 
-If regions accept independent concurrent policy writes, conflict resolution must preserve deny semantics and rule ordering. Last-write-wins can remove a security restriction because of clock or replication order. Prefer a single logical policy authority or disjoint ownership.
+Policy needs a single order of revisions because security rules do not merge safely. If two regions accept policy writes independently and reconcile by last-write-wins, a deny rule written in one can be overwritten by an unrelated change in the other, purely as an accident of clocks or replication order, and the system reports a successful merge. A single logical policy authority, or ownership divided so that writers never touch the same rules, avoids the problem.
 
-Regional isolation needs last-known-good identity bundles and policy, but also a maximum isolation duration. After it, high-risk access fails closed or enters a documented break-glass procedure.
+A region cut off from the control plane continues on its last-known-good identity bundles and policy. That is the correct behavior for a while, and the design must say for how long. Beyond a stated maximum isolation, high-risk access fails closed or goes through a documented break-glass procedure.
 
-Federation maps identities, not permissions. A partner identity `spiffe://partner.example/service/a` should receive only explicitly mapped access in the local domain.
+Federation maps identities and does not map permissions. A partner identity such as `spiffe://partner.example/service/a` is authentic once the bundle verifies, and it receives only the access explicitly mapped to it in the local domain.
 
 ---
 
-## 10. Network Segmentation Still Matters
+## Network Segmentation Still Matters
 
-Zero trust does not mean “the network is irrelevant.” Segmentation:
+The slogan "the network is not trusted" is sometimes read as "the network does not matter," which is a different claim and a false one. Segmentation:
 
 - removes unreachable attack paths;
 - limits credential-testing and scanning;
@@ -406,15 +410,15 @@ Zero trust does not mean “the network is irrelevant.” Segmentation:
 - protects control-plane endpoints;
 - reduces accidental cross-environment access.
 
-The difference is that reachability is not sufficient authority. Use network policy as one layer, cryptographic workload identity for authentication, and resource policy for authorization.
+What has changed is the role of reachability. In the perimeter model it was sufficient for access. In this model it is necessary and never sufficient. A service an attacker cannot reach cannot be attacked through a vulnerability in its authentication, and so network policy remains a valuable layer beneath cryptographic workload identity and resource policy.
 
-Egress is often the forgotten half. An exploited workload with broad outbound network access can exfiltrate data or call arbitrary effectors. Apply destination allowlists, DNS/service identity, proxy policy, and per-workload egress credentials.
+Egress is the half that tends to be forgotten. Designs concentrate on who may call a workload and neglect what the workload may call. An exploited workload with unrestricted outbound access can send data anywhere and invoke any external service. Destination allowlists, service identity, proxy policy, and per-workload egress credentials apply the same discipline in the outbound direction.
 
 ---
 
-## 11. Failure Traces
+## Failure Traces
 
-### 11.1 Proxy trusts an unsigned identity header
+### Proxy trusts an unsigned identity header
 
 1. Gateway authenticates users and normally injects `X-User-ID`.
 2. Internal service is also reachable directly.
@@ -423,24 +427,28 @@ Egress is often the forgotten half. An exploited workload with broad outbound ne
 
 **Prevention:** remove caller-provided identity headers at the boundary, cryptographically bind propagated identity, and close bypass paths.
 
-### 11.2 mTLS grants transitive authority
+### mTLS grants transitive authority
 
 1. Service A's certificate is valid.
 2. Service A is compromised.
-3. Every downstream accepts any action from A because “mTLS passed.”
+3. Every downstream accepts any action from A because "mTLS passed."
 4. Attacker reads or mutates unrelated tenants.
+
+This is the perimeter model rebuilt out of certificates. The network boundary has been replaced by a cryptographic one, and inside it everything still trusts everything. Lateral movement is as easy as before.
 
 **Prevention:** mTLS authenticates workload A; downstream still authorizes action/resource/tenant and propagated principal.
 
-### 11.3 Policy outage widens access
+### Policy outage widens access
 
 1. Remote PDP times out.
 2. SDK catches the error and defaults to `allow` for availability.
 3. An attacker creates PDP load and bypasses policy.
 
+The default was written by someone protecting uptime, and in a narrow sense it worked. It also converted a denial-of-service attack on the policy service into a way of bypassing authorization.
+
 **Prevention:** decision-class-specific fail-safe default, local last-known-good policy, deadlines, and circuit isolation.
 
-### 11.4 Stale allow survives revocation
+### Stale allow survives revocation
 
 1. Administrator access is revoked.
 2. One region misses the policy update.
@@ -449,7 +457,7 @@ Egress is often the forgotten half. An exploited workload with broad outbound ne
 
 **Prevention:** freshness class for privileged access, active revision telemetry, short cache bound, and remote/current check for sensitive actions.
 
-### 11.5 Root rotation partitions the fleet
+### Root rotation partitions the fleet
 
 1. Issuer begins signing with a new root.
 2. Some proxies have not received the bundle.
@@ -458,7 +466,7 @@ Egress is often the forgotten half. An exploited workload with broad outbound ne
 
 **Prevention:** trust-new-before-issue, observed convergence, dual-chain overlap, and staged rotation.
 
-### 11.6 Cross-tenant decision cache
+### Cross-tenant decision cache
 
 1. Cache key contains user and action but not tenant/resource.
 2. User is admin in tenant A.
@@ -466,7 +474,7 @@ Egress is often the forgotten half. An exploited workload with broad outbound ne
 
 **Prevention:** complete semantic cache key and property tests for tenant separation.
 
-### 11.7 Identity agent is a local confused deputy
+### Identity agent is a local confused deputy
 
 1. Any container on a node can reach a workload identity endpoint.
 2. Agent selects identity from caller-provided metadata.
@@ -476,9 +484,9 @@ Egress is often the forgotten half. An exploited workload with broad outbound ne
 
 ---
 
-## 12. Observability and Incident Response
+## Observability and Incident Response
 
-Identity-plane signals:
+Each plane has its own signals. From the identity plane:
 
 - issuance/renewal rate, latency, and rejection reason;
 - credential age and expiry headroom;
@@ -487,7 +495,7 @@ Identity-plane signals:
 - unexpected identity on node/namespace;
 - issuance after disable request.
 
-Policy-plane signals:
+From the policy plane:
 
 - mutation, validation, approval, and publication outcomes;
 - evaluator active revision distribution;
@@ -496,7 +504,7 @@ Policy-plane signals:
 - emergency deny propagation latency;
 - rollback/downgrade attempts.
 
-Enforcement signals:
+From enforcement:
 
 - allow/deny/error by action and coarse resource class;
 - authentication and audience/binding failures;
@@ -505,9 +513,11 @@ Enforcement signals:
 - cross-region/federation use;
 - break-glass activation and duration.
 
-Avoid principal IDs, resource IDs, and arbitrary policy attributes as metric labels. Put high-cardinality evidence in access-controlled audit logs with sampling/retention rules.
+Two of these give early warning of the commonest outages. Expiry headroom, the time remaining before the oldest credential in use expires, falls steadily when renewal is broken and reaches zero at the moment of the outage, so it is worth alerting on well before that. The distribution of active policy revisions across evaluators shows whether a rollout has converged or whether some part of the fleet is running on old rules.
 
-Incident response needs a rehearsed sequence:
+Principal identifiers, resource identifiers, and arbitrary policy attributes do not belong in metric labels. High-cardinality evidence goes to access-controlled audit logs with sampling and retention rules.
+
+Incident response should be a rehearsed sequence:
 
 1. identify compromised principal/workload/trust domain;
 2. block issuance and publish emergency deny;
@@ -520,9 +530,9 @@ Incident response needs a rehearsed sequence:
 
 ---
 
-## 13. Migration Path
+## Migration Path
 
-Do not begin by enforcing every service-to-service edge.
+No organization begins with a clean slate, and a migration that tries to enforce every service-to-service edge on the first day will cause an outage and lose its sponsorship. The sequence that works starts by observing:
 
 1. Inventory callers, workloads, resources, and bypass paths.
 2. Issue workload identities in observe-only mode.
@@ -535,13 +545,13 @@ Do not begin by enforcing every service-to-service edge.
 9. segment network/egress based on observed required paths;
 10. remove legacy credentials and unauthenticated endpoints.
 
-Observe-only data is evidence, not policy. Existing traffic may include compromise, obsolete integrations, or overbroad access. Require owners to justify edges before converting them to allows.
+There is a trap in the third step. The graph of observed traffic is evidence of what happens today, and it is tempting to turn it directly into an allowlist. But today's traffic may include a compromise already in progress, integrations nobody remembers, and access far broader than anything needs. Converting it wholesale into policy would give all of that formal approval. Each edge needs an owner who can justify it before it becomes an allow.
 
-Use policy semantic diffs: replay privacy-scrubbed access requests under old and proposed revisions and review newly allowed and newly denied sets. Canary enforcement by service/tenant and retain an audited rollback revision.
+Policy changes are checked with semantic diffs. Privacy-scrubbed access requests are replayed under the old and the proposed revisions, and the sets of newly allowed and newly denied requests are reviewed. Enforcement is introduced as a canary by service or tenant, with an audited rollback revision kept ready.
 
 ---
 
-## 14. Verification
+## Verification
 
 1. **Identity tests:** wrong issuer, audience, trust domain, expiry, signature, and key binding.
 2. **Policy tests:** allow/deny vectors, missing attributes, resource versions, and tenant separation.
@@ -554,15 +564,15 @@ Use policy semantic diffs: replay privacy-scrubbed access requests under old and
 9. **Break-glass game day:** activate, scope, observe, expire, and review emergency access.
 10. **Adversarial tests:** header spoofing, token replay, confused deputy, SSRF/egress, and compromised workload lateral movement.
 
-The strongest test is end-to-end: demonstrate that a principal can reach an intended resource and that changing network location, forging headers, replaying credentials, or calling through an unintended workload does not widen authority.
+The strongest test is end to end and has two halves. First we demonstrate that a principal can reach a resource it is meant to reach. Then we demonstrate that changing network location, forging headers, replaying credentials, or calling through an unintended workload does not widen that authority. The second half is the one that tests the architecture. Many systems pass the first while failing the second.
 
 ---
 
-## 15. Decision Framework
+## Decision Framework
 
-Use this architecture when internal reachability is broad, workloads are dynamic, credentials need automated rotation, multiple trust domains interact, or compromise of one workload must not grant transitive access.
+This architecture is warranted when internal reachability is broad, workloads are dynamic, credentials need automated rotation, several trust domains interact, or the compromise of one workload must not grant transitive access.
 
-Before adding a component, answer:
+Before adding any component in its name, we ask:
 
 1. Which attacker capability or ambient trust does it remove?
 2. What identity is authenticated, and how was it bootstrapped?
@@ -575,7 +585,7 @@ Before adding a component, answer:
 9. Which data appears in decision/audit telemetry?
 10. How is emergency access bounded and expired?
 
-Do not call an architecture zero trust merely because it uses a mesh, proxy, VPN replacement, or short-lived certificate. The defining property is that each protected action is authorized from verified identity and current resource context at a non-bypassable boundary, with explicit failure semantics.
+The first question is the filter. A component that removes no attacker capability has added cost and complexity for nothing, however modern it is. An architecture does not become zero trust by deploying a mesh, a proxy, a VPN replacement, or short-lived certificates. The defining property is that each protected action is authorized from verified identity and current resource context, at a boundary that cannot be bypassed, with explicit behavior under failure.
 
 ---
 

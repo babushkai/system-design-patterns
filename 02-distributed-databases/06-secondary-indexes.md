@@ -8,6 +8,10 @@ A distributed secondary index must define maintenance and query semantics for lo
 
 ## Query and Consistency Contract
 
+Partitioning arranges data so that a lookup by the partition key goes to exactly one machine. Applications also need to find records by other attributes: orders by customer, users by email, products by category. A secondary index serves such a query, and in a partitioned database the index has to live somewhere, which forces a choice between two unsatisfactory options.
+
+The index can be kept local, with each partition indexing only its own records. Writes then stay cheap, since a write touches one partition, but a query by the indexed attribute must be sent to every partition and the results merged, because matching records could be anywhere. Alternatively the index can be global, partitioned by the indexed attribute itself, so that a query goes to one place. Reads are then cheap and writes are not: updating one record may require updating index entries on other partitions, which either needs a distributed transaction or leaves the index briefly out of step with the data. The choice is between paying on every read and paying on every write, and the workload decides.
+
 Inventory real query shapes before creating an index. Record equality and range predicates, sort order, limit, projection, expected selectivity, tenant boundary, result freshness, pagination stability, and whether the index must enforce uniqueness. A query such as “newest 50 open orders for merchant M” has a different physical requirement from “find any user with email E,” even if both mention one secondary field.
 
 The important consistency choices are observable:

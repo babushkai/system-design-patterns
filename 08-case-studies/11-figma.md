@@ -8,6 +8,10 @@ Durability is a checkpoint plus an ordered journal whose snapshot declares its e
 
 ## Scope and Evidence Contract
 
+Figma took a kind of software that had always been a desktop application working on local files, the vector design tool, and made it a web application in which many people edit the same document at once and see each other's changes as they happen. Two technical problems follow from that decision, and the public engineering record is mostly about them.
+
+The first is performance. A design document can contain hundreds of thousands of objects, and rendering and manipulating it at interactive speed in a browser required an engine compiled to run there and drawing directly with the graphics hardware. The second is concurrency. When several people edit one document, their changes must be merged so that everyone converges on the same result. Figma's published approach is simpler than the general algorithms for collaborative text, because its documents are trees of objects with properties, and because a central server sees every change and can impose an order on them. Conflicts are resolved property by property, and the last write to a given property wins, which is adequate for design work where two people rarely change the same property of the same object at the same moment.
+
 Claims use three evidence labels:
 
 - **Documented fact** means a claim made in a dated Figma engineering article. The date matters because the architecture changed.

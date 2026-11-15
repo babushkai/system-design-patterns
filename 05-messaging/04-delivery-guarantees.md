@@ -8,6 +8,10 @@ Delivery guarantees are end-to-end contracts over broker semantics, acknowledgem
 
 ## Workload and Guarantee Contract
 
+Messaging systems advertise three delivery guarantees: at most once, at least once, and exactly once. The first two are easy to understand. A sender that never retries will sometimes lose a message and never duplicate one. A sender that retries until it receives an acknowledgement will never lose a message and will sometimes send it twice, because an acknowledgement can be lost just as a message can.
+
+The third deserves suspicion, and the reason is worth stating carefully. Suppose a consumer receives a message, performs its work, and crashes before it can acknowledge. The broker, having heard nothing, cannot distinguish this from the consumer crashing before doing the work, and must deliver again or risk losing the message. No protocol between broker and consumer can remove that ambiguity. What systems sold as "exactly once" actually provide is at-least-once delivery combined with a way of making a repeated delivery harmless, either by recognizing and discarding duplicates or by committing the work and the acknowledgement in one atomic step. The guarantee then holds over exactly the span that the atomic step covers. An effect outside that span, such as an email or a call to another company's API, is still performed twice.
+
 Draw the complete path:
 
 ```text

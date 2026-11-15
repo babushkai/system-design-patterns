@@ -8,6 +8,10 @@ The 2020 paper documents regional autonomy, a recovery log deliberately placed o
 
 ## Publication Boundary
 
+A monitoring system has an obligation that most systems do not: it has to keep working when everything else is failing, because that is when it is needed. Google's earlier monitoring system had served well, but each team ran its own instances, and it had grown hard to operate at the company's scale. Monarch is a single monitoring service for the whole company, and its design is dominated by the need to stay available during outages.
+
+Two consequences stand out. Data is stored in memory, in the same region where it is collected, and each region can ingest and serve its own data without depending on any other. A global failure of some shared component must not blind engineers to what is happening locally. Queries that span regions are sent to each region and the results combined, and where a region is unreachable the query returns what it can and says what is missing. The system also deliberately avoids depending on the storage systems it is used to monitor. The paper describes a rich data model in which measurements carry structured labels and distributions are a first-class type, and a query engine that pushes as much work as possible down toward where the data lives.
+
 - **Paper:** *Monarch: Google's Planet-Scale In-Memory Time Series Database*
 - **Venue and version:** Proceedings of the VLDB Endowment, volume 13, issue 12, pages 3181–3194, 2020
 - **Evaluated system:** Google's internal Monarch deployment, primarily a July 2019 snapshot plus production query experiments

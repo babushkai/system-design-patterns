@@ -8,6 +8,10 @@ Single-leader replication makes one node the serialization point for writes and 
 
 ## Scope: One Write Authority and Its Replicated Log
 
+Keeping the same data on several machines serves three purposes: the data survives the loss of a machine, reads can be spread across copies, and a copy can be placed near the users who read it. The difficulty is keeping the copies the same. If two machines each accept writes, they can accept conflicting ones, and something must then decide which wins.
+
+Single-leader replication avoids the question by construction. One node, the leader, accepts every write and decides the order in which writes take effect. It records that order in a log and ships the log to the other nodes, which apply the same writes in the same sequence and so arrive at the same state. Because there is one order, there are no conflicts. The price is paid at two points that the rest of this chapter examines. Followers apply the log some time after the leader wrote it, so a read from a follower may be stale. And when the leader fails, a follower has to take over, at which point the system must be certain that the old leader has really stopped, since two nodes that each believe they are the leader will each accept writes the other never sees.
+
 One node at a time accepts writes for a replicated dataset.
 
 - [Multi-Leader Replication](02-multi-leader-replication.md) owns concurrent write authorities and cross-leader conflicts.

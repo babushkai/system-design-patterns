@@ -14,6 +14,10 @@ Exact servers, languages, connection counts, and databases appear only when supp
 
 ## Workload and Security Contract
 
+Most messaging systems are designed around a server that stores and understands the messages it carries. End-to-end encryption removes that assumption. Messages are encrypted on the sender's device with keys that only the recipient's devices hold, and the server relays ciphertext it cannot read. The consequences for the architecture are far-reaching, because many features that are simple when the server can see content have to be redesigned or moved to the client.
+
+The server cannot search messages, cannot build a preview, and cannot keep a readable history from which a new device might be restored. Each of a user's devices has its own keys, so a message to one person is in fact encrypted separately for every device that person owns, and adding a device raises the question of how it obtains past messages that the server was never able to read. Group messages need a scheme that avoids encrypting each message individually for every member. What remains with the server is delivery: queuing ciphertext for devices that are offline, and doing so reliably for a very large number of connections.
+
 **Documented, 2021 snapshot.** Meta reported that WhatsApp supported more than 100 billion messages and one billion calls per day while describing its de-identified telemetry system. Those are publication-time global figures, not a current QPS breakdown. [Meta Engineering, de-identified telemetry](https://engineering.fb.com/2021/04/16/security/dit/)
 
 **Documented, 2026 snapshot.** WhatsApp reported default end-to-end encryption for more than three billion people in January 2026. [Meta Engineering, Rust at scale for WhatsApp security](https://engineering.fb.com/2026/01/27/security/rust-at-scale-security-whatsapp/)

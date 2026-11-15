@@ -8,6 +8,10 @@ The physical index lifecycle covers document ingestion, immutable segments, comm
 
 ## Workload and Service Contract
 
+To find the documents that contain a given word, a system could read every document and check. That takes time in proportion to the size of the collection and is hopeless for anything large. The inverted index reverses the arrangement, in the way the index at the back of a book does. For each word it stores the list of documents in which the word appears, so that answering a query becomes a matter of looking up a few lists and combining them.
+
+Almost all of the engineering follows from how large those lists are and how they are combined. A common word may appear in a large fraction of all documents, so its list is enormous. The lists are kept sorted by document number, which allows two of them to be intersected by walking through both in step, and allows them to be compressed heavily, since the gaps between successive numbers in a sorted list are small and take few bits. The other major design decision concerns updates. A structure this compact is expensive to modify in place, so search engines write new documents into small new index segments, treat segments as immutable once written, and merge them in the background, which is the same approach that log-structured storage engines take for the same reason.
+
 Start with the operations the index must support:
 
 - `upsert(document_id, source_version, document)`: make a new source version searchable eventually;

@@ -10,7 +10,11 @@ Rate limiting governs admission and quota accounting. [Circuit Breakers](./06-ci
 
 ---
 
-## 1. Admission Contract
+## Admission Contract
+
+Any service open to callers it does not control will eventually receive more requests than it can handle, whether from an attack, a customer's runaway script, or a retry loop in a well-meaning client. Without a limit, the service slows down for everyone, and the callers behaving reasonably pay for the one who is not. A rate limit makes the excess the problem of whoever is causing it.
+
+The mechanism most often used is the token bucket, and its popularity has a reason. Tokens are added to a bucket at a steady rate up to a fixed capacity, and each request removes one. A caller who has been quiet accumulates tokens and may spend them in a burst, while over any long period the caller cannot exceed the refill rate. Two numbers thus express both how much traffic is permitted on average and how uneven it may be, which matches how real clients behave far better than a fixed count per minute does. The algorithm is the easy part. The harder questions are whom to count, since a limit keyed on network address punishes a whole office behind one address and one keyed on account does nothing about unauthenticated traffic, and how to enforce one limit across many servers without making every request wait on a shared counter.
 
 Define the decision before choosing an algorithm:
 
@@ -40,7 +44,7 @@ Rate limits are policy, not capacity discovery. Derive them from downstream safe
 
 ---
 
-## 2. Data Plane and Control Plane
+## Data Plane and Control Plane
 
 ~~~mermaid
 flowchart LR
@@ -76,7 +80,7 @@ The data plane must continue with a deliberate degraded policy when the control 
 
 ---
 
-## 3. Rate, Burst, Quota, and Concurrency Are Different
+## Rate, Burst, Quota, and Concurrency Are Different
 
 - **Rate** bounds admitted work per unit time.
 - **Burst** permits temporary accumulation of unused rate credit.
@@ -107,7 +111,7 @@ Do not reveal another tenant’s remaining capacity through response headers or 
 
 ---
 
-## 4. Canonical Algorithms
+## Canonical Algorithms
 
 ### Token bucket
 
@@ -146,7 +150,7 @@ Use a monotonic server clock for replenishment. For distributed durable state, s
 
 ---
 
-## 5. Distributed Accounting
+## Distributed Accounting
 
 ### Linearizable central decision
 
@@ -191,7 +195,7 @@ This is a product and security choice, not an implementation default.
 
 ---
 
-## 6. Fairness, Identity, and Abuse
+## Fairness, Identity, and Abuse
 
 Rate-limit keys must follow authenticated identity. IP-only limits combine many users behind NAT, allow address rotation, and can let an attacker exhaust a victim’s shared prefix. Use IP/network reputation as one abuse signal, not the commercial tenant identity.
 
@@ -209,7 +213,7 @@ Quota enforcement is not authorization. A valid token balance never grants acces
 
 ---
 
-## 7. Response and Client Contract
+## Response and Client Contract
 
 For HTTP, 429 means the client exceeded a rate policy. A temporarily overloaded service may instead use a service-unavailable response according to its API contract. Include:
 
@@ -225,7 +229,7 @@ Clients must obey the attempt policy in [Retries, Timeouts, and Hedging](./10-re
 
 ---
 
-## 8. Concrete Failure Trace: Scaling Multiplies the Limit
+## Concrete Failure Trace: Scaling Multiplies the Limit
 
 1. A gateway process has a local bucket allowing <code>R</code> requests/s for tenant T.
 2. The fleet runs four replicas, so T can reach roughly <code>4R</code> by spreading connections.
@@ -238,7 +242,7 @@ The bug is a mismatch between declared global scope and process-local state. Fix
 
 ---
 
-## 9. Capacity and Cost Model
+## Capacity and Cost Model
 
 Let:
 
@@ -265,7 +269,7 @@ Cost includes decision latency, counter storage/replication, cross-region traffi
 
 ---
 
-## 10. Operations and Migration
+## Operations and Migration
 
 ### Safe policy rollout
 
@@ -288,7 +292,7 @@ Changing a key, cost unit, or quota window is a state migration. Dual-account ol
 
 ---
 
-## 11. Security and Governance
+## Security and Governance
 
 - Authenticate before charging a privileged identity; apply a cheap unauthenticated guard before expensive authentication.
 - Sign or mutually authenticate lease and policy distribution.
@@ -302,7 +306,7 @@ Never expose a global limiter service directly to untrusted callers.
 
 ---
 
-## 12. Observability
+## Observability
 
 Measure:
 
@@ -320,7 +324,7 @@ A rising rejection rate may mean policy is working. The alert condition is a con
 
 ---
 
-## 13. Verification
+## Verification
 
 - prove the token-bucket interval bound with deterministic and randomized arrival sequences;
 - race concurrent spends on the same key;
@@ -339,7 +343,7 @@ Test the full composition with retry budgets and downstream concurrency limits. 
 
 ---
 
-## 14. Decision Framework
+## Decision Framework
 
 | Requirement | Preferred mechanism |
 |---|---|
