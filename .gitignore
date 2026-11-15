@@ -37,3 +37,5 @@ website/
 # Alternate package managers
 yarn.lock
 pnpm-lock.yaml
+
+.claude/
