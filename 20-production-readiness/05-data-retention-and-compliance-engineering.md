@@ -183,3 +183,4 @@ Log and telemetry retention deserves its own note because it is the largest volu
 - [Disaster Recovery and Data Reconstruction](../15-deployment/05-disaster-recovery.md): restores re-introduce deleted data unless the erasure log is replayed
 - [Multi-Tenant Isolation and Tenant Lifecycle Architecture](../06-scaling/12-multi-tenancy.md): offboarding a tenant is retention, holds, and key destruction applied at scale
 - [Production Logging Architecture](../11-observability/03-logging.md): the highest-volume retention decision in most estates is what gets emitted in the first place
+- [Verifiable Credentials and Selective Disclosure](../10-security/14-verifiable-credentials-and-selective-disclosure.md): a verifier that keeps disclosed claims inherits a retention duty for data it never issued

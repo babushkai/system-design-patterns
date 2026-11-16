@@ -10,6 +10,8 @@ from urllib.parse import unquote
 # Part/chapter structure lives in book.manifest.json; scripts/book_structure.py owns
 # the checks that keep the sidebars, book build, and README contents in step with it.
 from book_structure import validate as validate_book_structure
+# Reading order and link reachability are audited against a baseline; see the module.
+from order_audit import validate as validate_reading_order
 # Japanese chapters state whether they track the current English text; see the module.
 from translation_status import validate as validate_translation_status
 
@@ -1083,6 +1085,7 @@ def main() -> int:
     validate_reference_links(errors)
     validate_markdown_layout(errors)
     validate_reading_graph(errors)
+    validate_reading_order(errors)
     validate_english_dash_style(errors)
     validate_unique_substantial_prose(errors)
     validate_portable_math_delimiters(errors)

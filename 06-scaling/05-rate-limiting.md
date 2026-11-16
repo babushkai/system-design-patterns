@@ -385,3 +385,4 @@ Select the weakest coordination that still satisfies the entitlement and error c
 - [Priority, Fairness, and Backpressure](../18-workflow-job-systems/07-priority-fairness-backpressure.md): the same budgets applied to work that is already queued instead of still arriving
 - [API Threat Boundaries and Abuse Resistance](../10-security/04-api-security.md): a limit is also an authorization question: whose traffic, counted against which identity
 - [DDoS Defense Architecture](../10-security/09-ddos-defense.md): where limiters sit when the traffic is built to exhaust them
+- [Passkeys and Phishing-Resistant Authentication](../10-security/10-passkeys-and-phishing-resistant-authentication.md): phishing-resistant sign-in removes the guesser's cost ceiling, so admission control carries the load

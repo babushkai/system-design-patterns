@@ -656,3 +656,4 @@ The smallest scheduler is usually the best one, but “small” still requires d
 - [Leases, Heartbeats, and Recovery](08-leases-heartbeats-recovery.md): fencing is what stops two schedulers from materializing one occurrence after a failover
 - [Durable Execution and Workflow Engines](04-durable-execution-workflow-engines.md): durable execution consumes occurrences; this chapter decides how many there should have been
 - [Distributed Time](../01-foundations/05-distributed-time.md): calendar intent follows civil time through daylight-saving folds while owner fencing needs monotonic elapsed time
+- [Wake Sources, Mailboxes, and Scheduling](../22-always-on-agents/02-wake-triggers-scheduling.md): an agent that schedules its own wake-ups becomes this scheduler's most demanding tenant

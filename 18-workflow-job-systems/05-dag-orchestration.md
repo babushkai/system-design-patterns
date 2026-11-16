@@ -443,3 +443,4 @@ Before choosing, answer:
 - [Durable Execution and Workflow Engines](04-durable-execution-workflow-engines.md): per-step durability versus per-program durability, a different granularity entirely
 - [Training Pipelines](../16-ml-systems/05-training-pipelines.md): an expensive DAG whose nodes are far too large to rerun casually
 - [MapReduce](../09-whitepapers/01-mapreduce.md): the ancestor that fixed the execution shape most schedulers still imitate
+- [Parallel Development and Integration](../19-compound-engineering/06-compound-development-workflows.md): a graph whose nodes are written by agents and gated by human review still schedules the same way

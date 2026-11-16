@@ -604,3 +604,4 @@ Run game days that fail the measurement path separately from the service. An SLO
 - [Metrics Systems and Monitoring](02-metrics-monitoring.md): an objective is only as trustworthy as the measurement window behind it
 - [Progressive Delivery and Deployment Strategies](../15-deployment/01-deployment-strategies.md): the release process that spends the budget instead of discovering it is gone
 - [Incident Command and Learning](07-incident-management.md): whoever holds the pager inherits whatever the objective failed to prevent
+- [Attention, Evaluation, and Operations](../22-always-on-agents/06-attention-evaluation-operations.md): objectives for staleness and missed wakes, which an unattended agent needs more than uptime

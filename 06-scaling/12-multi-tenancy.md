@@ -665,3 +665,4 @@ Choose pooling when logical controls, fair sharing and lifecycle tooling meet th
 - [Authorization at Scale](../10-security/07-authorization-patterns.md): the tenant as an authorization scope, enforced somewhere other than the query
 - [Partitioning Strategies](../02-distributed-databases/05-partitioning-strategies.md): where rows for one tenant land decides whether isolation is physical or aspirational
 - [Threat Modeling and Abuse Case Engineering](../10-security/08-threat-modeling-and-abuse-cases.md): tenant isolation claims need an enumerated abuse case and a test per boundary, not a diagram
+- [Amazon DynamoDB](../09-whitepapers/14-dynamodb-2022.md): per-tenant admission and capacity isolation, shipped as a service and priced per request

@@ -322,3 +322,4 @@ Use at-most-once only when loss is cheaper than duplication. Use at-least-once w
 - [Idempotency and Operation Identity](../01-foundations/08-idempotency.md): at-least-once is survivable only when the effect can be recognized a second time
 - [Transactional Outbox, Inbox, and CDC Publication](07-outbox-pattern.md): making the write and the publish commit as one decision
 - [Distributed Transactions](../02-distributed-databases/07-distributed-transactions.md): the alternative to reconciling two systems: one commit domain
+- [Identity Lifecycle and Continuous Access Evaluation](../10-security/13-identity-lifecycle-and-continuous-access.md): revocation signals reach every session they once authorized through the same deduplicated fan-out

@@ -234,3 +234,4 @@ Property tests should prove range coverage with no gaps/overlaps, deterministic 
 - [Database Sharding](../06-scaling/03-database-sharding.md): the operational half: rebalancing, hot shards, and the migration you cannot abort
 - [Secondary Indexes in Distributed Databases](06-secondary-indexes.md): every secondary index is another partitioned dataset to keep in step with the first
 - [Capacity Planning and Back-of-the-Envelope Estimation](../01-foundations/10-capacity-planning.md): the arithmetic that says whether this key space can be split usefully at all
+- [Amazon DynamoDB](../09-whitepapers/14-dynamodb-2022.md): what a partitioned key space has to promise when one tenant's tail latency is the product

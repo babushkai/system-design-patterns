@@ -535,3 +535,4 @@ Finally prove recovery with fault injection: kill a worker during output upload,
 - [Model Registry and ML Metadata](13-model-registry-metadata.md): the lineage record that makes a promoted model auditable months later
 - [Idempotency and Operation Identity](../01-foundations/08-idempotency.md): a retried stage has to produce the same artifact, which rules out implicit state
 - [Continual Learning and Model Freshness](16-continual-learning-model-freshness.md): what changes when the retraining interval shrinks to minutes
+- [Fine-Tuning Patterns](../17-llm-systems/07-fine-tuning-patterns.md): a fine-tune inherits this pipeline's lineage, checkpointing, and reproducibility contract
