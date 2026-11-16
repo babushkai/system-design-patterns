@@ -397,7 +397,7 @@ Inventory exact object versions, manifests, key versions, and lifecycle state. M
 
 ---
 
-## Concrete Failure Traces
+## Failure Traces
 
 ### Multipart completion times out
 

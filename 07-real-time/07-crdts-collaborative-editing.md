@@ -366,7 +366,7 @@ Keep a durable regional log or replicated snapshot frontier that meets recovery 
 
 ---
 
-## Concrete Failure Traces
+## Failure Traces
 
 ### Lost acknowledgement duplicates an insertion
 

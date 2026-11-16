@@ -468,7 +468,7 @@ Failback consumes risk while the team is tired. Delay it until the product is st
 
 ---
 
-## Concrete Failure Traces
+## Failure Traces
 
 ### Every replica contains the corruption
 

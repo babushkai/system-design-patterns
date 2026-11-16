@@ -197,9 +197,7 @@ Give each a source-of-truth and rebuild/replay boundary.
 
 ## Authority, Epochs, and Fencing
 
-Failure detectors cannot distinguish a dead region from an isolated but running region. Therefore “cannot reach primary” is insufficient authority to promote.
-
-This sentence states the central difficulty of regional failover, and it deserves to be taken literally. From the vantage point of the healthy regions, a region that has lost power and a region whose network links to the others have been cut look identical: both stop responding. But the second is still running and still serving any users who can reach it, and if it is still accepting writes while another region is promoted to replace it, the system has two primaries for the same data. Every write accepted by the isolated region during that interval will conflict with or be lost to the new primary. Failover must therefore include fencing, a mechanism that prevents the old region from committing writes regardless of whether it believes it is still in charge.
+Failure detectors cannot distinguish a dead region from an isolated one that is still running. To the healthy regions both simply stop responding, but the isolated region may still be accepting writes from the users who can reach it. Promoting a replacement on "cannot reach primary" alone therefore creates two primaries, and every write the old one accepts in that interval conflicts with or is lost to the new one. Failover must include fencing: a mechanism that stops the old region from committing whether or not it believes it is still in charge.
 
 A promotion authority can be:
 

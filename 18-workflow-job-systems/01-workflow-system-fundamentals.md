@@ -238,7 +238,7 @@ Pin or record the versions needed to interpret each execution. Deploy readers/up
 
 Rollback restores compatible execution code and routing; it does not delete newly appended state. If a new definition emitted a command or value the old version cannot interpret, rollback is a forward compatibility operation.
 
-## Specialized Failure Traces
+## Failure Traces
 
 ### Acceptance response precedes durable state
 

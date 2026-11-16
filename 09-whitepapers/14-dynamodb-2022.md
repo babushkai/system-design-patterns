@@ -171,7 +171,7 @@ The Prime Day 89.2 million requests/s figure and this YCSB experiment have diffe
 6. Capacity-unit and backup details are dated to the publication.
 7. Cached control/security data needs explicit safe expiration; static stability is not permission to serve indefinitely stale authorization.
 
-## Design-Review Questions
+## Design Review Questions
 
 1. Is the customer's capacity unit also a physical partition budget? If so, how does skew waste purchased capacity?
 2. How are global token grants bounded when routers or GAC servers partition?

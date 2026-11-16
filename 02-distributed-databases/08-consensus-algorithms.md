@@ -131,7 +131,7 @@ Logs cannot grow forever. A snapshot represents state after an applied log index
 
 Publish a snapshot atomically, retain log entries needed by active readers/followers until installation is safe, and install into a temporary location before switching the state pointer. A follower receiving a snapshot concurrently with log entries must not apply an old suffix over the new image. Snapshotting is part of the safety state machine, not a file-copy optimization.
 
-## Concrete Failure Traces
+## Failure Traces
 
 ### An acceptor forgets durable state
 

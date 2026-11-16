@@ -285,9 +285,7 @@ On expiry, a recovery transaction changes `CLAIMED/RUNNING` back to `READY` and 
 
 ### Why leader election is insufficient
 
-A scheduler leader can pause beyond its lease, recover, and continue dispatching. The new leader also dispatches. Consensus elects a current leader; it cannot erase messages already emitted by the stale one.
-
-The obvious design for a reliable scheduler is to run several instances and elect one as leader, which alone fires the schedules. It fails in the way all lease-based leadership fails. If the leader stalls for longer than its lease, another instance is elected and starts firing, and when the stalled leader resumes it carries on as well, so for a time two schedulers fire the same jobs. The robust design does not rely on there being only one scheduler. Each occurrence of a schedule is given an identity, the time it was meant to run, and is recorded in a store under a unique constraint, so that whichever scheduler records an occurrence first owns it and any other attempt finds it already present.
+Electing one scheduler instance to fire the schedules fails in the way all lease-based leadership fails. A leader that stalls beyond its lease is replaced, and when it resumes it carries on dispatching alongside its successor; consensus elects a current leader but cannot recall messages the stale one already emitted. The robust design does not depend on there being one scheduler. Each occurrence has an identity, the time it was meant to run, recorded under a unique constraint, so whichever scheduler records it first owns it and any other attempt finds it already present.
 
 Downstream state accepts only the current `claim_epoch`, or effects use stable operation identity. See [Leases, Heartbeats, and Recovery](./08-leases-heartbeats-recovery.md) for the ownership protocol.
 

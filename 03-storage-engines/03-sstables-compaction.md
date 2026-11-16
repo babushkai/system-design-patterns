@@ -141,7 +141,7 @@ Range tombstones are harder because one deletion interval may overlap many outpu
 
 TTL expiry has the same shape. Treat expiration as a versioned deletion under the database's time semantics, and decide whether historical snapshots may read pre-expiry values.
 
-## Concrete Failure Traces
+## Failure Traces
 
 ### Manifest references non-durable output
 

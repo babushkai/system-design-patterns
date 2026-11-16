@@ -239,7 +239,7 @@ Decoder-only autoregressive models later reused masked self-attention for langua
 
 These systems consequences are covered in [LLM Inference Platforms](../08-case-studies/13-llm-inference-platforms.md), [LLM Infrastructure](../17-llm-systems/05-llm-infrastructure.md), and [GPU Inference Internals](../17-llm-systems/11-gpu-inference-internals.md). They are descendants, not results of the 2017 evaluation.
 
-## Design-Review Questions
+## Design Review Questions
 
 1. Is the architecture encoder-only, encoder-decoder, or decoder-only, and which attention masks apply?
 2. Does a complexity claim include projections, FFN, memory traffic, padding, and backward activations?

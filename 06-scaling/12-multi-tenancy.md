@@ -506,7 +506,7 @@ Isolation is not only runtime resources. Stage configuration/schema/deployment b
 
 ---
 
-## Concrete Failure Traces
+## Failure Traces
 
 ### Connection-pool tenant bleed
 

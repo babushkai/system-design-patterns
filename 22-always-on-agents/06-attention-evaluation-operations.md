@@ -146,7 +146,7 @@ A small set of metrics describes the health of a fleet.
 | Memory writes per day, quarantined writes, core size | Drift and poisoning |
 | Pending timers per agent | Leaks |
 
-The alert that matters most is the one for something that did not happen. A crashed service returns errors; a standing agent that has stopped waking returns nothing, and its dashboards look calm. An independent checker, which does not share the scheduler's failure domain, compares expected wakes with completed runs and alerts on the gap.
+The alert that matters most is for wake completeness, because a standing agent that stops waking fails silently, as chapter 1 argued. The checker that compares expected wakes with completed runs must not share the scheduler's failure domain, or the outage that stops the agent also stops the alert.
 
 ## Economics
 

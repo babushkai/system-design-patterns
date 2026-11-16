@@ -333,7 +333,7 @@ Projection repair never changes execution truth. Actual authoritative-history re
 
 ---
 
-## Specialized Failure Traces
+## Failure Traces
 
 ### A stale visibility row triggers duplicate repair
 

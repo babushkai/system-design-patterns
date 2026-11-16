@@ -97,7 +97,7 @@ Coordinators cannot safely switch replica maps independently. A new node first j
 
 Removing or replacing a node likewise drains hints, streams its ranges, and fences the old identity. Reusing a node ID with an empty disk is dangerous: peers may interpret it as the old replica that has already seen tombstones. Use a fresh incarnation epoch and require explicit bootstrap. Logical partition movement itself is covered in [Partitioning Strategies](./05-partitioning-strategies.md).
 
-## Specialized Failure Traces
+## Failure Traces
 
 ### Timeout followed by a non-idempotent retry
 

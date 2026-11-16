@@ -319,7 +319,7 @@ Linear extrapolation is only a first alarm. Use scenario forecasts for launches,
 
 Autoscaling handles demand after capacity is available to the actuator. It cannot invent provider quota, split a hot key, shorten a seven-hour state copy, or make a dependency accept more connections. See [Auto-Scaling](../06-scaling/08-auto-scaling.md).
 
-## Specialized Failure Traces
+## Failure Traces
 
 ### Average demand hides a deterministic peak
 

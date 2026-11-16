@@ -325,7 +325,7 @@ The terms can overlap for many clients, but the sum covers the client that obtai
 
 Rollback is asymmetric after old data, certificates, routes, or capacity are removed. Keep the old path write-compatible and provisioned until the rollback horizon closes; “put the record back” is not a rollback plan if resolvers cache both directions and clients retain new connections.
 
-## Specialized Failure Traces
+## Failure Traces
 
 ### DNS changed; old endpoint still receives writes
 

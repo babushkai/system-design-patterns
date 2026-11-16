@@ -121,7 +121,7 @@ Breaking changes use a new field identity or message version. Producers may dual
 
 Semantic evolution needs extra gates. Units, enum behavior, normalization, privacy classification, and identifier scope belong in API review and contract fixtures. An enum reader should define what an unknown numeric value does. An intermediary should not convert it to a familiar default and erase evidence of the new state.
 
-## Specialized Failure Traces
+## Failure Traces
 
 ### Protobuf tag reuse silently changes identity
 

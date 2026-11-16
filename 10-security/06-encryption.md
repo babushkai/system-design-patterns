@@ -371,7 +371,7 @@ Track:
 
 ---
 
-## Concrete Failure Traces
+## Failure Traces
 
 ### Snapshot rollback reuses a nonce
 

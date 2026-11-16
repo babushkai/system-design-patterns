@@ -123,7 +123,7 @@ Some domains merge intentions more safely than values. Recording `add 5` and `su
 
 Operation logs require bounded retention, deterministic replay, idempotency, and a snapshot/compaction rule. An operation that calls an external service is not made safe merely by putting it in a mergeable log; see [Idempotency](../01-foundations/08-idempotency.md).
 
-## Concrete Failure Traces
+## Failure Traces
 
 ### Equal timestamps without a stable tie-breaker
 

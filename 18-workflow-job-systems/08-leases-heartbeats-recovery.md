@@ -295,7 +295,7 @@ If $\mu \le \lambda$, it never drains in steady state. Provision the authority s
 
 ---
 
-## Specialized Failure Traces
+## Failure Traces
 
 ### Heartbeat thread hides a deadlock
 

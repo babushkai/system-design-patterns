@@ -39,7 +39,7 @@ The second most important is the split between always-loaded and retrieved. Alwa
 
 ## The Record
 
-A memory record that can be maintained needs more than its text.
+[Context Management](../17-llm-systems/08-context-management.md) lists what any memory record needs: subject, claim, source, scope, and expiry. A store that an agent maintains by itself for months needs three more things: where each belief came from and how far to trust it, two separate notions of time, and links from derived records back to their sources.
 
 ```python
 @dataclass

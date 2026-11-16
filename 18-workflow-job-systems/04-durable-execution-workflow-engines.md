@@ -311,7 +311,7 @@ Release gates:
 
 Rollback routes tasks back to compatible code. It does not remove events written by the new build; if old code cannot replay them, recovery requires the compatible branch/build or a new forward repair.
 
-## Specialized Failure Traces
+## Failure Traces
 
 ### Sticky cache hides nondeterminism
 

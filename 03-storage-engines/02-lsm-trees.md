@@ -117,7 +117,7 @@ For a point miss across `S` candidate runs with per-run filter false-positive pr
 
 Stored bytes include live values, overwritten versions, tombstones, file-level space amplification, pinned snapshots, and temporary outputs. Size the volume for peak simultaneous input and output during background jobs. Running an LSM near full disk can deadlock reclamation because compaction needs free space to create the file that would let it delete inputs.
 
-## Specialized Failure Traces
+## Failure Traces
 
 ### Success precedes durable WAL
 
