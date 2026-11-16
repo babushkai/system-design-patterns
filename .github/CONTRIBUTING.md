@@ -128,6 +128,10 @@ Three to eight bullets, each one link plus the reason the edge exists:
   the reader that the book stops at the directory boundary, and the leaf chapters are where
   it happens: a timer service is a distributed-time chapter with a cron expression attached,
   and a label queue is a stream-processing chapter whose workers are people.
+- Answer a hand-off in both directions. Where two designs meet, the reader should learn the
+  boundary from either page, so a cross-part edge usually earns a return edge that states the
+  other question. `scripts/order_audit.py` counts the one-way ones and may only ever report
+  fewer; see [Reading order](#reading-order).
 - Keep the list curated: eight is the ceiling because a pointer list nobody finishes is
   worse than four that are read.
 
@@ -208,10 +212,32 @@ regenerate the README. `scripts/book_structure.py --check` enforces both rules a
 parts whose numbers still carry holes from earlier merges. Renumbering changes published
 URLs, so treat it as a maintainer decision rather than routine cleanup.
 
+### Reading order
+
+Print order is a promise to the straight-through reader that a mechanism exists before a
+chapter leans on it, and reachability is the same promise seen from a search result: a chapter
+nothing outside its own part links to is reachable only from the sidebar. Both are measured:
+
+```bash
+python scripts/order_audit.py          # reachability plus the longest read-aheads
+python scripts/order_audit.py --check  # what validate_docs.py runs, against the baseline
+```
+
+The audit enforces reachability and one-way hand-offs against
+`scripts/order_audit_baseline.json`, a floor that may fall and never rise. It reports print-order
+read-aheads without failing on them, because the honest fix for most of them is a renumbering,
+and renumbering changes published URLs. Move material earlier only when the reader genuinely
+cannot go on without it; otherwise gloss the term where it first appears and leave the URL alone.
+When an improvement lands and the numbers really did get better, re-record the floor with
+`python scripts/order_audit.py --write-baseline` in the same pull request. That command refuses
+to widen the floor, because "the new chapter is not wired in yet" is exactly the regression the
+file exists to catch; `--force` overrides it, which is a maintainer decision and belongs in the
+pull request description, not buried in a diff.
+
 ## Checks Before Opening a Pull Request
 
 ```bash
-python scripts/validate_docs.py       # structure, links, graph, evidence headings, dash style
+python scripts/validate_docs.py       # structure, links, reading order, evidence headings, dash style
 npm ci && npm run docs:build          # the site actually builds
 python scripts/validate_built_site.py # rendered links, anchors, and assets resolve
 ```

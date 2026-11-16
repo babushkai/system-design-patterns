@@ -1,0 +1,5 @@
+{
+  "_doc": "Reachability floor for scripts/order_audit.py. sidebar_only_chapters lists the chapters that nothing outside their own part links to; the audit fails when a new name appears. one_way_cross_part_handoffs is a ceiling that may only fall.",
+  "one_way_cross_part_handoffs": 310,
+  "sidebar_only_chapters": []
+}
