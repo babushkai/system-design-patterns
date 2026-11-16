@@ -1,5 +1,7 @@
 # Training Pipelines
 
+> The retrain ran green and produced a model trained on an empty partition. What should the pipeline have checked before it spent the GPUs?
+
 ## TL;DR
 
 A training pipeline is the durable transaction that turns versioned inputs into an evaluated model release. The notebook that produces a promising artifact is not a pipeline; the pipeline makes each run reconstructible, validates contracts before expensive work, commits immutable artifacts atomically, records lineage, and hands promotion a complete release candidate rather than a loose file. Reproducibility is necessary but not sufficient: a perfectly reproducible pipeline can faithfully regenerate leaked data or a harmful model. The system must preserve both provenance (what happened) and validity (why this artifact was allowed to advance).
@@ -12,7 +14,7 @@ A training pipeline adds durable state, input identity, attempt isolation, artif
 
 Three guarantees are intentionally separate. **Reconstruction** retrieves the pinned inputs and execution contract needed to reproduce a declared-equivalent artifact. **Promotion** proves that one evaluated candidate is allowed to enter a release lifecycle. **Rollback** restores a retained, previously qualified deployable bundle. A reproducible model can still be unsafe to promote, and rebuilding it during an incident is not rollback.
 
-The pipeline consumes inputs pinned by immutable manifests and commits one evaluated output manifest. [ML System Fundamentals](./01-ml-system-fundamentals.md) covers lifecycle motivation; [Dataset Management and Versioning](./11-dataset-management-versioning.md) covers snapshot identity; [Offline Evaluation and Metric Design](./12-offline-evaluation-metrics.md) covers measurement; [Model Registry and ML Metadata](./13-model-registry-metadata.md) covers cross-run metadata; [Model Deployment and Rollouts](./06-model-deployment-rollouts.md) covers activation and rollback. The pipeline must commit evidence each downstream system can verify.
+The pipeline consumes inputs pinned by immutable manifests and commits one evaluated output manifest. [ML System Fundamentals](./01-ml-system-fundamentals.md) covers lifecycle motivation; [Dataset Management and Versioning](./03-dataset-management-versioning.md) covers snapshot identity; [Offline Evaluation and Metric Design](./08-offline-evaluation-metrics.md) covers measurement; [Model Registry and ML Metadata](./09-model-registry-metadata.md) covers cross-run metadata; [Model Deployment and Rollouts](./11-model-deployment-rollouts.md) covers activation and rollback. The pipeline must commit evidence each downstream system can verify.
 
 ---
 
@@ -33,7 +35,7 @@ flowchart LR
     PROMOTE -->|"fail"| STOP["Stop / investigate"]
 ```
 
-What makes this a *system* rather than a flowchart is that every edge carries metadata (dataset version, code version, feature definitions, parameters, artifact hash, evaluation report), and every node is owned, monitored, and re-runnable. Dataset snapshots and split assignments are covered in [Dataset Management and Versioning](./11-dataset-management-versioning.md); metric design and leakage checks are covered in [Offline Evaluation and Metric Design](./12-offline-evaluation-metrics.md). A training pipeline is structurally a [batch data pipeline](../13-data-pipelines/01-batch-processing.md) with a model at the end; it inherits the same demands for [idempotent](../01-foundations/08-idempotency.md) steps, snapshot-based reproducibility, and [workflow orchestration](../18-workflow-job-systems/05-dag-orchestration.md) discipline that any derived-data system needs.
+What makes this a *system* rather than a flowchart is that every edge carries metadata (dataset version, code version, feature definitions, parameters, artifact hash, evaluation report), and every node is owned, monitored, and re-runnable. Dataset snapshots and split assignments are covered in [Dataset Management and Versioning](./03-dataset-management-versioning.md); metric design and leakage checks are covered in [Offline Evaluation and Metric Design](./08-offline-evaluation-metrics.md). A training pipeline is structurally a [batch data pipeline](../10-data-pipelines/01-batch-processing.md) with a model at the end; it inherits the same demands for [idempotent](../01-foundations/07-idempotency.md) steps, snapshot-based reproducibility, and [workflow orchestration](../09-workflow-job-systems/08-dag-orchestration.md) discipline that any derived-data system needs.
 
 ### Stage Ownership
 
@@ -70,7 +72,7 @@ control plane:   COMMIT manifest IF run=R is RUNNING AND lease_token=L
 result:          one committed manifest; duplicate attempts are harmless
 ```
 
-This is an [idempotency](../01-foundations/08-idempotency.md) boundary, not just file organization. The same protocol applies to dataset snapshots, transformed features, checkpoints, and evaluation reports. Downstream tasks consume committed manifest IDs, never paths named `latest`, and promotion consumes a release manifest binding all required artifacts. Garbage collection follows reachability from committed manifests and retention policy; age alone cannot identify an unreferenced artifact safely.
+This is an [idempotency](../01-foundations/07-idempotency.md) boundary, not just file organization. The same protocol applies to dataset snapshots, transformed features, checkpoints, and evaluation reports. Downstream tasks consume committed manifest IDs, never paths named `latest`, and promotion consumes a release manifest binding all required artifacts. Garbage collection follows reachability from committed manifests and retention policy; age alone cannot identify an unreferenced artifact safely.
 
 Control-plane availability and worker availability have different consequences. If workers fail, the run retries from committed inputs. If the metadata/control plane is unavailable, workers may continue bounded computation but must not publish or promote, because lineage and uniqueness cannot be proven. This deliberately chooses consistency for release state over availability: an expensive duplicate run is recoverable; two conflicting production candidates with incomplete provenance are not.
 
@@ -92,9 +94,9 @@ A model is reproducible only if five distinct axes are pinned, and most reproduc
 
 **Code** is the most obvious axis and the one teams handle best, because Git already solves it. The model version must record the exact commit that trained it, including the pipeline definition, not just the model class.
 
-**Data** is the axis teams handle worst, because data is large, mutable, and lives outside version control. The pipeline must pin an immutable snapshot (a specific partition, a specific timestamp, a specific label window) such that the exact training set can be reconstructed. "I trained on last month's data" is not reproducible; "I trained on the snapshot at `2026-06-10T00:00:00Z` with a 30-day label window" is. The label window is not a detail: it is part of the target definition, and premature or selectively missing labels corrupt the training set before the model sees it (see [Label and Ground-Truth Systems](./10-label-ground-truth-systems.md)).
+**Data** is the axis teams handle worst, because data is large, mutable, and lives outside version control. The pipeline must pin an immutable snapshot (a specific partition, a specific timestamp, a specific label window) such that the exact training set can be reconstructed. "I trained on last month's data" is not reproducible; "I trained on the snapshot at `2026-06-10T00:00:00Z` with a 30-day label window" is. The label window is not a detail: it is part of the target definition, and premature or selectively missing labels corrupt the training set before the model sees it (see [Label and Ground-Truth Systems](./02-label-ground-truth-systems.md)).
 
-**Features** are a subtle axis because feature definitions evolve independently of model code. A feature named `account_risk` might mean three different things across three versions. The model must pin the feature *view versions* it consumed, and the meaning of those versions must be immutable. (This is why feature stores treat a semantic change as a new feature name, not an in-place edit: see [Feature Stores](./02-feature-stores.md).)
+**Features** are a subtle axis because feature definitions evolve independently of model code. A feature named `account_risk` might mean three different things across three versions. The model must pin the feature *view versions* it consumed, and the meaning of those versions must be immutable. (This is why feature stores treat a semantic change as a new feature name, not an in-place edit: see [Feature Stores](./04-feature-stores.md).)
 
 **Parameters** include hyperparameters and random seeds. Without the seed, a model trained twice on identical data can differ, which makes debugging variance from genuine regression impossible. A seed alone does not make a GPU stack deterministic: some operations have nondeterministic implementations, libraries inspect process-level configuration during initialization, and data-loader workers have independent RNG streams. The following is a scoped PyTorch setup, not a universal guarantee across releases, drivers, hardware, or unsupported operators:
 
@@ -133,7 +135,7 @@ Deterministic modes can reduce throughput or reject unsupported operations, with
 
 **Environment** is the axis that produces the most baffling incidents, because it is invisible. A NumPy upgrade changes floating-point accumulation order. A CUDA version changes kernel behavior. The model trained yesterday cannot be reproduced today because the container image was rebuilt. The pipeline must pin the container image *by digest*, not by tag: `ml-train:latest` is the enemy of reproducibility.
 
-The practical encoding of all five axes is a *reproducibility contract*: a metadata record attached to every registered model that answers, programmatically, "what produced this?" The registry (not a Slack thread, not a wiki, not someone's memory) is the source of truth. The registry control-plane design is covered in [Model Registry and ML Metadata](./13-model-registry-metadata.md).
+The practical encoding of all five axes is a *reproducibility contract*: a metadata record attached to every registered model that answers, programmatically, "what produced this?" The registry (not a Slack thread, not a wiki, not someone's memory) is the source of truth. The registry control-plane design is covered in [Model Registry and ML Metadata](./09-model-registry-metadata.md).
 
 ```yaml
 # The reproducibility contract: the minimum required to rebuild a model
@@ -186,7 +188,7 @@ labels:
     max_observed_delay_days: 30     # contract from Label & Ground-Truth Systems
 ```
 
-The `baseline` reference is the load-bearing part: distribution checks compare against the *statistical fingerprint of the data the current production model was trained on*, persisted as a versioned artifact, not against a rolling recent window (which would silently track the very drift it is meant to catch, reproducing the same baseline-drift trap that defeats [model monitoring](./04-model-monitoring.md)).
+The `baseline` reference is the load-bearing part: distribution checks compare against the *statistical fingerprint of the data the current production model was trained on*, persisted as a versioned artifact, not against a rolling recent window (which would silently track the very drift it is meant to catch, reproducing the same baseline-drift trap that defeats [model monitoring](./13-model-monitoring.md)).
 
 The deeper principle is that *type compatibility does not imply semantic compatibility*. The `event_type` enum gaining a new value, or `total_spend` switching from gross to net, will pass every type check and every null check while quietly poisoning the model. This is why mature validation compares against a *baseline distribution* (the statistical fingerprint of the data the current production model was trained on) and flags divergence even when every value is individually valid. Google's TensorFlow Data Validation and tools like Great Expectations exist precisely to make these distributional contracts explicit, versioned, and enforced before training consumes a single GPU-hour.
 
@@ -200,7 +202,7 @@ Data leakage is the most insidious failure in training pipelines because it make
 
 The reason leakage is so hard to eliminate is that it hides inside joins and timestamps that look perfectly reasonable. Consider a fraud model that joins each transaction to an `account_status` table. If `account_status` was updated to "closed_for_fraud" *after* the fraud was discovered, then training on the current value of that table tells the model the answer. The join looks innocent; the leak is in the *time dimension*, invisible unless you ask "was this value knowable at the moment of the decision?"
 
-The central defense is *point-in-time correctness*: every training row may use only source facts semantically valid before the decision and feature generations actually servable by then. [Feature Stores](./02-feature-stores.md) owns the bitemporal join mechanics and the distinction among event, ingestion, computation, and servable time. The training pipeline owns making that query reproducible. Its dataset manifest records the example decision-time column, feature versions, source snapshots, as-of query-plan hash, late-event/watermark policy, correction mode (`as_served` or `as_corrected`), and output row-set hash. A free-form analyst SQL query with no recorded plan is not an auditable dataset builder even when its predicate happens to be correct today.
+The central defense is *point-in-time correctness*: every training row may use only source facts semantically valid before the decision and feature generations actually servable by then. [Feature Stores](./04-feature-stores.md) owns the bitemporal join mechanics and the distinction among event, ingestion, computation, and servable time. The training pipeline owns making that query reproducible. Its dataset manifest records the example decision-time column, feature versions, source snapshots, as-of query-plan hash, late-event/watermark policy, correction mode (`as_served` or `as_corrected`), and output row-set hash. A free-form analyst SQL query with no recorded plan is not an auditable dataset builder even when its predicate happens to be correct today.
 
 Leakage validation should attack the time boundary. Rebuild a sample using served feature vectors from historical prediction logs and compare it with the dataset builder; assert that shifting a decision timestamp backward cannot reveal a later feature generation; and quarantine any source whose valid or servable clock is unknown. These tests exercise the contract rather than duplicating the feature store's join implementation inside the trainer.
 
@@ -215,7 +217,7 @@ The split must match the question the production system actually asks:
 | Entity-disjoint | "score a user/merchant never seen" | memorizing entity history | cold-start / new-entity generalization |
 | Group / session | "generalize across correlated groups" | within-group contamination | clustered or repeated-measure data |
 
-No split is honest by name alone. A random split fails when exchangeability is false; a time split can still leak through entities, labels, global aggregates, or feature generations computed after the cutoff, and it may estimate the wrong target when deployment samples an exchangeable population. The split is part of the *measurement instrument*, so its row assignments and rationale are materialized and versioned with the dataset. [Offline Evaluation and Metric Design](./12-offline-evaluation-metrics.md) owns the estimand, repeated-window design, and uncertainty analysis.
+No split is honest by name alone. A random split fails when exchangeability is false; a time split can still leak through entities, labels, global aggregates, or feature generations computed after the cutoff, and it may estimate the wrong target when deployment samples an exchangeable population. The split is part of the *measurement instrument*, so its row assignments and rationale are materialized and versioned with the dataset. [Offline Evaluation and Metric Design](./08-offline-evaluation-metrics.md) owns the estimand, repeated-window design, and uncertainty analysis.
 
 Unexpectedly strong performance is evidence to investigate, not a universal AUC threshold. Some domains are genuinely separable, while a subtler leak may lift AUC only slightly and still reverse a business decision. Audit features through lineage and time: ablate each high-influence feature, shift the evaluation cutoff, replay the feature at the original decision timestamp, and compare performance as the gap between train and evaluation windows grows. Identifier-like columns require special scrutiny because they can memorize entities or encode the label-generation workflow. Leakage defenses should be executable invariants on the dataset builder (temporal predicates, group-disjoint split manifests, and forbidden post-outcome sources) rather than a reviewer remembering a checklist.
 
@@ -312,17 +314,17 @@ Prefetching hides latency only when aggregate input throughput meets consumption
 | metadata calls dominate small reads | compact into sequential training shards | extra materialization stage and snapshot lineage |
 | device copies serialize with kernels | pinned buffers and asynchronous transfer | host-memory pressure and runtime complexity |
 
-The principle is the same one that governs any pipeline: the slowest steady-state stage sets throughput. Benchmark object reads, decode, augmentation, copies, compute, collectives, and checkpoint stalls separately; then change the bottleneck rather than inferring it from one utilization gauge. [Batch Processing](../13-data-pipelines/01-batch-processing.md) covers the general dataflow mechanics.
+The principle is the same one that governs any pipeline: the slowest steady-state stage sets throughput. Benchmark object reads, decode, augmentation, copies, compute, collectives, and checkpoint stalls separately; then change the bottleneck rather than inferring it from one utilization gauge. [Batch Processing](../10-data-pipelines/01-batch-processing.md) covers the general dataflow mechanics.
 
 ---
 
 ## Distributed Training: A Cost and Coordination Problem
 
-[Distributed Training Internals](./15-distributed-training-internals.md) owns data, tensor, pipeline, expert, and state-sharding mechanics, their communication equations, and how they compose. Collapsing those dimensions into "data parallel versus model parallel" is misleading: data parallelism is a throughput strategy rather than a response to a dataset not fitting on one device, and model partitioning does not imply pipeline parallelism or pipeline bubbles.
+[Distributed Training Internals](./06-distributed-training-internals.md) owns data, tensor, pipeline, expert, and state-sharding mechanics, their communication equations, and how they compose. Collapsing those dimensions into "data parallel versus model parallel" is misleading: data parallelism is a throughput strategy rather than a response to a dataset not fitting on one device, and model partitioning does not imply pipeline parallelism or pipeline bubbles.
 
 The training pipeline consumes the chosen parallel plan as a versioned execution contract. It records world size, mesh axes, rank-to-device placement, precision, optimizer/sharding configuration, data-sampler partition, and checkpoint schema. Those fields determine whether a retry can resume or must restart: a checkpoint portable across data-parallel world sizes may still be incompatible with a changed tensor partition, pipeline stage layout, optimizer sharding, or runtime version. The scheduler must allocate the plan as a gang and place ranks on a topology that satisfies its communication assumptions; partial allocation is not degraded service, because collectives cannot make progress with missing ranks.
 
-Distributed execution also changes pipeline reliability. More workers and links create more opportunities for interruption, and correlated rack, network, or control-plane failures invalidate an independence-only model. Measure interruption-free job intervals and checkpoint/restart cost for the actual cluster, then choose a committed checkpoint cadence that meets the recovery objective. The pipeline owns resumable state, retry classification, attempt identity, and final artifact commit; chapter 15 owns whether the parallel plan is computationally sound and efficient.
+Distributed execution also changes pipeline reliability. More workers and links create more opportunities for interruption, and correlated rack, network, or control-plane failures invalidate an independence-only model. Measure interruption-free job intervals and checkpoint/restart cost for the actual cluster, then choose a committed checkpoint cadence that meets the recovery objective. The pipeline owns resumable state, retry classification, attempt identity, and final artifact commit; the distributed training chapter owns whether the parallel plan is computationally sound and efficient.
 
 ---
 
@@ -350,7 +352,7 @@ Security events feed lineage in both directions. Given a compromised image diges
 
 ## Pipeline Reliability: Surviving Partial Failure
 
-Training pipelines fail partway through. A job dies at hour five of six; a worker is preempted; a transient network blip kills a step. The pipeline's job is to make these partial failures recoverable rather than catastrophic, and the discipline is the same idempotency-and-atomicity discipline that governs any [durable workflow system](../18-workflow-job-systems/06-retry-idempotency-compensation.md).
+Training pipelines fail partway through. A job dies at hour five of six; a worker is preempted; a transient network blip kills a step. The pipeline's job is to make these partial failures recoverable rather than catastrophic, and the discipline is the same idempotency-and-atomicity discipline that governs any [durable workflow system](../09-workflow-job-systems/04-retry-idempotency-compensation.md).
 
 The foundational invariant is that downstream steps observe either one complete output set or no committed output. The mechanism depends on storage. A local or distributed filesystem may offer an atomic rename within a namespace. Object stores such as S3 do not provide a true directory rename; "rename" is copy plus delete and can expose a partial multi-object dataset. Treating it as the commit point is a correctness bug.
 
@@ -412,7 +414,7 @@ High-cardinality labels need restraint. `run_id` belongs in traces and logs; mod
 
 ## Retraining: How Often, and How Automatically
 
-This section covers retraining as a sequence of discrete runs. Training on a stream, where the interval shrinks to minutes and versions must be minted deliberately, is the subject of [Continual Learning and Model Freshness](16-continual-learning-model-freshness.md).
+This section covers retraining as a sequence of discrete runs. Training on a stream, where the interval shrinks to minutes and versions must be minted deliberately, is the subject of [Continual Learning and Model Freshness](14-continual-learning-model-freshness.md).
 
 Deciding when to retrain is a risk-management question disguised as a scheduling question. Retrain too rarely and the model drifts away from a changing world; retrain too eagerly and you spend money relearning a world that has not changed, while exposing yourself to the risk that bad data quietly becomes a bad model.
 
@@ -530,8 +532,8 @@ Finally prove recovery with fault injection: kill a worker during output upload,
 
 ## Related Chapters
 
-- [DAG Orchestration](../18-workflow-job-systems/05-dag-orchestration.md): a training run is a DAG whose steps are expensive and only partly durable
-- [Dataset Management and Versioning](11-dataset-management-versioning.md): reproducibility starts with an immutable dataset version, not with a seed
-- [Model Registry and ML Metadata](13-model-registry-metadata.md): the lineage record that makes a promoted model auditable months later
-- [Idempotency and Operation Identity](../01-foundations/08-idempotency.md): a retried stage has to produce the same artifact, which rules out implicit state
-- [Continual Learning and Model Freshness](16-continual-learning-model-freshness.md): what changes when the retraining interval shrinks to minutes
+- [DAG Orchestration](../09-workflow-job-systems/08-dag-orchestration.md): a training run is a DAG whose steps are expensive and only partly durable
+- [Dataset Management and Versioning](03-dataset-management-versioning.md): reproducibility starts with an immutable dataset version, not with a seed
+- [Model Registry and ML Metadata](09-model-registry-metadata.md): the lineage record that makes a promoted model auditable months later
+- [Idempotency and Operation Identity](../01-foundations/07-idempotency.md): a retried stage has to produce the same artifact, which rules out implicit state
+- [Continual Learning and Model Freshness](14-continual-learning-model-freshness.md): what changes when the retraining interval shrinks to minutes

@@ -78,9 +78,9 @@ DEEP_SYSTEM_REQUIRED_HEADINGS = [
 # chapter instead of in one sweeping edit.
 RUNBOOK_SECTIONS = [
     Path("05-messaging"),
-    Path("02-distributed-databases/01-single-leader-replication.md"),
-    Path("02-distributed-databases/02-multi-leader-replication.md"),
-    Path("02-distributed-databases/03-leaderless-replication.md"),
+    Path("03-distributed-databases/02-single-leader-replication.md"),
+    Path("03-distributed-databases/03-multi-leader-replication.md"),
+    Path("03-distributed-databases/04-leaderless-replication.md"),
 ]
 RUNBOOK_REQUIRED_HEADINGS = [
     re.compile(r"^## Product Knob Map$", re.MULTILINE),
@@ -1043,7 +1043,7 @@ def validate_homepage_html_links(errors: list[str]) -> None:
 # is right, but it makes each one a thirty-second check for a reviewer and a target for
 # scripts/check_external_links.py. Paper analyses study one source, so one link is enough.
 MIN_REFERENCE_LINKS = 3
-SINGLE_SOURCE_SECTIONS = {Path("09-whitepapers")}
+SINGLE_SOURCE_SECTIONS = {Path("20-whitepapers")}
 EXTERNAL_LINK_RE = re.compile(r"\]\(https?://[^)\s]+\)")
 
 

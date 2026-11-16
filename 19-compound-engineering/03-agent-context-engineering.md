@@ -1,12 +1,14 @@
 # Repository Context and Policy Plane
 
+> The repository has ten years of conventions and the agent arrives knowing none of them. What should it be told, when, and by which file?
+
 ## TL;DR
 
 A repository context system acquires facts and policies from multiple authorities, authenticates origin, resolves scope and precedence, compiles an immutable effective snapshot, distributes it to runtimes, and records the revision governing each decision. The model receives a human-readable projection; deterministic policy enforcement authorizes actions.
 
 The hard problems are the same ones found in configuration, authorization, and software-supply-chain systems: ambiguous ownership, conflicting inheritance, stale replicas, rollback attacks, partial activation, tenant leakage, schema evolution, and untrusted content that impersonates instructions. Treat source authority, semantic trust, repository revision, tenant, scope, expiry, and provenance as typed fields. Never infer them from a filename or from where text happened to appear in a prompt.
 
-This chapter defines repository context artifacts and the policy control plane. [Context Management](../17-llm-systems/08-context-management.md) covers request-time selection, compaction, and token allocation; [Tool and Runtime Contracts](./02-coding-agent-tool-design.md) covers capabilities and enforcement; [Verification and Governance](./05-quality-engineering-with-ai-agents.md) covers review and quality gates.
+This chapter defines repository context artifacts and the policy control plane. [Context Management](../17-llm-systems/04-context-management.md) covers request-time selection, compaction, and token allocation; [Tool and Runtime Contracts](./02-coding-agent-tool-design.md) covers capabilities and enforcement; [Verification and Governance](./05-quality-engineering-with-ai-agents.md) covers review and quality gates.
 
 ---
 
@@ -763,7 +765,7 @@ A policy plane is not ready until it can demonstrate:
 - [OWASP LLM Prompt Injection Prevention Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/LLM_Prompt_Injection_Prevention_Cheat_Sheet.html): prompt-injection threat patterns and defense in depth
 - [Git Revision Parsing](https://git-scm.com/docs/git-rev-parse): resolving mutable revision expressions to object identities
 - [NIST SP 800-218: Secure Software Development Framework](https://csrc.nist.gov/pubs/sp/800/218/final): protected development artifacts, provenance, and secure change practices
-- [Context Management](../17-llm-systems/08-context-management.md): request-time context materialization, budgeting, compaction, and memory
+- [Context Management](../17-llm-systems/04-context-management.md): request-time context materialization, budgeting, compaction, and memory
 - [Tool and Runtime Contracts for Coding Agents](./02-coding-agent-tool-design.md): capability issuance, policy enforcement, sandboxing, and effect receipts
 - [Quality Engineering with AI Agents](./05-quality-engineering-with-ai-agents.md): implementation review, testing, and quality gates
 
@@ -771,7 +773,7 @@ A policy plane is not ready until it can demonstrate:
 
 ## Related Chapters
 
-- [Context Management](../17-llm-systems/08-context-management.md): the general budget applied to a repository with a build system and conventions
+- [Context Management](../17-llm-systems/04-context-management.md): the general budget applied to a repository with a build system and conventions
 - [Repository Architecture for Safe Agentic Change](04-ai-native-software-architecture.md): context only works when the codebase is shaped so it can be explained
 - [Tool and Runtime Contracts for Coding Agents](02-coding-agent-tool-design.md): searching a repository is a tool call, with every failure mode of one
-- [Search Index Architecture and Internals](../14-search-systems/01-inverted-indexes.md): the retrieval substrate behind most code search tools, with its own freshness story
+- [Search Index Architecture and Internals](../11-search-systems/01-inverted-indexes.md): the retrieval substrate behind most code search tools, with its own freshness story

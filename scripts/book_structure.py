@@ -41,10 +41,7 @@ FENCE_RE = re.compile(r"^\s*(```|~~~)")
 # be. The parts below still carry holes from earlier merges; closing one means
 # renumbering the part (rename files, update routes, regenerate the README table of
 # contents) and deleting its entry here.
-LEGACY_NUMBER_GAPS: dict[str, tuple[int, ...]] = {
-    "01-foundations": (7,),
-    "07-real-time": (2, 3, 4),
-}
+LEGACY_NUMBER_GAPS: dict[str, tuple[int, ...]] = {}
 
 
 class ManifestError(Exception):

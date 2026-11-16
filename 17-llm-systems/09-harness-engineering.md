@@ -1,5 +1,7 @@
 # Harness Engineering
 
+> The same model finishes far more tasks inside one harness than inside another. What is the code around the model doing that matters that much?
+
 ## TL;DR
 
 The harness is the trusted runtime between a probabilistic model and stateful tools. It compiles canonical task state into a model request, validates proposals, authorizes and schedules effects, journals observations, manages context revisions, enforces budgets, verifies completion, and emits evidence. Model and harness behavior are inseparable in an agent evaluation, but correctness guarantees belong to deterministic runtime boundaries.
@@ -60,7 +62,7 @@ The model is allowed to be nondeterministic; the runtime is not allowed to forge
 
 The harness compiles canonical run state, tool capabilities, memory, evidence, recent events, and output constraints into one provider request plus a manifest. The compilation is deterministic for a fixed state revision and configuration. It preserves trust labels, canonical ordering, truncation decisions, schema digests, and token allocation so an incident can reconstruct what the model was allowed to observe.
 
-The prompt is advisory configuration for the model, not the policy engine. Universal behavioral guidance belongs in a versioned prompt source; task state stays in durable records; evidence and tool results retain provenance; schemas enforce representable structure; authorization remains outside the request. [Prompt Engineering](./06-prompt-engineering.md) defines the compiler, and [Context Management](./08-context-management.md) defines selection and compaction.
+The prompt is advisory configuration for the model, not the policy engine. Universal behavioral guidance belongs in a versioned prompt source; task state stays in durable records; evidence and tool results retain provenance; schemas enforce representable structure; authorization remains outside the request. [Prompt Engineering](./03-prompt-engineering.md) defines the compiler, and [Context Management](./04-context-management.md) defines selection and compaction.
 
 Request assembly may fail before model admission: mandatory state does not fit, an active tool call cannot be represented by the target provider, a schema is unsupported, data residency excludes every model, or the context revision is stale. Return a typed error or invoke a declared migration/compaction policy; silently dropping a constraint is not graceful degradation.
 
@@ -80,7 +82,7 @@ Tool discovery returns only capabilities allowed for the principal and task, the
 
 The harness stores an append-only canonical event graph and produces disposable context revisions. A revision records source item IDs, trust/policy decisions, compaction lineage, selected tool schemas, token allocation, and rendered-request hash. Compaction or correction creates a new revision; it does not rewrite the evidence ledger.
 
-Context budgets reserve mandatory state and output headroom before optional evidence. Tool results enter through a result envelope and may be represented later by a receipt or artifact reference. Memory writes are policy-checked effects with scope and expiry. Subagent contexts fork from an explicit parent revision and return typed claims/evidence, not an implicit shared transcript. The full lifecycle belongs to [Context Management](./08-context-management.md); the harness's job is enforcing its contracts.
+Context budgets reserve mandatory state and output headroom before optional evidence. Tool results enter through a result envelope and may be represented later by a receipt or artifact reference. Memory writes are policy-checked effects with scope and expiry. Subagent contexts fork from an explicit parent revision and return typed claims/evidence, not an implicit shared transcript. The full lifecycle belongs to [Context Management](./04-context-management.md); the harness's job is enforcing its contracts.
 
 ---
 
@@ -167,7 +169,7 @@ The harness needs deterministic contract tests independent of model quality: req
 
 State-machine tests kill the process between every durable transition. Tool simulators produce timeout-before-commit, timeout-after-commit, duplicate receipt, stale revision, partial stream, and compensation failure. Load tests inject provider throttling, queue saturation, cache loss, fan-out bursts, and slow clients. Security tests place hostile instructions in every data channel while observing whether capability policy (not model obedience) contains the effect.
 
-End-to-end statistical evaluation measures the model–harness pair on representative tasks. [LLM Evaluation](./10-llm-evaluation.md) covers dataset and judge methodology. Harness evaluation must expose runtime faults and unsafe trajectories even when the final artifact passes.
+End-to-end statistical evaluation measures the model–harness pair on representative tasks. [LLM Evaluation](./07-llm-evaluation.md) covers dataset and judge methodology. Harness evaluation must expose runtime faults and unsafe trajectories even when the final artifact passes.
 
 ---
 
@@ -256,7 +258,7 @@ Build the smallest runtime that makes the desired guarantee enforceable. Add com
 
 ## Related Chapters
 
-- [Agent Orchestration Patterns](02-orchestration-patterns.md): topology is one of the harness decisions rather than a separate concern
-- [LLM Evaluation and Observability](10-llm-evaluation.md): a harness without regression tasks is a demo with good ergonomics
+- [Agent Orchestration Patterns](10-orchestration-patterns.md): topology is one of the harness decisions rather than a separate concern
+- [LLM Evaluation and Observability](07-llm-evaluation.md): a harness without regression tasks is a demo with good ergonomics
 - [Tool and Runtime Contracts for Coding Agents](../19-compound-engineering/02-coding-agent-tool-design.md): tool contracts as the interface between an agent and a machine you trust
-- [Context Management](08-context-management.md): the part of the harness that decides what the model is allowed to remember
+- [Context Management](04-context-management.md): the part of the harness that decides what the model is allowed to remember

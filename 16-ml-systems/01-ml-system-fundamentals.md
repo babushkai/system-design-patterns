@@ -1,5 +1,7 @@
 # ML System Fundamentals
 
+> The model was 94 percent accurate last quarter and nothing has changed in the code. It is now quietly wrong. Why does an ML system fail without an error?
+
 ## TL;DR
 
 An ML system learns material behavior from data rather than code and configuration alone. Operational risk therefore concentrates around the model: data collection, feature extraction, policy, serving, monitoring, and feedback loops. The deployable unit is a statistical decision system whose training objective proxies product intent and whose dependencies evolve.
@@ -35,7 +37,7 @@ Four properties make ML systems structurally harder to operate than the services
 
 **There is no clean specification.** The spec for a sorting function is a sentence. The spec for "detect fraudulent transactions" is a moving, contested, partly-unknowable target encoded in millions of historical examples that were themselves labeled by imperfect processes. Because the spec lives in the data, you cannot review it, version it as prose, or reason about it the way you reason about an interface. When the data is wrong, the spec is wrong, and nothing in the code will tell you.
 
-**Tests cannot fully capture behavior.** Unit tests pin down deterministic logic, but no finite test suite captures a model's behavior across an unbounded, drifting input space. You can test that the serving code loads an artifact and returns a number in range; you cannot unit-test that the model is *good*, because goodness is a statistical property of live data you have not seen yet. Validation in ML is therefore continuous and distributional (comparing live behavior to a baseline) rather than a gate you pass once at build time. (See [Model Monitoring](./04-model-monitoring.md).)
+**Tests cannot fully capture behavior.** Unit tests pin down deterministic logic, but no finite test suite captures a model's behavior across an unbounded, drifting input space. You can test that the serving code loads an artifact and returns a number in range; you cannot unit-test that the model is *good*, because goodness is a statistical property of live data you have not seen yet. Validation in ML is therefore continuous and distributional (comparing live behavior to a baseline) rather than a gate you pass once at build time. (See [Model Monitoring](./13-model-monitoring.md).)
 
 **Failure is silent.** When a traditional service breaks, it throws errors, latency spikes, dashboards turn red. When an ML system degrades, the service stays up, latency is fine, error rate is zero, and the predictions quietly get worse because the world changed. Silent degradation is the signature failure of ML systems, and it is invisible to every reliability tool built for deterministic software. The whole apparatus of model monitoring exists because uptime monitoring cannot see this class of failure at all.
 
@@ -72,7 +74,7 @@ def avg_purchase_7d(user_id):
 
 Both are reasonable code. They disagree in at least four ways: event time versus arrival time (a purchase synced from an offline device lands in one window but not the other), the SQL `AVG` over zero rows returns `NULL` while the Python returns `0.0`, the SQL window is anchored to the label's timestamp while Redis is anchored to *now*, and a Redis eviction silently shrinks the online window. Each discrepancy is a fraction of a percent of traffic; together they mean the model is systematically served a slightly different feature than the one it learned, and the gap concentrates in exactly the unusual users the model most needs to get right.
 
-Skew is insidious because it produces no error and no alert. The feature has the right name, the right type, and a plausible value; it is simply the *wrong* value. The structural defenses are architectural rather than ad hoc: define each feature once and compute it from a single shared definition for both paths (the core promise of a [feature store](./02-feature-stores.md)), log the exact feature values served in production so they can be replayed and compared against an offline recomputation, and treat any divergence between served and recomputed values as a sev-worthy incident rather than a rounding curiosity. The training/serving boundary is the most important reliability boundary in an ML system, and most production quality mysteries trace back to it.
+Skew is insidious because it produces no error and no alert. The feature has the right name, the right type, and a plausible value; it is simply the *wrong* value. The structural defenses are architectural rather than ad hoc: define each feature once and compute it from a single shared definition for both paths (the core promise of a [feature store](./04-feature-stores.md)), log the exact feature values served in production so they can be replayed and compared against an offline recomputation, and treat any divergence between served and recomputed values as a sev-worthy incident rather than a rounding curiosity. The training/serving boundary is the most important reliability boundary in an ML system, and most production quality mysteries trace back to it.
 
 ---
 
@@ -84,7 +86,7 @@ Sculley calls these *unstable data dependencies*, and they are more dangerous th
 
 A second, subtler hazard is the *underutilized* data dependency: a feature the model consumes but barely needs. It adds no real predictive value, yet it couples the model to an upstream source that can break, drift, or disappear. Every input is a liability as well as an asset, and a feature carrying its weight in risk but not in signal is pure downside.
 
-The engineering implications follow directly. Data dependencies must be made explicit and versioned the way code dependencies are: a model should record exactly which feature versions it consumed, and a semantic change to a feature should be a *new feature name*, never an in-place edit (see [Training Pipelines](./05-training-pipelines.md) and [Feature Stores](./02-feature-stores.md)). Inputs must be validated against a baseline distribution before they reach training or serving, because distributional checks are the only mechanism that catches a type-compatible, semantically-broken change. And the relationship across the boundary must be a *contract* with an owner, so that a violation fails loudly at the seam instead of being silently absorbed into a worse model.
+The engineering implications follow directly. Data dependencies must be made explicit and versioned the way code dependencies are: a model should record exactly which feature versions it consumed, and a semantic change to a feature should be a *new feature name*, never an in-place edit (see [Training Pipelines](./05-training-pipelines.md) and [Feature Stores](./04-feature-stores.md)). Inputs must be validated against a baseline distribution before they reach training or serving, because distributional checks are the only mechanism that catches a type-compatible, semantically-broken change. And the relationship across the boundary must be a *contract* with an owner, so that a violation fails loudly at the seam instead of being silently absorbed into a worse model.
 
 ---
 
@@ -94,7 +96,7 @@ Traditional software reads the world; ML systems frequently *change* the world t
 
 These feedback loops are the source of some of the most confusing pathologies in production ML. A *direct* loop is when a model's own outputs become its future inputs: the system slowly converges on a self-confirming worldview, mistaking the consequences of its past decisions for ground truth about the world. An *indirect* or *hidden* loop is worse: two models influence each other through the shared environment, so that improving one degrades the other through a channel that appears nowhere in either system's design. Sculley flags hidden feedback loops as one of the hardest forms of technical debt precisely because no component owns them and no test reveals them.
 
-The engineering implication is that the data an ML system collects about itself is not a neutral observation of the world: it is contaminated by the system's own past behavior, and naively training on it amplifies whatever bias the previous model had. The defenses are structural: preserve a slice of *exploration* traffic that is not controlled by the current model, so the system keeps seeing outcomes it would not have chosen; log the candidates that were *not* shown, not only the ones that were, so counterfactual analysis is possible at all; and separate observational metrics, which the model can game through the loop, from causal experiments on held-out traffic that the current model does not control (see [Online Experiments](./08-online-experiments.md)). Without an exploration path, an ML system gradually becomes a machine for confirming its own past opinions.
+The engineering implication is that the data an ML system collects about itself is not a neutral observation of the world: it is contaminated by the system's own past behavior, and naively training on it amplifies whatever bias the previous model had. The defenses are structural: preserve a slice of *exploration* traffic that is not controlled by the current model, so the system keeps seeing outcomes it would not have chosen; log the candidates that were *not* shown, not only the ones that were, so counterfactual analysis is possible at all; and separate observational metrics, which the model can game through the loop, from causal experiments on held-out traffic that the current model does not control (see [Online Experiments](./12-online-experiments.md)). Without an exploration path, an ML system gradually becomes a machine for confirming its own past opinions.
 
 ---
 
@@ -218,7 +220,7 @@ CREATE TABLE prediction_log (
 ) PARTITION BY RANGE (predicted_at);
 ```
 
-The physical primary key includes `predicted_at` because PostgreSQL cannot enforce a unique constraint on a range-partitioned table unless it includes the partition key. The logical contract still requires `prediction_id` to be globally unique; enforce that at ID issuance or in a non-partitioned decision directory if labels resolve by ID alone. `served_features_ref` resolves to the actual vector consumed by the model (inline, or in an immutable encrypted object governed by classification and retention), while `features_hash` only verifies identity; a hash cannot reconstruct values. Counterfactual analysis needs both the eligible action support and the probability with which the logging policy selected the observed action. An `explored` boolean supplies neither, so it cannot support propensity weighting or prove that an alternative action had nonzero probability. [Online Experiments](./08-online-experiments.md) owns the estimands and assignment design; [Label and Ground-Truth Systems](./10-label-ground-truth-systems.md) owns the later outcome join.
+The physical primary key includes `predicted_at` because PostgreSQL cannot enforce a unique constraint on a range-partitioned table unless it includes the partition key. The logical contract still requires `prediction_id` to be globally unique; enforce that at ID issuance or in a non-partitioned decision directory if labels resolve by ID alone. `served_features_ref` resolves to the actual vector consumed by the model (inline, or in an immutable encrypted object governed by classification and retention), while `features_hash` only verifies identity; a hash cannot reconstruct values. Counterfactual analysis needs both the eligible action support and the probability with which the logging policy selected the observed action. An `explored` boolean supplies neither, so it cannot support propensity weighting or prove that an alternative action had nonzero probability. [Online Experiments](./12-online-experiments.md) owns the estimands and assignment design; [Label and Ground-Truth Systems](./02-label-ground-truth-systems.md) owns the later outcome join.
 
 ---
 
@@ -250,7 +252,7 @@ action          a = P_policy(s, eligibility, limits, experiment assignment)
 observed label  y~ = L(outcome, observation process, maturity window)
 ```
 
-Changing `F`, `M`, or `P` changes the decision even if the other two remain byte-identical. Changing `L` changes apparent quality without changing a production decision. The deployable release unit must identify the model artifact, preprocessing and feature contracts, calibration, threshold or ranking policy, runtime, fallback, and observation schema together. [Model Registry and ML Metadata](./13-model-registry-metadata.md) defines its manifest and lifecycle state; [Model Deployment and Rollouts](./06-model-deployment-rollouts.md) defines atomic activation, retained rollback bundles, and traffic exposure.
+Changing `F`, `M`, or `P` changes the decision even if the other two remain byte-identical. Changing `L` changes apparent quality without changing a production decision. The deployable release unit must identify the model artifact, preprocessing and feature contracts, calibration, threshold or ranking policy, runtime, fallback, and observation schema together. [Model Registry and ML Metadata](./09-model-registry-metadata.md) defines its manifest and lifecycle state; [Model Deployment and Rollouts](./11-model-deployment-rollouts.md) defines atomic activation, retained rollback bundles, and traffic exposure.
 
 This boundary also prevents a common category error: optimizing a predictive metric when the system is accountable for an action. Suppose action `a` has consequence-dependent loss `C(a, y)`. The relevant objective is expected decision loss,
 
@@ -258,7 +260,7 @@ This boundary also prevents a common category error: optimizing a predictive met
 R(P, M) = E[C(P(M(X)), Y)]
 ```
 
-not AUC, log loss, or accuracy in isolation. A model with better ranking quality can create a worse system when its threshold overwhelms a review queue, when false positives carry asymmetric harm, or when a policy change applies its scores outside the population on which they were calibrated. [Offline Evaluation and Metric Design](./12-offline-evaluation-metrics.md) develops metric selection; [Online Experiments](./08-online-experiments.md) handles causal product impact. The foundational point is that ownership must extend through the score-to-action mapping.
+not AUC, log loss, or accuracy in isolation. A model with better ranking quality can create a worse system when its threshold overwhelms a review queue, when false positives carry asymmetric harm, or when a policy change applies its scores outside the population on which they were calibrated. [Offline Evaluation and Metric Design](./08-offline-evaluation-metrics.md) develops metric selection; [Online Experiments](./12-online-experiments.md) handles causal product impact. The foundational point is that ownership must extend through the score-to-action mapping.
 
 The observation process is part of the boundary too. A recommender observes outcomes only for exposed items; a fraud system gets mature labels mainly for transactions it allowed or reviewed. Consequently `y~` is not automatically a representative sample of `Y`. The release manifest must identify the exposure policy and experiment assignment, and the prediction log must retain them. Otherwise retraining silently treats the previous policy's selective observations as neutral ground truth and closes a biased feedback loop.
 
@@ -282,7 +284,7 @@ Because behavior lives in data, because failure is silent, and because everythin
 
 **Lineage** is the queryable record of what produced what: which dataset and code produced which model, and conversely, which models depend on a given dataset. The second direction is the one that matters during a data incident, when a source table turns out to have been wrong for a week and someone must name the production models trained on that window. ([Training Pipelines](./05-training-pipelines.md) covers the lineage store.)
 
-**Monitoring** in ML is not uptime and latency: those are necessary but blind to the failure that matters. ML monitoring watches the *data and the predictions*: input distribution drift, prediction distribution shift, feature freshness, and, where labels eventually arrive, realized quality against a baseline. It exists because silent degradation produces no error to alert on, so the only way to detect it is to measure the statistical behavior of the system continuously and compare it to what "healthy" looked like (see [Model Monitoring](./04-model-monitoring.md)). The realized-quality layer depends on trustworthy labels, which are themselves a production system with delay, bias, and correction semantics (see [Label and Ground-Truth Systems](./10-label-ground-truth-systems.md)).
+**Monitoring** in ML is not uptime and latency: those are necessary but blind to the failure that matters. ML monitoring watches the *data and the predictions*: input distribution drift, prediction distribution shift, feature freshness, and, where labels eventually arrive, realized quality against a baseline. It exists because silent degradation produces no error to alert on, so the only way to detect it is to measure the statistical behavior of the system continuously and compare it to what "healthy" looked like (see [Model Monitoring](./13-model-monitoring.md)). The realized-quality layer depends on trustworthy labels, which are themselves a production system with delay, bias, and correction semantics (see [Label and Ground-Truth Systems](./02-label-ground-truth-systems.md)).
 
 These three are not separate hygiene tasks. They are the minimum machinery required to operate a system whose behavior is defined by changing data: reproducibility to reconstruct and compare, lineage to trace, monitoring to detect. Live rollback additionally requires retention of the previously qualified deployable bundle.
 
@@ -326,7 +328,7 @@ Incident response follows the lifecycle in reverse:
 6. repair source/labels, rebuild downstream artifacts, and requalify them through ordinary gates;
 7. add the incident slice/attack to monitoring and regression evaluation.
 
-[Dataset Management and Versioning](./11-dataset-management-versioning.md) covers publication and poisoning provenance; [Training Pipelines](./05-training-pipelines.md) covers worker and artifact supply-chain boundaries; [Model Serving](./03-model-serving.md) covers request-path extraction, privacy, and abuse controls; [ML Risk and Governance](./09-ml-risk-governance.md) covers authority, notification, contestability, and incident evidence. The cross-lifecycle threat map defined here shows how these controls compose.
+[Dataset Management and Versioning](./03-dataset-management-versioning.md) covers publication and poisoning provenance; [Training Pipelines](./05-training-pipelines.md) covers worker and artifact supply-chain boundaries; [Model Serving](./10-model-serving.md) covers request-path extraction, privacy, and abuse controls; [ML Risk and Governance](./17-ml-risk-governance.md) covers authority, notification, contestability, and incident evidence. The cross-lifecycle threat map defined here shows how these controls compose.
 
 ---
 
@@ -334,7 +336,7 @@ Incident response follows the lifecycle in reverse:
 
 The characteristic failures of ML systems recur across organizations, and naming them is half of preventing them. They share a family resemblance: each is invisible to the tools built for deterministic software.
 
-**Training/serving skew** is the same feature contract producing different as-trained and as-served values. The foundational mechanism is described above; [Feature Stores](./02-feature-stores.md) owns temporal materialization semantics and [Model Monitoring](./04-model-monitoring.md) owns sampled parity measurement and incident attribution.
+**Training/serving skew** is the same feature contract producing different as-trained and as-served values. The foundational mechanism is described above; [Feature Stores](./04-feature-stores.md) owns temporal materialization semantics and [Model Monitoring](./13-model-monitoring.md) owns sampled parity measurement and incident attribution.
 
 **Silent data-dependency regression** is a semantic change to an upstream source (a unit, a definition, a covered population) that passes every type and null check while quietly corrupting every model downstream of it. The defense is distributional validation against a baseline before data reaches training, and explicit versioned data contracts with an owner who is paged when the contract breaks.
 
@@ -346,7 +348,7 @@ The characteristic failures of ML systems recur across organizations, and naming
 
 **Entanglement surprise** is the CACE failure: a "small" change (one added feature, one dropped input) shifts behavior on an unrelated slice because the model had been silently using that input to compensate elsewhere. The defense is to never trust local reasoning about a model change and always measure the whole model against a baseline.
 
-**Release-tuple mismatch** occurs when individually valid model, feature, calibration, policy, runtime, or fallback versions are combined into a decision system that was never evaluated as a unit. The registry and rollout protocols that prevent this are owned by [Model Registry and ML Metadata](./13-model-registry-metadata.md) and [Model Deployment and Rollouts](./06-model-deployment-rollouts.md).
+**Release-tuple mismatch** occurs when individually valid model, feature, calibration, policy, runtime, or fallback versions are combined into a decision system that was never evaluated as a unit. The registry and rollout protocols that prevent this are owned by [Model Registry and ML Metadata](./09-model-registry-metadata.md) and [Model Deployment and Rollouts](./11-model-deployment-rollouts.md).
 
 **Observation-policy bias** occurs when the system treats labels generated under its previous action policy as an unbiased view of the world. Blocked, unshown, or unreviewed cases have missing counterfactual outcomes, so retraining confirms the old policy. The defense is exposure and propensity metadata, preserved exploration where safe, and an explicit label-population contract.
 
@@ -396,8 +398,8 @@ The strongest architectures are usually *hybrids*: deterministic rules define th
 
 ## Related Chapters
 
-- [Feature Stores](02-feature-stores.md): the training and serving split behind most ML platform problems
-- [Model Serving](03-model-serving.md): where a model meets traffic, with a latency budget and a hardware bill attached
-- [Offline Evaluation and Metric Design](12-offline-evaluation-metrics.md): the numbers that let you reject a model before it ever sees production traffic
-- [Online Experiments](08-online-experiments.md): the only evaluation that measures the product rather than the dataset
-- [LLM Agent Fundamentals](../17-llm-systems/01-agent-fundamentals.md): the same argument one layer on, where a prompted controller rather than a trained model supplies behavior nobody authored
+- [Feature Stores](04-feature-stores.md): the training and serving split behind most ML platform problems
+- [Model Serving](10-model-serving.md): where a model meets traffic, with a latency budget and a hardware bill attached
+- [Offline Evaluation and Metric Design](08-offline-evaluation-metrics.md): the numbers that let you reject a model before it ever sees production traffic
+- [Online Experiments](12-online-experiments.md): the only evaluation that measures the product rather than the dataset
+- [LLM Agent Fundamentals](../17-llm-systems/08-agent-fundamentals.md): the same argument one layer on, where a prompted controller rather than a trained model supplies behavior nobody authored

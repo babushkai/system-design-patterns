@@ -1,10 +1,12 @@
 # Delivery Guarantees and Effect Boundaries
 
+> The vendor page says exactly-once. Your customer was emailed twice. Where does a delivery guarantee end and your own effect begin?
+
 ## TL;DR
 
 Delivery guarantees describe uncertainty between producer, broker, consumer, and effect store. A broker can prove that a record was durably appended, fetched, or transactionally written to another broker partition. It cannot, by itself, prove that a payment, email, filesystem write, or unrelated database transaction happened exactly once. Correct design names each atomicity boundary and closes the gaps end to end.
 
-Delivery guarantees are end-to-end contracts over broker semantics, acknowledgement ambiguity, producer retry deduplication, consumer effect commit, and the limits of “exactly once.” [Outbox and Inbox](07-outbox-pattern.md) owns atomic database-to-broker publication and transactional consumer deduplication. [Ordering](03-message-ordering.md) owns sequences. Workflow-specific retries and compensation belong to [Effect Commit Protocols](../18-workflow-job-systems/06-retry-idempotency-compensation.md).
+Delivery guarantees are end-to-end contracts over broker semantics, acknowledgement ambiguity, producer retry deduplication, consumer effect commit, and the limits of “exactly once.” [Outbox and Inbox](05-outbox-pattern.md) owns atomic database-to-broker publication and transactional consumer deduplication. [Ordering](03-message-ordering.md) owns sequences. Workflow-specific retries and compensation belong to [Effect Commit Protocols](../09-workflow-job-systems/04-retry-idempotency-compensation.md).
 
 ## Workload and Guarantee Contract
 
@@ -93,7 +95,7 @@ The broker tracks `(producer_id, epoch, sequence)` per partition. A retry of the
 
 Producer identity state must be durable enough for failover. If the broker forgets it during restore while the producer assumes it remains valid, the guarantee changes. Include snapshot/backup compatibility and dedup watermark in recovery tests.
 
-The strongest database-to-broker producer design is not “retry after commit”; it is a [transactional outbox](07-outbox-pattern.md) or authoritative event log whose relay retries with stable identity.
+The strongest database-to-broker producer design is not “retry after commit”; it is a [transactional outbox](05-outbox-pattern.md) or authoritative event log whose relay retries with stable identity.
 
 ## Broker Durability and Replication
 
@@ -318,7 +320,7 @@ Use at-most-once only when loss is cheaper than duplication. Use at-least-once w
 
 ## Related Chapters
 
-- [WhatsApp](../08-case-studies/10-whatsapp.md): end-to-end encryption turns the acknowledgement contract into a device-state problem
-- [Idempotency and Operation Identity](../01-foundations/08-idempotency.md): at-least-once is survivable only when the effect can be recognized a second time
-- [Transactional Outbox, Inbox, and CDC Publication](07-outbox-pattern.md): making the write and the publish commit as one decision
-- [Distributed Transactions](../02-distributed-databases/07-distributed-transactions.md): the alternative to reconciling two systems: one commit domain
+- [WhatsApp](../21-case-studies/10-whatsapp.md): end-to-end encryption turns the acknowledgement contract into a device-state problem
+- [Idempotency and Operation Identity](../01-foundations/07-idempotency.md): at-least-once is survivable only when the effect can be recognized a second time
+- [Transactional Outbox, Inbox, and CDC Publication](05-outbox-pattern.md): making the write and the publish commit as one decision
+- [Distributed Transactions](../03-distributed-databases/10-distributed-transactions.md): the alternative to reconciling two systems: one commit domain

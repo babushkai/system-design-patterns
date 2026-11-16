@@ -1,5 +1,7 @@
 # Cache Invalidation and Coherence
 
+> You deleted the cache entry, and a slow reader put the old value straight back. Why is invalidation a race, and what ordering makes it safe?
+
 ## TL;DR
 
 Invalidation is a distributed consistency protocol between an authoritative write and one or more disposable projections. A database commit and a cache operation are not atomic merely because they appear next to each other in application code.
@@ -526,7 +528,7 @@ Each SLO needs a measurement source and a declared response when telemetry is mi
 ## Related Chapters
 
 - [Cache Semantics and Economics](01-cache-strategies.md): the consistency target chosen earlier, which this chapter has to keep on every tier
-- [Transactional Outbox, Inbox, and CDC Publication](../05-messaging/07-outbox-pattern.md): making the invalidation signal commit with the write instead of shortly after it
-- [TAO](../09-whitepapers/05-tao.md): an entity cache with associations, where dependency graphs stop being hypothetical
-- [Authorization at Scale](../10-security/07-authorization-patterns.md): a cached decision is still a decision, and revocation is an invalidation problem
-- [URL Shortener](../21-reference-designs/01-url-shortener.md): revocation deadlines across browser and edge caches in one small complete design
+- [Transactional Outbox, Inbox, and CDC Publication](../05-messaging/05-outbox-pattern.md): making the invalidation signal commit with the write instead of shortly after it
+- [TAO](../20-whitepapers/05-tao.md): an entity cache with associations, where dependency graphs stop being hypothetical
+- [Authorization at Scale](../12-security/07-authorization-patterns.md): a cached decision is still a decision, and revocation is an invalidation problem
+- [URL Shortener](../22-reference-designs/01-url-shortener.md): revocation deadlines across browser and edge caches in one small complete design

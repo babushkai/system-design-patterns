@@ -1,5 +1,7 @@
 # ACID Transactions
 
+> The database said "committed" and then the power went out. What exactly were you promised, and which part of the engine keeps that promise?
+
 ## TL;DR
 
 ACID names four properties of a transaction, but the label alone is not a complete contract. The exact isolation level, durability boundary, replication acknowledgement, and failure assumptions vary by database and configuration. Each letter hides real engineering tradeoffs: undo versus redo, flush latency versus durability, and concurrency control versus throughput. Read the product's documented semantics and verify the deployed configuration instead of treating "ACID" as a binary feature flag.
@@ -218,7 +220,7 @@ The letter C carries a second difficulty, which is that the same word names diff
 | CAP theorem | A read/write object remains linearizable while messages may be lost or delayed | Usually quorum/consensus protocols |
 | Replica convergence | Replicas that receive the same updates eventually compute the same state | Replication and merge protocol |
 
-These three concepts have little in common beyond the word. → see [Consistency Models](04-consistency-models.md) for linearizability, causal consistency, and eventual consistency. When someone says "this system is consistent," we ask which definition they mean before agreeing or disagreeing.
+These three concepts have little in common beyond the word. → see [Consistency Models](05-consistency-models.md) for linearizability, causal consistency, and eventual consistency. When someone says "this system is consistent," we ask which definition they mean before agreeing or disagreeing.
 
 ### Deferred Constraints
 
@@ -286,7 +288,7 @@ The choice is a tradeoff between data placement and correctness. It is not evide
 
 On a single node, checking a constraint is an index lookup. When the constrained rows or indexes live on another node, the same check becomes distributed work. Every cross-shard constraint check adds network round trips. Locks held across nodes make deadlock detection expensive. The system must also maintain the extra indexes and the distributed transaction metadata that the check depends on.
 
-Some systems deliberately omit or relax these constraints for latency, availability, or operational simplicity. Distributed SQL systems may preserve them and charge the coordination cost. "ACID" does not imply that constraints are local to one shard, and CAP does not require abandoning invariants during normal operation. → see [CAP Theorem](03-cap-theorem.md)
+Some systems deliberately omit or relax these constraints for latency, availability, or operational simplicity. Distributed SQL systems may preserve them and charge the coordination cost. "ACID" does not imply that constraints are local to one shard, and CAP does not require abandoning invariants during normal operation. → see [CAP Theorem](06-cap-theorem.md)
 
 ---
 
@@ -555,7 +557,7 @@ Replication is not a backup. A replica faithfully applies whatever the primary d
 
 ## Production Failure Modes (Transaction-Specific)
 
-The failures in this section come from how applications use transactions, and not from faults in the database. → see [Failure Modes](06-failure-modes.md) for the general taxonomy.
+The failures in this section come from how applications use transactions, and not from faults in the database. → see [Failure Modes](03-failure-modes.md) for the general taxonomy.
 
 ### Lost Update Without Proper Isolation
 
@@ -897,6 +899,6 @@ SHOW VARIABLES LIKE 'sync_binlog';                      -- should be 1 for durab
 ## Related Chapters
 
 - [Isolation Levels](02-isolation-levels.md): isolation is the letter with a market price, and the levels say what anomalies you accept
-- [Failure Semantics, Detection, and Recovery Boundaries](06-failure-modes.md): atomicity only matters at the moments when a process stops halfway through a write
-- [Distributed Transactions](../02-distributed-databases/07-distributed-transactions.md): what one commit costs once it spans machines and is no longer atomic by luck
-- [Write-Ahead Logging](../03-storage-engines/04-write-ahead-logging.md): the mechanism that makes A and D survivable, with its fsync latency attached
+- [Failure Semantics, Detection, and Recovery Boundaries](03-failure-modes.md): atomicity only matters at the moments when a process stops halfway through a write
+- [Distributed Transactions](../03-distributed-databases/10-distributed-transactions.md): what one commit costs once it spans machines and is no longer atomic by luck
+- [Write-Ahead Logging](../02-storage-engines/02-write-ahead-logging.md): the mechanism that makes A and D survivable, with its fsync latency attached

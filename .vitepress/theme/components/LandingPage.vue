@@ -26,10 +26,10 @@ const totalChapters = parts.reduce((sum, part) => sum + part.chapters.length, 0)
 const doors = [
   { id: 'correctness', route: '01-foundations/01-acid-transactions' },
   { id: 'load', route: '04-caching/01-cache-strategies' },
-  { id: 'async', route: '18-workflow-job-systems/01-workflow-system-fundamentals' },
-  { id: 'retrieval', route: '14-search-systems/01-inverted-indexes' },
+  { id: 'async', route: '09-workflow-job-systems/01-workflow-system-fundamentals' },
+  { id: 'retrieval', route: '11-search-systems/01-inverted-indexes' },
   { id: 'intelligence', route: '16-ml-systems/01-ml-system-fundamentals' },
-  { id: 'signoff', route: '20-production-readiness/01-design-documents-and-decision-records' },
+  { id: 'signoff', route: '15-production-readiness/01-design-documents-and-decision-records' },
 ].map((door, index) => ({ ...door, order: index + 1 }))
 
 const chaptersByRoute = new Map<string, { part: BookPart; chapter: BookChapter }>()

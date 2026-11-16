@@ -17,7 +17,7 @@ Results fall into three groups:
 Usage:
 
     python3 scripts/check_external_links.py            # all chapters
-    python3 scripts/check_external_links.py 20-production-readiness
+    python3 scripts/check_external_links.py 15-production-readiness
 """
 
 from __future__ import annotations

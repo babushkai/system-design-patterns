@@ -1,5 +1,7 @@
 # Multi-Tenant Isolation and Tenant Lifecycle Architecture
 
+> One tenant ran a report and four hundred others timed out. What should be shared, what must be isolated, and who decides when a tenant moves?
+
 ## TL;DR
 
 Multi-tenancy is not “add `tenant_id` to every table.” It is a system-wide isolation contract spanning identity, authorization, data, caches, queues, compute, network, configuration, cryptographic keys, observability, billing, backup, and operations.
@@ -89,7 +91,7 @@ authenticate principal and workload
 
 For a resource URL, resolve the canonical resource under a tenant-scoped lookup or composite identity. Do not perform global `SELECT ... WHERE id = :id` then trust the row's tenant after returning data.
 
-Long-lived tokens should avoid embedding rapidly changing membership/role graphs. Bind stable identity and audience in the token; consult or cache current authorization with a revocation objective. See [Authentication Systems](../10-security/01-authentication-fundamentals.md) and [Authorization at Scale](../10-security/07-authorization-patterns.md).
+Long-lived tokens should avoid embedding rapidly changing membership/role graphs. Bind stable identity and audience in the token; consult or cache current authorization with a revocation objective. See [Authentication Systems](../12-security/02-authentication-fundamentals.md) and [Authorization at Scale](../12-security/07-authorization-patterns.md).
 
 ### Cross-service propagation
 
@@ -162,7 +164,7 @@ Thousands of database-per-tenant connections can exhaust server/pooler memory be
 
 ### Cell
 
-A cell contains a bounded cohort and most data-plane dependencies, limiting failure and overload while permitting incremental rollout. Shared identity, placement, DNS, billing, or deployment planes can still defeat containment. [Cell-Based Architecture](./11-cell-based-architecture.md) covers cell construction; tenant placement and movement remain part of the isolation contract.
+A cell contains a bounded cohort and most data-plane dependencies, limiting failure and overload while permitting incremental rollout. Shared identity, placement, DNS, billing, or deployment planes can still defeat containment. [Cell-Based Architecture](./13-cell-based-architecture.md) covers cell construction; tenant placement and movement remain part of the isolation contract.
 
 ### Silo
 
@@ -319,7 +321,7 @@ One global FIFO lets a whale's import place every other tenant behind millions o
 
 A first-in, first-out queue shared by all tenants is fair to requests and unfair to tenants. One tenant that submits a million jobs places every other tenant's work behind them, and a small customer who submits one job waits hours. Fair queueing gives each tenant its own queue and serves the queues in turn, so that each active tenant receives a share of the workers regardless of how much it has submitted, and a burst from one tenant slows only that tenant.
 
-[Priority, Fairness, and Backpressure](../18-workflow-job-systems/07-priority-fairness-backpressure.md) covers scheduler algorithms; tenant hierarchy and isolation objectives define their policy.
+[Priority, Fairness, and Backpressure](../09-workflow-job-systems/06-priority-fairness-backpressure.md) covers scheduler algorithms; tenant hierarchy and isolation objectives define their policy.
 
 ### Shared downstreams
 
@@ -436,7 +438,7 @@ Publish a tenant-generation tombstone early so stale jobs/restores cannot reacti
 
 ### Per-tenant restore
 
-Silo/bridge restore may replace a database; pooled restore is selective merge. Prevent ID/version collision, duplicate external effects, overwritten newer rows, and resurrection of deleted principals. Restore into isolation, compare/reconcile, write through normal operation identities, and reindex derived state. [Disaster Recovery and Data Reconstruction](../15-deployment/05-disaster-recovery.md) owns the broader protocol.
+Silo/bridge restore may replace a database; pooled restore is selective merge. Prevent ID/version collision, duplicate external effects, overwritten newer rows, and resurrection of deleted principals. Restore into isolation, compare/reconcile, write through normal operation identities, and reindex derived state. [Disaster Recovery and Data Reconstruction](../14-deployment/07-disaster-recovery.md) owns the broader protocol.
 
 ---
 
@@ -660,8 +662,8 @@ Choose pooling when logical controls, fair sharing and lifecycle tooling meet th
 
 ## Related Chapters
 
-- [Cell-Based Architecture and Shuffle Sharding](11-cell-based-architecture.md): isolation by topology versus isolation by policy, and the cost of each per tenant
-- [Rate Limiting](05-rate-limiting.md): fair share is a rate limit with a definition of fair attached to it
-- [Authorization at Scale](../10-security/07-authorization-patterns.md): the tenant as an authorization scope, enforced somewhere other than the query
-- [Partitioning Strategies](../02-distributed-databases/05-partitioning-strategies.md): where rows for one tenant land decides whether isolation is physical or aspirational
-- [Threat Modeling and Abuse Case Engineering](../10-security/08-threat-modeling-and-abuse-cases.md): tenant isolation claims need an enumerated abuse case and a test per boundary, not a diagram
+- [Cell-Based Architecture and Shuffle Sharding](13-cell-based-architecture.md): isolation by topology versus isolation by policy, and the cost of each per tenant
+- [Rate Limiting](07-rate-limiting.md): fair share is a rate limit with a definition of fair attached to it
+- [Authorization at Scale](../12-security/07-authorization-patterns.md): the tenant as an authorization scope, enforced somewhere other than the query
+- [Partitioning Strategies](../03-distributed-databases/08-partitioning-strategies.md): where rows for one tenant land decides whether isolation is physical or aspirational
+- [Threat Modeling and Abuse Case Engineering](../12-security/01-threat-modeling-and-abuse-cases.md): tenant isolation claims need an enumerated abuse case and a test per boundary, not a diagram

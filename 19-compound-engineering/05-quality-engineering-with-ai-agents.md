@@ -1,10 +1,12 @@
 # Verification and Governance for Agentic Change
 
+> The agent's tests pass, and the agent wrote the tests. What evidence would actually convince you the change is correct?
+
 ## TL;DR
 
 An agent-generated patch is a proposal, not proof. A trustworthy engineering system converts the task into explicit acceptance claims, records the provenance of the candidate, gathers independent evidence against the actual target revision, and lets policy plus accountable reviewers decide whether the evidence authorizes integration. The hardest failure is **correlated evidence**: the same run misunderstands the requirement, writes the implementation, generates tests for its interpretation, and then declares those tests sufficient. Separate specification, mutation, verification, and release authority where risk justifies it.
 
-This chapter defines evidence requirements, review controls, and promotion decisions. [Platform Fundamentals](./01-compound-engineering-fundamentals.md) and [Tool Contracts](./02-coding-agent-tool-design.md) cover runtime isolation; [Repository Architecture](./04-ai-native-software-architecture.md) covers structure; [Security](../10-security/04-api-security.md) covers application-security mechanisms.
+This chapter defines evidence requirements, review controls, and promotion decisions. [Platform Fundamentals](./01-compound-engineering-fundamentals.md) and [Tool Contracts](./02-coding-agent-tool-design.md) cover runtime isolation; [Repository Architecture](./04-ai-native-software-architecture.md) covers structure; [Security](../12-security/13-api-security.md) covers application-security mechanisms.
 
 ---
 
@@ -190,7 +192,7 @@ Use real protocol and storage boundaries for transaction, serialization, permiss
 
 ### Security verification
 
-Threat-model the change’s trust boundaries and effects. Apply deterministic scanners where relevant, then inspect authorization subject/object binding, tenant isolation, secret flow, injection boundaries, dependency execution, audit behavior, and abuse controls. Generic vulnerability lists belong to the [Security section](../10-security/01-authentication-fundamentals.md); this layer maps those mechanisms to the candidate’s actual change surface.
+Threat-model the change’s trust boundaries and effects. Apply deterministic scanners where relevant, then inspect authorization subject/object binding, tenant isolation, secret flow, injection boundaries, dependency execution, audit behavior, and abuse controls. Generic vulnerability lists belong to the [Security section](../12-security/02-authentication-fundamentals.md); this layer maps those mechanisms to the candidate’s actual change surface.
 
 ### Migration and recovery verification
 
@@ -362,13 +364,13 @@ The system is ready to integrate a candidate when every required claim has appli
 - [OWASP Web Security Testing Guide](https://owasp.org/www-project-web-security-testing-guide/)
 - [Coding Agent Platform Fundamentals](./01-compound-engineering-fundamentals.md)
 - [Repository Architecture for Safe Agentic Change](./04-ai-native-software-architecture.md)
-- [Deployment Strategies](../15-deployment/01-deployment-strategies.md)
+- [Deployment Strategies](../14-deployment/03-deployment-strategies.md)
 
 ---
 
 ## Related Chapters
 
-- [Software Delivery Control Planes and GitOps Reconciliation](../15-deployment/04-cicd-gitops.md): the pipeline becomes the reviewer that cannot be talked out of anything
+- [Software Delivery Control Planes and GitOps Reconciliation](../14-deployment/02-cicd-gitops.md): the pipeline becomes the reviewer that cannot be talked out of anything
 - [Tool and Runtime Contracts for Coding Agents](02-coding-agent-tool-design.md): a test command is a tool, and its exit code is the only honest feedback loop
-- [LLM Evaluation and Observability](../17-llm-systems/10-llm-evaluation.md): evaluating the agent as well as the change it produced
-- [Zero-Trust Service and Workload Architecture](../10-security/05-zero-trust-architecture.md): an agent is an untrusted principal with write access, which is an old problem
+- [LLM Evaluation and Observability](../17-llm-systems/07-llm-evaluation.md): evaluating the agent as well as the change it produced
+- [Zero-Trust Service and Workload Architecture](../12-security/11-zero-trust-architecture.md): an agent is an untrusted principal with write access, which is an old problem

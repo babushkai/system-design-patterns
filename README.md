@@ -37,51 +37,53 @@ Evidence labels used throughout the fieldbook:
 
 ## How to Read This Fieldbook
 
-The parts are grouped by role, not by difficulty. Pick an entry point, then follow links: every chapter is written to be read alone, with the terms it needs either defined in place or linked. The link graph is part of the build, so it cannot rot quietly: every chapter ends with a curated Related Chapters list that states why each neighbor follows from the page you just read, and no chapter ships that nothing else points to.
+The book is ordered as one climb. It starts with the promises a single machine can keep, moves out to many machines, adds the infrastructure a service is built from, then the work of running it, then systems that learn, and ends with the papers, products, and complete designs that put every earlier part to the test. Each part assumes the ones before it, and inside a part the chapters are in reading order.
 
-| Parts | Role | How to read them |
+| Stage | Parts | What you can do after it |
 |---|---|---|
-| 1-7: [Foundations](01-foundations/01-acid-transactions.md) through [Real-Time](07-real-time/01-polling.md) | Mechanisms that every later chapter assumes | Read in order once, then keep as reference |
-| 8-9: [Case Studies](08-case-studies/01-twitter.md), [Whitepapers](09-whitepapers/01-mapreduce.md) | Evidence for the mechanisms above | Read beside the mechanism chapter that names the system, not as a tour of companies; the pairing tables below give those neighbors |
-| 10-15: [Security](10-security/01-authentication-fundamentals.md) through [Deployment](15-deployment/01-deployment-strategies.md) | Complete subsystems with their own failure models | Any order; each is one design surface |
-| 16-19: [ML](16-ml-systems/01-ml-system-fundamentals.md), [LLM](17-llm-systems/01-agent-fundamentals.md), [Workflow](18-workflow-job-systems/01-workflow-system-fundamentals.md), and [Agent Engineering](19-compound-engineering/01-compound-engineering-fundamentals.md) | Applied domains built on Parts 1-6 | Start with Part 1, then take a track |
-| 20: [Production Readiness](20-production-readiness/01-design-documents-and-decision-records.md) | The layer that turns a working design into an approved, verified, lawful one | Read when a design needs sign-off, a dependency needs an owner, or an audit needs evidence |
-| 21: [Reference Designs](21-reference-designs/01-url-shortener.md) | Complete designs for recurring problems, assembled from the mechanism chapters | Read after the mechanisms a design names; each one closes with the review questions to ask of your own version |
-| 22: [Always-On Agents](22-always-on-agents/01-always-on-agent-fundamentals.md) | Agents that hold a mandate for months and wake on events, timers, and schedules with nobody watching | Read after Parts 17 and 18; it assumes the agent loop and durable execution |
+| **I. The laws** | 1 [Foundations](01-foundations/01-acid-transactions.md) · 2 [Storage Engines](02-storage-engines/01-b-trees.md) · 3 [Distributed Databases](03-distributed-databases/01-data-modeling.md) | Say exactly what a system promises about data, and what it costs to keep that promise on one machine and on many |
+| **II. The building blocks** | 4 [Caching](04-caching/01-cache-strategies.md) · 5 [Messaging](05-messaging/01-message-queues.md) · 6 [Scaling](06-scaling/01-horizontal-vertical.md) · 7 [Service Connectivity and APIs](07-service-mesh/01-api-design-patterns.md) · 8 [Real-Time](08-real-time/01-polling.md) · 9 [Workflow & Job Systems](09-workflow-job-systems/01-workflow-system-fundamentals.md) | Assemble a service that stays up under load, talks to its neighbors, and finishes work that outlives a request |
+| **III. Data in motion** | 10 [Data Pipelines](10-data-pipelines/01-batch-processing.md) · 11 [Search Systems](11-search-systems/01-inverted-indexes.md) | Move, reshape, and retrieve data without losing track of which copy is true |
+| **IV. Running it** | 12 [Security](12-security/01-threat-modeling-and-abuse-cases.md) · 13 [Observability and Operations](13-observability/01-metrics-monitoring.md) · 14 [Deployment](14-deployment/01-compute-platform-scheduling.md) · 15 [Production Readiness](15-production-readiness/01-design-documents-and-decision-records.md) | Defend a design, see it, change it safely, and get it signed off |
+| **V. Systems that learn** | 16 [ML Systems](16-ml-systems/01-ml-system-fundamentals.md) · 17 [LLM Systems](17-llm-systems/01-llm-infrastructure.md) · 18 [Always-On Agents](18-always-on-agents/01-always-on-agent-fundamentals.md) · 19 [Engineering Systems for Coding Agents](19-compound-engineering/01-compound-engineering-fundamentals.md) | Apply everything above to systems whose behavior comes from data and models, from one prediction to an agent that runs for months |
+| **VI. The field** | 20 [Whitepapers](20-whitepapers/01-mapreduce.md) · 21 [Case Studies](21-case-studies/01-twitter.md) · 22 [Reference Designs](22-reference-designs/01-url-shortener.md) | Check the mechanisms against the papers that introduced them, the products that stress them, and complete designs built from them |
+
+Reading front to back is the intended path, but nothing forces it. Every chapter is written to be read alone, with the terms it needs either defined in place or linked. The link graph is part of the build, so it cannot rot quietly: every chapter ends with a curated Related Chapters list that states why each neighbor follows from the page you just read, and no chapter ships that nothing else points to. Stage VI is also meant to be read sideways: the pairing tables below put each paper and product next to the mechanism chapters it grounds.
 
 ### Reading one chapter
 
 Every chapter opens the same way, so you can stop as early as the question allows:
 
-1. **TL;DR** - The verdict and the contract in two paragraphs. Usually enough to decide whether this chapter is yours.
-2. **Primary Evidence and Scope** (where present) - Which source establishes each claim and where that source stops applying. Read it before repeating a number.
-3. **Mechanism sections** - Behavior under load, contention, partial failure, and migration, with the arithmetic behind the claims.
-4. **Failure traces and verification** - What breaks, what the evidence looks like in production, and how to prove a fix worked.
-5. **Decision framework and Key Takeaways** (where present) - The part worth pasting into a design review.
-6. **References** - Primary sources for the chapter, not a bibliography of anything adjacent.
-7. **Related Chapters** - Three to eight neighbors, each with one line on why it follows from this one. Read it before opening a new tab.
+1. **The opening scenario** - One or two lines under the title: a production moment the chapter exists to explain. If you cannot answer it, read on.
+2. **TL;DR** - The verdict and the contract in two paragraphs. Usually enough to decide whether this chapter is yours.
+3. **Primary Evidence and Scope** (where present) - Which source establishes each claim and where that source stops applying. Read it before repeating a number.
+4. **Mechanism sections** - Behavior under load, contention, partial failure, and migration, with the arithmetic behind the claims.
+5. **Failure traces and verification** - What breaks, what the evidence looks like in production, and how to prove a fix worked.
+6. **Decision framework and Key Takeaways** (where present) - The part worth pasting into a design review.
+7. **References** - Primary sources for the chapter, not a bibliography of anything adjacent.
+8. **Related Chapters** - Three to eight neighbors, each with one line on why it follows from this one. Read it before opening a new tab.
 
 Chapters own one concept each. Where two designs meet, the boundary is stated in both directions rather than repeated, so read the linked chapter instead of guessing where the other half lives.
 
 ### Tracks
 
-- **Data correctness** - [ACID Transactions](01-foundations/01-acid-transactions.md) and [Isolation Levels](01-foundations/02-isolation-levels.md), then [Consistency Models](01-foundations/04-consistency-models.md), the three [replication](02-distributed-databases/01-single-leader-replication.md) chapters, [Distributed Transactions](02-distributed-databases/07-distributed-transactions.md), and [Consensus Algorithms](02-distributed-databases/08-consensus-algorithms.md). Finish in [Storage Engines](03-storage-engines/01-b-trees.md) to see where durability actually lands.
-- **Traffic that survives its own success** - [Capacity Planning](01-foundations/10-capacity-planning.md), then [Load Balancing](06-scaling/01-load-balancing.md), [Rate Limiting](06-scaling/05-rate-limiting.md), [Circuit Breakers](06-scaling/06-circuit-breakers.md), [Backpressure](06-scaling/07-backpressure.md), [Retries & Hedging](06-scaling/10-retries-timeouts-hedging.md), and [Cell-Based Architecture](06-scaling/11-cell-based-architecture.md).
-- **Multi-region and edge** - [DNS & Connections](06-scaling/13-dns-and-connection-management.md), [Network Transport Internals](06-scaling/14-network-transport-internals.md), [Multi-Region Architecture](06-scaling/09-multi-region-architecture.md), [CDN Architecture](06-scaling/04-cdn-architecture.md), and [Disaster Recovery](15-deployment/05-disaster-recovery.md).
-- **Moving data without lying** - [Message Queue Architecture](05-messaging/01-message-queues.md), [Message Ordering](05-messaging/03-message-ordering.md), [Delivery & Effect Boundaries](05-messaging/04-delivery-guarantees.md), [Outbox, Inbox & CDC](05-messaging/07-outbox-pattern.md), then [Batch Execution](13-data-pipelines/01-batch-processing.md), [Stream Execution](13-data-pipelines/02-stream-processing.md), [Lakehouse Table Formats](13-data-pipelines/05-lakehouse-table-formats.md), and [Analytical Query Engines](13-data-pipelines/03-analytical-query-engines.md).
-- **Owning it in production** - [Tracing & Telemetry Pipelines](11-observability/01-distributed-tracing.md), [Metrics Systems](11-observability/02-metrics-monitoring.md), [Production Logging](11-observability/03-logging.md), [Alert Evaluation](11-observability/04-alerting.md), [SLOs & Error-Budget Control](11-observability/05-slos-error-budgets.md), and [Incident Command](11-observability/07-incident-management.md), plus [Progressive Delivery](15-deployment/01-deployment-strategies.md) and [Database Migrations](15-deployment/03-database-migrations.md).
-- **Identity and trust** - [Authentication Systems](10-security/01-authentication-fundamentals.md), [OAuth 2.0 and OpenID Connect](10-security/02-oauth2-openid-connect.md), [JOSE and JWT Verification](10-security/03-jwt-tokens.md), [API Threat Boundaries](10-security/04-api-security.md), [Cryptographic Key Architecture](10-security/06-encryption.md), and [Authorization at Scale](10-security/07-authorization-patterns.md), with [DDoS Defense Architecture](10-security/09-ddos-defense.md) for traffic whose only purpose is exhaustion.
-- **Work that outlives the request** - [Workflow Fundamentals](18-workflow-job-systems/01-workflow-system-fundamentals.md), [Background Jobs & Workers](18-workflow-job-systems/02-background-jobs-worker-pools.md), [Durable Execution](18-workflow-job-systems/04-durable-execution-workflow-engines.md), [Effect Commit Protocols](18-workflow-job-systems/06-retry-idempotency-compensation.md), and [Leases, Heartbeats & Recovery](18-workflow-job-systems/08-leases-heartbeats-recovery.md).
-- **AI systems** - [ML System Fundamentals](16-ml-systems/01-ml-system-fundamentals.md), [Feature Stores](16-ml-systems/02-feature-stores.md), [Model Serving](16-ml-systems/03-model-serving.md), and [Offline Evaluation](16-ml-systems/12-offline-evaluation-metrics.md), then [LLM Infrastructure](17-llm-systems/05-llm-infrastructure.md), [GPU Inference Internals](17-llm-systems/11-gpu-inference-internals.md), [RAG Patterns](17-llm-systems/04-rag-patterns.md), and [LLM Evaluation](17-llm-systems/10-llm-evaluation.md).
+- **Data correctness** - [ACID Transactions](01-foundations/01-acid-transactions.md) and [Isolation Levels](01-foundations/02-isolation-levels.md), then [Consistency Models](01-foundations/05-consistency-models.md), the three [replication](03-distributed-databases/02-single-leader-replication.md) chapters, [Distributed Transactions](03-distributed-databases/10-distributed-transactions.md), and [Consensus Algorithms](03-distributed-databases/06-consensus-algorithms.md). Finish in [Storage Engines](02-storage-engines/01-b-trees.md) to see where durability actually lands.
+- **Traffic that survives its own success** - [Capacity Planning](01-foundations/09-capacity-planning.md), then [Load Balancing](06-scaling/04-load-balancing.md), [Rate Limiting](06-scaling/07-rate-limiting.md), [Circuit Breakers](06-scaling/10-circuit-breakers.md), [Backpressure](06-scaling/08-backpressure.md), [Retries & Hedging](06-scaling/09-retries-timeouts-hedging.md), and [Cell-Based Architecture](06-scaling/13-cell-based-architecture.md).
+- **Multi-region and edge** - [DNS & Connections](06-scaling/02-dns-and-connection-management.md), [Network Transport Internals](06-scaling/03-network-transport-internals.md), [Multi-Region Architecture](06-scaling/14-multi-region-architecture.md), [CDN Architecture](06-scaling/05-cdn-architecture.md), and [Disaster Recovery](14-deployment/07-disaster-recovery.md).
+- **Moving data without lying** - [Message Queue Architecture](05-messaging/01-message-queues.md), [Message Ordering](05-messaging/03-message-ordering.md), [Delivery & Effect Boundaries](05-messaging/04-delivery-guarantees.md), [Outbox, Inbox & CDC](05-messaging/05-outbox-pattern.md), then [Batch Execution](10-data-pipelines/01-batch-processing.md), [Stream Execution](10-data-pipelines/02-stream-processing.md), [Lakehouse Table Formats](10-data-pipelines/04-lakehouse-table-formats.md), and [Analytical Query Engines](10-data-pipelines/05-analytical-query-engines.md).
+- **Owning it in production** - [Tracing & Telemetry Pipelines](13-observability/03-distributed-tracing.md), [Metrics Systems](13-observability/01-metrics-monitoring.md), [Production Logging](13-observability/02-logging.md), [Alert Evaluation](13-observability/05-alerting.md), [SLOs & Error-Budget Control](13-observability/04-slos-error-budgets.md), and [Incident Command](13-observability/06-incident-management.md), plus [Progressive Delivery](14-deployment/03-deployment-strategies.md) and [Database Migrations](14-deployment/05-database-migrations.md).
+- **Identity and trust** - [Authentication Systems](12-security/02-authentication-fundamentals.md), [OAuth 2.0 and OpenID Connect](12-security/04-oauth2-openid-connect.md), [JOSE and JWT Verification](12-security/05-jwt-tokens.md), [API Threat Boundaries](12-security/13-api-security.md), [Cryptographic Key Architecture](12-security/10-encryption.md), and [Authorization at Scale](12-security/07-authorization-patterns.md), with [DDoS Defense Architecture](12-security/14-ddos-defense.md) for traffic whose only purpose is exhaustion.
+- **Work that outlives the request** - [Workflow Fundamentals](09-workflow-job-systems/01-workflow-system-fundamentals.md), [Background Jobs & Workers](09-workflow-job-systems/02-background-jobs-worker-pools.md), [Durable Execution](09-workflow-job-systems/07-durable-execution-workflow-engines.md), [Effect Commit Protocols](09-workflow-job-systems/04-retry-idempotency-compensation.md), and [Leases, Heartbeats & Recovery](09-workflow-job-systems/03-leases-heartbeats-recovery.md).
+- **AI systems** - [ML System Fundamentals](16-ml-systems/01-ml-system-fundamentals.md), [Feature Stores](16-ml-systems/04-feature-stores.md), [Model Serving](16-ml-systems/10-model-serving.md), and [Offline Evaluation](16-ml-systems/08-offline-evaluation-metrics.md), then [LLM Infrastructure](17-llm-systems/01-llm-infrastructure.md), [GPU Inference Internals](17-llm-systems/02-gpu-inference-internals.md), [RAG Patterns](17-llm-systems/05-rag-patterns.md), and [LLM Evaluation](17-llm-systems/07-llm-evaluation.md).
 
-- **Reads that stay fast and honest** - [Cache Strategies & Economics](04-caching/01-cache-strategies.md) and [Invalidation & Coherence](04-caching/02-cache-invalidation.md) decide how much staleness you are selling, then [Distributed Cache Internals](04-caching/03-distributed-caching.md) and [Stampede, Cold Start & Warming](04-caching/04-cache-stampede.md) show what happens when the cache leaves, with [CDN Architecture](06-scaling/04-cdn-architecture.md) for the same argument one layer out.
-- **Real-time delivery and collaboration** - [Client Delivery Transports](07-real-time/01-polling.md) picks how a client learns that something changed, [Publish-Subscribe Architecture](05-messaging/02-pub-sub.md) and [Presence](07-real-time/06-presence.md) carry the fan-out, [WebRTC](07-real-time/05-webrtc.md) covers peer media, and [Collaborative Sync & CRDTs](07-real-time/07-crdts-collaborative-editing.md) with [Conflict Resolution](02-distributed-databases/04-conflict-resolution.md) settle two people typing at once.
-- **Service boundaries and API contracts** - [Discovery & Control-Plane State](12-service-mesh/01-service-discovery.md), [Mesh Data & Control Planes](12-service-mesh/03-sidecar-pattern.md), and [Edge Gateway & API Mediation](12-service-mesh/02-api-gateway.md) decide where cross-cutting policy lives, then [API Design & Evolution](12-service-mesh/04-api-design-patterns.md), [API Threat Boundaries](10-security/04-api-security.md), and [Zero-Trust Workload Architecture](10-security/05-zero-trust-architecture.md) decide what each hop is allowed to assume.
-- **Retrieval and ranking** - [Index Architecture & Internals](14-search-systems/01-inverted-indexes.md) and [Lexical Query Execution](14-search-systems/02-full-text-search.md) build the lexical path, [Vector Retrieval Systems](14-search-systems/03-vector-search.md) builds the semantic one, [Geospatial Indexing](14-search-systems/05-geospatial-indexing.md) answers what is near a point, then [Ranking & Evaluation](14-search-systems/04-ranking-algorithms.md) and [Typeahead & Autocomplete](14-search-systems/06-typeahead-autocomplete.md) turn scores into a product, with [RAG Patterns](17-llm-systems/04-rag-patterns.md) and [Recommendation Systems](16-ml-systems/07-recommendation-systems.md) as the two consumers.
-- **Engineering systems for coding agents** - [Platform Fundamentals](19-compound-engineering/01-compound-engineering-fundamentals.md), [Tool & Runtime Contracts](19-compound-engineering/02-coding-agent-tool-design.md), and [Context & Policy Plane](19-compound-engineering/03-agent-context-engineering.md) build the platform, then [Repository Architecture](19-compound-engineering/04-ai-native-software-architecture.md), [Verification & Governance](19-compound-engineering/05-quality-engineering-with-ai-agents.md), and [Parallel Development](19-compound-engineering/06-compound-development-workflows.md) make it survive a fleet of agents, on top of [Agent Fundamentals](17-llm-systems/01-agent-fundamentals.md) and [Harness Engineering](17-llm-systems/09-harness-engineering.md).
-- **Measuring at scale** - [Metrics Systems](11-observability/02-metrics-monitoring.md) defines what is recorded, [Time-Series Storage Engines](03-storage-engines/09-time-series-storage.md) shows why cardinality rather than volume is the limit, [Probabilistic Sketches](03-storage-engines/10-probabilistic-sketches.md) keeps counts and percentiles mergeable, and [Analytical Query Engines](13-data-pipelines/03-analytical-query-engines.md) takes the per-entity questions a metrics store should refuse.
-- **Reference designs for recurring problems** - [URL Shortener](21-reference-designs/01-url-shortener.md) for identifier allocation and cache-bounded revocation, [Notification Delivery Platform](21-reference-designs/02-notification-delivery.md) for consent and irreversible sends, [Web Crawler](21-reference-designs/03-web-crawler.md) for scheduling under politeness, [Ad Click Aggregation](21-reference-designs/04-ad-click-aggregation.md) for event-time counts that are billed, [Ticketing & Inventory Reservation](21-reference-designs/05-ticketing-inventory-reservation.md) for holds under contention, and [Order Matching Engine](21-reference-designs/06-order-matching-engine.md) for a deterministic single-writer core.
-- **From design review to signed-off production** - [Design Documents & ADRs](20-production-readiness/01-design-documents-and-decision-records.md) and [Architecture Review & Governance](20-production-readiness/02-architecture-review-and-governance.md) put the decision on paper and give it a forum, [Third-Party & Supply Chain](20-production-readiness/03-third-party-dependencies-and-supply-chain.md) prices the failure modes that decision inherits, [Verification Strategy](20-production-readiness/04-verification-strategy-for-distributed-systems.md) proves it survives interleavings and injected faults, and [Data Retention & Compliance](20-production-readiness/05-data-retention-and-compliance-engineering.md) keeps it lawful after launch, on top of [Resilience Testing & Fault Injection](11-observability/09-resilience-testing-and-fault-injection.md) and [Progressive Delivery](15-deployment/01-deployment-strategies.md), which supply the two verifiers no pre-production environment can replicate.
+- **Reads that stay fast and honest** - [Cache Strategies & Economics](04-caching/01-cache-strategies.md) and [Invalidation & Coherence](04-caching/02-cache-invalidation.md) decide how much staleness you are selling, then [Distributed Cache Internals](04-caching/03-distributed-caching.md) and [Stampede, Cold Start & Warming](04-caching/04-cache-stampede.md) show what happens when the cache leaves, with [CDN Architecture](06-scaling/05-cdn-architecture.md) for the same argument one layer out.
+- **Real-time delivery and collaboration** - [Client Delivery Transports](08-real-time/01-polling.md) picks how a client learns that something changed, [Publish-Subscribe Architecture](05-messaging/02-pub-sub.md) and [Presence](08-real-time/03-presence.md) carry the fan-out, [WebRTC](08-real-time/02-webrtc.md) covers peer media, and [Collaborative Sync & CRDTs](08-real-time/04-crdts-collaborative-editing.md) with [Conflict Resolution](03-distributed-databases/05-conflict-resolution.md) settle two people typing at once.
+- **Service boundaries and API contracts** - [Discovery & Control-Plane State](07-service-mesh/02-service-discovery.md), [Mesh Data & Control Planes](07-service-mesh/04-sidecar-pattern.md), and [Edge Gateway & API Mediation](07-service-mesh/03-api-gateway.md) decide where cross-cutting policy lives, then [API Design & Evolution](07-service-mesh/01-api-design-patterns.md), [API Threat Boundaries](12-security/13-api-security.md), and [Zero-Trust Workload Architecture](12-security/11-zero-trust-architecture.md) decide what each hop is allowed to assume.
+- **Retrieval and ranking** - [Index Architecture & Internals](11-search-systems/01-inverted-indexes.md) and [Lexical Query Execution](11-search-systems/02-full-text-search.md) build the lexical path, [Vector Retrieval Systems](11-search-systems/03-vector-search.md) builds the semantic one, [Geospatial Indexing](11-search-systems/05-geospatial-indexing.md) answers what is near a point, then [Ranking & Evaluation](11-search-systems/04-ranking-algorithms.md) and [Typeahead & Autocomplete](11-search-systems/06-typeahead-autocomplete.md) turn scores into a product, with [RAG Patterns](17-llm-systems/05-rag-patterns.md) and [Recommendation Systems](16-ml-systems/15-recommendation-systems.md) as the two consumers.
+- **Engineering systems for coding agents** - [Platform Fundamentals](19-compound-engineering/01-compound-engineering-fundamentals.md), [Tool & Runtime Contracts](19-compound-engineering/02-coding-agent-tool-design.md), and [Context & Policy Plane](19-compound-engineering/03-agent-context-engineering.md) build the platform, then [Repository Architecture](19-compound-engineering/04-ai-native-software-architecture.md), [Verification & Governance](19-compound-engineering/05-quality-engineering-with-ai-agents.md), and [Parallel Development](19-compound-engineering/06-compound-development-workflows.md) make it survive a fleet of agents, on top of [Agent Fundamentals](17-llm-systems/08-agent-fundamentals.md) and [Harness Engineering](17-llm-systems/09-harness-engineering.md).
+- **Measuring at scale** - [Metrics Systems](13-observability/01-metrics-monitoring.md) defines what is recorded, [Time-Series Storage Engines](02-storage-engines/08-time-series-storage.md) shows why cardinality rather than volume is the limit, [Probabilistic Sketches](02-storage-engines/09-probabilistic-sketches.md) keeps counts and percentiles mergeable, and [Analytical Query Engines](10-data-pipelines/05-analytical-query-engines.md) takes the per-entity questions a metrics store should refuse.
+- **Reference designs for recurring problems** - [URL Shortener](22-reference-designs/01-url-shortener.md) for identifier allocation and cache-bounded revocation, [Notification Delivery Platform](22-reference-designs/02-notification-delivery.md) for consent and irreversible sends, [Web Crawler](22-reference-designs/03-web-crawler.md) for scheduling under politeness, [Ad Click Aggregation](22-reference-designs/04-ad-click-aggregation.md) for event-time counts that are billed, [Ticketing & Inventory Reservation](22-reference-designs/05-ticketing-inventory-reservation.md) for holds under contention, and [Order Matching Engine](22-reference-designs/06-order-matching-engine.md) for a deterministic single-writer core.
+- **From design review to signed-off production** - [Design Documents & ADRs](15-production-readiness/01-design-documents-and-decision-records.md) and [Architecture Review & Governance](15-production-readiness/02-architecture-review-and-governance.md) put the decision on paper and give it a forum, [Third-Party & Supply Chain](15-production-readiness/04-third-party-dependencies-and-supply-chain.md) prices the failure modes that decision inherits, [Verification Strategy](15-production-readiness/03-verification-strategy-for-distributed-systems.md) proves it survives interleavings and injected faults, and [Data Retention & Compliance](15-production-readiness/05-data-retention-and-compliance-engineering.md) keeps it lawful after launch, on top of [Resilience Testing & Fault Injection](13-observability/08-resilience-testing-and-fault-injection.md) and [Progressive Delivery](14-deployment/03-deployment-strategies.md), which supply the two verifiers no pre-production environment can replicate.
 
 ### Papers next to mechanisms
 
@@ -89,21 +91,21 @@ The whitepaper chapters are analyses of what a paper actually established, so th
 
 | Paper | Mechanism chapters it grounds |
 |---|---|
-| [MapReduce](09-whitepapers/01-mapreduce.md) | [Batch Execution](13-data-pipelines/01-batch-processing.md) |
-| [Dynamo](09-whitepapers/02-dynamo.md) | [Leaderless Replication](02-distributed-databases/03-leaderless-replication.md), [Conflict Resolution](02-distributed-databases/04-conflict-resolution.md) |
-| [Bigtable](09-whitepapers/03-bigtable.md) | [LSM Trees](03-storage-engines/02-lsm-trees.md), [Column Storage](03-storage-engines/06-column-storage.md) |
-| [Spanner](09-whitepapers/04-spanner.md) | [Distributed Time](01-foundations/05-distributed-time.md), [Distributed Transactions](02-distributed-databases/07-distributed-transactions.md) |
-| [TAO](09-whitepapers/05-tao.md) | [Secondary Indexes](02-distributed-databases/06-secondary-indexes.md), [Partitioning Strategies](02-distributed-databases/05-partitioning-strategies.md) |
-| [Kafka](09-whitepapers/06-kafka.md) | [Message Ordering](05-messaging/03-message-ordering.md), [Delivery & Effect Boundaries](05-messaging/04-delivery-guarantees.md) |
-| [Raft](09-whitepapers/07-raft.md) | [Consensus Algorithms](02-distributed-databases/08-consensus-algorithms.md), [Leader Election](02-distributed-databases/09-leader-election.md) |
-| [Chubby](09-whitepapers/08-chubby.md) | [Distributed Locks](01-foundations/09-distributed-locks.md), [Leader Election](02-distributed-databases/09-leader-election.md) |
-| [Aurora](09-whitepapers/09-aurora.md) | [Write-Ahead Logging](03-storage-engines/04-write-ahead-logging.md), [Single-Leader Replication](02-distributed-databases/01-single-leader-replication.md) |
-| [CockroachDB](09-whitepapers/10-cockroachdb.md) | [Distributed Transactions](02-distributed-databases/07-distributed-transactions.md), [Partitioning Strategies](02-distributed-databases/05-partitioning-strategies.md) |
-| [Zanzibar](09-whitepapers/11-zanzibar.md) | [Authorization at Scale](10-security/07-authorization-patterns.md) |
-| [Monarch](09-whitepapers/12-monarch.md) | [Metrics Systems & Monitoring](11-observability/02-metrics-monitoring.md), [Tracing & Telemetry Pipelines](11-observability/01-distributed-tracing.md) |
-| [FoundationDB](09-whitepapers/13-foundationdb.md) | [Consensus Algorithms](02-distributed-databases/08-consensus-algorithms.md), [Distributed Transactions](02-distributed-databases/07-distributed-transactions.md) |
-| [DynamoDB (2022)](09-whitepapers/14-dynamodb-2022.md) | [Database Sharding](06-scaling/03-database-sharding.md), [Secondary Indexes](02-distributed-databases/06-secondary-indexes.md) |
-| [The Transformer](09-whitepapers/15-attention-transformers.md) | [GPU Inference Internals](17-llm-systems/11-gpu-inference-internals.md), [LLM Infrastructure](17-llm-systems/05-llm-infrastructure.md) |
+| [MapReduce](20-whitepapers/01-mapreduce.md) | [Batch Execution](10-data-pipelines/01-batch-processing.md) |
+| [Dynamo](20-whitepapers/02-dynamo.md) | [Leaderless Replication](03-distributed-databases/04-leaderless-replication.md), [Conflict Resolution](03-distributed-databases/05-conflict-resolution.md) |
+| [Bigtable](20-whitepapers/03-bigtable.md) | [LSM Trees](02-storage-engines/03-lsm-trees.md), [Column Storage](02-storage-engines/07-column-storage.md) |
+| [Spanner](20-whitepapers/04-spanner.md) | [Distributed Time](01-foundations/04-distributed-time.md), [Distributed Transactions](03-distributed-databases/10-distributed-transactions.md) |
+| [TAO](20-whitepapers/05-tao.md) | [Secondary Indexes](03-distributed-databases/09-secondary-indexes.md), [Partitioning Strategies](03-distributed-databases/08-partitioning-strategies.md) |
+| [Kafka](20-whitepapers/06-kafka.md) | [Message Ordering](05-messaging/03-message-ordering.md), [Delivery & Effect Boundaries](05-messaging/04-delivery-guarantees.md) |
+| [Raft](20-whitepapers/07-raft.md) | [Consensus Algorithms](03-distributed-databases/06-consensus-algorithms.md), [Leader Election](03-distributed-databases/07-leader-election.md) |
+| [Chubby](20-whitepapers/08-chubby.md) | [Distributed Locks](01-foundations/08-distributed-locks.md), [Leader Election](03-distributed-databases/07-leader-election.md) |
+| [Aurora](20-whitepapers/09-aurora.md) | [Write-Ahead Logging](02-storage-engines/02-write-ahead-logging.md), [Single-Leader Replication](03-distributed-databases/02-single-leader-replication.md) |
+| [CockroachDB](20-whitepapers/10-cockroachdb.md) | [Distributed Transactions](03-distributed-databases/10-distributed-transactions.md), [Partitioning Strategies](03-distributed-databases/08-partitioning-strategies.md) |
+| [Zanzibar](20-whitepapers/11-zanzibar.md) | [Authorization at Scale](12-security/07-authorization-patterns.md) |
+| [Monarch](20-whitepapers/12-monarch.md) | [Metrics Systems & Monitoring](13-observability/01-metrics-monitoring.md), [Tracing & Telemetry Pipelines](13-observability/03-distributed-tracing.md) |
+| [FoundationDB](20-whitepapers/13-foundationdb.md) | [Consensus Algorithms](03-distributed-databases/06-consensus-algorithms.md), [Distributed Transactions](03-distributed-databases/10-distributed-transactions.md) |
+| [DynamoDB (2022)](20-whitepapers/14-dynamodb-2022.md) | [Database Sharding](06-scaling/11-database-sharding.md), [Secondary Indexes](03-distributed-databases/09-secondary-indexes.md) |
+| [The Transformer](20-whitepapers/15-attention-transformers.md) | [GPU Inference Internals](17-llm-systems/02-gpu-inference-internals.md), [LLM Infrastructure](17-llm-systems/01-llm-infrastructure.md) |
 
 ### Products next to mechanisms
 
@@ -111,19 +113,19 @@ Each case study starts from a product you can use today and works back to the me
 
 | Product | Mechanism chapters it stresses |
 |---|---|
-| [Twitter/X](08-case-studies/01-twitter.md) | [Partitioning Strategies](02-distributed-databases/05-partitioning-strategies.md), [Backpressure](06-scaling/07-backpressure.md), [Outbox, Inbox & CDC](05-messaging/07-outbox-pattern.md) |
-| [Instagram](08-case-studies/02-instagram.md) | [CDN Architecture](06-scaling/04-cdn-architecture.md), [Stampede, Cold Start & Warming](04-caching/04-cache-stampede.md), [Object Storage & Commit Protocols](03-storage-engines/08-object-storage.md) |
-| [Uber](08-case-studies/03-uber.md) | [Distributed Time](01-foundations/05-distributed-time.md), [Secondary Indexes](02-distributed-databases/06-secondary-indexes.md), [Message Ordering](05-messaging/03-message-ordering.md) |
-| [Netflix](08-case-studies/04-netflix.md) | [Cell-Based Architecture](06-scaling/11-cell-based-architecture.md), [Durable Execution](18-workflow-job-systems/04-durable-execution-workflow-engines.md), [Recommendation Systems](16-ml-systems/07-recommendation-systems.md) |
-| [Slack](08-case-studies/05-slack.md) | [Delivery & Effect Boundaries](05-messaging/04-delivery-guarantees.md), [Client Delivery Transports](07-real-time/01-polling.md), [Lexical Query Execution](14-search-systems/02-full-text-search.md) |
-| [Stripe](08-case-studies/06-stripe.md) | [Idempotency](01-foundations/08-idempotency.md), [Distributed Transactions](02-distributed-databases/07-distributed-transactions.md), [SLOs & Error-Budget Control](11-observability/05-slos-error-budgets.md) |
-| [Dropbox](08-case-studies/07-dropbox.md) | [Object Storage & Commit Protocols](03-storage-engines/08-object-storage.md), [Collaborative Sync & CRDTs](07-real-time/07-crdts-collaborative-editing.md), [Disaster Recovery & Reconstruction](15-deployment/05-disaster-recovery.md) |
-| [Discord](08-case-studies/08-discord.md) | [Partitioning Strategies](02-distributed-databases/05-partitioning-strategies.md), [Presence](07-real-time/06-presence.md), [LSM Trees](03-storage-engines/02-lsm-trees.md) |
-| [Google Maps](08-case-studies/09-google-maps.md) | [Typeahead & Autocomplete](14-search-systems/06-typeahead-autocomplete.md), [Partitioning Strategies](02-distributed-databases/05-partitioning-strategies.md), [Dataset Management & Versioning](16-ml-systems/11-dataset-management-versioning.md) |
-| [WhatsApp](08-case-studies/10-whatsapp.md) | [Cryptographic Key Architecture](10-security/06-encryption.md), [Client Delivery Transports](07-real-time/01-polling.md), [Network Transport Internals](06-scaling/14-network-transport-internals.md) |
-| [Figma](08-case-studies/11-figma.md) | [Conflict Resolution](02-distributed-databases/04-conflict-resolution.md), [Collaborative Sync & CRDTs](07-real-time/07-crdts-collaborative-editing.md), [Write-Ahead Logging](03-storage-engines/04-write-ahead-logging.md) |
-| [Cloudflare](08-case-studies/12-cloudflare.md) | [Multi-Region Architecture](06-scaling/09-multi-region-architecture.md), [Multi-Tenant Isolation & Lifecycle](06-scaling/12-multi-tenancy.md), [SLOs & Error-Budget Control](11-observability/05-slos-error-budgets.md) |
-| [LLM Inference Platforms](08-case-studies/13-llm-inference-platforms.md) | [GPU Inference Internals](17-llm-systems/11-gpu-inference-internals.md), [LLM Infrastructure](17-llm-systems/05-llm-infrastructure.md), [FinOps & Cost Engineering](11-observability/06-finops-cost-engineering.md) |
+| [Twitter/X](21-case-studies/01-twitter.md) | [Partitioning Strategies](03-distributed-databases/08-partitioning-strategies.md), [Backpressure](06-scaling/08-backpressure.md), [Outbox, Inbox & CDC](05-messaging/05-outbox-pattern.md) |
+| [Instagram](21-case-studies/02-instagram.md) | [CDN Architecture](06-scaling/05-cdn-architecture.md), [Stampede, Cold Start & Warming](04-caching/04-cache-stampede.md), [Object Storage & Commit Protocols](02-storage-engines/10-object-storage.md) |
+| [Uber](21-case-studies/03-uber.md) | [Distributed Time](01-foundations/04-distributed-time.md), [Secondary Indexes](03-distributed-databases/09-secondary-indexes.md), [Message Ordering](05-messaging/03-message-ordering.md) |
+| [Netflix](21-case-studies/04-netflix.md) | [Cell-Based Architecture](06-scaling/13-cell-based-architecture.md), [Durable Execution](09-workflow-job-systems/07-durable-execution-workflow-engines.md), [Recommendation Systems](16-ml-systems/15-recommendation-systems.md) |
+| [Slack](21-case-studies/05-slack.md) | [Delivery & Effect Boundaries](05-messaging/04-delivery-guarantees.md), [Client Delivery Transports](08-real-time/01-polling.md), [Lexical Query Execution](11-search-systems/02-full-text-search.md) |
+| [Stripe](21-case-studies/06-stripe.md) | [Idempotency](01-foundations/07-idempotency.md), [Distributed Transactions](03-distributed-databases/10-distributed-transactions.md), [SLOs & Error-Budget Control](13-observability/04-slos-error-budgets.md) |
+| [Dropbox](21-case-studies/07-dropbox.md) | [Object Storage & Commit Protocols](02-storage-engines/10-object-storage.md), [Collaborative Sync & CRDTs](08-real-time/04-crdts-collaborative-editing.md), [Disaster Recovery & Reconstruction](14-deployment/07-disaster-recovery.md) |
+| [Discord](21-case-studies/08-discord.md) | [Partitioning Strategies](03-distributed-databases/08-partitioning-strategies.md), [Presence](08-real-time/03-presence.md), [LSM Trees](02-storage-engines/03-lsm-trees.md) |
+| [Google Maps](21-case-studies/09-google-maps.md) | [Typeahead & Autocomplete](11-search-systems/06-typeahead-autocomplete.md), [Partitioning Strategies](03-distributed-databases/08-partitioning-strategies.md), [Dataset Management & Versioning](16-ml-systems/03-dataset-management-versioning.md) |
+| [WhatsApp](21-case-studies/10-whatsapp.md) | [Cryptographic Key Architecture](12-security/10-encryption.md), [Client Delivery Transports](08-real-time/01-polling.md), [Network Transport Internals](06-scaling/03-network-transport-internals.md) |
+| [Figma](21-case-studies/11-figma.md) | [Conflict Resolution](03-distributed-databases/05-conflict-resolution.md), [Collaborative Sync & CRDTs](08-real-time/04-crdts-collaborative-editing.md), [Write-Ahead Logging](02-storage-engines/02-write-ahead-logging.md) |
+| [Cloudflare](21-case-studies/12-cloudflare.md) | [Multi-Region Architecture](06-scaling/14-multi-region-architecture.md), [Multi-Tenant Isolation & Lifecycle](06-scaling/12-multi-tenancy.md), [SLOs & Error-Budget Control](13-observability/04-slos-error-budgets.md) |
+| [LLM Inference Platforms](21-case-studies/13-llm-inference-platforms.md) | [GPU Inference Internals](17-llm-systems/02-gpu-inference-internals.md), [LLM Infrastructure](17-llm-systems/01-llm-infrastructure.md), [FinOps & Cost Engineering](13-observability/09-finops-cost-engineering.md) |
 
 ## Table of Contents
 
@@ -132,37 +134,37 @@ Each case study starts from a product you can use today and works back to the me
 ### Part 1: Foundations
 - [ACID Transactions](01-foundations/01-acid-transactions.md)
 - [Isolation Levels](01-foundations/02-isolation-levels.md)
-- [CAP Theorem](01-foundations/03-cap-theorem.md)
-- [Consistency Models](01-foundations/04-consistency-models.md)
-- [Distributed Time](01-foundations/05-distributed-time.md)
-- [Failure Semantics, Detection, and Recovery Boundaries](01-foundations/06-failure-modes.md)
-- [Idempotency and Operation Identity](01-foundations/08-idempotency.md)
-- [Distributed Locks and Leases](01-foundations/09-distributed-locks.md)
-- [Capacity Planning and Back-of-the-Envelope Estimation](01-foundations/10-capacity-planning.md)
+- [Failure Semantics, Detection, and Recovery Boundaries](01-foundations/03-failure-modes.md)
+- [Distributed Time](01-foundations/04-distributed-time.md)
+- [Consistency Models](01-foundations/05-consistency-models.md)
+- [CAP Theorem](01-foundations/06-cap-theorem.md)
+- [Idempotency and Operation Identity](01-foundations/07-idempotency.md)
+- [Distributed Locks and Leases](01-foundations/08-distributed-locks.md)
+- [Capacity Planning and Back-of-the-Envelope Estimation](01-foundations/09-capacity-planning.md)
 
-### Part 2: Distributed Databases
-- [Single-Leader Replication](02-distributed-databases/01-single-leader-replication.md)
-- [Multi-Leader Replication](02-distributed-databases/02-multi-leader-replication.md)
-- [Leaderless Replication](02-distributed-databases/03-leaderless-replication.md)
-- [Conflict Resolution](02-distributed-databases/04-conflict-resolution.md)
-- [Partitioning Strategies](02-distributed-databases/05-partitioning-strategies.md)
-- [Secondary Indexes in Distributed Databases](02-distributed-databases/06-secondary-indexes.md)
-- [Distributed Transactions](02-distributed-databases/07-distributed-transactions.md)
-- [Consensus Algorithms](02-distributed-databases/08-consensus-algorithms.md)
-- [Leader Election](02-distributed-databases/09-leader-election.md)
-- [Workload-Driven Data Modeling and Derived Projections](02-distributed-databases/10-data-modeling.md)
+### Part 2: Storage Engines
+- [B-Trees](02-storage-engines/01-b-trees.md)
+- [Write-Ahead Logging (WAL)](02-storage-engines/02-write-ahead-logging.md)
+- [LSM Trees](02-storage-engines/03-lsm-trees.md)
+- [SSTables and Compaction](02-storage-engines/04-sstables-compaction.md)
+- [Bloom Filters](02-storage-engines/05-bloom-filters.md)
+- [Data Encoding](02-storage-engines/06-data-encoding.md)
+- [Column-Oriented Storage](02-storage-engines/07-column-storage.md)
+- [Time-Series Storage Engines](02-storage-engines/08-time-series-storage.md)
+- [Probabilistic Sketches](02-storage-engines/09-probabilistic-sketches.md)
+- [Object Storage Architecture and Commit Protocols](02-storage-engines/10-object-storage.md)
 
-### Part 3: Storage Engines
-- [B-Trees](03-storage-engines/01-b-trees.md)
-- [LSM Trees](03-storage-engines/02-lsm-trees.md)
-- [SSTables and Compaction](03-storage-engines/03-sstables-compaction.md)
-- [Write-Ahead Logging (WAL)](03-storage-engines/04-write-ahead-logging.md)
-- [Bloom Filters](03-storage-engines/05-bloom-filters.md)
-- [Column-Oriented Storage](03-storage-engines/06-column-storage.md)
-- [Data Encoding](03-storage-engines/07-data-encoding.md)
-- [Object Storage Architecture and Commit Protocols](03-storage-engines/08-object-storage.md)
-- [Time-Series Storage Engines](03-storage-engines/09-time-series-storage.md)
-- [Probabilistic Sketches](03-storage-engines/10-probabilistic-sketches.md)
+### Part 3: Distributed Databases
+- [Workload-Driven Data Modeling and Derived Projections](03-distributed-databases/01-data-modeling.md)
+- [Single-Leader Replication](03-distributed-databases/02-single-leader-replication.md)
+- [Multi-Leader Replication](03-distributed-databases/03-multi-leader-replication.md)
+- [Leaderless Replication](03-distributed-databases/04-leaderless-replication.md)
+- [Conflict Resolution](03-distributed-databases/05-conflict-resolution.md)
+- [Consensus Algorithms](03-distributed-databases/06-consensus-algorithms.md)
+- [Leader Election](03-distributed-databases/07-leader-election.md)
+- [Partitioning Strategies](03-distributed-databases/08-partitioning-strategies.md)
+- [Secondary Indexes in Distributed Databases](03-distributed-databases/09-secondary-indexes.md)
+- [Distributed Transactions](03-distributed-databases/10-distributed-transactions.md)
 
 ### Part 4: Caching
 - [Cache Semantics and Economics](04-caching/01-cache-strategies.md)
@@ -175,165 +177,148 @@ Each case study starts from a product you can use today and works back to the me
 - [Publish-Subscribe Architecture](05-messaging/02-pub-sub.md)
 - [Message Ordering](05-messaging/03-message-ordering.md)
 - [Delivery Guarantees and Effect Boundaries](05-messaging/04-delivery-guarantees.md)
-- [Event Sourcing and Domain Logs](05-messaging/05-event-sourcing.md)
-- [CQRS and Projection Architecture](05-messaging/06-cqrs.md)
-- [Transactional Outbox, Inbox, and CDC Publication](05-messaging/07-outbox-pattern.md)
-- [Poison-Message Quarantine and Redrive](05-messaging/08-dead-letter-queues.md)
+- [Transactional Outbox, Inbox, and CDC Publication](05-messaging/05-outbox-pattern.md)
+- [Poison-Message Quarantine and Redrive](05-messaging/06-dead-letter-queues.md)
+- [Event Sourcing and Domain Logs](05-messaging/07-event-sourcing.md)
+- [CQRS and Projection Architecture](05-messaging/08-cqrs.md)
 
 ### Part 6: Scaling
-- [Load Balancing](06-scaling/01-load-balancing.md)
-- [Horizontal vs Vertical Scaling](06-scaling/02-horizontal-vertical.md)
-- [Database Sharding](06-scaling/03-database-sharding.md)
-- [CDN Architecture](06-scaling/04-cdn-architecture.md)
-- [Rate Limiting: Admission Policy and Distributed Budgets](06-scaling/05-rate-limiting.md)
-- [Circuit Breakers: Dependency State and Concurrency Control](06-scaling/06-circuit-breakers.md)
-- [Backpressure: Bounded Buffers, Flow Control, and Load Shedding](06-scaling/07-backpressure.md)
-- [Auto-Scaling: Delayed Feedback, Headroom, and Safe Scale-Down](06-scaling/08-auto-scaling.md)
-- [Multi-Region Architecture: Authority, Routing, and Failover](06-scaling/09-multi-region-architecture.md)
-- [Retries, Timeouts, and Hedging: Deadline and Attempt Budgets](06-scaling/10-retries-timeouts-hedging.md)
-- [Cell-Based Architecture and Shuffle Sharding](06-scaling/11-cell-based-architecture.md)
+- [Horizontal vs Vertical Scaling](06-scaling/01-horizontal-vertical.md)
+- [DNS and Connection Management](06-scaling/02-dns-and-connection-management.md)
+- [Network Transport Internals](06-scaling/03-network-transport-internals.md)
+- [Load Balancing](06-scaling/04-load-balancing.md)
+- [CDN Architecture](06-scaling/05-cdn-architecture.md)
+- [Auto-Scaling: Delayed Feedback, Headroom, and Safe Scale-Down](06-scaling/06-auto-scaling.md)
+- [Rate Limiting: Admission Policy and Distributed Budgets](06-scaling/07-rate-limiting.md)
+- [Backpressure: Bounded Buffers, Flow Control, and Load Shedding](06-scaling/08-backpressure.md)
+- [Retries, Timeouts, and Hedging: Deadline and Attempt Budgets](06-scaling/09-retries-timeouts-hedging.md)
+- [Circuit Breakers: Dependency State and Concurrency Control](06-scaling/10-circuit-breakers.md)
+- [Database Sharding](06-scaling/11-database-sharding.md)
 - [Multi-Tenant Isolation and Tenant Lifecycle Architecture](06-scaling/12-multi-tenancy.md)
-- [DNS and Connection Management](06-scaling/13-dns-and-connection-management.md)
-- [Network Transport Internals](06-scaling/14-network-transport-internals.md)
+- [Cell-Based Architecture and Shuffle Sharding](06-scaling/13-cell-based-architecture.md)
+- [Multi-Region Architecture: Authority, Routing, and Failover](06-scaling/14-multi-region-architecture.md)
 
-### Part 7: Real-Time Systems
-- [Client Delivery Transports](07-real-time/01-polling.md)
-- [WebRTC Media Systems](07-real-time/05-webrtc.md)
-- [Presence as Derived Multi-Session State](07-real-time/06-presence.md)
-- [Collaborative Document Replication and CRDT Sync Engines](07-real-time/07-crdts-collaborative-editing.md)
+### Part 7: Service Connectivity and APIs
+- [API Design and Evolution](07-service-mesh/01-api-design-patterns.md)
+- [Service Discovery and Control-Plane State](07-service-mesh/02-service-discovery.md)
+- [Edge Gateway and API Mediation](07-service-mesh/03-api-gateway.md)
+- [Service Mesh Data and Control Planes](07-service-mesh/04-sidecar-pattern.md)
 
-### Part 8: Case Studies
-- [Twitter/X Timelines: Evidence, Inference, and Reference Design](08-case-studies/01-twitter.md)
-- [Instagram: Evidence, Inference, and a Media-System Reference Design](08-case-studies/02-instagram.md)
-- [Uber: Evidence, Inference, and a Real-Time Marketplace Reference Design](08-case-studies/03-uber.md)
-- [Netflix: Evidence, Inference, and a Streaming Reference Design](08-case-studies/04-netflix.md)
-- [Slack: Evidence, Inference, and a Durable Real-Time Messaging Reference Design](08-case-studies/05-slack.md)
-- [Stripe: Designing a Correct Payment State Machine](08-case-studies/06-stripe.md)
-- [Dropbox: Convergent File Sync over Immutable Content](08-case-studies/07-dropbox.md)
-- [Discord: Hot-Key Isolation for Text, Presence, and Voice](08-case-studies/08-discord.md)
-- [Google Maps: Versioned Geospatial Data, Tiles, Routing, and ETA](08-case-studies/09-google-maps.md)
-- [WhatsApp: End-to-End Encrypted Multi-Device Messaging](08-case-studies/10-whatsapp.md)
-- [Figma System Design](08-case-studies/11-figma.md)
-- [Cloudflare System Design](08-case-studies/12-cloudflare.md)
-- [LLM Inference Platforms: Serving Tokens at Planetary Scale](08-case-studies/13-llm-inference-platforms.md)
+### Part 8: Real-Time Systems
+- [Client Delivery Transports](08-real-time/01-polling.md)
+- [WebRTC Media Systems](08-real-time/02-webrtc.md)
+- [Presence as Derived Multi-Session State](08-real-time/03-presence.md)
+- [Collaborative Document Replication and CRDT Sync Engines](08-real-time/04-crdts-collaborative-editing.md)
 
-### Part 9: Whitepapers
-- [MapReduce (OSDI 2004): Evidence-First Paper Analysis](09-whitepapers/01-mapreduce.md)
-- [Dynamo (SOSP 2007): Evidence-First Paper Analysis](09-whitepapers/02-dynamo.md)
-- [Bigtable (OSDI 2006): Evidence-First Paper Analysis](09-whitepapers/03-bigtable.md)
-- [Spanner (OSDI 2012): Evidence-First Paper Analysis](09-whitepapers/04-spanner.md)
-- [TAO (USENIX ATC 2013): Evidence-First Paper Analysis](09-whitepapers/05-tao.md)
-- [Kafka (NetDB 2011): Evidence-First Paper Analysis](09-whitepapers/06-kafka.md)
-- [Raft (USENIX ATC 2014): Evidence-First Paper Analysis](09-whitepapers/07-raft.md)
-- [Chubby (OSDI 2006): Evidence-First Paper Analysis](09-whitepapers/08-chubby.md)
-- [Amazon Aurora (SIGMOD 2017): Evidence-First Paper Analysis](09-whitepapers/09-aurora.md)
-- [CockroachDB (SIGMOD 2020): Evidence-First Paper Analysis](09-whitepapers/10-cockroachdb.md)
-- [Zanzibar: Google's Consistent, Global Authorization System](09-whitepapers/11-zanzibar.md)
-- [Monarch: Google's Planet-Scale In-Memory Time Series Database](09-whitepapers/12-monarch.md)
-- [FoundationDB: A Distributed, Unbundled, Transactional Key-Value Store](09-whitepapers/13-foundationdb.md)
-- [Amazon DynamoDB (2022): Predictability as the Product](09-whitepapers/14-dynamodb-2022.md)
-- [Attention Is All You Need: The Transformer](09-whitepapers/15-attention-transformers.md)
+### Part 9: Workflow & Job Systems
+- [Workflow System Fundamentals](09-workflow-job-systems/01-workflow-system-fundamentals.md)
+- [Background Jobs and Worker Pools](09-workflow-job-systems/02-background-jobs-worker-pools.md)
+- [Leases, Heartbeats, and Recovery](09-workflow-job-systems/03-leases-heartbeats-recovery.md)
+- [Effect Commit Protocols for Workflows](09-workflow-job-systems/04-retry-idempotency-compensation.md)
+- [Distributed Scheduling and Timer Services](09-workflow-job-systems/05-distributed-cron-scheduling.md)
+- [Priority, Fairness, and Backpressure](09-workflow-job-systems/06-priority-fairness-backpressure.md)
+- [Durable Execution and Workflow Engines](09-workflow-job-systems/07-durable-execution-workflow-engines.md)
+- [DAG Orchestration](09-workflow-job-systems/08-dag-orchestration.md)
+- [Workflow Observability and Replay](09-workflow-job-systems/09-workflow-observability-replay.md)
 
-### Part 10: Security
-- [Authentication Systems](10-security/01-authentication-fundamentals.md)
-- [OAuth 2.0 and OpenID Connect](10-security/02-oauth2-openid-connect.md)
-- [JOSE and JSON Web Token Verification](10-security/03-jwt-tokens.md)
-- [API Threat Boundaries and Abuse Resistance](10-security/04-api-security.md)
-- [Zero-Trust Service and Workload Architecture](10-security/05-zero-trust-architecture.md)
-- [Cryptographic Key and Data-Protection Architecture](10-security/06-encryption.md)
-- [Authorization at Scale](10-security/07-authorization-patterns.md)
-- [Threat Modeling and Abuse Case Engineering](10-security/08-threat-modeling-and-abuse-cases.md)
-- [DDoS Defense Architecture](10-security/09-ddos-defense.md)
-- [Passkeys and Phishing-Resistant Authentication](10-security/10-passkeys-and-phishing-resistant-authentication.md)
-- [OAuth 2.1 and High-Assurance Authorization Profiles](10-security/11-oauth-security-profiles.md)
-- [Workload and Agent Identity Delegation](10-security/12-workload-and-agent-identity.md)
-- [Identity Lifecycle and Continuous Access Evaluation](10-security/13-identity-lifecycle-and-continuous-access.md)
-- [Verifiable Credentials and Selective Disclosure](10-security/14-verifiable-credentials-and-selective-disclosure.md)
+### Part 10: Data Pipelines
+- [Batch Execution: DAGs, Shuffle, and Safe Reprocessing](10-data-pipelines/01-batch-processing.md)
+- [Stream Execution: Time, State, Recovery, and Backpressure](10-data-pipelines/02-stream-processing.md)
+- [Change Data Capture: Snapshot, Tail, Apply, and Repair](10-data-pipelines/03-change-data-capture.md)
+- [Lakehouse Table Formats: Snapshots, Commits, and Maintenance](10-data-pipelines/04-lakehouse-table-formats.md)
+- [Analytical Query Engines](10-data-pipelines/05-analytical-query-engines.md)
 
-### Part 11: Observability and Operations
-- [Distributed Tracing and Telemetry Pipelines](11-observability/01-distributed-tracing.md)
-- [Metrics Systems and Monitoring](11-observability/02-metrics-monitoring.md)
-- [Production Logging Architecture](11-observability/03-logging.md)
-- [Alert Evaluation and Notification](11-observability/04-alerting.md)
-- [SLOs and Error-Budget Control](11-observability/05-slos-error-budgets.md)
-- [FinOps and Cost Engineering](11-observability/06-finops-cost-engineering.md)
-- [Incident Command and Learning](11-observability/07-incident-management.md)
-- [Performance Engineering and Profiling](11-observability/08-performance-engineering-and-profiling.md)
-- [Resilience Testing and Fault Injection](11-observability/09-resilience-testing-and-fault-injection.md)
+### Part 11: Search Systems
+- [Search Index Architecture and Internals](11-search-systems/01-inverted-indexes.md)
+- [Lexical Query Execution](11-search-systems/02-full-text-search.md)
+- [Vector Retrieval Systems](11-search-systems/03-vector-search.md)
+- [Ranking and Evaluation Systems](11-search-systems/04-ranking-algorithms.md)
+- [Geospatial Indexing](11-search-systems/05-geospatial-indexing.md)
+- [Typeahead and Autocomplete](11-search-systems/06-typeahead-autocomplete.md)
 
-### Part 12: Service Connectivity and APIs
-- [Service Discovery and Control-Plane State](12-service-mesh/01-service-discovery.md)
-- [Edge Gateway and API Mediation](12-service-mesh/02-api-gateway.md)
-- [Service Mesh Data and Control Planes](12-service-mesh/03-sidecar-pattern.md)
-- [API Design and Evolution](12-service-mesh/04-api-design-patterns.md)
+### Part 12: Security
+- [Threat Modeling and Abuse Case Engineering](12-security/01-threat-modeling-and-abuse-cases.md)
+- [Authentication Systems](12-security/02-authentication-fundamentals.md)
+- [Passkeys and Phishing-Resistant Authentication](12-security/03-passkeys-and-phishing-resistant-authentication.md)
+- [OAuth 2.0 and OpenID Connect](12-security/04-oauth2-openid-connect.md)
+- [JOSE and JSON Web Token Verification](12-security/05-jwt-tokens.md)
+- [OAuth 2.1 and High-Assurance Authorization Profiles](12-security/06-oauth-security-profiles.md)
+- [Authorization at Scale](12-security/07-authorization-patterns.md)
+- [Identity Lifecycle and Continuous Access Evaluation](12-security/08-identity-lifecycle-and-continuous-access.md)
+- [Verifiable Credentials and Selective Disclosure](12-security/09-verifiable-credentials-and-selective-disclosure.md)
+- [Cryptographic Key and Data-Protection Architecture](12-security/10-encryption.md)
+- [Zero-Trust Service and Workload Architecture](12-security/11-zero-trust-architecture.md)
+- [Workload and Agent Identity Delegation](12-security/12-workload-and-agent-identity.md)
+- [API Threat Boundaries and Abuse Resistance](12-security/13-api-security.md)
+- [DDoS Defense Architecture](12-security/14-ddos-defense.md)
 
-### Part 13: Data Pipelines
-- [Batch Execution: DAGs, Shuffle, and Safe Reprocessing](13-data-pipelines/01-batch-processing.md)
-- [Stream Execution: Time, State, Recovery, and Backpressure](13-data-pipelines/02-stream-processing.md)
-- [Analytical Query Engines](13-data-pipelines/03-analytical-query-engines.md)
-- [Change Data Capture: Snapshot, Tail, Apply, and Repair](13-data-pipelines/04-change-data-capture.md)
-- [Lakehouse Table Formats: Snapshots, Commits, and Maintenance](13-data-pipelines/05-lakehouse-table-formats.md)
+### Part 13: Observability and Operations
+- [Metrics Systems and Monitoring](13-observability/01-metrics-monitoring.md)
+- [Production Logging Architecture](13-observability/02-logging.md)
+- [Distributed Tracing and Telemetry Pipelines](13-observability/03-distributed-tracing.md)
+- [SLOs and Error-Budget Control](13-observability/04-slos-error-budgets.md)
+- [Alert Evaluation and Notification](13-observability/05-alerting.md)
+- [Incident Command and Learning](13-observability/06-incident-management.md)
+- [Performance Engineering and Profiling](13-observability/07-performance-engineering-and-profiling.md)
+- [Resilience Testing and Fault Injection](13-observability/08-resilience-testing-and-fault-injection.md)
+- [FinOps and Cost Engineering](13-observability/09-finops-cost-engineering.md)
 
-### Part 14: Search Systems
-- [Search Index Architecture and Internals](14-search-systems/01-inverted-indexes.md)
-- [Lexical Query Execution](14-search-systems/02-full-text-search.md)
-- [Vector Retrieval Systems](14-search-systems/03-vector-search.md)
-- [Ranking and Evaluation Systems](14-search-systems/04-ranking-algorithms.md)
-- [Geospatial Indexing](14-search-systems/05-geospatial-indexing.md)
-- [Typeahead and Autocomplete](14-search-systems/06-typeahead-autocomplete.md)
+### Part 14: Deployment
+- [Compute Platform and Scheduling Architecture](14-deployment/01-compute-platform-scheduling.md)
+- [Software Delivery Control Planes and GitOps Reconciliation](14-deployment/02-cicd-gitops.md)
+- [Progressive Delivery and Deployment Strategies](14-deployment/03-deployment-strategies.md)
+- [Feature-Flag Control Planes](14-deployment/04-feature-flags.md)
+- [Database Schema Migrations](14-deployment/05-database-migrations.md)
+- [Service and Platform Migration](14-deployment/06-migration-strategies.md)
+- [Disaster Recovery and Data Reconstruction](14-deployment/07-disaster-recovery.md)
 
-### Part 15: Deployment
-- [Progressive Delivery and Deployment Strategies](15-deployment/01-deployment-strategies.md)
-- [Feature-Flag Control Planes](15-deployment/02-feature-flags.md)
-- [Database Schema Migrations](15-deployment/03-database-migrations.md)
-- [Software Delivery Control Planes and GitOps Reconciliation](15-deployment/04-cicd-gitops.md)
-- [Disaster Recovery and Data Reconstruction](15-deployment/05-disaster-recovery.md)
-- [Service and Platform Migration](15-deployment/06-migration-strategies.md)
-- [Compute Platform and Scheduling Architecture](15-deployment/07-compute-platform-scheduling.md)
+### Part 15: Production Readiness and Governance
+- [Design Documents and Architecture Decision Records](15-production-readiness/01-design-documents-and-decision-records.md)
+- [Architecture Review and Technical Governance](15-production-readiness/02-architecture-review-and-governance.md)
+- [Verification Strategy for Distributed Systems](15-production-readiness/03-verification-strategy-for-distributed-systems.md)
+- [Third-Party Dependency and Supply Chain Architecture](15-production-readiness/04-third-party-dependencies-and-supply-chain.md)
+- [Data Retention and Compliance Engineering](15-production-readiness/05-data-retention-and-compliance-engineering.md)
 
 ### Part 16: ML Systems
 - [ML System Fundamentals](16-ml-systems/01-ml-system-fundamentals.md)
-- [Feature Stores](16-ml-systems/02-feature-stores.md)
-- [Model Serving](16-ml-systems/03-model-serving.md)
-- [Model Monitoring](16-ml-systems/04-model-monitoring.md)
+- [Label and Ground-Truth Systems](16-ml-systems/02-label-ground-truth-systems.md)
+- [Dataset Management and Versioning](16-ml-systems/03-dataset-management-versioning.md)
+- [Feature Stores](16-ml-systems/04-feature-stores.md)
 - [Training Pipelines](16-ml-systems/05-training-pipelines.md)
-- [Model Deployment and Rollouts](16-ml-systems/06-model-deployment-rollouts.md)
-- [Recommendation Systems](16-ml-systems/07-recommendation-systems.md)
-- [Online Experiments](16-ml-systems/08-online-experiments.md)
-- [ML Risk and Governance](16-ml-systems/09-ml-risk-governance.md)
-- [Label and Ground-Truth Systems](16-ml-systems/10-label-ground-truth-systems.md)
-- [Dataset Management and Versioning](16-ml-systems/11-dataset-management-versioning.md)
-- [Offline Evaluation and Metric Design](16-ml-systems/12-offline-evaluation-metrics.md)
-- [Model Registry and ML Metadata](16-ml-systems/13-model-registry-metadata.md)
-- [ML Capacity and Cost Planning](16-ml-systems/14-ml-capacity-cost-planning.md)
-- [Distributed Training Internals](16-ml-systems/15-distributed-training-internals.md)
-- [Continual Learning and Model Freshness](16-ml-systems/16-continual-learning-model-freshness.md)
-- [Embedding Tables and Sparse Model Infrastructure](16-ml-systems/17-embedding-tables-sparse-models.md)
+- [Distributed Training Internals](16-ml-systems/06-distributed-training-internals.md)
+- [Embedding Tables and Sparse Model Infrastructure](16-ml-systems/07-embedding-tables-sparse-models.md)
+- [Offline Evaluation and Metric Design](16-ml-systems/08-offline-evaluation-metrics.md)
+- [Model Registry and ML Metadata](16-ml-systems/09-model-registry-metadata.md)
+- [Model Serving](16-ml-systems/10-model-serving.md)
+- [Model Deployment and Rollouts](16-ml-systems/11-model-deployment-rollouts.md)
+- [Online Experiments](16-ml-systems/12-online-experiments.md)
+- [Model Monitoring](16-ml-systems/13-model-monitoring.md)
+- [Continual Learning and Model Freshness](16-ml-systems/14-continual-learning-model-freshness.md)
+- [Recommendation Systems](16-ml-systems/15-recommendation-systems.md)
+- [ML Capacity and Cost Planning](16-ml-systems/16-ml-capacity-cost-planning.md)
+- [ML Risk and Governance](16-ml-systems/17-ml-risk-governance.md)
 
 ### Part 17: LLM Systems
-- [LLM Agent Fundamentals](17-llm-systems/01-agent-fundamentals.md)
-- [Agent Orchestration Patterns](17-llm-systems/02-orchestration-patterns.md)
-- [Multi-Agent Systems](17-llm-systems/03-multi-agent-systems.md)
-- [Retrieval-Augmented Generation Systems](17-llm-systems/04-rag-patterns.md)
-- [LLM Infrastructure](17-llm-systems/05-llm-infrastructure.md)
-- [Prompt Engineering](17-llm-systems/06-prompt-engineering.md)
-- [Fine-Tuning Patterns](17-llm-systems/07-fine-tuning-patterns.md)
-- [Context Management](17-llm-systems/08-context-management.md)
+- [LLM Infrastructure](17-llm-systems/01-llm-infrastructure.md)
+- [GPU Inference Internals](17-llm-systems/02-gpu-inference-internals.md)
+- [Prompt Engineering](17-llm-systems/03-prompt-engineering.md)
+- [Context Management](17-llm-systems/04-context-management.md)
+- [Retrieval-Augmented Generation Systems](17-llm-systems/05-rag-patterns.md)
+- [Fine-Tuning Patterns](17-llm-systems/06-fine-tuning-patterns.md)
+- [LLM Evaluation and Observability](17-llm-systems/07-llm-evaluation.md)
+- [LLM Agent Fundamentals](17-llm-systems/08-agent-fundamentals.md)
 - [Harness Engineering](17-llm-systems/09-harness-engineering.md)
-- [LLM Evaluation and Observability](17-llm-systems/10-llm-evaluation.md)
-- [GPU Inference Internals](17-llm-systems/11-gpu-inference-internals.md)
+- [Agent Orchestration Patterns](17-llm-systems/10-orchestration-patterns.md)
+- [Multi-Agent Systems](17-llm-systems/11-multi-agent-systems.md)
 - [Agent Inference: Serving Multi-Step LLM Workloads](17-llm-systems/12-agent-inference.md)
 
-### Part 18: Workflow & Job Systems
-- [Workflow System Fundamentals](18-workflow-job-systems/01-workflow-system-fundamentals.md)
-- [Background Jobs and Worker Pools](18-workflow-job-systems/02-background-jobs-worker-pools.md)
-- [Distributed Scheduling and Timer Services](18-workflow-job-systems/03-distributed-cron-scheduling.md)
-- [Durable Execution and Workflow Engines](18-workflow-job-systems/04-durable-execution-workflow-engines.md)
-- [DAG Orchestration](18-workflow-job-systems/05-dag-orchestration.md)
-- [Effect Commit Protocols for Workflows](18-workflow-job-systems/06-retry-idempotency-compensation.md)
-- [Priority, Fairness, and Backpressure](18-workflow-job-systems/07-priority-fairness-backpressure.md)
-- [Leases, Heartbeats, and Recovery](18-workflow-job-systems/08-leases-heartbeats-recovery.md)
-- [Workflow Observability and Replay](18-workflow-job-systems/09-workflow-observability-replay.md)
+### Part 18: Always-On Agents
+- [Always-On Agents: The Standing Process Model](18-always-on-agents/01-always-on-agent-fundamentals.md)
+- [Wake Sources, Mailboxes, and Scheduling](18-always-on-agents/02-wake-triggers-scheduling.md)
+- [The Session Log and Durable Runtime](18-always-on-agents/03-session-log-durable-runtime.md)
+- [Memory Lifecycle for Standing Agents](18-always-on-agents/04-memory-lifecycle.md)
+- [Standing Authority and Containment](18-always-on-agents/05-standing-authority-containment.md)
+- [Attention, Evaluation, and Operations](18-always-on-agents/06-attention-evaluation-operations.md)
 
 ### Part 19: Engineering Systems for Coding Agents
 - [Coding Agent Platform Fundamentals](19-compound-engineering/01-compound-engineering-fundamentals.md)
@@ -343,28 +328,45 @@ Each case study starts from a product you can use today and works back to the me
 - [Verification and Governance for Agentic Change](19-compound-engineering/05-quality-engineering-with-ai-agents.md)
 - [Parallel Development and Integration](19-compound-engineering/06-compound-development-workflows.md)
 
-### Part 20: Production Readiness and Governance
-- [Design Documents and Architecture Decision Records](20-production-readiness/01-design-documents-and-decision-records.md)
-- [Architecture Review and Technical Governance](20-production-readiness/02-architecture-review-and-governance.md)
-- [Third-Party Dependency and Supply Chain Architecture](20-production-readiness/03-third-party-dependencies-and-supply-chain.md)
-- [Verification Strategy for Distributed Systems](20-production-readiness/04-verification-strategy-for-distributed-systems.md)
-- [Data Retention and Compliance Engineering](20-production-readiness/05-data-retention-and-compliance-engineering.md)
+### Part 20: Whitepapers
+- [MapReduce (OSDI 2004): Evidence-First Paper Analysis](20-whitepapers/01-mapreduce.md)
+- [Dynamo (SOSP 2007): Evidence-First Paper Analysis](20-whitepapers/02-dynamo.md)
+- [Bigtable (OSDI 2006): Evidence-First Paper Analysis](20-whitepapers/03-bigtable.md)
+- [Spanner (OSDI 2012): Evidence-First Paper Analysis](20-whitepapers/04-spanner.md)
+- [TAO (USENIX ATC 2013): Evidence-First Paper Analysis](20-whitepapers/05-tao.md)
+- [Kafka (NetDB 2011): Evidence-First Paper Analysis](20-whitepapers/06-kafka.md)
+- [Raft (USENIX ATC 2014): Evidence-First Paper Analysis](20-whitepapers/07-raft.md)
+- [Chubby (OSDI 2006): Evidence-First Paper Analysis](20-whitepapers/08-chubby.md)
+- [Amazon Aurora (SIGMOD 2017): Evidence-First Paper Analysis](20-whitepapers/09-aurora.md)
+- [CockroachDB (SIGMOD 2020): Evidence-First Paper Analysis](20-whitepapers/10-cockroachdb.md)
+- [Zanzibar: Google's Consistent, Global Authorization System](20-whitepapers/11-zanzibar.md)
+- [Monarch: Google's Planet-Scale In-Memory Time Series Database](20-whitepapers/12-monarch.md)
+- [FoundationDB: A Distributed, Unbundled, Transactional Key-Value Store](20-whitepapers/13-foundationdb.md)
+- [Amazon DynamoDB (2022): Predictability as the Product](20-whitepapers/14-dynamodb-2022.md)
+- [Attention Is All You Need: The Transformer](20-whitepapers/15-attention-transformers.md)
 
-### Part 21: Reference Designs
-- [URL Shortener: Identifier Allocation and the Redirect Path](21-reference-designs/01-url-shortener.md)
-- [Notification Delivery Platform: Preferences, Fan-Out, and Provider Semantics](21-reference-designs/02-notification-delivery.md)
-- [Web Crawler: Frontier, Politeness, and Freshness](21-reference-designs/03-web-crawler.md)
-- [Ad Click Aggregation: Event Time, Deduplication, and Reconciliation](21-reference-designs/04-ad-click-aggregation.md)
-- [Ticketing and Inventory Reservation: Holds, Contention, and Fair Admission](21-reference-designs/05-ticketing-inventory-reservation.md)
-- [Order Matching Engine: Sequencing, Determinism, and Replay](21-reference-designs/06-order-matching-engine.md)
+### Part 21: Case Studies
+- [Twitter/X Timelines: Evidence, Inference, and Reference Design](21-case-studies/01-twitter.md)
+- [Instagram: Evidence, Inference, and a Media-System Reference Design](21-case-studies/02-instagram.md)
+- [Uber: Evidence, Inference, and a Real-Time Marketplace Reference Design](21-case-studies/03-uber.md)
+- [Netflix: Evidence, Inference, and a Streaming Reference Design](21-case-studies/04-netflix.md)
+- [Slack: Evidence, Inference, and a Durable Real-Time Messaging Reference Design](21-case-studies/05-slack.md)
+- [Stripe: Designing a Correct Payment State Machine](21-case-studies/06-stripe.md)
+- [Dropbox: Convergent File Sync over Immutable Content](21-case-studies/07-dropbox.md)
+- [Discord: Hot-Key Isolation for Text, Presence, and Voice](21-case-studies/08-discord.md)
+- [Google Maps: Versioned Geospatial Data, Tiles, Routing, and ETA](21-case-studies/09-google-maps.md)
+- [WhatsApp: End-to-End Encrypted Multi-Device Messaging](21-case-studies/10-whatsapp.md)
+- [Figma System Design](21-case-studies/11-figma.md)
+- [Cloudflare System Design](21-case-studies/12-cloudflare.md)
+- [LLM Inference Platforms: Serving Tokens at Planetary Scale](21-case-studies/13-llm-inference-platforms.md)
 
-### Part 22: Always-On Agents
-- [Always-On Agents: The Standing Process Model](22-always-on-agents/01-always-on-agent-fundamentals.md)
-- [Wake Sources, Mailboxes, and Scheduling](22-always-on-agents/02-wake-triggers-scheduling.md)
-- [The Session Log and Durable Runtime](22-always-on-agents/03-session-log-durable-runtime.md)
-- [Memory Lifecycle for Standing Agents](22-always-on-agents/04-memory-lifecycle.md)
-- [Standing Authority and Containment](22-always-on-agents/05-standing-authority-containment.md)
-- [Attention, Evaluation, and Operations](22-always-on-agents/06-attention-evaluation-operations.md)
+### Part 22: Reference Designs
+- [URL Shortener: Identifier Allocation and the Redirect Path](22-reference-designs/01-url-shortener.md)
+- [Notification Delivery Platform: Preferences, Fan-Out, and Provider Semantics](22-reference-designs/02-notification-delivery.md)
+- [Web Crawler: Frontier, Politeness, and Freshness](22-reference-designs/03-web-crawler.md)
+- [Ad Click Aggregation: Event Time, Deduplication, and Reconciliation](22-reference-designs/04-ad-click-aggregation.md)
+- [Ticketing and Inventory Reservation: Holds, Contention, and Fair Admission](22-reference-designs/05-ticketing-inventory-reservation.md)
+- [Order Matching Engine: Sequencing, Determinism, and Replay](22-reference-designs/06-order-matching-engine.md)
 
 <!-- BOOK_TOC:END -->
 

@@ -1,5 +1,7 @@
 # Isolation Levels
 
+> Two transactions each checked that a doctor was still on call, and both went off shift. Neither saw an error. Which isolation level would have stopped them?
+
 ## TL;DR
 
 An isolation level is a contract over **which transaction histories may commit**. It is not a performance preset and its SQL name is not portable across engines. Start from a business invariant, construct the smallest concurrent history that could break it, and then choose a mechanism that rejects that history: a declarative constraint, one atomic statement, an explicit lock, compare-and-swap, snapshot isolation, or serializability. Multi-version concurrency control makes readers cheap by retaining old versions; it does not by itself make a history serializable. Lock-based serializability waits, serializable snapshot isolation aborts dangerous dependency structures, and both move cost into different queues. Every application using an abort-capable level needs a bounded retry protocol, a way to resolve ambiguous commits, and a boundary that keeps external effects out of speculative transactions.
@@ -12,7 +14,7 @@ A database that ran one transaction at a time would have no isolation problems a
 
 The difficulty for the engineer is that the interference a level permits is defined in terms of anomalies with unfamiliar names, and the same level name means different things in different databases. Two applications that each read a balance, check that it is sufficient, and write a withdrawal can both succeed and overdraw the account under an isolation level whose name suggests nothing of the kind. The purpose of this chapter is to make it possible to say, for a given invariant in a given database, which level actually protects it.
 
-Transaction isolation governs concurrent access to one transactional authority through snapshots, locks, serialization conflicts, and retry behavior. The neighboring problems belong to neighboring chapters. [ACID Transactions](01-acid-transactions.md) covers atomic commit, durability, WAL, and recovery. [Consistency Models](04-consistency-models.md) covers client-visible guarantees across replicas and services. [Distributed Transactions](../02-distributed-databases/07-distributed-transactions.md) covers commit across multiple resource managers, and [Idempotency](08-idempotency.md) covers duplicate requests and durable effect deduplication.
+Transaction isolation governs concurrent access to one transactional authority through snapshots, locks, serialization conflicts, and retry behavior. The neighboring problems belong to neighboring chapters. [ACID Transactions](01-acid-transactions.md) covers atomic commit, durability, WAL, and recovery. [Consistency Models](05-consistency-models.md) covers client-visible guarantees across replicas and services. [Distributed Transactions](../03-distributed-databases/10-distributed-transactions.md) covers commit across multiple resource managers, and [Idempotency](07-idempotency.md) covers duplicate requests and durable effect deduplication.
 
 Those boundaries matter. A serializable transaction on a lagging read replica can be internally serializable yet stale. A linearizable key-value operation can be individually current yet fail a multi-row invariant. “The database is ACID” does not specify either behavior.
 
@@ -228,7 +230,7 @@ for attempt in 0..max_attempts:
       outcome unknown  -> resolve by command id before any retry
 ```
 
-The **outcome-unknown** branch is different from a serialization abort. A connection can disappear after the commit record becomes durable but before the response arrives. Blindly repeating the business action can double-charge or double-reserve. Give each logical command a stable identifier, store it with the result under a uniqueness constraint, and query that record to resolve the outcome. See [Idempotency](08-idempotency.md).
+The **outcome-unknown** branch is different from a serialization abort. A connection can disappear after the commit record becomes durable but before the response arrives. Blindly repeating the business action can double-charge or double-reserve. Give each logical command a stable identifier, store it with the result under a uniqueness constraint, and query that record to resolve the outcome. See [Idempotency](07-idempotency.md).
 
 Keep network calls, email, and irreversible device actions outside the speculative transaction. Persist intent in an outbox or workflow state, commit, then deliver the effect with its own idempotency key. Holding database locks while waiting on an external dependency couples two unrelated failure domains and makes tail latency the lock duration.
 
@@ -362,6 +364,6 @@ The correct level is selected per transaction class. One service can reasonably 
 ## Related Chapters
 
 - [ACID Transactions](01-acid-transactions.md): where isolation sits among the letters it is named after, and what the others cost
-- [Consistency Models](04-consistency-models.md): replica freshness is a different axis from history serializability, and conflating them causes outages
-- [Idempotency and Operation Identity](08-idempotency.md): retries belong to the transaction protocol, and idempotency decides how expensive they are
-- [Distributed Transactions](../02-distributed-databases/07-distributed-transactions.md): anomalies that move outside the coordinator when no single node sees every lock
+- [Consistency Models](05-consistency-models.md): replica freshness is a different axis from history serializability, and conflating them causes outages
+- [Idempotency and Operation Identity](07-idempotency.md): retries belong to the transaction protocol, and idempotency decides how expensive they are
+- [Distributed Transactions](../03-distributed-databases/10-distributed-transactions.md): anomalies that move outside the coordinator when no single node sees every lock
