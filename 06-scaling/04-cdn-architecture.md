@@ -286,7 +286,7 @@ If a 400 TiB PoP cache turns over 12%/hour, write rate is about 13.7 GiB/s befor
 
 One million tenants issuing 20 tag purges/day yields 231 purge records/s on average, but deployment bursts dominate. Tombstone retention must cover maximum edge outage plus log replay lag; otherwise an offline edge can return with pre-purge objects after the central tombstone vanished.
 
-## Specialized Failure Traces
+## Failure Traces
 
 ### Missing cache-key dimension leaks private content
 

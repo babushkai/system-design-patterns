@@ -283,7 +283,7 @@ For RabbitMQ, cancel the consumer to stop future deliveries, drain/ack current i
 
 Deployment capacity includes old and new pools concurrently, plus drain. Route only payload/handler versions a worker supports. Canary one job class/tenant, compare duration/error/effect evidence, then expand. Rollback retains the new payload decoder and any state transitions already emitted; an old binary that cannot read queued jobs is not a rollback.
 
-## Specialized Failure Traces
+## Failure Traces
 
 ### Prefetch expires before execution starts
 

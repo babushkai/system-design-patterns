@@ -186,76 +186,19 @@ Log richer evidence under access control using the request ID. Keep the public e
 
 ## Idempotency for Unsafe Operations
 
-Network ambiguity is unavoidable:
+A client whose create-payment response is lost cannot tell whether a retry is a duplicate or a recovery. An idempotency key names the logical operation so the server can tell. [Idempotency](../01-foundations/08-idempotency.md) covers the mechanism: key scope and request digest, the deduplication record's state machine, atomicity with the effect, retention, and multi-region authority. What belongs in the API design is the part of that contract the client can see.
 
-~~~text
-client sends create-payment
--> service commits payment
--> response is lost
--> client cannot know whether retry is duplicate or recovery
-~~~
+**Scope.** The key is unique within tenant, authenticated client, and operation, and it is bound to a canonical fingerprint of the request under a stated API behavior version. The same key with a different fingerprint returns a stable key-reuse conflict and never the earlier result.
 
-An idempotency key names one logical operation. Its scope must include every boundary that prevents accidental collision:
+**Ordering.** Validate and authenticate before claiming a key, or unauthenticated callers can exhaust the key store.
 
-~~~text
-tenant
-authenticated client or delegated principal class
-operation/route identity
-target resource where applicable
-idempotency key
-canonical semantic request fingerprint
-API behavior version
-~~~
+**In-progress behavior.** A duplicate that arrives while the original is executing either waits for a bounded, documented time or receives an explicit in-progress response.
 
-### Idempotency record state machine
+**Replay semantics.** The contract states whether a replay returns the original status and representation, the current representation with a replay marker, an operation resource, or a stable terminal problem. Deterministic validation and conflict outcomes are persisted when that stops a key from being reused with altered meaning; transient 5xx failures are not replayed forever unless the contract declares them terminal.
 
-~~~mermaid
-stateDiagram-v2
-    [*] --> Reserved: atomic claim
-    Reserved --> InProgress: execution starts
-    InProgress --> Succeeded: effect and replay result committed
-    InProgress --> FailedReplayable: terminal deterministic failure
-    InProgress --> Unknown: outcome cannot be established
-    Unknown --> Succeeded: reconciliation proves commit
-    Unknown --> FailedReplayable: reconciliation proves no effect
-    Succeeded --> Expired: retention contract ends
-    FailedReplayable --> Expired: retention contract ends
-~~~
+**Retention.** Records are kept for at least the published client retry horizon plus the operation's ambiguity window, and the horizon is part of the documentation.
 
-Correct behavior:
-
-1. Validate and authenticate before claiming a key that could be used for storage exhaustion.
-2. Canonicalize the semantic request and compute a fingerprint.
-3. Atomically reserve the scoped key or read the existing record.
-4. If the same key has a different fingerprint, return a stable key-reuse conflict.
-5. If an operation is in progress, return or wait under a bounded documented behavior.
-6. Commit the business effect and durable idempotency outcome in one transaction where possible.
-7. Replay the documented result for later identical requests.
-8. Retain the record for at least the published client retry horizon and operation ambiguity window.
-
-When effect and dedupe store cannot share a transaction, use a domain-unique operation ID in the effect store plus reconciliation. “Write effect, then write cache” still duplicates if the process fails between writes.
-
-### Replay semantics
-
-Document whether replay returns:
-
-- the original status and representation;
-- the current resource representation with an explicit replay marker;
-- an operation resource; or
-- a stable terminal problem.
-
-Do not replay transient 5xx failures forever unless the contract declares them terminal for the logical operation. Do persist deterministic validation or conflict outcomes when doing so prevents a key from being reused with altered meaning.
-
-### Cross-region idempotency
-
-If the same client can fail over across regions, the idempotency scope needs a shared or deterministically routed authority. Region-local stores allow duplicate effects unless:
-
-- the operation is pinned to a home region;
-- the business store has a global uniqueness constraint;
-- a globally consistent key claim is used; or
-- the accepted duplicate bound is explicit and the effect is compensatable.
-
-The complete storage and retry pattern is in [Idempotency](../01-foundations/08-idempotency.md).
+**Failover.** If a client can fail over across regions, the contract says which of the multi-region designs applies, since region-local key stores permit duplicate effects.
 
 ## Optimistic Concurrency and Preconditions
 

@@ -275,7 +275,7 @@ Effective rate is constrained by source IOPS, target write/redo, replicas, lock 
 
 Temporary space must survive original table + ghost/new index + logs/undo + sort/temp + backups/snapshots + free-space threshold. Disk-full during DDL can threaten the database, not merely the migration.
 
-## Specialized Failure Traces
+## Failure Traces
 
 ### “Instant” DDL queues the application
 

@@ -180,7 +180,7 @@ Add waiter watches, acquire/release writes, audit events, and recovery bursts. A
 
 Capacity planning must include the hottest resource key, not just total acquisitions. Ten million cold locks do not offset one global lock at 99% utilization.
 
-## Specialized Failure Traces
+## Failure Traces
 
 ### Paused holder writes after regrant
 

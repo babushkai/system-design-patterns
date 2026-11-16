@@ -103,7 +103,7 @@ WAL makes dirty-page writeback safe only if the log describing a page change rea
 
 Copy-on-write B-trees take another route: write a new leaf and every changed ancestor, then atomically publish a new root. Readers pin immutable roots and need almost no page latching. The cost is path-copy write amplification, delayed garbage collection, and often restricted writer concurrency. This is attractive for read-heavy embedded stores and filesystem metadata, not an automatic OLTP replacement.
 
-## Specialized Failure Traces
+## Failure Traces
 
 ### Crash makes a split page unreachable
 

@@ -163,22 +163,9 @@ The design has separable choices:
 
 ## The KV-Cache Ledger
 
-For standard multi-head or grouped-query attention, an illustrative per-sequence KV byte count is:
+[GPU Inference Internals](../17-llm-systems/11-gpu-inference-internals.md) derives the per-token size of the KV cache: two tensors per layer, per KV head, per head dimension, at the stored precision. For the platform, the number that matters is the per-sequence total.
 
-$$
-B_{KV}=2 \times L \times H_{KV} \times d_{head} \times b \times n
-$$
-
-where:
-
-- $2$ represents keys and values,
-- $L$ is layer count,
-- $H_{KV}$ is the number of KV heads,
-- $d_{head}$ is head dimension,
-- $b$ is bytes per stored element,
-- $n$ is cached tokens.
-
-**Illustrative, not a provider fact:** with $L=80$, $H_{KV}=8$, $d_{head}=128$, BF16 ($b=2$), and $n=32{,}768$:
+**Illustrative, not a provider fact:** an 80-layer model with 8 KV heads of dimension 128 in BF16 stores about 320 KB per token, so a sequence with 32,768 cached tokens holds:
 
 $$
 B_{KV}=10{,}737{,}418{,}240\ \text{bytes}=10\ \text{GiB per active sequence}
@@ -317,7 +304,7 @@ See [LLM Evaluation](../17-llm-systems/10-llm-evaluation.md) for model-quality g
 | Local SSD | Dense and cheap | Read amplification, wear, and millisecond tails |
 | Remote tier | Fleet-wide sharing and durability options | Network congestion, privacy boundary, coordination |
 
-## Design-Review Questions
+## Design Review Questions
 
 1. What exact arrival, input-length, output-length, and prefix-reuse distributions drive capacity?
 2. Which objective is published: TTFT, TPOT, end-to-end latency, or goodput? If it is latency-based, which percentile does it constrain?

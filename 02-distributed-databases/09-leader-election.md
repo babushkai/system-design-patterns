@@ -91,21 +91,9 @@ Bully and ring algorithms can choose a deterministic candidate in a reliable, fu
 
 ## Fencing the Old Leader
 
-Consider a lease grant returning generation 100 to A and the next grant returning 101 to B. Every state-changing request includes the generation:
+Every state-changing request from a leader carries the generation returned with its grant, and the protected resource rejects any generation lower than the highest it has accepted. The check and the effect must be one atomic operation, and the token orders writes only within its own scope; [Distributed Locks](../01-foundations/09-distributed-locks.md) gives the protocol and its rules. Two points are specific to leadership.
 
-```text
-resource.write(command, generation)
-
-if generation < greatest_generation_seen:
-    reject STALE_LEADER
-else:
-    durably advance greatest_generation_seen as required
-    apply command
-```
-
-The validation and update must be atomic with respect to the protected operation. A check in application memory followed by an unfenced write has a time-of-check/time-of-use race.
-
-Tokens are scoped. If a job writes database X and object store Y, both must reject old generations; seeing token 101 at X does not teach Y about it. A newly elected leader may need to establish a fence at each resource before publishing itself active.
+A leader usually writes to more than one resource, and seeing generation 101 at database X teaches object store Y nothing. A newly elected leader may therefore need to establish its fence at each resource before it publishes itself as active.
 
 If a third-party API cannot validate generations, alternatives are weaker or more expensive:
 
@@ -138,7 +126,7 @@ On failed renewal, observed higher term, quorum loss, or explicit transfer, stop
 
 For maintenance, catch the target up first, stop or bound new work, transfer/elect a higher generation, establish its barrier, and only then demote the old leader. A transfer protocol can reduce downtime, but “zero gap” and “zero overlap” are different goals. Fencing makes a brief physical overlap safe; clients retry through a brief service gap.
 
-## Concrete Failure Traces
+## Failure Traces
 
 ### Process pause outlives its lease
 

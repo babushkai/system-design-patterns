@@ -28,18 +28,15 @@ Simon Willison's *lethal trifecta* names the dangerous combination for data thef
 
 The first decision is whose name is on the request. The convenient answer, running the agent with the user's own token, is the wrong one for three reasons. Downstream services cannot tell the user's actions from the agent's, so they cannot apply different policy or produce a useful audit. The token carries everything the user can do, when the mandate covers a small part of it. And revoking the agent means revoking the user.
 
-The agent is a workload with its own identity, as [Workload & Agent Identity](../10-security/12-workload-and-agent-identity.md) describes, and it acts for its principal through *delegation*. OAuth token exchange (RFC 8693) expresses this directly. The agent presents its own credential and evidence of the user's grant, and receives a token whose subject is the user and whose `act` claim names the agent. A resource server that reads both can enforce "this user, through this agent, for these scopes" and log it that way.
+The agent is a workload with its own identity and acts for its principal through *delegation*: OAuth token exchange (RFC 8693) yields a token whose subject is the user and whose `act` claim names the agent, so a resource server can enforce and log "this user, through this agent, for these scopes." [Workload & Agent Identity](../10-security/12-workload-and-agent-identity.md) covers the mechanism, along with audience binding, sender constraint, and the Model Context Protocol's authorization rules. A standing agent changes three things about how it is applied.
 
-| Property | Mechanism | Why it matters for a standing agent |
-|---|---|---|
-| Own identity | Workload credential issued to the agent runtime, such as a SPIFFE identity or a signed workload token | Actions are attributable and separately revocable |
-| Delegated, not copied | Token exchange with subject and actor claims | Downstream policy can distinguish and narrow agent actions |
-| Narrow | Scopes derived from the mandate's `authority` block; audience bound per resource (RFC 8707) | A token for the calendar is useless at the bank |
-| Short-lived | Access tokens of minutes, minted per run | A leaked token expires before it is useful |
-| Sender-constrained | DPoP (RFC 9449) or mutual TLS binding | A token copied out of a log or a sandbox cannot be replayed elsewhere |
-| Attenuating | Each hop to a subagent or downstream agent can only reduce scope | A chain of delegation never ends with more authority than it began with |
+**Scope comes from the mandate, not from the task.** There is no user request to derive scopes from, so the token broker derives them from the mandate's `authority` block and binds each token to one resource (RFC 8707). A token for the calendar is useless at the bank.
 
-The standards for this are in motion. The Model Context Protocol's 2026 revisions treat servers as OAuth resource servers that publish protected-resource metadata (RFC 9728) and must reject tokens not issued for them, and add enterprise-managed authorization through an identity provider. The IETF WIMSE working group is drafting how agents should combine workload identity with OAuth, including authorization chaining across domains and translating a user's confirmation into an authorization event. These are worth following, and none of them should be waited for. The properties in the table can be built today from token exchange and audience restriction.
+**Tokens are minted per run.** The agent lives for months and its access tokens live for minutes. Nothing long-lived sits in the runtime between wakes, so a credential copied out of a sandbox or a log expires before it is useful, and sender constraint (DPoP, RFC 9449, or mutual TLS) stops it from being replayed elsewhere in the meantime.
+
+**Delegation only attenuates.** Each hop to a subagent or a downstream agent can reduce scope and never add to it, so a chain that runs unattended for weeks cannot end with more authority than the mandate granted.
+
+The standards are still moving. The IETF WIMSE working group is drafting how agents should combine workload identity with OAuth, including authorization chaining across domains and translating a user's confirmation into an authorization event. That work is worth following and should not be waited for: all three properties can be built today from token exchange and audience restriction.
 
 ### Consent Without Presence
 

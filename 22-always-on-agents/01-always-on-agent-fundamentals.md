@@ -156,9 +156,9 @@ A standing agent's time divides into three states: *dormant*, with no process an
 
 The runtime scales to zero. Per-agent processes, warm containers, and held connections are affordable for ten agents and impossible for a hundred thousand. State that must survive dormancy goes in the log, the memory store, or a workspace snapshot.
 
-Activation latency is part of the reaction-time budget. Rebuilding context from the log, restoring a workspace, and paying an uncached prefill are all charged to the first turn after a long sleep. Provider prompt caches typically expire after minutes to an hour of disuse, so an agent that wakes every thirty minutes may pay full input price on every wake while an agent that wakes every four pays a fraction. [Agent Inference](../17-llm-systems/12-agent-inference.md) covers the serving side of that trade.
+Activation latency is part of the reaction-time budget. Rebuilding context from the log, restoring a workspace, and paying an uncached prefill are all charged to the first turn after a long sleep, and chapter 6 shows how wake cadence interacts with the provider's prompt-cache lifetime.
 
-Most wakes should not reach the large model at all. A deterministic filter or a small model can answer "has anything changed that this mandate cares about" for a hundredth of the price, and the design goal is that the expensive path runs only when there is work.
+Most wakes should not reach the large model at all. Chapter 2 builds the gate that answers "has anything changed that this mandate cares about" for a hundredth of the price, so that the expensive path runs only when there is work.
 
 ## Service Levels for a Standing Agent
 

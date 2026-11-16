@@ -142,8 +142,6 @@ If an existing key has a different digest, return a conflict. Replaying the old 
 
 The digest guards against a failure that looks harmless and is not. Suppose a client sends a payment of 40 under some key, and later, because of a bug or a reused variable, sends a payment of 55 under the same key. A server that only checks whether it has seen the key will reply that the operation already succeeded, and the client will record that 55 was charged when in fact 40 was. The server has told the truth about the first request and the client has drawn a false conclusion about the second. Comparing a digest of the request's meaning makes this case detectable, and a conflict response turns a silent accounting error into a visible bug.
 
-Canonicalization exists so that the digest compares meaning and not bytes. Two SDKs in different languages may serialize the same request with fields in a different order or numbers in a different format, and a digest of the raw bytes would treat those as different requests. Defining the canonical form precisely, and testing it across every client implementation, is what makes the comparison trustworthy.
-
 ---
 
 ## Deduplication State Machine

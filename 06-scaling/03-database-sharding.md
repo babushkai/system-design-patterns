@@ -238,7 +238,7 @@ A 9 TiB unit copied at an effective 180 MiB/s with `a=0.15` and `d=0.7` needs at
 
 Migration cost includes source reads, target writes, WAL retention, replication, validation reads, network egress, temporary duplicate storage, and operator attention. Budget and rate-limit it separately from foreground traffic.
 
-## Specialized Failure Traces
+## Failure Traces
 
 ### Stale router during cutover
 

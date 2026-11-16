@@ -146,7 +146,7 @@ Authorization can itself require consistency. Credential revocation, ownership t
 
 Observe required versus served frontier, replica apply position and age, wait/route/fallback counts, session-token size and rejection, authority term and lease evidence, stale-read age distribution, causal dependency queue, incomplete-operation outcomes, conflict backlog, and contract mode by endpoint and tenant. Measure semantic outcomes rather than calling every successful HTTP response “consistent.”
 
-## Specialized Failure Traces
+## Failure Traces
 
 ### Acknowledgement precedes the durable linearization point
 

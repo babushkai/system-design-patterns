@@ -395,7 +395,7 @@ Deployment frequency, lead time for changes, change failure, and restoration mea
 
 ---
 
-## Concrete Failure Traces
+## Failure Traces
 
 ### Under-keyed build cache promotes old code
 

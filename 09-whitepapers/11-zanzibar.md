@@ -230,7 +230,7 @@ Denormalizing every effective permission makes reads cheap but writes explode wi
 6. The paper does not benchmark open-source systems, public-cloud multitenancy, or policy languages added later.
 7. `Expand` returns a structural userset representation; enumerating every member of enormous groups remains undesirable.
 
-## Design-Review Questions
+## Design Review Questions
 
 1. What exact interleaving creates a “new enemy” in this product, and where is its freshness token persisted?
 2. Does every content read carry the minimum authorization snapshot, including caches and asynchronous jobs?

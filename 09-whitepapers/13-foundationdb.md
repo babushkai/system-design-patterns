@@ -205,7 +205,7 @@ The authors reported more than 0.5 million CloudKit disk-years without detected 
 6. Simulator confidence depends on model fidelity and controlled nondeterminism.
 7. Storage-server engine details in current releases may differ from the paper.
 
-## Design-Review Questions
+## Design Review Questions
 
 1. Which exact log acknowledgments make commit durable under each replication policy?
 2. Can a client accidentally omit a read-conflict range and violate its intended invariant?

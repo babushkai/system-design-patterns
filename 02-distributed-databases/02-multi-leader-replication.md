@@ -108,7 +108,7 @@ Take a consistent snapshot at source frontier `L`, restore it, then apply every 
 
 Schema changes use expand–migrate–contract. Readers and appliers first learn both encodings; producers then emit the new representation; old events and offline sites are drained or translated; only then may the old field disappear. Replication records keep an immutable schema identifier. The general compatibility rules live in [Data Encoding](../03-storage-engines/07-data-encoding.md), and large data backfills should follow the log-boundary discipline in [Change Data Capture](../13-data-pipelines/04-change-data-capture.md).
 
-## Specialized Failure Traces
+## Failure Traces
 
 ### Acknowledgement outruns durable capture
 

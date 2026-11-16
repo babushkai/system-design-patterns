@@ -455,7 +455,7 @@ Authorization joins can become query design. “List every object Alice can acce
 
 ---
 
-## Concrete Failure Traces
+## Failure Traces
 
 ### Hot monotonic partition
 

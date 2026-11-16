@@ -345,26 +345,13 @@ The right values come from the risk of the data and the tolerance of the user jo
 
 A bearer token works like cash, in that possession is the whole of the entitlement. Sender constraint binds the token to a cryptographic key, so that presenting it also requires proving possession of the key, and a token copied from a log or a proxy is inert.
 
-### mTLS-bound tokens
+Two mechanisms exist, and [OAuth 2.1 and High-Assurance Authorization Profiles](11-oauth-security-profiles.md) covers their proof formats and replay defenses in detail.
 
-The authorization server observes the client's certificate at the token endpoint and records its thumbprint in the token. The resource server then checks that the TLS connection on which the token arrives was established with the same certificate.
+**mTLS-bound tokens** record the thumbprint of the client certificate seen at the token endpoint, and the resource server checks that the token arrives on a connection established with the same certificate. The difficulty is operational. Applications rarely terminate TLS themselves, so the load balancer must convey the verified certificate identity in a header that a client cannot supply directly, and certificate rotation must overlap with token lifetimes.
 
-The mechanism is simple and its difficulties are operational:
+**DPoP** moves the proof into the application layer: each request carries a small JWT signed by the client's key, naming the method and URI. It survives TLS termination, which is why it suits browsers and mobile apps. In exchange it brings state for nonces and replay detection, exact agreement on the request URI after proxies have rewritten it, and sensitivity to clock differences.
 
-- TLS termination must preserve verified certificate identity;
-- certificate and token lifetimes/rotation overlap;
-- key scope must match client instance/fleet policy;
-- proxies cannot substitute arbitrary certificate headers.
-
-The first and last items are one problem seen from two sides. Applications rarely terminate TLS themselves, so the load balancer must tell the application which certificate it saw, typically in a header. If a client can supply that header directly, it can claim any certificate it likes.
-
-### DPoP
-
-DPoP moves the proof into the application layer. With each request the client sends a small JWT signed by its key, naming the HTTP method and URI and carrying a timestamp and unique identifier. The access token is associated with that key, and the resource server validates both.
-
-This survives TLS termination, which is why it suits browsers and mobile apps. In exchange it brings state for nonces and replay detection, the need to agree exactly on what the request URI was after any proxies have rewritten it, and sensitivity to clock differences. It also does not protect against a compromised client, since an attacker who controls the key can generate valid proofs.
-
-Sender constraint is worth its operational cost where bearer replay is a realistic threat, especially for public clients and high-value APIs.
+Neither protects against a compromised client, since an attacker who controls the key can generate valid proofs. Sender constraint is worth its operational cost where bearer replay is a realistic threat, especially for public clients and high-value APIs.
 
 ---
 

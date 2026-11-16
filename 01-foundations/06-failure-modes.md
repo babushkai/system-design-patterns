@@ -372,7 +372,7 @@ Fallbacks are real production paths. A stale cache, default policy, secondary pr
 
 ---
 
-## Concrete Failure Traces
+## Failure Traces
 
 ### The ambiguous payment timeout
 

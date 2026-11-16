@@ -117,7 +117,7 @@ At frontier `L`, establish a consistent base snapshot and begin retaining all la
 
 Shadow reads compare old and new paths without serving the new answer. Cut over by index version, not by mutating a name in place, so rollback is a metadata change while both builds remain maintained. To drop an index, first stop new query plans, wait out cursor and transaction leases, stop maintenance at a recorded frontier, then reclaim partitions. Database-wide migration patterns appear in [Database Schema Migrations](../15-deployment/03-database-migrations.md).
 
-## Specialized Failure Traces
+## Failure Traces
 
 ### Application dual-write creates a false negative
 

@@ -275,7 +275,7 @@ Do not deploy every cell from one unbounded global job or make cell startup requ
 
 A schema or protocol change spanning interacting cells needs compatibility across the entire mixed-version window. Cells reduce rollout blast radius; they do not remove compatibility requirements.
 
-## Specialized Failure Traces
+## Failure Traces
 
 ### Shared global dependency defeats containment
 
