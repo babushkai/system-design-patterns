@@ -127,6 +127,24 @@ A soak test runs months of simulated time, with consolidation and compaction inc
 
 Offline scores are a gate, and production is the measure. The signals available online are the principal's reactions: messages opened, approvals granted or denied, actions undone, explicit feedback, and budgets the owner raised or lowered. An action the user reverses is the closest thing a standing agent has to a labeled error. A sampled audit, in which a reviewer or a judge model reads a random selection of runs including silent ones, finds the missed actions that no reaction can reveal.
 
+## Evaluation Budget and Statistical Power
+
+Scenario replay costs little wall time because the virtual clock removes waiting, so the binding constraint on evaluation is statistical rather than computational. Two arms of a comparison need enough cases before either can be called better, and for a proportion that requirement is fixed by arithmetic rather than by ambition. At 80 percent power and a 5 percent significance level:
+
+| Baseline action recall | Cases per arm to detect | Drop detected |
+|---|---|---|
+| 92 percent | 130 | 12 points |
+| 92 percent | 325 | 7 points |
+| 92 percent | 881 | 4 points |
+
+A fifty-scenario golden set therefore sees collapses and nothing else: it can catch a fifteen-point regression with reasonable reliability and cannot see a four-point one at all. That is a fine thing to own deliberately and a bad thing to believe by accident, so name the suite for what it is. "Breakage detector" is honest; "we run evals before shipping" is not.
+
+The cost of doing this properly is smaller than teams fear. At 881 cases per arm, a comparison runs about 1,760 scenarios; at twenty-five turns each and the per-turn price from Economics, that is roughly USD 1,700, about a third of what this fleet spends running itself for a day. The scarce input is not compute but rubric authoring and labels, which is the argument for mining production session logs for scenarios rather than hand-writing them, and for reserving human authoring for the rare conditions that traffic does not supply.
+
+Silence needs the same treatment because it is measured by sampling, and sampling has a floor. This fleet skips about 921,600 wakes a day. To have a 95 percent chance of catching at least one wrong skip when the true error rate is 1 percent requires roughly 300 sampled skips; at 0.1 percent it requires about 3,000. Sampling 0.03 percent of skips costs near USD 11 a day in full turns and 0.1 percent near USD 36. A weekly audit of fifty runs cannot bound the miss rate below two percent no matter how carefully those fifty are read, which is worth saying in the meeting where someone proposes it.
+
+Attention has a budget that is not statistical at all, because it is spent out of a person's day. If owners tolerate roughly three escalations a day, then two hundred owners buy six hundred escalations across ten thousand agents: each agent may interrupt on about 6 percent of its days. Precision alone cannot protect that ceiling, since precision is a ratio and the budget is a count; the quantity to hold is escalations per owner per day, and new signal sources should be approved in the same review that prices their contribution to it.
+
 ## Observability
 
 The trace unit is the run. One trace spans the wake event, the gate decision, each model call and tool call, the policy decisions, memory reads and writes, and the outcome, and it carries the agent, mandate version, session, and model version as attributes. [Tracing & Telemetry Pipelines](../11-observability/01-distributed-tracing.md) applies unchanged. The OpenTelemetry generative-AI semantic conventions define attribute names for model and agent spans. They were still marked as in development at the time of writing, with the agent and tool spans the least settled, so pin the convention version and expect to migrate.
@@ -198,6 +216,30 @@ Report cost per useful outcome and not per token or per run. An agent that costs
 | Silent fleet failure | Scheduler fault stops wakes; dashboards look quiet | Independent expected-versus-actual check | Absence alerts outside the scheduler's failure domain |
 | Cost cliff | Cadence crosses the cache lifetime, or overhead grows | Cached fraction drops; tokens per wake rise | Stable prefix; cadence chosen with cache lifetime in mind |
 | Rollout regression in attention | New version interrupts more to finish more | Guardrail metrics by cohort | Attention metrics as rollout gates |
+
+## Incident Playbook
+
+Agent-fleet incidents arrive as complaints before they arrive as alerts, which means the first job is deciding whether the system is broken or merely wrong, because the second is not an engineering ticket.
+
+### An agent did something wrong and nobody was paged
+
+Establish whether an escalation existed and failed to send, or was never decided. The outbox answers this directly: a queued-but-unsent record means delivery, while an absent record means the attention policy chose silence. Only the first is an outage. For the second, read the decision record rather than retraining intuition, and check whether the condition was in the mandate at all; most "the agent should have told me" reports turn out to describe a mandate nobody wrote down. Do not lower escalation thresholds fleet-wide to answer one complaint, because that spends the interrupt budget of every owner to fix one owner's expectation. Verify by replaying the scenario with the rubric's must-act entry added and watching this agent escalate in it.
+
+### Owners started muting the agent
+
+Muting is the clearest possible evaluation signal and it arrives as a count: escalations per owner per day against the budget. When the count is over budget, the fix is subtraction, either dropping the least precise signal source or batching low-urgency classes into a digest. Do not add new signal types to improve precision, and do not invent quiet hours that merely delay delivery into a window where the same volume arrives at once. Verify by watching muted owners unmute on their own, which is the only confirmation that cannot be faked by a dashboard.
+
+### Scores are flat and users are complaining
+
+Flat aggregate scores during a complaint wave usually mean the measurement has stopped describing production. Check three things in order: slice scores by mandate and tenant, because an aggregate hides a cohort on fire; case provenance, because scenario sets go stale within weeks when they are not refreshed from current traffic; and the rubric's must-not-act list, which rots fastest since permissive rubrics score silence as success. Do not re-baseline the metric to agree with the complaints; that ends the argument and the ability to have it later. Verify by finding a production timeline that reproduces the complaint, adding it to the suite, and watching the suite fail before anything is fixed.
+
+### Cost doubled while quality stayed flat
+
+Read the soak trends before touching the model: tokens per wake, core memory size, pending timers, and wakes per agent-day. The usual causes are cache residency falling after a prefix change, always-loaded overhead growing one review at a time, and timer leaks adding a wake per agent per day, which on ten thousand agents is ten thousand wakes nobody scheduled. Do not cut the verbatim tail to save money; that is a correctness lever and it will be spent in an incident later. Verify by confirming cached fraction at turn start returned to its band and that action recall on the probe set held while spend fell.
+
+### Some agents regressed after a model or prompt upgrade
+
+Compare cohorts rather than rolling anything back globally, because the fleet is the only instrument that can attribute the regression and a global rollback destroys it. Hold the canary, revert the majority cohort, and check whether memory writes made under the new version read differently under the old one; if they do, the rollback needs version-tagged writes and not just a version flip. Do not average across cohorts to produce a single verdict, which is how a fleet convinces itself nothing happened while a tenth of its agents degrade. Verify by confirming the regressed slice returns to its band with the rest of the fleet unchanged.
 
 ## Decision Framework
 
