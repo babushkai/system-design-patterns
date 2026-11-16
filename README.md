@@ -37,17 +37,28 @@ Evidence labels used throughout the fieldbook:
 
 ## How to Read This Fieldbook
 
-The parts are grouped by role, not by difficulty. Pick an entry point, then follow links: every chapter is written to be read alone, with the terms it needs either defined in place or linked. The link graph is part of the build, so it cannot rot quietly: every chapter ends with a curated Related Chapters list that states why each neighbor follows from the page you just read, and no chapter ships that nothing else points to.
+The parts are grouped by role, not by difficulty. Pick an entry point, then follow links: every chapter is written to be read alone, with the terms it needs either defined in place or linked. The link graph is part of the build, so it cannot rot quietly: every chapter ends with a curated Related Chapters list that states why each neighbor follows from the page you just read, no chapter ships that nothing else points to, and no chapter is reachable only from the sidebar.
 
 | Parts | Role | How to read them |
 |---|---|---|
 | 1-7: [Foundations](01-foundations/01-acid-transactions.md) through [Real-Time](07-real-time/01-polling.md) | Mechanisms that every later chapter assumes | Read in order once, then keep as reference |
-| 8-9: [Case Studies](08-case-studies/01-twitter.md), [Whitepapers](09-whitepapers/01-mapreduce.md) | Evidence for the mechanisms above | Read beside the mechanism chapter that names the system, not as a tour of companies; the pairing tables below give those neighbors |
+| 8-9: [Case Studies](08-case-studies/01-twitter.md), [Whitepapers](09-whitepapers/01-mapreduce.md) | Evidence for the mechanisms above and below them | An interlude, not a queue: read beside the mechanism chapter that names the system, not as a tour of companies; the pairing tables below give those neighbors |
 | 10-15: [Security](10-security/01-authentication-fundamentals.md) through [Deployment](15-deployment/01-deployment-strategies.md) | Complete subsystems with their own failure models | Any order; each is one design surface |
 | 16-19: [ML](16-ml-systems/01-ml-system-fundamentals.md), [LLM](17-llm-systems/01-agent-fundamentals.md), [Workflow](18-workflow-job-systems/01-workflow-system-fundamentals.md), and [Agent Engineering](19-compound-engineering/01-compound-engineering-fundamentals.md) | Applied domains built on Parts 1-6 | Start with Part 1, then take a track |
 | 20: [Production Readiness](20-production-readiness/01-design-documents-and-decision-records.md) | The layer that turns a working design into an approved, verified, lawful one | Read when a design needs sign-off, a dependency needs an owner, or an audit needs evidence |
 | 21: [Reference Designs](21-reference-designs/01-url-shortener.md) | Complete designs for recurring problems, assembled from the mechanism chapters | Read after the mechanisms a design names; each one closes with the review questions to ask of your own version |
 | 22: [Always-On Agents](22-always-on-agents/01-always-on-agent-fundamentals.md) | Agents that hold a mandate for months and wake on events, timers, and schedules with nobody watching | Read after Parts 17 and 18; it assumes the agent loop and durable execution |
+
+### One pass, in order
+
+If you intend to read straight through rather than look things up, take the book in four moves:
+
+1. **Parts 1-7, in print order.** Each introduces what the next one uses. Where they reach ahead, it is a hand-off that names an owner ("detailed renewal timing belongs to Leader Election") rather than a term the page needs and does not define.
+2. **One subsystem from Parts 10-15**, whichever surface is yours. Each assumes the mechanisms and nothing else printed beside it, which is why they can be read in any order; where two surfaces meet (authorization and derived indexes, say) the page states the boundary instead of demanding the other chapter first.
+3. **Parts 8-9 as you go, not in one sitting.** They are evidence, and a good share of their evidence is about the subsystems in Parts 10-22: reading them as a block means reading ahead, reading them beside the chapter that names the system means finishing an argument you had already started.
+4. **Parts 16-22 as tracks**, starting from that part's own fundamentals chapter. Those parts are ordered by lifecycle stage and finish with deep dives, so chapter 1 maps the rest and the deep dive you need is worth taking out of order when the question is in front of you.
+
+When a chapter says another chapter "owns" something you do not have yet, that is a boundary being stated once instead of twice. Open the owner now if the question is yours, and later if it is not; the short version needed to finish the page is always on the page.
 
 ### Reading one chapter
 
