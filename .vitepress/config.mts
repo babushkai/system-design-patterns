@@ -1,6 +1,9 @@
 import type { HeadConfig } from 'vitepress'
 import { withMermaid } from 'vitepress-plugin-mermaid'
 import bookManifest from '../book.manifest.json'
+import redirects from './redirects.json'
+import { mkdirSync, writeFileSync, existsSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 // Shared with scripts/build_book_sources.py so site and PDF/EPUB diagrams use one palette.
 import mermaidTheme from './mermaid-theme.json'
 
@@ -66,6 +69,26 @@ export default withMermaid({
 
   // Generated-link integrity is checked after every production build.
   ignoreDeadLinks: true,
+
+  // Chapters were renumbered into reading order. Every former URL keeps working: the build
+  // writes a small redirect page at the old path that points at the chapter's new home.
+  buildEnd(siteConfig) {
+    for (const [from, to] of Object.entries(redirects as Record<string, string>)) {
+      if (from === to) continue
+      for (const prefix of ['', 'ja/']) {
+        const file = join(siteConfig.outDir, `${prefix}${from}.html`)
+        if (existsSync(file)) continue
+        const target = `/${prefix}${to}`
+        mkdirSync(dirname(file), { recursive: true })
+        writeFileSync(
+          file,
+          `<!doctype html><meta charset="utf-8"><title>Moved</title>` +
+            `<link rel="canonical" href="${target}"><meta http-equiv="refresh" content="0; url=${target}">` +
+            `<meta name="robots" content="noindex"><a href="${target}">This chapter has moved.</a>\n`
+        )
+      }
+    }
+  },
 
   head: [
     ['link', { rel: 'icon', type: 'image/svg+xml', sizes: 'any', href: '/favicon-book.svg' }],

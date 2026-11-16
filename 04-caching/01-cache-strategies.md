@@ -1,5 +1,7 @@
 # Cache Semantics and Economics
 
+> A cache made the page fast and then served a price that was two hours old. How much staleness did you agree to sell, and what did you get for it?
+
 ## TL;DR
 
 A cache is a disposable, incomplete, and potentially stale projection of an authoritative system. The design is not complete when a team chooses Redis, a TTL, or an eviction policy. It is complete when the team can state:
@@ -511,4 +513,4 @@ Use sampling for per-key telemetry; logging every key can create a new cost and 
 - [Cache Invalidation and Coherence](02-cache-invalidation.md): the write half of a promise this chapter is only allowed to state
 - [Distributed Cache Internals](03-distributed-caching.md): where the tiers stop being process-local and acquire their own failure domain
 - [Cache Stampede, Cold Start, and Warming](04-cache-stampede.md): what a miss costs when every client misses at the same moment
-- [CDN Architecture](../06-scaling/04-cdn-architecture.md): the same economics at internet scale, with egress replacing origin load as the constraint
+- [CDN Architecture](../06-scaling/05-cdn-architecture.md): the same economics at internet scale, with egress replacing origin load as the constraint

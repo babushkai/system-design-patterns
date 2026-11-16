@@ -1,5 +1,7 @@
 # Distributed Cache Internals
 
+> One cache node restarts and the database load triples. How do placement, replication, and eviction decide what a single failure costs?
+
 ## TL;DR
 
 A distributed cache is a sharded, replicated, memory-constrained data plane plus a routing and topology control plane. It scales only when keys distribute evenly, clients agree on ownership, one hot key cannot saturate a shard, and node loss does not send more misses to the origin than it can survive.
@@ -548,4 +550,4 @@ A benchmark on a warm, healthy, single node proves none of these properties.
 - [Cache Semantics and Economics](01-cache-strategies.md): the serving semantics this routing layer has to preserve one key at a time
 - [Cache Invalidation and Coherence](02-cache-invalidation.md): coherence across tiers is hard in one process and harder across a shard ring
 - [Cache Stampede, Cold Start, and Warming](04-cache-stampede.md): a shared pool turns a thundering herd into a per-key single-flight problem
-- [Database Sharding](../06-scaling/03-database-sharding.md): slot maps, rebalancing, and hot shards, with a cache instead of a table behind them
+- [Database Sharding](../06-scaling/11-database-sharding.md): slot maps, rebalancing, and hot shards, with a cache instead of a table behind them

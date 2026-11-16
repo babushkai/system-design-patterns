@@ -1,5 +1,7 @@
 # Repository Architecture for Safe Agentic Change
 
+> A change that a human reviews in ten minutes takes the agent an hour of searching to locate. What about the repository made it that hard to find?
+
 ## TL;DR
 
 A repository is safe to change when a bounded requirement maps to a bounded, discoverable change surface, contracts exclude invalid combinations, verification observes important behavior, and failures can be isolated, reverted, or migrated. Measure dependency structure, change history, verification selectivity, rollback behavior, and escaped defects; universal file-size, token, coverage, or file-count thresholds do not establish safety.
@@ -99,7 +101,7 @@ Make the command path and projection path visibly different in code. A search in
 
 Aggregate together state that must satisfy an invariant atomically. Keep unbounded or independently owned data outside and model the coordination explicitly. The correct boundary is driven by contention, access patterns, and failure semantics, not a fixed class or file size.
 
-When a transaction crosses systems, encode the workflow, idempotency, and compensation in a durable orchestrator rather than hiding it behind a method that appears synchronous. Cross-link to [Distributed Transactions](../02-distributed-databases/07-distributed-transactions.md), [Outbox](../05-messaging/07-outbox-pattern.md), and [Durable Execution](../18-workflow-job-systems/04-durable-execution-workflow-engines.md) instead of reimplementing those mechanisms locally.
+When a transaction crosses systems, encode the workflow, idempotency, and compensation in a durable orchestrator rather than hiding it behind a method that appears synchronous. Cross-link to [Distributed Transactions](../03-distributed-databases/10-distributed-transactions.md), [Outbox](../05-messaging/05-outbox-pattern.md), and [Durable Execution](../09-workflow-job-systems/07-durable-execution-workflow-engines.md) instead of reimplementing those mechanisms locally.
 
 ---
 
@@ -204,7 +206,7 @@ secret classification
 observability label policy
 ```
 
-Feature flags are temporary compatibility mechanisms, operational controls, experiments, or entitlements; those categories have different owners and lifetimes. The architecture should make flag evaluation deterministic for the chosen subject and version, preserve a kill path, and remove obsolete branches after rollout. See [Feature Flags](../15-deployment/02-feature-flags.md) for the control-plane design.
+Feature flags are temporary compatibility mechanisms, operational controls, experiments, or entitlements; those categories have different owners and lifetimes. The architecture should make flag evaluation deterministic for the chosen subject and version, preserve a kill path, and remove obsolete branches after rollout. See [Feature Flags](../14-deployment/04-feature-flags.md) for the control-plane design.
 
 ---
 
@@ -322,15 +324,15 @@ Design repositories so intent, authority, dependency, evidence, and migration ar
 - [Bazel: Hermeticity](https://bazel.build/basics/hermeticity)
 - [Google Engineering Practices: Code Review](https://google.github.io/eng-practices/review/)
 - [Semantic Versioning 2.0.0](https://semver.org/)
-- [Database Schema Migrations](../15-deployment/03-database-migrations.md)
-- [Service and Platform Migration](../15-deployment/06-migration-strategies.md)
-- [Data Modeling for Access Patterns](../02-distributed-databases/10-data-modeling.md)
+- [Database Schema Migrations](../14-deployment/05-database-migrations.md)
+- [Service and Platform Migration](../14-deployment/06-migration-strategies.md)
+- [Data Modeling for Access Patterns](../03-distributed-databases/01-data-modeling.md)
 
 ---
 
 ## Related Chapters
 
-- [Database Schema Migrations](../15-deployment/03-database-migrations.md): agents change schemas, which turns a migration policy into a guardrail
-- [Transactional Outbox, Inbox, and CDC Publication](../05-messaging/07-outbox-pattern.md): a module boundary an agent can violate in one entirely plausible commit
+- [Database Schema Migrations](../14-deployment/05-database-migrations.md): agents change schemas, which turns a migration policy into a guardrail
+- [Transactional Outbox, Inbox, and CDC Publication](../05-messaging/05-outbox-pattern.md): a module boundary an agent can violate in one entirely plausible commit
 - [Verification and Governance for Agentic Change](05-quality-engineering-with-ai-agents.md): architecture defines the verification surface that agents will try to skip
 - [Repository Context and Policy Plane](03-agent-context-engineering.md): structure is context: conventions written where an agent will actually read them

@@ -1,5 +1,7 @@
 # Cache Stampede, Cold Start, and Warming
 
+> A popular key expired and ten thousand requests went to rebuild it at the same instant. Why does a cache make this failure worse, and what breaks the herd?
+
 ## TL;DR
 
 A stampede is overload caused by many requests discovering the same missing or unusable cache state before one protected refill completes. A cold start is the same mechanism across many keys. Warming is controlled refill before or during traffic.
@@ -712,8 +714,8 @@ A useful alert detects cache miss growth **and** protected-origin stress, or a r
 
 ## Related Chapters
 
-- [Instagram](../08-case-studies/02-instagram.md): a cold rendition after viral media, where warming is a capacity event
-- [Rate Limiting](../06-scaling/05-rate-limiting.md): the same overload question seen from the client instead of the cache
+- [Instagram](../21-case-studies/02-instagram.md): a cold rendition after viral media, where warming is a capacity event
+- [Rate Limiting](../06-scaling/07-rate-limiting.md): the same overload question seen from the client instead of the cache
 - [Cache Semantics and Economics](01-cache-strategies.md): the serving semantics that decide whether a miss is allowed to block
 - [Distributed Cache Internals](03-distributed-caching.md): where the dogpile actually forms: shared pools, key distribution, and eviction
-- [Backpressure](../06-scaling/07-backpressure.md): the same overload question with the cache as the bounded resource
+- [Backpressure](../06-scaling/08-backpressure.md): the same overload question with the cache as the bounded resource

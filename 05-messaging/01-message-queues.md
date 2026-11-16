@@ -1,10 +1,12 @@
 # Message Queue Architecture
 
+> The consumer crashed halfway through a message. Is the message gone, redelivered, or stuck? The answer is the whole design of a queue.
+
 ## TL;DR
 
 A message queue is a durable ownership-transfer mechanism for asynchronous work. Producers append an intent; one worker at a time receives a temporary claim; completion becomes final only when the queue records an acknowledgement. The core design problem is managing that state under crashes, overload, rebalancing, and retention, not choosing an SDK call.
 
-A queue contract must specify enqueue, claim and visibility, acknowledgement, partitioning, worker flow control, backlog, retention, and capacity. [Message Ordering](03-message-ordering.md) owns sequence guarantees, [Delivery Guarantees](04-delivery-guarantees.md) owns duplicate/loss boundaries, and [Poison-Message Quarantine](08-dead-letter-queues.md) owns failed-message repair.
+A queue contract must specify enqueue, claim and visibility, acknowledgement, partitioning, worker flow control, backlog, retention, and capacity. [Message Ordering](03-message-ordering.md) owns sequence guarantees, [Delivery Guarantees](04-delivery-guarantees.md) owns duplicate/loss boundaries, and [Poison-Message Quarantine](06-dead-letter-queues.md) owns failed-message repair.
 
 ## Workload and Contract
 
@@ -250,7 +252,7 @@ Control-plane changes (retention reduction, purge, replay, quota, consumer ident
 
 ## Decision Framework
 
-Use a work queue when one logical worker should perform each item and buffering isolates producers from consumers. Use pub-sub when multiple independent subscriptions need the same event. Use a durable workflow engine when work contains timers, multi-step state, compensation, or human waits; see [Durable Execution](../18-workflow-job-systems/04-durable-execution-workflow-engines.md).
+Use a work queue when one logical worker should perform each item and buffering isolates producers from consumers. Use pub-sub when multiple independent subscriptions need the same event. Use a durable workflow engine when work contains timers, multi-step state, compensation, or human waits; see [Durable Execution](../09-workflow-job-systems/07-durable-execution-workflow-engines.md).
 
 Choose the queue design by answering:
 
@@ -279,9 +281,9 @@ Choose the queue design by answering:
 
 ## Related Chapters
 
-- [Kafka](../09-whitepapers/06-kafka.md): where the log-as-abstraction argument was first made at scale
-- [Twitter/X Timelines](../08-case-studies/01-twitter.md): fan-out on write, and the viral publish that turns one event into a million writes
+- [Kafka](../20-whitepapers/06-kafka.md): where the log-as-abstraction argument was first made at scale
+- [Twitter/X Timelines](../21-case-studies/01-twitter.md): fan-out on write, and the viral publish that turns one event into a million writes
 - [Delivery Guarantees and Effect Boundaries](04-delivery-guarantees.md): what a broker can promise about one message, and what it leaves to you
-- [Backpressure](../06-scaling/07-backpressure.md): a queue is a buffer with an opinion: what happens when it fills
-- [Background Jobs and Worker Pools](../18-workflow-job-systems/02-background-jobs-worker-pools.md): the consumer side, where a queue becomes a work system with retries and leases
-- [Notification Delivery Platform](../21-reference-designs/02-notification-delivery.md): queues per stage and per channel applied to an irreversible external effect
+- [Backpressure](../06-scaling/08-backpressure.md): a queue is a buffer with an opinion: what happens when it fills
+- [Background Jobs and Worker Pools](../09-workflow-job-systems/02-background-jobs-worker-pools.md): the consumer side, where a queue becomes a work system with retries and leases
+- [Notification Delivery Platform](../22-reference-designs/02-notification-delivery.md): queues per stage and per channel applied to an irreversible external effect

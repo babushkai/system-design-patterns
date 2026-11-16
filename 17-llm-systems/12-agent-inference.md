@@ -1,5 +1,7 @@
 # Agent Inference: Serving Multi-Step LLM Workloads
 
+> An agent session is forty model calls with long pauses between them, each reusing the same growing prefix. Why does that break a scheduler built for chat?
+
 ## TL;DR
 
 Agent inference is a session-level workload, not a collection of independent chat calls. A task alternates model turns with tools and approvals; its context usually grows; most prior tokens are prefix-reusable; siblings may share a base prefix; and orchestrator fan-out converts one logical decision into a burst of concurrent prefills. The fleet must optimize task goodput under deadline, spend, and memory constraints, not request throughput in isolation.
@@ -314,15 +316,15 @@ Begin with canonical session state and task-level measurement. Add affinity only
 - [Mooncake: A KVCache-centric Disaggregated Architecture for LLM Serving](https://arxiv.org/abs/2407.00079): distributed KV cache and disaggregated serving
 - [Fast Inference from Transformers via Speculative Decoding](https://arxiv.org/abs/2211.17192): exact speculative decoding
 - [Orca: A Distributed Serving System for Transformer-Based Generative Models](https://www.usenix.org/conference/osdi22/presentation/yu): iteration-level scheduling
-- [Context Management](./08-context-management.md): context construction, compaction, and token economics
-- [GPU Inference Internals](./11-gpu-inference-internals.md): phase rooflines, KV footprint, kernels, and parallelism
-- [LLM Infrastructure](./05-llm-infrastructure.md): admission, routing, streaming, rollout, and regional serving architecture
+- [Context Management](./04-context-management.md): context construction, compaction, and token economics
+- [GPU Inference Internals](./02-gpu-inference-internals.md): phase rooflines, KV footprint, kernels, and parallelism
+- [LLM Infrastructure](./01-llm-infrastructure.md): admission, routing, streaming, rollout, and regional serving architecture
 
 ---
 
 ## Related Chapters
 
-- [GPU Inference Internals](11-gpu-inference-internals.md): the scheduler-level detail this workload has to be designed around
-- [Context Management](08-context-management.md): a session is a context budget, and its history is what you are caching
-- [LLM Infrastructure](05-llm-infrastructure.md): the platform boundary where sessions, retries, and tenant fairness live
-- [Model Serving](../16-ml-systems/03-model-serving.md): single-request serving, still the right baseline to compare against
+- [GPU Inference Internals](02-gpu-inference-internals.md): the scheduler-level detail this workload has to be designed around
+- [Context Management](04-context-management.md): a session is a context budget, and its history is what you are caching
+- [LLM Infrastructure](01-llm-infrastructure.md): the platform boundary where sessions, retries, and tenant fairness live
+- [Model Serving](../16-ml-systems/10-model-serving.md): single-request serving, still the right baseline to compare against

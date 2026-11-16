@@ -1,5 +1,7 @@
 # Coding Agent Platform Fundamentals
 
+> The coding agent writes a thousand lines an hour. Is the codebase getting easier or harder to change? What has to surround the agent for the gains to compound?
+
 ## TL;DR
 
 A coding-agent platform is a multi-tenant workflow system, not a prompt wrapper around a code-generating model. It confines an untrusted probabilistic planner within deterministic contracts for tasks, capabilities, effects, isolation, budgets, evidence, and approval. Every effect must be attributable; replay must not duplicate irreversible actions; state must not cross task or tenant boundaries; cancellation must eventually stop new effects; and policy alone may promote a patch.
@@ -67,7 +69,7 @@ Policy inputs should be versioned artifacts: repository rules, protected paths, 
 
 ### Context plane
 
-The context plane assembles the task specification, selected repository content, tool results, durable summaries, and prior decisions. It owns provenance and visibility: each context item records its source revision, tenant, trust class, selection reason, and lifetime. The detailed mechanics belong to [Context Management](../17-llm-systems/08-context-management.md); repository instruction and policy artifacts belong to [Repository Context and Policy](./03-agent-context-engineering.md).
+The context plane assembles the task specification, selected repository content, tool results, durable summaries, and prior decisions. It owns provenance and visibility: each context item records its source revision, tenant, trust class, selection reason, and lifetime. The detailed mechanics belong to [Context Management](../17-llm-systems/04-context-management.md); repository instruction and policy artifacts belong to [Repository Context and Policy](./03-agent-context-engineering.md).
 
 Context is an input, not authority. Text found in source code, issue bodies, generated files, web pages, or tool output can be relevant while remaining untrusted. It must not expand capabilities or override policy merely because the model read it.
 
@@ -136,7 +138,7 @@ stateDiagram-v2
     Conflict --> Queued: new pinned target
 ```
 
-Transitions use compare-and-swap on `state_version` or an equivalent transaction. A late worker cannot move a cancelled task back to running. Scheduler claims carry a lease and fencing token; every authoritative write checks the token. This applies the workflow mechanics from [Leases, Heartbeats, and Recovery](../18-workflow-job-systems/08-leases-heartbeats-recovery.md) rather than reinventing them in the agent layer.
+Transitions use compare-and-swap on `state_version` or an equivalent transaction. A late worker cannot move a cancelled task back to running. Scheduler claims carry a lease and fencing token; every authoritative write checks the token. This applies the workflow mechanics from [Leases, Heartbeats, and Recovery](../09-workflow-job-systems/03-leases-heartbeats-recovery.md) rather than reinventing them in the agent layer.
 
 ### Attempt identity versus task identity
 
@@ -369,8 +371,8 @@ Keep proposal authority separate from release authority regardless of scale. The
 - [OWASP Agentic AI: Threats and Mitigations](https://genai.owasp.org/resource/agentic-ai-threats-and-mitigations/)
 - [Git Worktree Documentation](https://git-scm.com/docs/git-worktree)
 - [Harness Engineering](../17-llm-systems/09-harness-engineering.md)
-- [Durable Execution](../18-workflow-job-systems/04-durable-execution-workflow-engines.md)
-- [Workflow Observability and Replay](../18-workflow-job-systems/09-workflow-observability-replay.md)
+- [Durable Execution](../09-workflow-job-systems/07-durable-execution-workflow-engines.md)
+- [Workflow Observability and Replay](../09-workflow-job-systems/09-workflow-observability-replay.md)
 
 ---
 
@@ -378,5 +380,5 @@ Keep proposal authority separate from release authority regardless of scale. The
 
 - [Harness Engineering](../17-llm-systems/09-harness-engineering.md): the harness discipline this platform standardizes across teams
 - [Tool and Runtime Contracts for Coding Agents](02-coding-agent-tool-design.md): tools are the surface where agent capability becomes measurable at all
-- [Durable Execution and Workflow Engines](../18-workflow-job-systems/04-durable-execution-workflow-engines.md): agent runs need exactly the durability guarantees this chapter assumes
+- [Durable Execution and Workflow Engines](../09-workflow-job-systems/07-durable-execution-workflow-engines.md): agent runs need exactly the durability guarantees this chapter assumes
 - [Verification and Governance for Agentic Change](05-quality-engineering-with-ai-agents.md): verification is the constraint that decides how much autonomy you can grant

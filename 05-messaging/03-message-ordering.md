@@ -1,5 +1,7 @@
 # Message Ordering
 
+> "Account closed" arrived before "account opened." Both were delivered exactly as sent. Where did the order go, and what would it cost to keep it?
+
 ## TL;DR
 
 Ordering is a scoped relation between events, not a property that a broker can provide “globally” without cost or qualification. A useful design names which events must be comparable, who assigns their sequence, what happens at gaps, and how epochs prevent an old writer from extending a sequence after failover.
@@ -83,7 +85,7 @@ Many applications need only explicit dependencies: carry predecessor event IDs, 
 
 ### Global total order
 
-A global log assigns every event a comparable sequence. It simplifies deterministic replication and audit but centralizes sequencing/consensus, increases cross-region latency, and imposes order between unrelated events. Use it only when the invariant truly spans the entire scope. The consensus mechanics are covered in [Consensus Algorithms](../02-distributed-databases/08-consensus-algorithms.md).
+A global log assigns every event a comparable sequence. It simplifies deterministic replication and audit but centralizes sequencing/consensus, increases cross-region latency, and imposes order between unrelated events. Use it only when the invariant truly spans the entire scope. The consensus mechanics are covered in [Consensus Algorithms](../03-distributed-databases/06-consensus-algorithms.md).
 
 ## Sequence Assignment and Writer Epochs
 
@@ -97,7 +99,7 @@ only if current_version = expected_version
 publish versions expected_version+1 ... expected_version+n
 ```
 
-The [event-store transaction](05-event-sourcing.md) prevents concurrent commands from claiming the same next version; downstream ordering should reuse that version rather than create another counter.
+The [event-store transaction](07-event-sourcing.md) prevents concurrent commands from claiming the same next version; downstream ordering should reuse that version rather than create another counter.
 
 On producer retry, an idempotent append protocol can map `(producer_id, epoch, producer_sequence)` to the prior result. This prevents retry reordering inside that producer session. It does not order independent producers or guarantee an external effect; those are separate contracts.
 
@@ -323,7 +325,7 @@ Then answer:
 
 ## Related Chapters
 
-- [Kafka](../09-whitepapers/06-kafka.md): a partition is the ordering domain and the offset is the sequence number
+- [Kafka](../20-whitepapers/06-kafka.md): a partition is the ordering domain and the offset is the sequence number
 - [Delivery Guarantees and Effect Boundaries](04-delivery-guarantees.md): ordering without deduplication still permits duplicates, which surprises most consumers
-- [Collaborative Document Replication and CRDT Sync Engines](../07-real-time/07-crdts-collaborative-editing.md): convergence as the alternative when a total order is not available at any price
-- [Idempotency and Operation Identity](../01-foundations/08-idempotency.md): the practical substitute for exactly-once, and the only one a broker can verify
+- [Collaborative Document Replication and CRDT Sync Engines](../08-real-time/04-crdts-collaborative-editing.md): convergence as the alternative when a total order is not available at any price
+- [Idempotency and Operation Identity](../01-foundations/07-idempotency.md): the practical substitute for exactly-once, and the only one a broker can verify

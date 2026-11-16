@@ -1,5 +1,7 @@
 # Parallel Development and Integration
 
+> Five agents are working in the same repository at once. How do they stay out of each other's way, and who merges?
+
 ## TL;DR
 
 Parallel coding agents turn software delivery into a scheduling and merge problem. Safe parallelism requires a dependency graph, explicit ownership of files and semantic invariants, isolated workspaces pinned to known revisions, bounded child budgets, durable handoffs, and an integration queue that revalidates every candidate against the actual target. The speedup is limited by the serial fraction (specification, shared interfaces, verification, conflict resolution, and approval) and by downstream capacity. More workers can increase wall-clock time when they duplicate context, contend on the same state, overload tests, or create semantic conflicts that textual merge tools cannot see.
@@ -357,15 +359,15 @@ Optimize for the shortest safe path from an accepted requirement to verified, in
 - [Amdahl’s Law](https://dl.acm.org/doi/10.1145/1465482.1465560)
 - [Bors-NG: A Merge Bot for GitHub Pull Requests](https://bors.tech/documentation/)
 - [Google Engineering Practices: Small CLs](https://google.github.io/eng-practices/review/developer/small-cls.html)
-- [Workflow and Job System Fundamentals](../18-workflow-job-systems/01-workflow-system-fundamentals.md)
-- [DAG Orchestration](../18-workflow-job-systems/05-dag-orchestration.md)
+- [Workflow and Job System Fundamentals](../09-workflow-job-systems/01-workflow-system-fundamentals.md)
+- [DAG Orchestration](../09-workflow-job-systems/08-dag-orchestration.md)
 - [Verification and Governance](./05-quality-engineering-with-ai-agents.md)
 
 ---
 
 ## Related Chapters
 
-- [DAG Orchestration](../18-workflow-job-systems/05-dag-orchestration.md): parallel branches are a dependency graph whose most expensive nodes are reviewers
+- [DAG Orchestration](../09-workflow-job-systems/08-dag-orchestration.md): parallel branches are a dependency graph whose most expensive nodes are reviewers
 - [Verification and Governance for Agentic Change](05-quality-engineering-with-ai-agents.md): throughput nobody reviews is a liability, which is what verification buys back
-- [Service and Platform Migration](../15-deployment/06-migration-strategies.md): long-lived branches and dual-write migrations fail for the same reason
+- [Service and Platform Migration](../14-deployment/06-migration-strategies.md): long-lived branches and dual-write migrations fail for the same reason
 - [Coding Agent Platform Fundamentals](01-compound-engineering-fundamentals.md): the platform these workflows are meant to compound on top of

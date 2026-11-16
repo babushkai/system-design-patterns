@@ -1,10 +1,12 @@
 # Publish-Subscribe Architecture
 
+> One event, forty subscribers, and one of them is ten minutes behind. Who pays for the slow one: the publisher, the broker, or everyone?
+
 ## TL;DR
 
 Publish-subscribe turns one committed fact into independent consumption streams. Its central abstraction is not “send to many services”; it is a durable event plus subscription state that allows each consumer to progress, pause, replay, filter, and fail without changing another consumer’s position.
 
-A pub/sub contract must define topic semantics, fan-out architecture, subscription state, replay and bootstrap, filtering, and schema governance. It deliberately does not re-teach [Ordering](03-message-ordering.md) or [Delivery Guarantees](04-delivery-guarantees.md). Atomic domain publication belongs to [Outbox and Inbox](07-outbox-pattern.md). Multi-step business execution belongs to [Durable Workflows](../18-workflow-job-systems/04-durable-execution-workflow-engines.md) and [Retry, Idempotency, and Compensation](../18-workflow-job-systems/06-retry-idempotency-compensation.md).
+A pub/sub contract must define topic semantics, fan-out architecture, subscription state, replay and bootstrap, filtering, and schema governance. It deliberately does not re-teach [Ordering](03-message-ordering.md) or [Delivery Guarantees](04-delivery-guarantees.md). Atomic domain publication belongs to [Outbox and Inbox](05-outbox-pattern.md). Multi-step business execution belongs to [Durable Workflows](../09-workflow-job-systems/07-durable-execution-workflow-engines.md) and [Retry, Idempotency, and Compensation](../09-workflow-job-systems/04-retry-idempotency-compensation.md).
 
 ## Workload and Contract
 
@@ -302,5 +304,5 @@ Before creating a topic, answer:
 
 - [Message Queue Architecture](01-message-queues.md): competing consumers or broadcast, which is the whole difference in what can be promised
 - [Message Ordering](03-message-ordering.md): fan-out multiplies the number of places where ordering has to be defined
-- [Transactional Outbox, Inbox, and CDC Publication](07-outbox-pattern.md): how an event gets published because a database row says it has to be
-- [Durable Execution and Workflow Engines](../18-workflow-job-systems/04-durable-execution-workflow-engines.md): the consumer that treats an event as resumable program state, not a notification
+- [Transactional Outbox, Inbox, and CDC Publication](05-outbox-pattern.md): how an event gets published because a database row says it has to be
+- [Durable Execution and Workflow Engines](../09-workflow-job-systems/07-durable-execution-workflow-engines.md): the consumer that treats an event as resumable program state, not a notification

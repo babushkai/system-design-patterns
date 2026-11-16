@@ -1,10 +1,12 @@
 # Tool and Runtime Contracts for Coding Agents
 
+> The agent has forty tools and keeps picking the wrong one. What makes a tool something a model can use correctly on the first try?
+
 ## TL;DR
 
 A production tool is the versioned protocol between a probabilistic planner and the systems it can affect. It requires typed arguments, normalized resource identity, authorization, bounded execution, cancellation semantics, structured results, provenance, redaction, and a durable receipt. Use the smallest primitives that preserve intent (read, search, patch, execute, inspect, and invoke a scoped connector) and expose dangerous composition to policy.
 
-This chapter defines the tool registry, request/effect protocol, runtime boundary, and tool-specific failure semantics. [Platform Fundamentals](./01-compound-engineering-fundamentals.md) defines task, isolation, scheduling, and approval; [Context Management](../17-llm-systems/08-context-management.md) covers runtime selection; [Repository Context and Policy](./03-agent-context-engineering.md) covers repository policy artifacts.
+This chapter defines the tool registry, request/effect protocol, runtime boundary, and tool-specific failure semantics. [Platform Fundamentals](./01-compound-engineering-fundamentals.md) defines task, isolation, scheduling, and approval; [Context Management](../17-llm-systems/04-context-management.md) covers runtime selection; [Repository Context and Policy](./03-agent-context-engineering.md) covers repository policy artifacts.
 
 ---
 
@@ -351,13 +353,13 @@ Fewer orthogonal primitives are easier to secure and teach than dozens of overla
 - [Git Worktree Documentation](https://git-scm.com/docs/git-worktree)
 - [SWE-agent: Agent-Computer Interfaces Enable Automated Software Engineering](https://arxiv.org/abs/2405.15793)
 - [Coding Agent Platform Fundamentals](./01-compound-engineering-fundamentals.md)
-- [Workflow Effect Protocols](../18-workflow-job-systems/06-retry-idempotency-compensation.md)
+- [Workflow Effect Protocols](../09-workflow-job-systems/04-retry-idempotency-compensation.md)
 
 ---
 
 ## Related Chapters
 
-- [Context Management](../17-llm-systems/08-context-management.md): every tool result is a write into a context window with a finite budget
-- [LLM Agent Fundamentals](../17-llm-systems/01-agent-fundamentals.md): the loop these tools exist to serve, along with its error classes
-- [API Design and Evolution](../12-service-mesh/04-api-design-patterns.md): a tool is an API whose client is probabilistic and never reads the changelog
+- [Context Management](../17-llm-systems/04-context-management.md): every tool result is a write into a context window with a finite budget
+- [LLM Agent Fundamentals](../17-llm-systems/08-agent-fundamentals.md): the loop these tools exist to serve, along with its error classes
+- [API Design and Evolution](../07-service-mesh/01-api-design-patterns.md): a tool is an API whose client is probabilistic and never reads the changelog
 - [Verification and Governance for Agentic Change](05-quality-engineering-with-ai-agents.md): an agent that can run a command must also be able to prove which one it ran
