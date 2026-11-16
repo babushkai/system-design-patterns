@@ -750,3 +750,4 @@ An exercise should test the whole socio-technical system. Running a failover com
 - [Production Logging Architecture](03-logging.md): the evidence available at three in the morning, already shaped by retention and sampling
 - [Multi-Region Architecture](../06-scaling/09-multi-region-architecture.md): a region failure is a decision to shed or fail over on incomplete evidence
 - [Resilience Testing and Fault Injection](09-resilience-testing-and-fault-injection.md): drills rehearse the incident role set before an outage audits whether it works
+- [Design Documents and Architecture Decision Records](../20-production-readiness/01-design-documents-and-decision-records.md): a postmortem that uncovers an undocumented assumption is evidence for the record nobody wrote

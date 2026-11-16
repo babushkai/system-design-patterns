@@ -512,3 +512,4 @@ Use sampling for per-key telemetry; logging every key can create a new cost and 
 - [Distributed Cache Internals](03-distributed-caching.md): where the tiers stop being process-local and acquire their own failure domain
 - [Cache Stampede, Cold Start, and Warming](04-cache-stampede.md): what a miss costs when every client misses at the same moment
 - [CDN Architecture](../06-scaling/04-cdn-architecture.md): the same economics at internet scale, with egress replacing origin load as the constraint
+- [Embedding Tables and Sparse Model Infrastructure](../16-ml-systems/17-embedding-tables-sparse-models.md): parameters become a working set, so hit rate, admission, and miss cost decide serving feasibility

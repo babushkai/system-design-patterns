@@ -278,3 +278,4 @@ If the platform cannot state what reset or isolation guarantee applies to a devi
 - [Agent Inference](12-agent-inference.md): multi-step workloads break the assumptions made here about request lifetime
 - [ML Capacity and Cost Planning](../16-ml-systems/14-ml-capacity-cost-planning.md): the capacity plan that consumes the constants measured in this chapter
 - [Attention Is All You Need](../09-whitepapers/15-attention-transformers.md): the paper that fixes the arithmetic these schedulers exist to amortize
+- [Distributed Training Internals](../16-ml-systems/15-distributed-training-internals.md): the same hardware sharded the other way: one synchronized job instead of many concurrent requests

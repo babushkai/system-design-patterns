@@ -286,3 +286,4 @@ The correct context is the smallest authorized view that preserves the task's ob
 - [Harness Engineering](09-harness-engineering.md): the harness decides what enters the window, and when it gets compacted away
 - [Backpressure](../06-scaling/07-backpressure.md): a context window is a bounded buffer with the same shedding decisions
 - [Repository Context and Policy Plane](../19-compound-engineering/03-agent-context-engineering.md): the repository-specific version: what to load from the codebase, and when
+- [Memory Lifecycle for Standing Agents](../22-always-on-agents/04-memory-lifecycle.md): what a standing agent keeps between sessions, and what it must re-derive after a long silence

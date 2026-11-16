@@ -260,3 +260,4 @@ Build the smallest runtime that makes the desired guarantee enforceable. Add com
 - [LLM Evaluation and Observability](10-llm-evaluation.md): a harness without regression tasks is a demo with good ergonomics
 - [Tool and Runtime Contracts for Coding Agents](../19-compound-engineering/02-coding-agent-tool-design.md): tool contracts as the interface between an agent and a machine you trust
 - [Context Management](08-context-management.md): the part of the harness that decides what the model is allowed to remember
+- [Coding Agent Platform Fundamentals](../19-compound-engineering/01-compound-engineering-fundamentals.md): what a harness becomes when several teams share one agent fleet instead of one laptop

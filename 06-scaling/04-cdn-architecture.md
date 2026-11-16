@@ -413,3 +413,4 @@ Changing CDN provider repeats this discipline. Dual-CDN routing can improve fail
 - [DNS and Connection Management](13-dns-and-connection-management.md): which edge you reach is a DNS decision that lags by a connection lifetime
 - [Cache Semantics and Economics](../04-caching/01-cache-strategies.md): the same cache questions at internet scale, with egress as the cost function
 - [Network Transport Internals](14-network-transport-internals.md): what a client does with your edge after the connection opens, including QUIC migration
+- [WebRTC Media Systems](../07-real-time/05-webrtc.md): a TURN relay is an edge cost center, and the same placement math decides media latency and egress bills

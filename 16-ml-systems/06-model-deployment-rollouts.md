@@ -288,3 +288,4 @@ Rollback is a state transition plus an impact workflow. The controller latches t
 - [Online Experiments](08-online-experiments.md): the rollout able to attribute a metric change to the model rather than to luck
 - [Model Serving](03-model-serving.md): two versions in one process, which is a memory problem before it is a modeling one
 - [Model Monitoring](04-model-monitoring.md): a shadow rollout only produces signal if someone reads it and can stop the rollout
+- [Prompt Engineering](../17-llm-systems/06-prompt-engineering.md): a prompt edit is an unversioned model swap unless it climbs the same ladder
