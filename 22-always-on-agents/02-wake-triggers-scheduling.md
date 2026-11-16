@@ -157,6 +157,39 @@ One agent's wake path is a mailbox and a lease. Ten thousand agents sharing a mo
 
 *Backpressure to the source.* When mailboxes grow, coalescing absorbs much of the excess because a deeper mailbox still drains in one turn. When turn latency itself grows past the freshness objective, the scheduler sheds sweeps, widens debounce windows, and finally declines low-priority wakes with an explicit skip record. It never drops silently.
 
+## Capacity and Cost Model
+
+Cost and freshness become decidable only against a scenario, so carry one through. Ten thousand standing support agents; a fifteen-minute heartbeat; six event wakes per agent-hour on average; two self-set timers per agent-day; a gate that lets 4 percent of heartbeats become turns; a forty-thousand-token resident context with nine hundred output tokens; illustrative frontier-model prices of USD 3 per million input tokens and USD 15 per million output tokens; and prompt caching priced at one tenth of the read rate for cached input with a quarter premium to write it, as [Agent Inference](../17-llm-systems/12-agent-inference.md) sets out. Change every number and the shape holds.
+
+Wake evaluations are nearly free and turns are not. The scheduler evaluates 960,000 heartbeats a day, about eleven per second, and a state-diff gate makes each evaluation a hash comparison. Of those, 38,400 become turns. Adding events and timers gives roughly 118,400 turns a day: 1.4 turns per second on average, and near four times that in a business-hours peak, about 330 a minute. Every lever in this chapter acts on those two numbers, and only one of them is a model call.
+
+The dominant term is cache residency, not cadence.
+
+| Cached share of input | Cost per turn (USD) | Per thousand turns (USD) | Fleet per day (USD) |
+|---|---|---|---|
+| 0 percent | USD 0.164 | USD 164 | USD 19,400 |
+| 80 percent | USD 0.053 | USD 53 | USD 6,300 |
+| 90 percent | USD 0.039 | USD 39 | USD 4,700 |
+| 97 percent | USD 0.030 | USD 30 | USD 3,500 |
+
+The same work costs four times more when the prefix cache is cold, and the scheduler cannot see it: wake counts, skip rates, queue depth, and turn latency all look identical while the bill quadruples. This is why the wake path and the cache are one design rather than two. A heartbeat interval longer than the cache's residency window buys a smaller wake count and pays for it in uncached input, so the interval should be chosen jointly with the residency window and not by whoever owns the cron file.
+
+Cadence scales almost linearly at fixed gate behavior and residency.
+
+| Heartbeat interval | Heartbeat turns per day | What those turns cost (USD) |
+|---|---|---|
+| 5 minutes | 115,200 | USD 4,530 |
+| 15 minutes | 38,400 | USD 1,510 |
+| 60 minutes | 9,600 | USD 380 |
+
+The gate is the better lever because it multiplies rather than divides. A pass rate of 10 percent runs the fleet near USD 6,900 a day, 4 percent near USD 4,700, and 2 percent near USD 3,900, while cutting the interval from fifteen minutes to five triples the heartbeat line at any pass rate. Buy gate precision before cadence, and keep pricing its recall by offline replay so the saving is not paid for in missed work.
+
+Concurrency follows from turn duration rather than wake rate. At a peak of 5.5 turns per second and a mean residence of 150 seconds including queueing, Little's law gives about 820 turns in flight: that is the worker and sandbox pool to provision, or the admission bound to enforce instead. Billed throughput at that peak is roughly 1.6 million tokens per minute at 90 percent residency and 13.4 million with a cold cache, an order of magnitude apart, which is why a provider quota sized on steady state turns into throttling during exactly the incident when the cache also went cold.
+
+The last line is the burst that follows repair. A two-hour scheduler outage leaves every agent with due wakes; coalescing reduces them to at most one turn per agent per subject, and delivering those 20,000 turns inside ten minutes means 33 turns per second, six times the steady peak. Coalesce policies and staged resume are therefore capacity constraints and not politeness, and a recovery plan that omits them trades an outage for a second one.
+
+Four numbers deserve the pager: hint age against the freshness objective, gate pass rate drift, because a step change means a digest definition changed under it; cache hit ratio measured at turn start; and admission rejections by priority class, which is the only place starvation becomes visible before an owner notices.
+
 ## Failure Modes
 
 | Failure | Mechanism | Detection | Mitigation |
@@ -170,6 +203,30 @@ One agent's wake path is a mailbox and a lease. Ten thousand agents sharing a mo
 | Thundering herd | Aligned schedules or post-outage catch-up | Admission queue depth at period boundaries | Hash jitter; coalesce policy; staged resume |
 | Starved sweeps | Events consume the whole budget | Sweep lateness | Reserved share for the reconciliation class |
 | Stale wake | Turn acts on a hint hours old after a pause | Hint age at turn start | TTL on hints; read current state before acting |
+
+## Incident Playbook
+
+Almost every wake-path incident asks one of three questions: is this agent dead, idle, or starved; what caused these wakes; and did a hint get lost on the way in. Establish which question you are answering before changing configuration, because the fixes pull in opposite directions and two of the three make the other two worse.
+
+### An agent has not acted for hours and nothing is paging
+
+Read the last log append before anything else, because it separates the three states that look alike. No append at all while its mailbox has hints means the wake never fired: look at the lease, then the scheduler's own liveness, then whether the agent's schedule still exists after a config sync. An append that is a skip record means the agent is alive and the gate is deciding, which is a tuning question and not an outage. Appends that are turns with no outward effect mean starvation somewhere below the model: admission rejections, provider throttling on its lowest class, or a sandbox pool that cannot start. Do not restart the scheduler to unstick it, since a paused lease store looks identical from outside and nothing is lost by a restart that the durable mailbox does not already hold. Verify by injecting one test event and watching it acknowledged with a turn id, and treat the agent's next heartbeat skip record as evidence of life rather than failure.
+
+### Wakes tripled overnight and the invoice moved before any alert did
+
+Split wakes by origin class first, because a fleet can be the victim of its own actions and there is no other explanation for external rates staying flat while total wakes climb. A loop shows every agent waking at almost exactly its own floor and its turns' effects correlating with the next wake in under a minute; genuine demand arrives unevenly across agents and carries new subjects. Do not raise the gate threshold to contain the cost: a self-caused event is a real event and passes any relevance test, so the only thing that stops the loop is ingress filtering on the agent's own effect identity. Verify by watching the self-caused share fall to baseline while confirming the external wake rate did not fall with it, since a drop there means the filter is now discarding real traffic and you have traded a cost incident for a silent one.
+
+### The same request produced two replies
+
+Fetch the two turns and compare their hints' idempotency keys. Matching keys mean acknowledgment advanced past a hint that had not been committed, which is the high-water-mark race: the fix belongs to the commit protocol, not the source. Non-matching keys mean upstream really delivered twice under different identifiers and deduplication has a narrower key than the source's retry behavior deserves. Do not widen the debounce window to merge the pair, because that merges distinct work as well and converts a duplicate into a missed action somewhere else on the same subject. Verify by replaying the recorded batch through ingress and the coalescer and confirming one turn per subject key, with both deliveries visible inside it.
+
+### Everything woke at once after a platform outage
+
+Read the wake policies before scaling anything, because a fleet that fires every missed occurrence is configured to do this on purpose. Coalesce is correct for sweeps and heartbeats; catch-up on a schedule that has no per-occurrence output turns one outage into a self-inflicted second one. The response is to bound the recovery rate and let freshness degrade in a declared order, so that sweeps and consolidation are late before any human-initiated turn is. Do not resize the fleet for a burst that arrives once a quarter when jitter, coalescing, and staged resume would have absorbed it, and do not disable the source during repair, which loses exactly the events the cursor cannot recover.
+
+### The gate started passing far more wakes than yesterday
+
+Compare skip-record reason distributions over a week before touching thresholds. A new reason code, or the disappearance of "digest unchanged", means the state digest now differs on every heartbeat because a tool changed the shape of what it returns, and the gate has silently stopped recognizing its own previous world. Do not tune the threshold to restore the old pass rate: that re-enables the cost the gate exists to prevent and hides the schema change. Verify by restoring the pass rate into its historical band with no rule change, and by adding the changed field to the digest only after deciding whether it is actually in the mandate's scope.
 
 ## Decision Framework
 

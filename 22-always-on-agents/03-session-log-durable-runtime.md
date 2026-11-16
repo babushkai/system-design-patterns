@@ -148,6 +148,22 @@ Because the log is the agent, an agent can be forked: copy the log up to a seque
 
 A fork must be isolated from the world. Its tool gateway is a recording stub or a simulated environment, its timers do not fire into the production scheduler, and its outbox goes nowhere. The failure this guards against is a debugging session that sends the customer a second email.
 
+## Capacity and Cost Model
+
+Take the fleet from [Wake Triggers and Scheduling](02-wake-triggers-scheduling.md): ten thousand standing agents running about 118,400 turns a day. The durable log is not the expensive part. A turn appends roughly fourteen records at two and a half kilobytes each, which is 35 KB per turn, 4.1 GB a day, and about 1.5 TB a year before any compaction. Tool results are four fifths of those bytes, so retention policy is really a policy about tool output: keep thirty days verbatim for a 124 GB hot set, summarize what is older, and let the mandate's own artifacts survive independently of both.
+
+What costs money is reading, and reading is bounded by the context view rather than by disk. Assume a two-hundred-thousand-token window held below half utilization so that output headroom stays free, a fixed prefix of forty thousand tokens, ten thousand of core memory, and eight thousand for summaries. That leaves about 42,000 tokens for verbatim history: thirty-five turns at twelve hundred tokens each.
+
+Two consequences are worth internalizing before the window is configured.
+
+A wake that resumes work more than about thirty-five turns deep is not continuing a session, it is reading a story about itself. That is the arithmetic behind resetting with handoff artifacts instead of compacting further, and it is why the compaction threshold should be set in turns of history rather than in percent of window.
+
+Every token added to the always-loaded prefix subtracts one from the tail and is then paid on every wake in the fleet. Five thousand tokens of extra core memory is 592 million input tokens a day for this fleet, about USD 1,800 uncached and roughly USD 400 even at a 90 percent cache hit rate. A memory block that "helps the agent be helpful" therefore costs a fifth of the tail and four hundred dollars a day, which is a trade worth naming in the review that approves it.
+
+Journaling model output is what makes repair affordable. One agent's thirty-day session is about 360 turns. Re-asking those turns costs around USD 14 per incident and produces a trajectory that differs from the one being investigated; reading them from the journal costs nothing and reproduces the original exactly. "Replay reads, never re-asks" is an economic rule before it is a purity rule, and a team that skips journaling to save storage pays for it in postmortems at roughly the moment it most needs an answer.
+
+Two more sizes follow from concurrency rather than volume. At the peak of 5.5 turns per second with sandboxes held forty seconds, Little's law asks for about 220 concurrent sandboxes; a pool smaller than that shows up first as a turn-latency tail and only later as an error rate, so alert on latency rather than waiting for failures. And the fencing epoch's append-rejection counter should read zero in steady state: any nonzero value means a brain is running without a lease, which is the only failure mode in this chapter whose blast radius is the external world rather than the log.
+
 ## Failure Modes
 
 | Failure | Mechanism | Detection | Mitigation |
@@ -162,6 +178,30 @@ A fork must be isolated from the world. Its tool gateway is a recording stub or 
 | Workspace and log diverge | Uncommitted files survive, or committed ones do not | Snapshot id mismatch at restore | Snapshot referenced by `TurnEnded` only |
 | Upgrade regression | New model reads old memory differently | Cohort indicators diverge | Shadow replay, cohort canary, version-tagged memory writes |
 | Fork leaks into production | Debug fork holds live credentials or timers | Effects attributed to a fork identity | Forks get stub gateways and an isolated scheduler |
+
+## Incident Playbook
+
+The runtime's incidents are all about which of three artifacts disagrees: the log, the external world, and the workspace. Establish the pair that diverged first, because the recovery differs completely and one of the three recoveries is data loss wearing a helpful costume.
+
+### An external system received the same effect twice
+
+Pull every intent record carrying that turn id and read their results. Two intents with distinct keys mean the checkpoint was finer than the effect and recovery re-ran a step whose result had not landed, which is a commit-protocol bug. One intent with an unresolved result means the response was lost and something retried without consulting the key, which is a tool-gateway bug. Do not serialize every tool call behind a global lock to make the symptom stop: that converts a rare duplicate into a fleet-wide latency regression and still leaves the unknown-outcome case unhandled, because a timeout is not a negative acknowledgment. Verify by replaying the recorded turn against stub gateways and confirming the second attempt returns the first result rather than performing the action again.
+
+### Recovery did not take the same actions as the original run
+
+Diff the replayed tool intents against the journaled ones and look for the first divergence, because everything after it is downstream. A divergence at a model step means that step was re-asked instead of read: check whether the record carries the model version and whether the journal covers every call type, since harnesses commonly journal the assistant's text and forget tool routing. Do not pin sampling parameters and declare the fork fixed; temperature zero still diverges once any tool result differs, and the reader will misdiagnose the next incident as storage corruption. Verify by replaying the same session twice and requiring identical intents both times, which is a test the team can run on every harness change.
+
+### The agent violated an instruction it was given long ago
+
+Ask where that instruction lives. If it survives only inside the window, then compaction has already rewritten it and the violation is the expected behavior of the design rather than a model failure; durable instructions belong in the mandate or core memory, which are rendered from state instead of remembered. Do not re-run compaction hoping for a better summary, and do not lengthen the verbatim tail to cover the gap, because the tail is funded by every other wake as shown above. Verify by finding the instruction in the assembled context of a fresh turn rather than in the transcript of the old one.
+
+### The next window misread the task it inherited
+
+This is a half-finished handoff: the previous context ran out mid-task and its summary did not say so. Run the workspace's own checks before touching the agent, because the artifacts either match reality or they do not, and that answer decides whether the work is resume or repair. If the checks pass, continue; if they fail, restore from the last committed snapshot and replay forward rather than letting the agent guess at which steps landed. Do not trust a progress note written inside the window, since it is exactly the artifact the incident produced. Verify by making start-of-turn verification mandatory in the harness, so the next handoff cannot depend on the summary being honest.
+
+### An append was rejected for a stale epoch
+
+Treat any occurrence as an outage that has not finished. First find the brain that appended without a lease and stop it, then bound the damage window between its last successful renewal and the rejection, because in that interval it may have taken effects that the log will never show. Enumerate those effects from the gateway side rather than trusting the agent's own record, which is precisely the record in question. Do not raise the lease timeout to make the disagreement disappear: a longer lease widens the interval an old brain can act in, and the next occurrence costs more. Verify by confirming the rejection counter stays at zero through a forced failover drill, and by confirming every effect in the damage window is accounted for as applied, rolled back, or explicitly accepted.
 
 ## Decision Framework
 
