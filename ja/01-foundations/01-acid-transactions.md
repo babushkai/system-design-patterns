@@ -4,982 +4,208 @@
 
 ## TL;DR
 
-ACIDはデータベーストランザクションの信頼性を保証するプロパティの集合です。しかし「ACID」はマーケティング用語であり、実際の保証はデータベースによって大きく異なります。各文字の背後には実際のエンジニアリング上のトレードオフが隠れています。undo logとredo log、fsyncのレイテンシと耐久性、分離コストとスループット。各文字の仕組みを理解することが、クラッシュに耐えるシステムと静かにデータを破壊するシステムの違いを生みます。
+振込が正しいためには、両方の口座に指定額の増減が一度だけ反映され、残高の合計が保たれ、振込元が残高不足にならないことが必要です。データベースが一連の書き込みを原子的にコミットしても、渡された書き込みが誤っていれば、この条件は崩れます。設計レビューでは、不変条件とトランザクション境界を最初に確認します。次に、並行処理から見える状態、コミットが耐える障害、応答を失った呼び出し元が結果を確定する方法を確認します。
 
----
+口座AからBへの100米ドルの振込を考えます。Bが存在せず入金の更新件数がゼロなら、引き落としだけがコミットされることがあります。二つの引き落としが競合する場合は、必要なロックを取得した後に残高を確認します。コミット応答を失った場合は、永続化された操作IDで結果を確認します。プライマリを失った場合は、どのスタンバイがコミットを保持し、どのスタンバイを昇格させるかで結果が決まります。
 
 ## ACIDが解決する問題
 
-銀行振込を考えましょう。口座Aから口座BへUSD 100を移動します。
+Aには500米ドル、Bには200米ドルがあります。100米ドルを振り込んだ後の残高は、Aが400米ドル、Bが300米ドルです。この参照設計では、両口座を一つのPostgreSQL 16データベースに置き、残高を整数のセントで表します。呼び出し元は論理的な振込ごとにUUIDを発行します。残高を書き換える処理はすべて同じ不変条件を守る必要があります。
 
-```text
-1. Read balance of A: $500
-2. Subtract $100 from A: $400
-3. Write new balance to A
-4. Read balance of B: $200
-5. Add $100 to B: $300
-6. Write new balance to B
-```
+| 性質 | 振込の設計で確認すること |
+|---|---|
+| 原子性 | 文の失敗やサーバーのクラッシュが起きたとき、どの書き込みが一緒にコミットされるか。 |
+| 整合性 | どのデータベース制約とアプリケーションの検査が残高の不変条件を守るか。 |
+| 分離性 | 別の引き落としや集計が振込と重なったとき、どの実行履歴が成立するか。 |
+| 耐久性 | 成功応答の後、どの障害が起きても振込が残るか。 |
 
-トランザクション保証がなければ何が起こりうるでしょうか？
+原子性と分離性は、データベースが受け取った処理に対する保証です。同じ処理を何度か試行したとき、それらを一つの論理操作に対応づけるためには、呼び出し側にもプロトコルが必要です。
 
-**クラッシュ障害:**
-- ステップ3の後にクラッシュ → AはUSD 100を失い、Bは何も得ていません。お金がシステムから消えました。
-- ステップ6の最中にクラッシュ → ディスクに部分的な書き込みが残ります。Bの残高はUSD 200でもUSD 300でもなく、壊れたバイト列になります。
+## 原子性と不変条件
 
-**並行性障害:**
-- Aからの2つの送金が同時に実行されます。どちらもUSD 500を読み取り、どちらもUSD 100を引き、どちらもUSD 400を書き込みます。AはUSD 300であるべきなのにUSD 400になっています。銀行は無からUSD 100を生み出しました。
-- レポートクエリがステップ3と6の間に実行されます。Aの引き落としは見えますが、Bへの入金はまだです。帳簿が合いません。
+引き落とし、入金、操作記録を同じトランザクションに含めます。トランザクションに属する書き込みは、まとめてコミットされるか、まとめて破棄されます。振込先が存在しない場合に、その保証の境界が見えます。PostgreSQLでは、対象行がゼロ件でも `UPDATE` は成功します。アプリケーションが引き落としを実行し、入金の更新件数を無視してコミットすれば、データベースは渡された引き落としだけを原子的にコミットします。
 
-**耐久性障害:**
-- データベースはCOMMIT成功と返答しました。電源が落ちます。カーネルはページキャッシュに書き込みを保持していましたが、fsyncを呼びませんでした。再起動すると書き込みは消えています。
-- ディスクファームウェアは書き込みを確認しましたが、データはディスクの揮発性書き込みバッファにありました。電源喪失により「確認済み」の書き込みはプラッタに到達しませんでした。
+残高を負にしないという行単位のルールは `CHECK` 制約で守ります。振込処理は、異なる二つの実在する口座に同額の増減を適用し、行をまたぐルールを守ります。残高を書き換える経路が複数あるときは、両方の仕組みが必要です。残高の制約は入金の欠落を検出できません。また、別の書き込み経路が振込処理を迂回すれば、その処理で不変条件を守ることはできません。
 
-これらは理論上の話ではありません。すべての本番データベースチームは各カテゴリの実体験を持っています。ACIDは、正しく実装・設定されれば、これらすべてを防ぐ保証の集合です。
+セーブポイントは、先行する変更を残したまま任意の作業を取り消すために使えます。入金の失敗時には振込全体を中止します。引き落とし後に設定したセーブポイントまで戻ってコミットすると、誤った書き込みが残ります。ロックの挙動はエンジンによって異なります。PostgreSQLはセーブポイントより後に取得したトランザクションロックを解放します。InnoDBはメモリに保持した行ロックを残すことがあります。一方、新規挿入行に対応するロックは、undoでその行を取り消すと解放されます。
 
----
+遅延制約は不変条件の検査をコミット時まで遅らせます。二つの行が相互に必須の外部キーを持つ場合などに使えます。文が成功した後でコミットが失敗する可能性があるため、アプリケーションのエラー処理はコミットまで含めます。
 
-## 原子性 — 詳細解説
+## 引き落としが競合するときの分離性
 
-### 実際の意味
+二つの呼び出し元がそれぞれAから400米ドルを振り込むとします。どちらの書き込みよりも先に、両方が500米ドルを読み取ることは可能です。その値を根拠に引き落としを承認すると、両者が同じ残高で判断したことになります。PostgreSQLのRead Committedでは、残高確認と書き込みが同じ状態を根拠とするように設計します。
 
-原子性は「すべての操作が瞬時に起こる」という意味ではありません。それは分離性に近い概念です。
+既知の一行の残高を守るには、`UPDATE accounts SET balance_cents = balance_cents - 40000 WHERE id = 1 AND balance_cents >= 40000` のような条件付き更新で十分です。並行更新が先行した場合、PostgreSQLはその更新を待ち、更新後の行で条件を再評価します。後続の引き落としの更新件数はゼロです。振込で両口座をロックする場合は、残高を確認する前にIDの昇順で取得します。これにより、逆方向の二つの振込が互いの振込先のロックを待つ循環を避けられます。他のリソースを介したデッドロックは引き続き起こりえます。
 
-**原子性とは、全か無かの実行を意味します。** トランザクションがコミットされれば、そのすべての書き込みが適用されます。アボートされた場合（またはコミット前にシステムがクラッシュした場合）、その書き込みは一切見えません。
+集計処理には別の問題があります。Read Committedでは、集計が振込前のAと振込後のBを読むことがあります。どちらのクエリもコミット済みデータを読みますが、集計結果は本来の700米ドルではなく800米ドルです。単一の通常の `SELECT` で集計できるなら、文単位のスナップショットで十分です。複数の文がスナップショットを共有する必要がある読み取り専用の集計には、Repeatable Readを使います。PostgreSQLがそのスナップショットを取得するのは、最初のトランザクション制御文以外の文を実行するときです。`BEGIN` と最初の `SELECT` の間にコミットされた振込は、集計に含まれます。
 
-### なぜ重要か
+日次の引き落とし上限のように、不変条件が複数の振込行を対象とする場合、二つの口座行だけをロックしても、他の書き込み経路を制御できないことがあります。共通の管理行で条件を守るか、関連するトランザクションをSerializableで実行します。直列化失敗時にはトランザクション全体を再試行します。行の競合と述語の競合を分ける実行履歴は、[分離レベル](02-isolation-levels.md)で解説しています。
 
-原子性がなければ、すべての複数ステートメント操作がデータ破損の潜在的な原因になります。トランザクション途中のクラッシュ、ネットワークタイムアウト、制約違反は、データベースを不整合な中間状態に置きます。代替手段 — アプリケーションコードで手動のクリーンアップとロールバックロジックを書くこと — は、エラーが起きやすく現実的ではありません。
+## 振込を検証する
 
-### Undo LogとRedo Log
-
-データベースは原子性と耐久性のために、根本的に異なる2つのロギング戦略を使用します。ほとんどの本番システムは一方または両方を使用します。
-
-**Undo log（ロールバックログ）:**
-- ページを変更する前に、*古い値*をundo logに書き込みます
-- ROLLBACKまたはクラッシュリカバリ時：undo logを再生して元の値を復元します
-- InnoDB（MySQL）が原子性の主要メカニズムとして使用します
-- InnoDBはundo logをシステムテーブルスペースまたは専用のundoテーブルスペースに保存します
-
-**Redo log（先行書き込みログ / WAL）:**
-- ページを変更する前に、*新しい値*をredo logに書き込みます
-- クラッシュリカバリ時：redo logを再生してコミット済みの変更を再適用します
-- PostgreSQLが主要メカニズムとして使用します（pg_walディレクトリ）
-- PostgreSQLのWALは追記専用のシーケンシャルI/Oであり、ランダムなページ書き込みよりもはるかに高速です
-
-**InnoDBは両方を同時に使用します（PostgreSQL 16）:**
-
-```text
-InnoDB transaction lifecycle:
-1. BEGIN
-2. Write old values to undo log (in buffer pool)
-3. Write new values to redo log (ib_logfile0/ib_logfile1)
-4. Modify buffer pool pages in memory (dirty pages)
-5. On COMMIT: fsync redo log → return success to client
-6. Checkpoint: flush dirty pages to tablespace files (async)
-7. Purge: clean up undo log entries after no transaction needs them
-```
-
-```text
-PostgreSQL transaction lifecycle (v16):
-1. BEGIN
-2. Write WAL records (new values) to WAL buffer
-3. Modify pages in shared buffer pool (with before-images kept via MVCC)
-4. On COMMIT: flush WAL buffer to pg_wal segment file → fsync → return success
-5. Checkpoint: flush dirty buffers to data files (async, configurable interval)
-6. Old row versions cleaned up by autovacuum (async)
-```
-
-重要な違い：InnoDBはページをインプレースで更新するため、ロールバックにundo logが必要です。PostgreSQLはMVCCを使用しており、古い行バージョンはVACUUMされるまでヒープに残るため、原子性のための独立したundo logは必要ありません。
-
-### ROLLBACKの仕組み：LSNトラバーサルとUndoチェーン
-
-すべてのログレコードには**Log Sequence Number（LSN）**があります。これは単調増加する識別子です。
-
-**InnoDBのロールバック（MySQL 8.0）:**
-
-```text
-Transaction T1 modifies rows R1, R2, R3:
-  LSN 1001: undo record for R1 (old value), prev_undo_ptr → NULL
-  LSN 1002: undo record for R2 (old value), prev_undo_ptr → 1001
-  LSN 1003: undo record for R3 (old value), prev_undo_ptr → 1002
-
-ROLLBACK T1:
-  1. Find T1's last undo record (LSN 1003)
-  2. Restore R3 to old value
-  3. Follow prev_undo_ptr to LSN 1002
-  4. Restore R2 to old value
-  5. Follow prev_undo_ptr to LSN 1001
-  6. Restore R1 to old value
-  7. Follow prev_undo_ptr to NULL → done
-```
-
-各トランザクションはundo recordの連結リストを保持します。ロールバックはこのチェーンを逆順にたどります。数百万行を変更したトランザクションのロールバックがトランザクション自体と同じくらい時間がかかるのはこのためです。各変更を個別に元に戻す必要があるからです。
-
-**PostgreSQLのロールバック**はより低コストです。コミットログ（pg_xact）でトランザクションをアボート済みとマークするだけです。残された不要なタプルは可視性ルールにより後続のトランザクションからは見えず、autovacuumによって後で除去されます。
-
-### セーブポイントと部分的ロールバック
-
-セーブポイントを使うと、トランザクション全体をアボートせずに一部をロールバックできます。条件分岐のある複雑なビジネスロジックには不可欠です。
+使い捨てのPostgreSQL 16データベースで次を実行します。検証中は振込記録を保持してください。この関数はRead Committedを前提とし、トランザクションの開始と終了は呼び出し側が行います。認可と操作IDの保持期間はサービス境界で定めます。
 
 ```sql
--- PostgreSQL 16
-BEGIN;
+CREATE TABLE accounts (
+    id integer PRIMARY KEY,
+    balance_cents bigint NOT NULL CHECK (balance_cents >= 0)
+);
 
-INSERT INTO orders (id, customer_id, total) VALUES (1001, 42, 299.99);
+CREATE TABLE transfers (
+    operation_id uuid PRIMARY KEY,
+    source_id integer NOT NULL,
+    destination_id integer NOT NULL,
+    amount_cents bigint NOT NULL CHECK (amount_cents > 0),
+    CHECK (source_id <> destination_id)
+);
 
-SAVEPOINT before_inventory;
+INSERT INTO accounts VALUES (1, 50000), (2, 20000);
 
-UPDATE inventory SET quantity = quantity - 1 WHERE product_id = 7;
--- Suppose this violates a CHECK constraint (quantity >= 0)
+CREATE FUNCTION post_transfer(
+    p_operation_id uuid,
+    p_source_id integer,
+    p_destination_id integer,
+    p_amount_cents bigint
+) RETURNS void
+LANGUAGE plpgsql VOLATILE AS $$
+DECLARE
+    locked_rows integer;
+BEGIN
+    INSERT INTO transfers VALUES (
+        p_operation_id, p_source_id, p_destination_id, p_amount_cents
+    ) ON CONFLICT (operation_id) DO NOTHING;
 
-ROLLBACK TO SAVEPOINT before_inventory;
--- The order INSERT is still intact
--- Only the inventory UPDATE was undone
+    IF NOT FOUND THEN
+        IF NOT EXISTS (
+            SELECT 1 FROM transfers
+            WHERE operation_id = p_operation_id
+              AND source_id = p_source_id
+              AND destination_id = p_destination_id
+              AND amount_cents = p_amount_cents
+        ) THEN
+            RAISE EXCEPTION 'operation ID reused with different inputs';
+        END IF;
+        RETURN;
+    END IF;
 
--- Try alternative fulfillment
-UPDATE inventory SET quantity = quantity - 1 WHERE product_id = 7 AND warehouse = 'secondary';
+    PERFORM id FROM accounts
+    WHERE id IN (p_source_id, p_destination_id)
+    ORDER BY id FOR UPDATE;
+    GET DIAGNOSTICS locked_rows = ROW_COUNT;
+    IF locked_rows <> 2 THEN
+        RAISE EXCEPTION 'both accounts must exist';
+    END IF;
 
+    UPDATE accounts SET balance_cents = balance_cents - p_amount_cents
+    WHERE id = p_source_id AND balance_cents >= p_amount_cents;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'debit rejected';
+    END IF;
+
+    UPDATE accounts SET balance_cents = balance_cents + p_amount_cents
+    WHERE id = p_destination_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'credit rejected';
+    END IF;
+END;
+$$;
+```
+
+同じ操作IDで二つの試行が競合したときは、一意インデックスが調停します。Read Committedでは、先に挿入したトランザクションを待った後、後続の挿入が何も変更せずに終わることがあります。関数内の次のSQL文は新しいスナップショットを取得するため、記録済みの入力を照合できます。先行処理が中止された場合は、後続処理が挿入を行い、そのまま進みます。操作IDが異なる場合は口座のロックを取得し、残高を取り合います。呼び出し元に成功を返すのは、外側のトランザクションがコミットしてからです。
+
+```sql
+BEGIN ISOLATION LEVEL READ COMMITTED;
+SELECT post_transfer('00000000-0000-0000-0000-000000000001', 1, 2, 10000);
 COMMIT;
+
+SELECT id, balance_cents FROM accounts ORDER BY id;
+SELECT operation_id, source_id, destination_id, amount_cents FROM transfers;
 ```
 
-**実装の詳細：** セーブポイントはサブトランザクション（PostgreSQLではsubtransaction）を作成します。各サブトランザクションは独自のトランザクションIDを取得します。PostgreSQLはサブトランザクションの状態をpg_subtransで追跡します。InnoDBは各セーブポイントに対して新しいundo logセグメントを作成します。
+各試行の前に二つの口座を初期残高に戻し、振込テーブルを空にします。並行実行の試行には別々のセッションを使います。
 
-**注意：** 深くネストしたセーブポイントにはオーバーヘッドがあります。PostgreSQLのpg_subtransは、数千のサブトランザクションでボトルネックになりえます。ループ内でセーブポイントが必要な場合は、トランザクション設計を見直してください。
+| 試行 | 実行手順 | 確認する結果 |
+|---|---|---|
+| 振込先が存在しない | 振込先に `99` を指定します。エラー後にロールバックします。 | 残高は50,000セントと20,000セントのままです。振込記録は残りません。 |
+| 引き落としの競合 | 異なるIDで40,000セントの振込を二回実行します。後続処理が待機するまで先行トランザクションを開いておき、その後コミットします。 | 後続処理は残高確認で失敗します。振込は一件だけ残り、残高は10,000セントと60,000セントです。 |
+| 再試行とIDの衝突 | サンプルをコミットします。同じIDと入力で再試行し、その後、同じIDで別の正の金額を指定します。 | 再試行は成功し、入力を変更した要求は失敗します。振込は一件だけ残り、残高は40,000セントと30,000セントです。 |
+| 読み取りスキュー | セッション1で読み取り専用トランザクションを開始し、Aを読みます。セッション2でサンプルの振込をコミットし、セッション1でBを読みます。分離レベルを変えて繰り返します。 | Read Committedでは50,000セントと30,000セント、Repeatable Readでは50,000セントと20,000セントが見えます。 |
 
-### 分散原子性：二相コミット（2PC）
+## コミット応答を失ったとき
 
-トランザクションが複数のデータベースノードにまたがる場合、ローカルのundo logでは不十分です。古典的な解決策は**二相コミットプロトコル**です。
+直列化失敗の場合、トランザクションは中止されたと判断できます。`COMMIT` の応答待ちで接続が切れた場合、結果は不明です。サーバーが振込を永続化した後に、ネットワークで応答が失われた可能性があります。ドライバーは接続を後処理できますが、サーバーで成立したコミットを取り消せません。
 
-```text
-Coordinator (transaction manager)
-├── Participant A (shard holding Account A)
-└── Participant B (shard holding Account B)
+結果が不明なら、現在の書き込み権限を持つノードに、**同じ操作IDと入力**で再試行します。一意な操作記録は、その効果とともにコミットされます。最初の振込がコミット済みなら再試行はその結果を返し、中止されていれば再試行で振込を適用できます。遅延しているスタンバイに行がないことから、どちらの結果だったかは判断できません。フェイルオーバー直後は、どの履歴を基準にしてよいかを、書き込み側がまず確定する必要があります。操作記録の耐久性は、それが保護するトランザクションの耐久性と同じです。
 
-Phase 1 — Prepare (vote):
-  Coordinator → A: "PREPARE transaction T1"
-  Coordinator → B: "PREPARE transaction T1"
-  A: writes all changes to durable log, acquires locks, responds YES
-  B: writes all changes to durable log, acquires locks, responds YES
+再試行の検証では、呼び出し元が初回応答を無視した場合を模擬しています。ネットワーク障害の経路を確認するには、データベースでコミットが成立した後の応答を遮断し、同じIDで再試行して、振込件数と両口座の残高を確認します。本番では、結果不明の処理を論理操作IDで追跡し、サポートする再試行期間中は記録を保持します。データベースの外部で生じる効果には、[アウトボックス](../05-messaging/07-outbox-pattern.md)や、独自の冪等性を持つ処理プロトコルを使います。IDのスコープ、保持期間、突合は[冪等性と操作ID](08-idempotency.md)で解説しています。
 
-Phase 2 — Commit (decision):
-  Coordinator: all voted YES → writes COMMIT decision to its own durable log
-  Coordinator → A: "COMMIT T1"
-  Coordinator → B: "COMMIT T1"
-  A: commits, releases locks
-  B: commits, releases locks
-```
-
-```sql
--- PostgreSQL 16 native 2PC (used by connection poolers, ORMs, distributed systems)
--- On participant:
-BEGIN;
-UPDATE accounts SET balance = balance - 100 WHERE id = 'A';
-PREPARE TRANSACTION 'transfer_1001_partA';
-
--- Later, coordinator decides:
-COMMIT PREPARED 'transfer_1001_partA';
--- or
-ROLLBACK PREPARED 'transfer_1001_partA';
-```
-
-**コーディネータ障害問題：**
-
-2PCの致命的な脆弱性は、フェーズ間でのコーディネータ障害です。コーディネータがすべてのYES投票を受け取った後、COMMITの決定をブロードキャストする前にクラッシュした場合：
-
-```text
-Timeline:
-  t0: Coordinator sends PREPARE to A and B
-  t1: A votes YES, B votes YES (both holding locks, changes durable)
-  t2: Coordinator writes COMMIT to its log
-  t3: *** Coordinator crashes ***
-
-  A and B are now "in-doubt" — they cannot safely commit or abort:
-  - Committing risks inconsistency if coordinator actually decided ABORT
-  - Aborting risks inconsistency if coordinator actually decided COMMIT
-  - Locks are held indefinitely until coordinator recovers
-```
-
-**不確定トランザクション**は運用上危険です。ロックを保持し、他のトランザクションをブロックし、コーディネータが復旧できなければ手動介入が必要になります。
-
-```sql
--- PostgreSQL: find in-doubt transactions
-SELECT gid, prepared, owner, database
-FROM pg_prepared_xacts;
-
--- Manual resolution (ONLY when you've confirmed the correct outcome):
-COMMIT PREPARED 'transfer_1001_partA';
-```
-
-**コーディネータ障害の緩和策：**
-- コーディネータはフェーズ2の前に決定をレプリケートされた永続ログに書き込みます
-- 参加者はタイムアウト後、コーディネータ（またはそのレプリカ）に決定を問い合わせます
-- 三相コミット（3PC）はプリコミットフェーズを追加しますが、複雑さとネットワーク分断の脆弱性のため実際にはほとんど使われません
-- 最新の分散データベース（CockroachDB、YugabyteDB）はコミットの決定にRaft/Paxosを使用し、単一コーディネータの障害モードを回避しています
-
-**2PCのパフォーマンスコスト：** すべての分散トランザクションは最低でも2回の追加ネットワークラウンドトリップと3回の強制ログフラッシュ（各参加者のprepareで1回、コーディネータの決定で1回）が必要です。これは通常、ローカルトランザクションと比較して5～20msのレイテンシを追加します。
-
----
-
-## 整合性 — 最も弱い文字
-
-### データベースが強制すること vs 強制できないこと
-
-**整合性とは、トランザクションがデータベースをある有効な状態から別の有効な状態に遷移させることを意味します。** ただし「有効」は宣言した制約によってのみ定義されます。
-
-データベースが強制するもの：
-- NOT NULL、CHECK制約
-- UNIQUEおよびPRIMARY KEY
-- FOREIGN KEY参照整合性
-- EXCLUDE制約（PostgreSQL）
-- トリガーベースの不変条件
-
-データベースが強制できないもの：
-- 「口座残高はすべての取引エントリの合計と一致すべき」（トリガーを書かない限り）
-- 「すべての注文は少なくとも1つの明細行を持つべき」（テーブル横断の不変条件）
-- 「すべての口座の合計は一定でなければならない」（グローバルな不変条件）
-- アプリケーションコードにのみ存在するビジネスルール
-
-**したがって整合性はACID保証の中で最も弱いものです** — これは主にアプリケーションレベルの責任です。データベースはツール（制約、トリガー）を提供しますが、正しさは開発者がそれらを使うかどうかに依存します。
-
-### 「C」の多義性問題
-
-文字Cは文脈によってまったく異なる意味を持ちます：
-
-| 文脈 | 「整合性」の意味 | 保証する仕組み |
-|------|-----------------|---------------|
-| ACID | データが宣言された制約を満たすこと | データベース制約 |
-| CAP定理 | すべてのノードが同時に同じデータを見ること（線形化可能性） | 合意プロトコル |
-| レプリカ | レプリカが同じ状態に収束すること | レプリケーションプロトコル |
-
-> [整合性モデル](04-consistency-models.md)で線形化可能性、因果整合性、結果整合性について参照してください。
-
-これらは同じ単語を共有する、根本的に異なる3つの概念です。誰かが「このシステムは整合性がある」と言ったら、どの定義を意味しているか必ず確認してください。
-
-### 遅延制約
-
-一部の制約は行ごとにチェックできません。相互外部キーを考えましょう：
-
-```sql
--- PostgreSQL 16
--- departments references employees.head, employees references departments
--- Inserting either first violates the FK of the other
-
--- Solution: deferred constraints
-ALTER TABLE employees
-  ADD CONSTRAINT fk_department
-  FOREIGN KEY (department_id) REFERENCES departments(id)
-  DEFERRABLE INITIALLY DEFERRED;
-
-ALTER TABLE departments
-  ADD CONSTRAINT fk_head
-  FOREIGN KEY (head_employee_id) REFERENCES employees(id)
-  DEFERRABLE INITIALLY DEFERRED;
-
-BEGIN;
-INSERT INTO departments (id, name, head_employee_id) VALUES (1, 'Engineering', 100);
-INSERT INTO employees (id, name, department_id) VALUES (100, 'Alice', 1);
--- Constraints checked HERE, at COMMIT time, not at each INSERT
-COMMIT;
-```
-
-トランザクションごとに制約を遅延させることもできます：
-
-```sql
-BEGIN;
-SET CONSTRAINTS fk_department DEFERRED;
--- ... operations that temporarily violate the constraint ...
-COMMIT;  -- constraint checked here
-```
-
-**遅延制約のユースケース：**
-- 循環外部キー（上記の例）
-- 中間状態がユニーク制約に違反する一括データロード
-- 親子の自己参照を持つグラフ構造
-- データを並べ替えるスキーママイグレーション
-
-**注意：** PostgreSQLの遅延ユニーク制約は異なるインデックスメカニズムを使用し、大きなテーブルではパフォーマンスに影響を及ぼす可能性があります。本番規模のデータでテストしてください。
-
-### シャード間の外部キー
-
-データベースをシャーディングすると、シャード間の外部キーに対するACID整合性はデータベース層では事実上不可能になります。
-
-```text
-Shard A (users 1-1000):
-  users table, orders table for these users
-
-Shard B (users 1001-2000):
-  users table, orders table for these users
-
-Problem: order on Shard A references a product catalog on Shard B.
-  - No cross-shard FK enforcement
-  - Shard B could delete the product while Shard A's order references it
-  - No transaction spans both shards without 2PC (which is slow)
-```
-
-**実用的なアプローチ：**
-- **非正規化：** 参照データをローカルシャードにコピーする（結果的な古さを許容する）
-- **アプリケーションレベルの検証：** 書き込み前にチェックし、競合状態を許容する
-- **イベント駆動のクリーンアップ：** 壊れた参照を非同期で検出・修復する
-- **シャード間参照を避ける：** 関連データを同じシャードに配置する
-
-これは分散システムが整合性を緩和することが多い根本的な理由です。 → [CAP定理](03-cap-theorem.md)を参照
-
-### なぜ分散システムはCを捨てたか
-
-単一ノードのデータベースでは、整合性はトランザクションレベルのプロパティです。すべての制約が宣言されていれば、DBがそれを強制します。分散データベースでは、トランザクション内でシャード間の制約を検証するコストは法外です：
-
-- シャード間の制約チェックごとにネットワークラウンドトリップが追加される
-- 分散デッドロック検出は高コスト
-- グローバルな制約検証はスケールしない
-
-これがGoogle Spanner、CockroachDB、YugabyteDBがACIDトランザクションをサポートしつつも、単一ノードのPostgreSQLと同じ保証でシャード間外部キーをサポートしない理由です。彼らのACIDにおけるCは「単一シャード上でローカルにチェックできる制約」を意味します。
-
----
-
-## 分離性 — 高コストの文字
-
-### 核心的な課題
-
-分離性は「並行トランザクションは何が見えるか？」という問いに答えます。理想（直列化可能性）はトランザクションが1つずつ実行されたかのように振る舞うことを意味します。現実は、完全な分離は高コストなため、データベースはより弱いレベルを提供します。
-
-### 分離レベルの概要
-
-| レベル | ダーティリード | 非反復読み取り | ファントムリード | 書き込みスキュー |
-|--------|--------------|---------------|----------------|-----------------|
-| Read Uncommitted | あり | あり | あり | あり |
-| Read Committed | なし | あり | あり | あり |
-| Repeatable Read | なし | なし | あり（InnoDB: なし） | あり |
-| Serializable | なし | なし | なし | なし |
-
-**実装アプローチ：**
-1. **ロック（2PL）：** トランザクションがロックを取得し、互いをブロックします。SQL ServerのSerializableで使用されています。
-2. **MVCC：** 複数の行バージョンを保持し、読み取りが書き込みをブロックしません。PostgreSQL、InnoDBのほとんどのレベルで使用されています。
-3. **OCC（楽観的並行制御）：** 競合がないと仮定し、コミット時に検証します。一部のインメモリデータベースで使用されています。
-4. **SSI（直列化可能スナップショット分離）：** MVCC + 依存関係追跡。PostgreSQLの9.1以降のSerializable実装です。
-
-> [分離レベル](/ja/01-foundations/02-isolation-levels)でMVCCの内部構造、ロッキングプロトコル、SSIの実装詳細、アノマリの詳細を参照してください。
-
-### コネクションプールの落とし穴：接続ごとのSET TRANSACTION
-
-コネクションプール（PgBouncer、HikariCP）使用時によくある本番バグ：
-
-```sql
--- Developer intends Serializable for this one critical transaction:
-SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;
-BEGIN;
-SELECT balance FROM accounts WHERE id = 42;
-UPDATE accounts SET balance = balance - 100 WHERE id = 42;
-COMMIT;
-```
-
-**問題点：** コネクションプールがこの接続をプールに返却し、別のリクエストに渡すと、分離レベルの設定が残る場合があります（プールモードとデータベースによります）。PgBouncerのトランザクションモードプーリングでは、`SET`コマンドがセッション間で漏洩します。
-
-**正しいアプローチ：**
-
-```sql
--- Use BEGIN with isolation level (scoped to the transaction)
-BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
-SELECT balance FROM accounts WHERE id = 42;
-UPDATE accounts SET balance = balance - 100 WHERE id = 42;
-COMMIT;
--- Isolation level automatically resets after COMMIT/ROLLBACK
-```
-
-コネクションプール使用時は、分離レベルを常にBEGINの一部として設定し、別のSETコマンドとして実行しないでください。
-
----
-
-## 耐久性 — レイテンシの文字
-
-### なぜ重要か
-
-耐久性はユーザーがデータベースを信頼し続けるための約束です。COMMITが成功を返したとき、データはプロセスクラッシュ、OSクラッシュ、電源障害を生き延びなければなりません。この約束を破ることはサイレントなデータ喪失を意味します。これは最悪の種類のバグです。データが必要になるまで誰も気づかないからです。
-
-### fsyncの詳細
-
-`fsync()`は耐久性を現実にするシステムコールです。何をするか（そして何をしないか）を理解することが重要です。
-
-```text
-Application writes data:
-  1. write() → data goes to kernel page cache (RAM) → returns immediately
-  2. fsync() → kernel flushes page cache to disk controller → waits for ack
-  3. Disk controller writes to persistent media (platter or NAND cells)
-
-What fsync actually forces:
-  - Flush kernel page cache dirty pages for this file to the disk controller
-  - Flush the disk's volatile write buffer to persistent storage
-  - Wait for the disk to confirm the write is on stable media
-```
-
-**fsyncが嘘をつく場合：**
-
-```text
-Failure point 1: Disk write buffer
-  - Some disks report fsync complete before data leaves volatile write buffer
-  - Enterprise SSDs have capacitor-backed write buffers (safe)
-  - Consumer SSDs may not (unsafe for databases)
-  - Check: hdparm -W /dev/sda (Linux), 0 = write cache disabled
-
-Failure point 2: RAID controller cache
-  - Battery-backed (BBU) or flash-backed: safe
-  - No battery: fsync lies, data in volatile controller RAM
-
-Failure point 3: Filesystem behavior
-  - ext4 with data=ordered (default): metadata journaled, data flushed before metadata
-  - XFS: metadata journaled, data may have holes after crash on older kernels
-  - ZFS: copy-on-write, checksums — most reliable for databases
-```
-
-**PostgreSQLとfsync — 2018年のインシデント：**
-
-v12以前のPostgreSQLには致命的なバグがありました。fsync()が失敗した場合、PostgreSQLはダーティページがまだカーネルページキャッシュにあると仮定してfsyncをリトライしていました。しかし一部のLinuxカーネル（5.2以前）はfsync失敗時にページキャッシュからダーティページを削除していました。リトライのfsyncはクリーンなページをfsyncし、何も書き込まずに成功していました。つまりPostgreSQLはデータが永続化されたと思っていましたが、実際にはされていませんでした。
-
-PostgreSQL 12以降はfsync失敗に対してPANIC（クラッシュリカバリ）を実行します。カーネルの状態が信頼できないためです。
+## コミットから昇格までの耐久性
 
 ### WALの仕組み
 
-Write-Ahead LogはPostgreSQLにおける耐久性の礎石です（InnoDBではredo logが同じ役割を果たします）。
+PostgreSQLのログ対象テーブルでは、コミットレコードまで先行書き込みログ（WAL）をフラッシュすれば、トランザクションを永続化できます。変更されたテーブルのページは後から永続化できます。ダーティページを書き出す前に、エンジンはそのページの復旧に必要なWALをフラッシュします。再起動時、PostgreSQLはチェックポイントレコードを読み、そこに**記録された**redo位置から復旧を始めます。チェックポイントレコード自体の位置は別の座標です。
 
-**WALセグメントファイル（PostgreSQL 16）：**
+PostgreSQLは、コミットされなかったトランザクションの物理的な変更を再適用することもあります。可視性のルールによって、未コミットの新しい行バージョンは見えず、後からVACUUMが回収できます。InnoDBはロールバックと過去の読み取りのためにundoレコードを保持します。そのため、大規模なロールバックでは、アプリケーションが待つのをやめた後も処理が続きます。PostgreSQLでは後から行バージョンの回収コストが現れます。再適用、チェックポイント、部分書き込みからの復旧は[先行書き込みログ](../03-storage-engines/04-write-ahead-logging.md)を参照してください。
 
-```text
-$PGDATA/pg_wal/
-├── 000000010000000000000001   (16 MB segment, default)
-├── 000000010000000000000002
-├── 000000010000000000000003
-└── archive_status/
+フラッシュの成功を信頼できるのは、ファイルシステムとストレージが永続化の要求に従う場合です。ベンチマークでフラッシュのコストは測れますが、電源断に対するプロバイダーの保証までは確認できません。PostgreSQLのfsync障害はその違いを示しています。Linuxでは書き戻しエラーの報告後にページがクリーンとされた例があり、後続のフラッシュが成功しても、失敗した書き込みがディスクに到達した証拠にはなりませんでした。Linux 4.13で書き戻しエラーの報告が改善され、PostgreSQLは復旧時の対応を変更して、当時サポートしていた旧版にも修正を適用しました。
 
-Segment naming: TimelineID + (LSN >> 24)
-Default segment size: 16 MB (configurable at initdb with --wal-segsize)
-```
+### グループコミットとフラッシュのコスト
 
-**WALレコードの構造：**
+複数のコミットレコードを永続化する一回のWALフラッシュで、それらのコミットを保証できます。並行処理があれば、そのコストを複数のトランザクションで分担できます。意図的に待機を入れるとバッチが大きくなりますが、到着がまばらな場合はレイテンシが増えます。待機時間を変更する前に、実際の到着パターンでコミットレイテンシとWALフラッシュ待ちを測定します。
 
-```text
-Each WAL record contains:
-  - LSN (Log Sequence Number): unique, monotonically increasing position
-  - Transaction ID
-  - Resource manager ID (heap, btree, hash, etc.)
-  - Record type (insert, update, delete, commit, etc.)
-  - Before/after images of modified data (depending on full_page_writes setting)
-  - CRC checksum
-```
+PostgreSQLで `synchronous_commit = off` にすると、ローカルのWALフラッシュより前に応答を返せます。クラッシュ復旧で直近の応答済みトランザクションが失われる一方、トランザクションの整合性は保たれます。`fsync` の無効化とは故障時の結果が異なります。非同期コミットを採用できるのは、応答済みデータの損失をアプリケーションが許容できるか、復元できる場合です。振込の成功応答には通常、それより強い耐久性が求められます。
 
-**チェックポイント頻度とクラッシュリカバリ：**
+### スタンバイの応答とフェイルオーバー
 
-チェックポイントはshared_buffersのすべてのダーティバッファをデータファイルに書き込み、チェックポイントLSNを記録します。クラッシュリカバリ時、PostgreSQLは最後のチェックポイント以降のWALだけを再生すれば済みます。
+PostgreSQL 16では、スタンバイ側の進捗をwrite、flush、replayの三段階で捉えます。writeではスタンバイのOSまで届きます。flushでストレージに永続化されます。replayが済むと、そのスタンバイ上の新しいスナップショットからコミット結果を読めます。同期スタンバイが構成されていれば、`remote_write`、`on`、`remote_apply` はそれぞれの段階まで待ちます。`synchronous_standby_names` が空なら、`on` が待つのはローカルのWALフラッシュだけです。
 
-```text
-Crash recovery time ≈ (WAL generated since last checkpoint) / (sequential read throughput)
+`FIRST 2 (s1, s2, s3)` は、優先順位に従って選ばれた二つのスタンバイを待ちます。`ANY 2 (s1, s2, s3)` は、対象内の任意の二つのスタンバイの応答で待機を終えます。どちらの設定でも必要な応答が得られなければ、コミット待ちが長引きます。リーダー選出や昇格は別途実装します。
 
-Example:
-  checkpoint_timeout = 5 min (default)
-  WAL generation rate = 50 MB/s (busy OLTP)
-  Max WAL since checkpoint = 50 MB/s × 300s = 15 GB
-  SSD sequential read = 500 MB/s
-  Recovery time ≈ 15 GB / 500 MB/s = 30 seconds
+`s1` と `s2` がWALをフラッシュした後に、プライマリが振込の成功を返したとします。その後プライマリが故障し、自動化が遅れている `s3` を昇格させると、別の生存スタンバイに振込が残っていても、新しいプライマリには存在しないことがあります。想定する障害でデータ損失ゼロを約束するなら、保持するWALに基づいて昇格候補を決め、旧プライマリが古い履歴上で書き込みを受け付けないようにします。誤ったマイグレーションが全スタンバイに再適用されるような障害には、バックアップからの復元演習が必要です。
 
-Tuning tradeoffs:
-  - Shorter checkpoint interval → faster recovery, more I/O during normal operation
-  - Longer checkpoint interval → slower recovery, less I/O overhead
-  - max_wal_size controls when a checkpoint is forced (default: 1 GB)
-```
+## デプロイされた契約を検証する
 
-**InnoDBのredo log（MySQL 8.0）：**
-
-```text
-InnoDB uses a circular redo log (ib_logfile0, ib_logfile1 in older versions;
-  #ib_redo directory with multiple files in MySQL 8.0.30+):
-
-  - Fixed total size: innodb_redo_log_capacity (default 100 MB in 8.0.30+)
-  - Circular buffer: head advances as new records are written
-  - Tail advances as checkpoints flush dirty pages
-  - If head catches tail: all transactions stall until checkpoint completes
-
-  Sizing rule of thumb:
-  - Redo log should hold ~1 hour of writes for busy systems
-  - Too small: frequent checkpoint stalls, spiky latency
-  - Too large: longer crash recovery time
-```
-
-### グループコミット：WALフラッシュのバッチ化
-
-すべてのCOMMITにはWALのfsyncが必要です。fsyncはデータサイズに関係なく固定のオーバーヘッドがあるため、10トランザクション分を1回でfsyncするのは1トランザクション分を1回fsyncするのとほぼ同じ速さです。
-
-**グループコミット**は複数の同時コミットを単一のWALフラッシュにバッチ化します。
-
-```text
-Without group commit:
-  T1: write WAL → fsync (2ms) → return
-  T2: write WAL → fsync (2ms) → return
-  T3: write WAL → fsync (2ms) → return
-  Total: 6ms, max throughput ≈ 500 commits/sec per disk
-
-With group commit:
-  T1: write WAL → wait
-  T2: write WAL → wait
-  T3: write WAL → wait
-  Leader: fsync all three → return to T1, T2, T3
-  Total: 2ms for all three, throughput scales with concurrency
-```
-
-**PostgreSQLのグループコミットチューニング（v16）：**
-
-```text
-# postgresql.conf
-
-# How long to delay before flushing WAL, hoping more commits arrive
-commit_delay = 10          # microseconds (default: 0 = disabled)
-
-# Only delay if at least this many transactions are active
-commit_siblings = 5        # (default: 5)
-
-# Effect: if ≥ 5 concurrent transactions, wait 10μs before fsync
-# This batches more commits into each fsync, improving throughput
-# at the cost of 10μs additional latency per commit
-```
-
-**グループコミットをチューニングするタイミング：**
-- 高いコミットレート（1000コミット/秒超）でfsyncがコミットレイテンシを支配している場合
-- fsyncレイテンシが高いストレージ（ネットワーク接続型、クラウドボリューム）
-- 小さなトランザクションが多いワークロード
-
-**InnoDBのグループコミット（MySQL 8.0）：**
-
-```text
-InnoDB implements group commit in three stages:
-1. FLUSH stage: write redo log to OS buffer
-2. SYNC stage: fsync the redo log (where batching happens)
-3. COMMIT stage: update transaction status
-
-# my.cnf
-innodb_flush_log_at_trx_commit = 1  # 1 = fsync every commit (default, safest)
-                                     # 2 = write to OS buffer every commit, fsync once/sec
-                                     # 0 = write+fsync once/sec (data loss on crash)
-binlog_group_commit_sync_delay = 0   # microseconds to wait for more transactions
-binlog_group_commit_sync_no_delay_count = 0  # commit immediately if this many waiting
-```
-
-### synchronous_commit = off：許容される場合
-
-PostgreSQLの`synchronous_commit`は、COMMITがWALのfsyncを待つかどうかを制御します。
+アプリケーションと同じ接続経路で有効な設定を確認します。プライマリからスタンバイのflush位置とreplay位置を比較し、どのスタンバイがコミット待ちの対象かを確認します。設定値だけでは、個々のトランザクションで何を待ったかや、障害時に生存ノードが約束を守れるかは分かりません。
 
 ```sql
--- Per-transaction override (PostgreSQL 16)
-SET LOCAL synchronous_commit = off;
--- Subsequent COMMIT returns immediately, WAL fsynced asynchronously
--- Risk window: ~10ms of data loss (3 × wal_writer_delay)
+SHOW transaction_isolation;
+SHOW synchronous_commit;
+SHOW synchronous_standby_names;
+SHOW fsync;
+SHOW full_page_writes;
+
+SELECT application_name, state, sync_state, write_lsn, flush_lsn, replay_lsn
+FROM pg_stat_replication;
 ```
 
-**失うもの：** PostgreSQLがコミットから約10ms以内にクラッシュした場合、そのトランザクションの変更は失われる可能性があります。データベースの整合性は保たれます（破損なし）が、コミット済みのトランザクションが消える可能性があります。
+| 演習 | 合格条件 |
+|---|---|
+| 正当な二つの引き落としを競合させる | 後続処理の失敗が確定する。残高の合計が保たれ、コミット済みの振込記録と一致する。 |
+| コミット前後で接続を遮断する | 同じ操作IDで再試行しても効果は一度だけ生じる。中止と、結果を確定する証拠がない場合を区別できる。 |
+| 成功応答の後にプライマリを失う | 定義した障害モデルで保護される応答済み振込を、新しい書き込みノードで確認できる。旧プライマリは書き込みを受け付けない。 |
+| 誤削除から復旧する | 検証済みのバックアップとWALアーカイブから意図した復旧時点へ戻せる。復旧時間を測り、書き込み再開前に記録を突合する。 |
 
-**許容される場合：**
-- 数秒分のデータ喪失が許容されるログ/アナリティクスの挿入
-- 再構築可能なセッション状態やキャッシュの書き込み
-- リプレイを処理するダウンストリームコンシューマーがある高スループットのイベント取り込み
+## 設計判断
 
-**許容されない場合：**
-- 金融トランザクション
-- アプリケーションがユーザーに対して成功を既に通知した書き込み
-- 不可逆な副作用（送信済みメール、API呼び出し）をトリガーする書き込み
+- **一つの書き込み権限で不変条件を守れる場合は、ローカルトランザクションを使います。** 制約と条件付き更新から始め、既知の行をまたぐ判断には順序を統一したロックを使い、述語をまたぐ判断にはSerializableを検討します。不変条件を壊す実行履歴を試験します。
+- **成功応答が耐える障害を明示します。** プロセス再起動、ホスト喪失、ゾーン喪失のどれを想定するかを記録します。スタンバイのフラッシュと昇格の手順を確認し、昇格後に応答済みの振込を照合します。
+- **再試行には同じ操作IDを使います。** 直列化によって中止された場合はトランザクション全体を再実行します。コミット結果が不明な場合は元の操作IDを保持して解決します。
+- **シャード間のコミットとシャード間の可視性をそれぞれ定義します。** 二相コミットは参加者に一つの永続的なcommitまたはabortの決定を与えます。準備済みの参加者が決定を待ち続ける場合も、一方のシャードが適用した変更を、他方の適用前に独立した読み取りから観測できる場合もあります。必要な読み取り保証を含む分散トランザクションプロトコルを使います。イベントの配信意図にはアウトボックスを用い、外部での効果を突合、補償する場合は永続的なワークフローを使います。
 
-```text
-Performance impact (typical SSD):
-  synchronous_commit = on:  ~3,000 commits/sec
-  synchronous_commit = off: ~30,000 commits/sec (10x improvement)
+## 参考文献
 
-The gap widens on high-latency storage (cloud EBS, network-attached).
-```
-
-### クラウドの落とし穴：すべてのfsyncが同等ではない
-
-クラウドブロックストレージは耐久性保証を変える抽象化レイヤーを導入します。
-
-**AWS EBSボリューム：**
-
-```text
-Volume Type    | IOPS (baseline) | fsync latency  | Durability notes
----------------|-----------------|----------------|------------------
-gp3            | 3,000           | 0.5–2ms        | Replicated within AZ
-io2 Block Expr | up to 256,000   | 0.2–0.5ms      | 99.999% durability SLA
-io1            | up to 64,000    | 0.3–1ms        | 99.8–99.9% durability
-st1 (HDD)     | 500 (throughput) | 5–20ms         | Not suitable for WAL
-
-Key insight: EBS replicates within a single AZ. An AZ outage can
-lose EBS volumes. Cross-AZ replication (RDS Multi-AZ, streaming
-replication) is your second tier of durability.
-```
-
-**GCP Persistent Disk：**
-- pd-ssd：EBS gp3と同等のパフォーマンス
-- Local SSD：最も低いレイテンシだが**エフェメラル** — VM停止/移行でデータ喪失。レプリケーションなしでWALに使用しないでください。
-
-**クラウドストレージの一般的なルール：** クラウドプロバイダーのfsyncが正しいと仮定しつつ、`diskchecker.pl`や`fsync=1`オプション付きの`fio`で検証してください。一部のVMタイプやハイパーバイザー設定はfsyncを正しく処理しない場合があります。
-
-### 耐久性の第二層としてのレプリケーション
-
-単一のディスク（または単一のEBSボリューム）は本番環境の耐久性としては不十分です。ディスクは故障し、AZはオフラインになり、リージョン全体が障害を起こすこともあります。
-
-```text
-Durability tiers (PostgreSQL):
-
-Tier 0: synchronous_commit = off
-  - WAL in memory only, fsynced asynchronously
-  - Risk: lose ~10ms of commits on crash
-  - Use: ephemeral data
-
-Tier 1: synchronous_commit = on (default)
-  - WAL fsynced to local disk before COMMIT returns
-  - Risk: disk failure loses data; AZ failure loses data
-  - Use: single-node development, small deployments
-
-Tier 2: Synchronous streaming replication
-  - WAL shipped to standby AND fsynced on standby before COMMIT returns
-  - synchronous_standby_names = 'standby1'
-  - Risk: simultaneous failure of primary + standby
-  - Cost: commit latency includes network RTT to standby (~1ms same AZ)
-  - Use: production databases requiring durability
-
-Tier 3: Synchronous replication to multiple standbys across AZs
-  - synchronous_standby_names = 'FIRST 2 (standby1, standby2, standby3)'
-  - Risk: simultaneous AZ failure (extremely rare)
-  - Cost: commit latency = max(RTT to required standbys) (~2-5ms cross-AZ)
-  - Use: critical financial/healthcare systems
-```
+- PostgreSQL 16の[UPDATE](https://www.postgresql.org/docs/16/sql-update.html#SQL-UPDATE-OUTPUTS)、[Transaction Isolation](https://www.postgresql.org/docs/16/transaction-iso.html)、[Function Volatility Categories](https://www.postgresql.org/docs/16/xfunc-volatility.html)は、更新件数ゼロの場合とスナップショットの取得時点を説明しています。
+- PostgreSQL 16の[Explicit Locking](https://www.postgresql.org/docs/16/explicit-locking.html)とMySQL 8.4の[Savepoint Statements](https://dev.mysql.com/doc/refman/8.4/en/savepoint.html)は、部分ロールバック後のロックの挙動を説明しています。
+- PostgreSQL 16の[WAL Internals](https://www.postgresql.org/docs/16/wal-internals.html)、[WAL Configuration](https://www.postgresql.org/docs/16/runtime-config-wal.html)、[Synchronous Replication](https://www.postgresql.org/docs/16/warm-standby.html#SYNCHRONOUS-REPLICATION)は、redo位置とコミット応答の条件を定義しています。
+- PostgreSQLプロジェクトの[Fsync Errors](https://wiki.postgresql.org/wiki/Fsync_Errors)は、LinuxとPostgreSQLで行われた変更をまとめています。
+- Amazon Builders' Libraryの[Making Retries Safe with Idempotent APIs](https://aws.amazon.com/builders-library/making-retries-safe-with-idempotent-APIs/)は、リクエストの識別と安全な再試行を説明しています。
+- Jim GrayとLeslie Lamportの[Consensus on Transaction Commit](https://www.microsoft.com/en-us/research/publication/consensus-on-transaction-commit/)は、原子的コミットの問題と二相コミットのブロッキングを形式化しています。
 
 ---
 
-## 本番環境での障害モード（トランザクション固有）
-
-これらはトランザクションの誤用に固有の障害パターンです。 → 一般的な分類については[障害モード](06-failure-modes.md)を参照してください。
-
-### 適切な分離性なしでの更新喪失
-
-本番環境で最もよくあるトランザクションバグです。
-
-**パターン（読み取り後書き込み）：**
-
-```python
-# DANGEROUS: Python with psycopg2 (PostgreSQL 16)
-# Two concurrent requests both try to increment a counter
-
-# Request 1                          # Request 2
-cur.execute("SELECT count            cur.execute("SELECT count
-  FROM counters WHERE id=1")           FROM counters WHERE id=1")
-count = cur.fetchone()[0]  # 10      count = cur.fetchone()[0]  # 10
-count += 1                            count += 1
-cur.execute("UPDATE counters          cur.execute("UPDATE counters
-  SET count=%s WHERE id=1",             SET count=%s WHERE id=1",
-  (count,))                             (count,))
-# Final value: 11 (should be 12)
-```
-
-**修正 — アトミックUPDATE：**
-
-```sql
--- Correct: single atomic statement, no read-then-write race
-UPDATE counters SET count = count + 1 WHERE id = 1;
-```
-
-**読み取り後書き込みが必要な場合（複雑なロジック）：**
-
-```sql
--- Use SELECT FOR UPDATE to acquire a row lock
-BEGIN TRANSACTION ISOLATION LEVEL READ COMMITTED;
-SELECT balance FROM accounts WHERE id = 42 FOR UPDATE;
--- Row is now locked; concurrent transactions block here
--- ... compute new balance in application ...
-UPDATE accounts SET balance = 350.00 WHERE id = 42;
-COMMIT;
-```
-
-### Read Committedでの部分的コミット可視性
-
-Read CommittedはPostgreSQLのデフォルトです。トランザクション内の各**ステートメント**は新しいスナップショットを見ます。長いトランザクションで微妙なバグを引き起こします。
-
-```sql
--- Session 1 (reporting query)
-BEGIN;
-SELECT sum(balance) FROM accounts WHERE region = 'US';
--- Returns $1,000,000
-
--- Meanwhile, Session 2 commits: moves $50,000 from US to EU account
-
-SELECT sum(balance) FROM accounts WHERE region = 'EU';
--- This SELECT sees Session 2's commit! Different snapshot than the first SELECT.
--- The report shows $50,000 appearing from nowhere.
-COMMIT;
-```
-
-**修正：** 一貫したスナップショットを必要とするレポートクエリにはRepeatable Readを使用してください。
-
-```sql
-BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ;
-SELECT sum(balance) FROM accounts WHERE region = 'US';
--- ... even if other transactions commit here ...
-SELECT sum(balance) FROM accounts WHERE region = 'EU';
--- Both SELECTs see the same snapshot
-COMMIT;
-```
-
-### リソースを保持する長時間トランザクション
-
-```text
-Symptoms:
-  - Lock wait timeouts on unrelated queries
-  - Bloated table sizes (PostgreSQL: dead tuples not vacuumed)
-  - Replication lag (slot can't advance past long tx)
-  - "too many clients already" connection exhaustion
-
-Root causes:
-  - BEGIN with no matching COMMIT (idle in transaction)
-  - Application exception skipping COMMIT/ROLLBACK
-  - Batch jobs running in a single transaction
-
-Monitoring (PostgreSQL 16):
-```
-
-```sql
--- Find long-running transactions
-SELECT pid, now() - xact_start AS duration, state, query
-FROM pg_stat_activity
-WHERE state = 'idle in transaction'
-  AND now() - xact_start > interval '5 minutes'
-ORDER BY duration DESC;
-
--- Nuclear option: terminate the session
-SELECT pg_terminate_backend(pid);
-```
-
-**予防策：**
-
-```text
-# postgresql.conf
-idle_in_transaction_session_timeout = '30s'   # kill idle-in-transaction after 30s
-statement_timeout = '60s'                      # kill any statement after 60s
-lock_timeout = '5s'                            # fail fast on lock waits
-```
-
-### オートコミットの誤用
-
-ほとんどのデータベースドライバはデフォルトでautocommit=onとなっており、各ステートメントを独自のトランザクションでラップします。単純なクエリでは正しいですが、開発者が複数ステートメントのロジックに明示的なトランザクションが必要であることに気づかない場合、問題を引き起こします。
-
-```python
-# DANGEROUS: each statement is a separate transaction
-conn.autocommit = True
-cur.execute("UPDATE accounts SET balance = balance - 100 WHERE id = 1")
-# ← crash here means money vanished
-cur.execute("UPDATE accounts SET balance = balance + 100 WHERE id = 2")
-```
-
-```python
-# CORRECT: explicit transaction
-conn.autocommit = False
-try:
-    cur.execute("UPDATE accounts SET balance = balance - 100 WHERE id = 1")
-    cur.execute("UPDATE accounts SET balance = balance + 100 WHERE id = 2")
-    conn.commit()
-except Exception:
-    conn.rollback()
-    raise
-```
-
-**SQLAlchemy コンテキストマネージャパターン（推奨）：**
-
-```python
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session
-
-engine = create_engine("postgresql+psycopg2://localhost/mydb")
-
-with Session(engine) as session, session.begin():
-    # All operations in this block are a single transaction
-    session.execute(text("UPDATE accounts SET balance = balance - 100 WHERE id = 1"))
-    session.execute(text("UPDATE accounts SET balance = balance + 100 WHERE id = 2"))
-# Automatic COMMIT on clean exit, ROLLBACK on exception
-```
-
----
-
-## 判断フレームワーク
-
-### 分離レベルの選択
-
-| ユースケース | 推奨レベル | 理由 | パフォーマンスコスト |
-|-------------|-----------|------|-------------------|
-| シンプルなCRUD Webアプリ | Read Committed | 重複しない書き込みには十分 | 基準値（1x） |
-| 金融送金 | Serializable | 書き込みスキュー、ファントムリードを防止 | 競合時に2〜5倍遅い |
-| レポート/アナリティクス | Repeatable Read | ステートメント間の一貫したスナップショット | 約1x（MVCCスナップショットは低コスト） |
-| 在庫管理（在庫数） | Read Committed + SELECT FOR UPDATE | 特定行の行レベルロック | 1x + ロック待ち時間 |
-| カウンターの増分 | Read Committed + アトミックUPDATE | 単一ステートメント、競合の余地なし | 1x |
-| 当直の台帳照合 | Serializable | すべてのアノマリを防止する必要がある | 2〜5x、シリアライゼーション失敗時にリトライ |
-
-### 2PC vs Saga vs Outboxの使い分け
-
-| パターン | 保証 | レイテンシ | 複雑さ | 使用するタイミング |
-|---------|------|----------|--------|------------------|
-| **2PC** | 参加者間の原子性 | 参加者あたり+5〜20ms | 中 | PREPARE TRANSACTIONをサポートするデータベース。参加者が少数（5未満） |
-| **Saga** | 補償アクションによる結果整合性 | 低（非同期ステップ） | 高（補償の正しい実装は難しい） | マイクロサービス、長期ワークフロー、サードパーティAPI呼び出し |
-| **Outbox** | at-least-once配信、ローカル原子性 | 低（ポーリング/CDC遅延） | 中 | 単一DB → メッセージブローカー、イベント駆動アーキテクチャ |
-
-**判断のヒューリスティック：**
-- すべての参加者が同じデータベースに収まるか？ → ローカルトランザクションを使用。2PCは不要。
-- すべての参加者が自分で管理するデータベースか？ → レイテンシが許容範囲なら2PCは実行可能。
-- ワークフローに外部サービス（決済、メール、API）が含まれるか？ → Saga。
-- データベース書き込みとアトミックにイベントを発行する必要があるか？ → Outboxパターン。
-
----
-
-## コード例
-
-### PostgreSQL：分離性を示す2つのセッション
-
-同じPostgreSQL 16データベースに接続した2つの`psql`セッションを開きます。
-
-**セットアップ：**
-
-```sql
-CREATE TABLE accounts (id INT PRIMARY KEY, balance NUMERIC NOT NULL);
-INSERT INTO accounts VALUES (1, 500), (2, 200);
-```
-
-**デモ：Read Committedはダーティリードを防ぎますが、非反復読み取りを許容します：**
-
-```text
-Session A (default Read Committed):      Session B:
-─────────────────────────────────────     ──────────────────────────────
-BEGIN;                                    BEGIN;
-UPDATE accounts SET balance = 400
-  WHERE id = 1;
-                                          SELECT balance FROM accounts
-                                            WHERE id = 1;
-                                          -- Returns 500 (not 400!)
-                                          -- Dirty read prevented ✓
-COMMIT;
-                                          SELECT balance FROM accounts
-                                            WHERE id = 1;
-                                          -- Returns 400
-                                          -- Non-repeatable read! The
-                                          -- value changed within the
-                                          -- same transaction.
-                                          COMMIT;
-```
-
-**デモ：Repeatable Readはスナップショット整合性を提供します：**
-
-```text
-Session A:                                Session B (Repeatable Read):
-─────────────────────────────────────     ──────────────────────────────
-                                          BEGIN TRANSACTION ISOLATION
-                                            LEVEL REPEATABLE READ;
-                                          SELECT balance FROM accounts
-                                            WHERE id = 1;
-                                          -- Returns 500
-BEGIN;
-UPDATE accounts SET balance = 400
-  WHERE id = 1;
-COMMIT;
-                                          SELECT balance FROM accounts
-                                            WHERE id = 1;
-                                          -- Still returns 500!
-                                          -- Snapshot is frozen at BEGIN
-                                          COMMIT;
-```
-
-### Python SQLAlchemy：SELECT FOR UPDATEパターン
-
-```python
-# Python 3.11+ / SQLAlchemy 2.0 / PostgreSQL 16
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import Session
-
-engine = create_engine(
-    "postgresql+psycopg2://user:pass@localhost:5432/mydb",
-    pool_size=10,
-    pool_pre_ping=True,  # detect stale connections
-)
-
-def transfer(from_id: int, to_id: int, amount: float) -> None:
-    """Transfer funds between accounts with proper locking.
-
-    Acquires row locks in consistent order (lower ID first) to prevent deadlocks.
-    """
-    # Lock ordering: always lock lower ID first to prevent deadlock
-    first_id, second_id = sorted([from_id, to_id])
-
-    with Session(engine) as session, session.begin():
-        # Acquire row locks in deterministic order
-        rows = session.execute(
-            text("""
-                SELECT id, balance FROM accounts
-                WHERE id IN (:id1, :id2)
-                ORDER BY id
-                FOR UPDATE
-            """),
-            {"id1": first_id, "id2": second_id},
-        ).fetchall()
-
-        balances = {row.id: row.balance for row in rows}
-
-        if balances[from_id] < amount:
-            raise ValueError(f"Insufficient funds: {balances[from_id]} < {amount}")
-
-        session.execute(
-            text("UPDATE accounts SET balance = balance - :amt WHERE id = :id"),
-            {"amt": amount, "id": from_id},
-        )
-        session.execute(
-            text("UPDATE accounts SET balance = balance + :amt WHERE id = :id"),
-            {"amt": amount, "id": to_id},
-        )
-    # COMMIT happens here; ROLLBACK on exception
-```
-
-この例の重要なポイント：
-- **ロック順序**（`sorted([from_id, to_id])`）は、2つの同時送金が逆方向に実行された場合のデッドロックを防ぎます
-- **`FOR UPDATE`**は行レベルの排他ロックを取得し、並行する変更をブロックします
-- **`session.begin()`コンテキストマネージャ**は例外時にROLLBACKを保証します
-- **`pool_pre_ping=True`**はPgBouncerやネットワークタイムアウトによって切断された接続を処理します
-
----
-
-## 実践でのACID
-
-| データベース | バージョン | デフォルト分離レベル | 耐久性メカニズム | WAL/Redoサイズのデフォルト | 注意点 |
-|-------------|-----------|-------------------|-----------------|--------------------------|--------|
-| PostgreSQL | 16 | Read Committed | WAL + fsync | max_wal_size=1GB | `synchronous_commit=on`がデフォルト。`idle_in_transaction_session_timeout`はデフォルトで無効 |
-| MySQL InnoDB | 8.0 | Repeatable Read | Redo log + doublewrite buffer | innodb_redo_log_capacity=100MB | `innodb_flush_log_at_trx_commit=1`は安全なデフォルトだがプロビジョニング後に確認が必要 |
-| MongoDB | 7.0 | Read Committed（レプリカセットではsnapshot） | Journal（WiredTiger WAL） | 100MB journal | デフォルトのwrite concern `w:1`はレプリケーション待機なし。耐久性には`w:majority`を使用 |
-| SQLite | 3.44 | Serializable | WALモードまたはロールバックジャーナル | N/A | WALモードは共有メモリが必要。ネットワークファイルシステムでは動作しない |
-| CockroachDB | 23.2 | Serializable（唯一のレベル） | Raft合意 + RocksDB WAL | N/A | より弱い分離レベルは利用不可。アプリケーションでのシリアライゼーションリトライが必要 |
-| SQL Server | 2022 | Read Committed | トランザクションログ | 自動拡張 | `READ_COMMITTED_SNAPSHOT`はデフォルトで無効（MVCCではなくロックを使用） |
-
-### 警告：デフォルト設定を確認してください
-
-本番データベースは単一ノードでの安全性に最適化されたデフォルトで出荷されます。しかしマネージドサービス、コンテナ、プロビジョニングスクリプトはしばしばそれらを上書きします。デプロイごとに確認してください：
-
-```sql
--- PostgreSQL: verify critical durability settings
-SHOW synchronous_commit;         -- should be 'on' for critical data
-SHOW fsync;                       -- should be 'on' (NEVER disable in production)
-SHOW full_page_writes;            -- should be 'on' (prevents torn pages)
-SHOW wal_level;                   -- 'replica' or 'logical' for replication
-
--- MySQL: verify InnoDB settings
-SHOW VARIABLES LIKE 'innodb_flush_log_at_trx_commit';  -- should be 1
-SHOW VARIABLES LIKE 'innodb_doublewrite';               -- should be ON
-SHOW VARIABLES LIKE 'sync_binlog';                      -- should be 1 for durability
-```
-
----
-
-## 重要なポイント
-
-1. **原子性**はundo log（InnoDB）またはWAL + MVCC（PostgreSQL）で実装されます。ロールバックコストはInnoDBではトランザクションサイズに比例し、PostgreSQLではほぼ無料です。
-2. **整合性**は最も弱い文字です。宣言した制約のみを強制します。シャード間外部キーは事実上不可能です。分散システムはこの保証を暗黙的に弱めます。
-3. **分離性**にはレベルがあり、それぞれ実際のパフォーマンスコストがあります。デフォルトのRead CommittedはOLTPではほぼ間違いありませんが、レポートクエリにはRepeatable Readが必要です。分離レベルは常にBEGIN内で設定し、SETでは設定しないでください。
-4. **耐久性**はスタックです：WAL → fsync → ディスクファームウェア → レプリケーション。各レイヤーが嘘をつきえます。fsyncの動作を検証し、重要なデータには同期レプリケーションを使用し、テストなしにクラウドストレージを信用しないでください。
-5. **2PC**は分散原子性を可能にしますが、コーディネータが単一障害点になります。データベース間トランザクションに使用し、外部サービスを含むものにはSagaを使用してください。
-6. **グループコミット**は無料のスループットです。高スループットシステムでは`commit_delay`と`commit_siblings`を調整してください。
-7. **最もよくある本番バグ**はロックなしの読み取り後書き込みです。アトミックUPDATE文またはSELECT FOR UPDATEを決定的なロック順序で使用してください。
+## 関連する章
+
+- [分離レベル](02-isolation-levels.md)は、制約、ロック、直列化で防ぐべき実行履歴を説明します。
+- [冪等性と操作ID](08-idempotency.md)は、コミット応答を失ったときの解決方法と、遅れて届いた再試行への対処を説明します。
+- [先行書き込みログ](../03-storage-engines/04-write-ahead-logging.md)は、コミットレコードとページの復旧、チェックポイント、レプリカの再適用の関係を説明します。
+- [分散トランザクション](../02-distributed-databases/07-distributed-transactions.md)は、不変条件が複数の書き込み権限にまたがったときに決定と可視性を調整する方法を説明します。
