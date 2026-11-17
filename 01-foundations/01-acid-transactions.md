@@ -4,6 +4,13 @@
 
 ACID names four properties of a transaction, but the label alone is not a complete contract. The exact isolation level, durability boundary, replication acknowledgement, and failure assumptions vary by database and configuration. Each letter hides real engineering tradeoffs: undo versus redo, flush latency versus durability, and concurrency control versus throughput. Read the product's documented semantics and verify the deployed configuration instead of treating "ACID" as a binary feature flag.
 
+This chapter walks the four letters in cost order rather than alphabetically:
+
+- **Atomicity** first, because it draws the boundary every other guarantee sits inside;
+- **Isolation** second, because it carries the market price and is the level teams inherit by default;
+- **Consistency** third, because an invariant nobody encoded does not exist;
+- **Durability** last, with the configuration checks that decide whether any of it held.
+
 ---
 
 ## The Problem ACID Solves
@@ -198,6 +205,106 @@ Two-phase commit also has a performance cost in the normal case. The prepare and
 
 ---
 
+## Isolation: The Expensive Letter
+
+### The Core Challenge
+
+Isolation answers the question "what do concurrent transactions see of one another?" The ideal answer is serializability: the result matches some order of running the transactions one at a time. That is simple to state and expensive to provide, because the database must either stop conflicting transactions from overlapping or detect the overlap and abort one of them, and both cost throughput. Weaker levels permit specific anomalies in exchange for concurrency, and the level in force is very often a default nobody on the team chose.
+
+### Isolation Levels Summary
+
+| Level | Dirty Reads | Non-Repeatable Reads | Phantom Reads | Write Skew |
+|-------|-------------|----------------------|---------------|------------|
+| Read Uncommitted | Yes | Yes | Yes | Yes |
+| Read Committed | No | Yes | Yes | Yes |
+| Repeatable Read | No | No | Implementation-dependent; PostgreSQL and InnoDB snapshot implementations prevent them | Often possible under snapshot isolation |
+| Serializable | No | No | No | No |
+
+This table is a starting point and not a portable specification. Engines map the SQL level names onto different mechanisms, and PostgreSQL, for one, silently promotes `READ UNCOMMITTED` to `READ COMMITTED`. Serializable prevents these anomalies for transactions that commit, but it does so partly by refusing to commit some of them, and the application must retry on a serialization failure.
+
+Four implementation approaches are in common use. *Two-phase locking* has transactions acquire locks and block one another; SQL Server uses it for Serializable. *MVCC* keeps multiple versions of each row so that ordinary reads usually do not block ordinary writes, although locks are still needed for some writes, for constraints, and for schema operations; PostgreSQL and InnoDB use it for most levels. *Optimistic concurrency control* assumes conflicts are rare, lets transactions run without locks, and validates at commit time; some in-memory databases use it. *Serializable snapshot isolation* adds dependency tracking to MVCC and aborts a transaction when the tracked dependencies could form a non-serializable cycle; it has been PostgreSQL's Serializable implementation since 9.1.
+
+[Isolation Levels](02-isolation-levels.md) develops the MVCC internals, the locking protocols, the serializable snapshot isolation implementation, and the anomaly-by-anomaly traces behind that table; this chapter stops at what each level costs a transaction.
+
+### PostgreSQL: Two Sessions Showing Isolation
+
+The behavior of isolation levels is easiest to believe after watching it. Open two `psql` sessions connected to the same PostgreSQL database and create a small table:
+
+```sql
+CREATE TABLE accounts (id INT PRIMARY KEY, balance NUMERIC NOT NULL);
+INSERT INTO accounts VALUES (1, 500), (2, 200);
+```
+
+At Read Committed, session B never sees A's uncommitted change, but it does see the committed change in the middle of its own transaction:
+
+```text
+Session A (default Read Committed):      Session B:
+─────────────────────────────────────     ──────────────────────────────
+BEGIN;                                    BEGIN;
+UPDATE accounts SET balance = 400
+  WHERE id = 1;
+                                          SELECT balance FROM accounts
+                                            WHERE id = 1;
+                                          -- Returns 500 (not 400!)
+                                          -- Dirty read prevented ✓
+COMMIT;
+                                          SELECT balance FROM accounts
+                                            WHERE id = 1;
+                                          -- Returns 400
+                                          -- Non-repeatable read! The
+                                          -- value changed within the
+                                          -- same transaction.
+                                          COMMIT;
+```
+
+At Repeatable Read, session B keeps the snapshot it started with, whatever A commits in the meantime:
+
+```text
+Session A:                                Session B (Repeatable Read):
+─────────────────────────────────────     ──────────────────────────────
+                                          BEGIN TRANSACTION ISOLATION
+                                            LEVEL REPEATABLE READ;
+                                          SELECT balance FROM accounts
+                                            WHERE id = 1;
+                                          -- Returns 500
+BEGIN;
+UPDATE accounts SET balance = 400
+  WHERE id = 1;
+COMMIT;
+                                          SELECT balance FROM accounts
+                                            WHERE id = 1;
+                                          -- Still returns 500!
+                                          -- Snapshot is frozen at BEGIN
+                                          COMMIT;
+```
+
+### Connection Pool Gotcha: Transaction-Scoped vs Session-Scoped Settings
+
+Connection pools such as PgBouncer and HikariCP introduce a production bug that is easy to create and hard to see, because it depends on which connection a request happens to borrow.
+
+PostgreSQL's `SET TRANSACTION` applies only to the current transaction and must run after `BEGIN` and before the first query. It does **not** leak into later transactions. By contrast, `SET SESSION CHARACTERISTICS AS TRANSACTION ...` changes the default for every subsequent transaction on that backend session. If the pool does not reset session state when a connection is returned, the next borrower inherits that default without knowing it.
+
+The safe forms keep the scope visible in the statement itself:
+
+```sql
+-- Preferred: make the scope explicit in one statement.
+BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+SELECT balance FROM accounts WHERE id = 42;
+UPDATE accounts SET balance = balance - 100 WHERE id = 42;
+COMMIT;
+-- Isolation level automatically resets after COMMIT/ROLLBACK
+
+-- Also valid, provided it occurs before the first query:
+BEGIN;
+SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+-- ... statements ...
+COMMIT;
+```
+
+We prefer a transaction API or `BEGIN ... ISOLATION LEVEL`, so that the scope is visible where the transaction starts. If code changes session defaults or any other session state, we configure and test the pool's reset behavior. Transaction pooling does not make arbitrary session commands safe.
+
+---
+
 ## Consistency: Invariants Are a Shared Responsibility
 
 ### What the Database Enforces vs What It Can't
@@ -218,7 +325,7 @@ The letter C carries a second difficulty, which is that the same word names diff
 | CAP theorem | A read/write object remains linearizable while messages may be lost or delayed | Usually quorum/consensus protocols |
 | Replica convergence | Replicas that receive the same updates eventually compute the same state | Replication and merge protocol |
 
-These three concepts have little in common beyond the word. → see [Consistency Models](04-consistency-models.md) for linearizability, causal consistency, and eventual consistency. When someone says "this system is consistent," we ask which definition they mean before agreeing or disagreeing.
+These three concepts have little in common beyond the word, and [Consistency Models](04-consistency-models.md) is where linearizability, causal consistency, and eventual consistency are defined. When someone says "this system is consistent," we ask which definition they mean before agreeing or disagreeing.
 
 ### Deferred Constraints
 
@@ -284,57 +391,9 @@ The choice is a tradeoff between data placement and correctness. It is not evide
 
 ### Constraint Enforcement Becomes Distributed Work
 
-On a single node, checking a constraint is an index lookup. When the constrained rows or indexes live on another node, the same check becomes distributed work. Every cross-shard constraint check adds network round trips. Locks held across nodes make deadlock detection expensive. The system must also maintain the extra indexes and the distributed transaction metadata that the check depends on.
+On a single node a constraint check is an index lookup; with the rows or indexes on another node it becomes distributed work. Each check adds network round trips, locks held across nodes make deadlock detection expensive, and the extra indexes and distributed transaction metadata must be maintained.
 
-Some systems deliberately omit or relax these constraints for latency, availability, or operational simplicity. Distributed SQL systems may preserve them and charge the coordination cost. "ACID" does not imply that constraints are local to one shard, and CAP does not require abandoning invariants during normal operation. → see [CAP Theorem](03-cap-theorem.md)
-
----
-
-## Isolation: The Expensive Letter
-
-### The Core Challenge
-
-Isolation answers the question "what do concurrent transactions see of one another?" The ideal answer is serializability: the result is the same as if the transactions had run one at a time, in some order. This is simple to state and expensive to provide, because the database must either prevent conflicting transactions from overlapping or detect the overlap and abort one of them. Both cost throughput. Databases therefore offer weaker levels that permit specific anomalies in exchange for more concurrency, and the level in force is very often a default that nobody on the team chose.
-
-### Isolation Levels Summary
-
-| Level | Dirty Reads | Non-Repeatable Reads | Phantom Reads | Write Skew |
-|-------|-------------|----------------------|---------------|------------|
-| Read Uncommitted | Yes | Yes | Yes | Yes |
-| Read Committed | No | Yes | Yes | Yes |
-| Repeatable Read | No | No | Implementation-dependent; PostgreSQL and InnoDB snapshot implementations prevent them | Often possible under snapshot isolation |
-| Serializable | No | No | No | No |
-
-This table is a starting point and not a portable specification. Engines map the SQL level names onto different mechanisms, and PostgreSQL, for one, silently promotes `READ UNCOMMITTED` to `READ COMMITTED`. Serializable prevents these anomalies for transactions that commit, but it does so partly by refusing to commit some of them, and the application must retry on a serialization failure.
-
-Four implementation approaches are in common use. *Two-phase locking* has transactions acquire locks and block one another; SQL Server uses it for Serializable. *MVCC* keeps multiple versions of each row so that ordinary reads usually do not block ordinary writes, although locks are still needed for some writes, for constraints, and for schema operations; PostgreSQL and InnoDB use it for most levels. *Optimistic concurrency control* assumes conflicts are rare, lets transactions run without locks, and validates at commit time; some in-memory databases use it. *Serializable snapshot isolation* adds dependency tracking to MVCC and aborts a transaction when the tracked dependencies could form a non-serializable cycle; it has been PostgreSQL's Serializable implementation since 9.1.
-
-→ see [Isolation Levels](02-isolation-levels.md) for MVCC internals, locking protocols, SSI implementation details, and anomaly deep dives.
-
-### Connection Pool Gotcha: Transaction-Scoped vs Session-Scoped Settings
-
-Connection pools such as PgBouncer and HikariCP introduce a production bug that is easy to create and hard to see, because it depends on which connection a request happens to borrow.
-
-PostgreSQL's `SET TRANSACTION` applies only to the current transaction and must run after `BEGIN` and before the first query. It does **not** leak into later transactions. By contrast, `SET SESSION CHARACTERISTICS AS TRANSACTION ...` changes the default for every subsequent transaction on that backend session. If the pool does not reset session state when a connection is returned, the next borrower inherits that default without knowing it.
-
-The safe forms keep the scope visible in the statement itself:
-
-```sql
--- Preferred: make the scope explicit in one statement.
-BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
-SELECT balance FROM accounts WHERE id = 42;
-UPDATE accounts SET balance = balance - 100 WHERE id = 42;
-COMMIT;
--- Isolation level automatically resets after COMMIT/ROLLBACK
-
--- Also valid, provided it occurs before the first query:
-BEGIN;
-SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;
--- ... statements ...
-COMMIT;
-```
-
-We prefer a transaction API or `BEGIN ... ISOLATION LEVEL`, so that the scope is visible where the transaction starts. If code changes session defaults or any other session state, we configure and test the pool's reset behavior. Transaction pooling does not make arbitrary session commands safe.
+Some systems deliberately omit or relax these constraints for latency, availability, or operational simplicity. Distributed SQL systems may preserve them and charge the coordination cost. "ACID" does not imply that constraints are local to one shard, and CAP does not require abandoning invariants during normal operation; [CAP Theorem](03-cap-theorem.md) makes that argument in full.
 
 ---
 
@@ -380,9 +439,9 @@ Failure point 3: Virtualized or network storage
     corruption, credentials misuse, or application-level deletion
 ```
 
-The second failure point is not hypothetical. In 2018 the PostgreSQL community found that the database had been handling fsync errors unsafely for about twenty years. When `fsync()` failed, PostgreSQL retried it, on the assumption that the dirty page was still in the kernel page cache waiting to be written. On some Linux kernels (before 5.2) that assumption was false: after a failed writeback the kernel marked the page clean and reported the error once. The retry then found nothing dirty to write and succeeded. PostgreSQL concluded that the data was durable when it had never reached the disk.
+The second failure point is not hypothetical. In 2018 the PostgreSQL community found that the database had been handling fsync errors unsafely for about twenty years. When `fsync()` failed, PostgreSQL retried it, on the assumption that the dirty page was still in the kernel page cache waiting to be written. On Linux that assumption was false: after a failed writeback the kernel marks the page clean and reports the error once. The retry then found nothing dirty to write and succeeded. PostgreSQL concluded that the data was durable when it had never reached the disk.
 
-Since version 12, PostgreSQL responds to an fsync failure with a PANIC and goes through crash recovery, replaying the WAL, because after such an error the state of the kernel's cache cannot be trusted. The lesson applies beyond PostgreSQL: an error on the durability path cannot be retried like an ordinary error, because the retry may succeed without doing the work.
+PostgreSQL now responds to an fsync failure with a PANIC and goes through crash recovery, replaying the WAL, because after such an error the state of the kernel's cache cannot be trusted; no Linux release makes the retry safe, and [Write-Ahead Logging](../03-storage-engines/04-write-ahead-logging.md) carries the per-kernel behavior. The lesson applies beyond PostgreSQL: an error on the durability path cannot be retried like an ordinary error, because the retry may succeed without doing the work.
 
 ### WAL Mechanics
 
@@ -553,9 +612,9 @@ Replication is not a backup. A replica faithfully applies whatever the primary d
 
 ---
 
-## Production Failure Modes (Transaction-Specific)
+## Failure Modes
 
-The failures in this section come from how applications use transactions, and not from faults in the database. → see [Failure Modes](06-failure-modes.md) for the general taxonomy.
+These failures come from how applications use transactions, not from faults inside the database; [Failure Semantics, Detection, and Recovery Boundaries](06-failure-modes.md) holds the general taxonomy.
 
 ### Lost Update Without Proper Isolation
 
@@ -705,86 +764,41 @@ with Session(engine) as session, session.begin():
 
 ---
 
-## Decision Framework
+## Verify the Deployed Contract
 
-### Isolation Level Selection
+The theme of this chapter is that ACID is a set of configurable contracts, so no claim about a guarantee is finished until it names what the running system is configured to do. This table lists the dimensions of the contract for common databases. The entries are not universal defaults, and we verify the deployed release and settings.
 
-| Use Case | Starting Point | Why | What to Measure/Test |
-|----------|----------------|-----|----------------------|
-| Independent CRUD writes | Read Committed + schema constraints | Avoids unnecessary serialization when writes do not share an invariant | Lost-update behavior and constraint races |
-| Transfer over a known row set | Atomic conditional statements or deterministic `SELECT FOR UPDATE` | Serializes modifications to the exact accounts involved | Deadlocks, lock waits, and timeout ambiguity |
-| Predicate/global financial invariant | Serializable + retry loop | Database detects executions that cannot be serialized | Abort rate and correctness under generated concurrency |
-| Reporting/analytics | Repeatable Read; consider read-only/deferrable Serializable where supported | Stable snapshot across statements | Snapshot age, vacuum impact, replica lag |
-| Inventory decrement | Atomic conditional `UPDATE ... WHERE available >= :n` | Check and decrement are one statement | Contention and zero-row retry semantics |
-| Counter increment | Atomic `UPDATE` | Removes the application read-then-write window | Hot-row throughput and sharding threshold |
+| Database | Common Default Isolation | Durability Mechanism | Verify Before Claiming a Guarantee |
+|----------|--------------------------|----------------------|------------------------------------|
+| PostgreSQL | Read Committed | WAL + configured flush policy | `fsync`, `synchronous_commit`, full-page writes, standby acknowledgement, pool/session settings |
+| MySQL InnoDB | Repeatable Read | Undo + redo + doublewrite; binary log if enabled | Redo flush and binary-log sync policies, storage flush semantics, replication acknowledgement |
+| MongoDB | Read and write semantics depend on `readConcern`/`writeConcern`; transactions can request snapshot reads | WiredTiger journal + replica-set acknowledgement | Explicit concern levels, journaling, majority acknowledgement, and transaction retry labels |
+| SQLite | Serializable transactions by serializing writes; WAL and rollback-journal modes have different concurrency | WAL or rollback journal | Filesystem/locking support, `synchronous` mode, journal mode, single-writer contention |
+| CockroachDB | Serializable by default; supported levels can vary by release/configuration | Replicated consensus log + storage-engine WAL | Transaction retry contract, selected isolation level, replica placement, quorum availability |
+| SQL Server | Read Committed, commonly locking unless read-committed snapshot is enabled | Transaction log | Database-level snapshot settings, delayed durability, availability-group acknowledgement |
 
-### When to Use 2PC vs Saga vs Outbox
+### Warning: Check Your Defaults
 
-| Pattern | Guarantees | Latency | Complexity | Use When |
-|---------|-----------|---------|------------|----------|
-| **2PC** | Atomic decision across transactional participants | Prepare/decision coordination and lock retention | Coordinator recovery and in-doubt operations | A transaction manager and every participant implement a compatible prepare protocol |
-| **Saga** | Durable sequence of local transactions; compensation is semantic recovery, not rollback | Usually asynchronous step latency | Ambiguous side effects and compensation design | Long-lived workflows and APIs that cannot join one transaction |
-| **Outbox** | Atomic local state + publication intent; relay is normally at least once | Relay/CDC delay | Duplicate handling and backlog operations | A local transaction must eventually produce a broker message |
+Managed services, containers, and provisioning scripts all override defaults. After every deployment, re-check the settings that define the contract:
 
-A short sequence of questions settles most cases. If all participants can live in the same database, we use a local transaction and need nothing else. If they cannot, but every participant supports prepare and we are able to operate in-doubt recovery, 2PC may be viable once we have tested its failure behavior and latency. If the workflow involves external services such as payment, email, or third-party APIs, which cannot join a transaction at all, we use a durable workflow or saga with idempotency, reconciliation, and explicit compensation where compensation is possible. If the need is only to publish an event atomically with a database write, the outbox pattern does that with the least machinery.
+```sql
+-- PostgreSQL: verify critical durability settings
+SHOW synchronous_commit;         -- should be 'on' for critical data
+SHOW fsync;                       -- should be 'on' (NEVER disable in production)
+SHOW full_page_writes;            -- should be 'on' (prevents torn pages)
+SHOW wal_level;                   -- 'replica' or 'logical' for replication
+
+-- MySQL: verify InnoDB settings
+SHOW VARIABLES LIKE 'innodb_flush_log_at_trx_commit';  -- should be 1
+SHOW VARIABLES LIKE 'innodb_doublewrite';               -- should be ON
+SHOW VARIABLES LIKE 'sync_binlog';                      -- should be 1 for durability
+```
 
 ---
 
-## Code Examples
+## Lock Ordering in a Two-Account Transfer
 
-### PostgreSQL: Two Sessions Showing Isolation
-
-The behavior of isolation levels is easiest to believe after watching it. Open two `psql` sessions connected to the same PostgreSQL database and create a small table:
-
-```sql
-CREATE TABLE accounts (id INT PRIMARY KEY, balance NUMERIC NOT NULL);
-INSERT INTO accounts VALUES (1, 500), (2, 200);
-```
-
-At Read Committed, session B never sees A's uncommitted change, but it does see the committed change in the middle of its own transaction:
-
-```text
-Session A (default Read Committed):      Session B:
-─────────────────────────────────────     ──────────────────────────────
-BEGIN;                                    BEGIN;
-UPDATE accounts SET balance = 400
-  WHERE id = 1;
-                                          SELECT balance FROM accounts
-                                            WHERE id = 1;
-                                          -- Returns 500 (not 400!)
-                                          -- Dirty read prevented ✓
-COMMIT;
-                                          SELECT balance FROM accounts
-                                            WHERE id = 1;
-                                          -- Returns 400
-                                          -- Non-repeatable read! The
-                                          -- value changed within the
-                                          -- same transaction.
-                                          COMMIT;
-```
-
-At Repeatable Read, session B keeps the snapshot it started with, whatever A commits in the meantime:
-
-```text
-Session A:                                Session B (Repeatable Read):
-─────────────────────────────────────     ──────────────────────────────
-                                          BEGIN TRANSACTION ISOLATION
-                                            LEVEL REPEATABLE READ;
-                                          SELECT balance FROM accounts
-                                            WHERE id = 1;
-                                          -- Returns 500
-BEGIN;
-UPDATE accounts SET balance = 400
-  WHERE id = 1;
-COMMIT;
-                                          SELECT balance FROM accounts
-                                            WHERE id = 1;
-                                          -- Still returns 500!
-                                          -- Snapshot is frozen at BEGIN
-                                          COMMIT;
-```
-
-### Python SQLAlchemy: SELECT FOR UPDATE Pattern
+The two-account transfer written out completely. Its correctness rests on lock order rather than on the isolation level.
 
 ```python
 # SQLAlchemy 2.x / PostgreSQL
@@ -839,35 +853,28 @@ Four details in this example carry the correctness. Sorting the IDs gives every 
 
 ---
 
-## Verify the Deployed Contract
+## Decision Framework
 
-The theme of this chapter is that ACID is a set of configurable contracts, so the last step is to check what the running system is actually configured to do. This table lists the dimensions of the contract for common databases. The entries are not universal defaults, and we verify the deployed release and settings.
+### Isolation Level Selection
 
-| Database | Common Default Isolation | Durability Mechanism | Verify Before Claiming a Guarantee |
-|----------|--------------------------|----------------------|------------------------------------|
-| PostgreSQL | Read Committed | WAL + configured flush policy | `fsync`, `synchronous_commit`, full-page writes, standby acknowledgement, pool/session settings |
-| MySQL InnoDB | Repeatable Read | Undo + redo + doublewrite; binary log if enabled | Redo flush and binary-log sync policies, storage flush semantics, replication acknowledgement |
-| MongoDB | Read and write semantics depend on `readConcern`/`writeConcern`; transactions can request snapshot reads | WiredTiger journal + replica-set acknowledgement | Explicit concern levels, journaling, majority acknowledgement, and transaction retry labels |
-| SQLite | Serializable transactions by serializing writes; WAL and rollback-journal modes have different concurrency | WAL or rollback journal | Filesystem/locking support, `synchronous` mode, journal mode, single-writer contention |
-| CockroachDB | Serializable by default; supported levels can vary by release/configuration | Replicated consensus log + storage-engine WAL | Transaction retry contract, selected isolation level, replica placement, quorum availability |
-| SQL Server | Read Committed, commonly locking unless read-committed snapshot is enabled | Transaction log | Database-level snapshot settings, delayed durability, availability-group acknowledgement |
+| Use Case | Starting Point | Why | What to Measure/Test |
+|----------|----------------|-----|----------------------|
+| Independent CRUD writes | Read Committed + schema constraints | Avoids unnecessary serialization when writes do not share an invariant | Lost-update behavior and constraint races |
+| Transfer over a known row set | Atomic conditional statements or deterministic `SELECT FOR UPDATE` | Serializes modifications to the exact accounts involved | Deadlocks, lock waits, and timeout ambiguity |
+| Predicate/global financial invariant | Serializable + retry loop | Database detects executions that cannot be serialized | Abort rate and correctness under generated concurrency |
+| Reporting/analytics | Repeatable Read; consider read-only/deferrable Serializable where supported | Stable snapshot across statements | Snapshot age, vacuum impact, replica lag |
+| Inventory decrement | Atomic conditional `UPDATE ... WHERE available >= :n` | Check and decrement are one statement | Contention and zero-row retry semantics |
+| Counter increment | Atomic `UPDATE` | Removes the application read-then-write window | Hot-row throughput and sharding threshold |
 
-### Warning: Check Your Defaults
+### When to Use 2PC vs Saga vs Outbox
 
-Defaults vary by product and release, and managed services, containers, or provisioning scripts can override them. After every deployment, verify the settings that define your contract:
+| Pattern | Guarantees | Latency | Complexity | Use When |
+|---------|-----------|---------|------------|----------|
+| **2PC** | Atomic decision across transactional participants | Prepare/decision coordination and lock retention | Coordinator recovery and in-doubt operations | A transaction manager and every participant implement a compatible prepare protocol |
+| **Saga** | Durable sequence of local transactions; compensation is semantic recovery, not rollback | Usually asynchronous step latency | Ambiguous side effects and compensation design | Long-lived workflows and APIs that cannot join one transaction |
+| **Outbox** | Atomic local state + publication intent; relay is normally at least once | Relay/CDC delay | Duplicate handling and backlog operations | A local transaction must eventually produce a broker message |
 
-```sql
--- PostgreSQL: verify critical durability settings
-SHOW synchronous_commit;         -- should be 'on' for critical data
-SHOW fsync;                       -- should be 'on' (NEVER disable in production)
-SHOW full_page_writes;            -- should be 'on' (prevents torn pages)
-SHOW wal_level;                   -- 'replica' or 'logical' for replication
-
--- MySQL: verify InnoDB settings
-SHOW VARIABLES LIKE 'innodb_flush_log_at_trx_commit';  -- should be 1
-SHOW VARIABLES LIKE 'innodb_doublewrite';               -- should be ON
-SHOW VARIABLES LIKE 'sync_binlog';                      -- should be 1 for durability
-```
+A short sequence of questions settles most cases. If all participants can live in the same database, we use a local transaction and need nothing else. If they cannot, but every participant supports prepare and we are able to operate in-doubt recovery, 2PC may be viable once we have tested its failure behavior and latency. If the workflow involves external services such as payment, email, or third-party APIs, which cannot join a transaction at all, we use a durable workflow or saga with idempotency, reconciliation, and explicit compensation where compensation is possible. If the need is only to publish an event atomically with a database write, the outbox pattern does that with the least machinery.
 
 ---
 

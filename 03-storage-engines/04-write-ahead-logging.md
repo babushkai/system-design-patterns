@@ -199,9 +199,11 @@ The durability of the entire design rests on one syscall telling the truth. It o
 2. fsync error semantics (fsyncgate, 2018): on Linux, if a background
    writeback fails, fsync() returns EIO ONCE, and marks the pages
    CLEAN. A process that retries fsync gets SUCCESS while the data
-   never reached disk. PostgreSQL had assumed retry-until-success was
-   safe for ~20 years; the fix (PG 11+) is to PANIC on fsync failure
-   and recover from WAL, never retry.
+   never reached disk. Kernel versions differ only in whether the first
+   error is reported at all (4.13, 4.15, 4.16); none makes retry safe.
+   PostgreSQL assumed retry-until-success was safe for ~20 years; the
+   fix (v12, back-patched to 9.4) is to PANIC on fsync failure and
+   recover from WAL, never retry.
 
 3. fdatasync vs fsync vs directory sync: creating a new WAL segment
    requires fsyncing the DIRECTORY too, or the file itself may vanish
@@ -315,6 +317,7 @@ Log archival extends the same stream through time instead of space. Shipping clo
 - [MySQL documentation, *Doublewrite Buffer*](https://dev.mysql.com/doc/refman/8.4/en/innodb-doublewrite-buffer.html)
 - [Rebello et al., *Can Applications Recover from fsync Failures?* (USENIX ATC 2020)](https://www.usenix.org/conference/atc20/presentation/rebello)
 - [LWN, *PostgreSQL's fsync() surprise* (2018)](https://lwn.net/Articles/752063/)
+- [PostgreSQL wiki, *Fsync Errors*](https://wiki.postgresql.org/wiki/Fsync_Errors): kernel-by-kernel `fsync()` error semantics and the back-patch history of the PANIC fix
 
 ---
 
