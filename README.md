@@ -312,7 +312,7 @@ Each case study starts from a product you can use today and works back to the me
 
 ### Part 17: LLM Systems
 
-A model call can succeed while the user's task fails. When an assistant cites an outdated policy, trace the answer back to the passage it received and the index revision that supplied it. When a tool call times out, check whether the operation committed before retrying it. When an agent misses its deadline, separate time spent waiting for tools from time spent queuing and generating tokens. These cases guide the design of the retrieval pipeline, agent runtime, and serving platform. The evaluation chapter shows how to tell whether a change improves outcomes for the users who receive it.
+A model call can succeed while the user's task fails. Start with the outcome you need to protect. For an incorrect answer, follow the evidence from the source revision through retrieval and context assembly. For a duplicate action, follow the agent's decision through orchestration to the tool that committed the write. For a missed deadline, separate queueing and GPU time from time spent waiting for tools. The prompt, fine-tuning, and evaluation chapters show how to change behavior and test whether the next release improves that outcome.
 
 - [LLM Agent Fundamentals](17-llm-systems/01-agent-fundamentals.md)
 - [Agent Orchestration Patterns](17-llm-systems/02-orchestration-patterns.md)

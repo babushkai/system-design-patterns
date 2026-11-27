@@ -184,6 +184,8 @@ def transform_chapter(text: str, route: str, routes: set[str], renderer: Diagram
             out.append(chunk)
             continue
         chunk = rewrite_links(chunk, route, routes)
+        # The website gives each chapter its own page. The book shares one ID space.
+        chunk = re.sub(r"^## Overview \{#tl-dr\}$", f"## Overview {{#{chapter_id(route)}-overview}}", chunk, flags=re.MULTILINE)
         if not titled:
             lines = chunk.splitlines(keepends=True)
             for index, line in enumerate(lines):
@@ -214,6 +216,8 @@ def place_diagrams(text: str, renderer: DiagramRenderer, base: Path) -> str:
 
 def part_page(part: dict, routes_in_part: list[str]) -> str:
     lines = [f"# Part {part['number']}: {readme_label(part)} {{.unnumbered #part-{part['number']}}}", ""]
+    if part.get("description"):
+        lines.extend([part["description"], ""])
     for route in routes_in_part:
         lines.append(f"- [{chapter_heading(markdown_path(route))}](#{chapter_id(route)})")
     return "\n".join(lines) + "\n"

@@ -4,11 +4,9 @@
 
 When a retrieval-augmented generation (RAG) system gives a wrong answer, trace the evidence. Did the index contain the right document revision? Could the user access it? Did retrieval and reranking put the relevant passage in the prompt? If so, check whether the answer follows from that passage and cites it accurately.
 
-A production design has two planes. The **indexing control plane** discovers sources, creates immutable document revisions, parses and enriches content, builds versioned sparse/dense indexes, validates them, and atomically publishes a corpus snapshot. The **query data plane** authenticates the caller, plans a retrieval request, applies mandatory filters, retrieves and reranks candidates, assembles an evidence packet, generates an answer under a grounded-output contract, and records claim-to-source provenance.
+The indexing path controls which document revisions are searchable. The query path checks access, retrieves passages, and records which ones support the answer. Keeping the source revision and passage ID lets an operator distinguish a stale index from a model that ignored current evidence.
 
-Use long context when the authoritative corpus is small and request-scoped. Use pipeline RAG when retrieval steps are stable. Use agentic retrieval when query decomposition must adapt at runtime and each extra search has an evidence-based stopping rule. Fine-tuning changes model behavior, not current factual memory, and is not a substitute for retrieval.
-
-The Search section covers [index architecture](../14-search-systems/01-inverted-indexes.md), [lexical execution](../14-search-systems/02-full-text-search.md), [vector retrieval](../14-search-systems/03-vector-search.md), and [ranking/evaluation](../14-search-systems/04-ranking-algorithms.md). RAG adds corpus and ACL publication, evidence-packet assembly, grounded generation, claim provenance, abstention, and joint retrieval/generation evaluation. A vector database is one query-plane component, not the RAG system boundary.
+If the authorized material fits in one request, try supplying it directly. Add retrieval when the service needs to search a larger or changing corpus. Let the model choose a follow-up search only when the initial evidence routinely leaves a question that another search can resolve.
 
 ---
 

@@ -4,7 +4,7 @@
 
 Start an evaluation by naming the release decision it must support. Define whose tasks the result should represent and which outcome matters. Record the system revision, choose a check that can establish that outcome, and report uncertainty alongside the result.
 
-Evaluate components and end-to-end outcomes separately. For agents, measure environment state and side effects as well as the trajectory. Repeat stochastic runs and report task-level reliability, latency, and cost. In production, connect assignment, exposure, trace, evaluator, user feedback, and delayed ground truth so drift and regressions can be distinguished from a changing traffic mix.
+For an agent that books appointments, verify that the intended reservation exists exactly once. Repeat the trial from a clean starting state to measure reliability. In a production canary, count every eligible task assigned to each release and separately record which release served it. A timeout before any answer reaches the user still belongs in the release decision.
 
 ---
 
@@ -99,7 +99,7 @@ Single-response grading misses what makes agents hard. Add four dimensions:
 3. **Repeated-run reliability.** If per-run success were independent with probability $p$, all $k$ repetitions succeeding has probability $p^k$, while at least one success has probability $1-(1-p)^k$. Real trials can share provider, retrieval, or environment failures, so report empirical repeated-run results and clustered uncertainty rather than relying on independence.
 4. **Efficiency.** Report tokens, currency, actions, accelerator/tool time, human review, and wall-clock per verified success. A higher pass rate can still leave the Pareto frontier if cost or tail latency grows beyond product value.
 
-Public benchmarks (SWE-bench Verified, τ-bench, OSWorld, GAIA) calibrate model+harness choices. They do not measure *your* product. Your suite does.
+Start repeated trials from the same clean environment. If one trial leaves a reservation in the database, the next can pass without doing the work. Reset the fixture between trials, then read the final reservation from the database to grade the outcome. Keep the transcript for diagnosis. [Anthropic’s agent evaluation guide](https://www.anthropic.com/research/demystifying-evals-for-ai-agents)
 
 ## CI Integration and Statistics
 
@@ -128,6 +128,16 @@ An end-to-end regression can originate in data availability, retrieval candidate
 ## Production: Observability and Online Evaluation
 
 Offline evaluation estimates behavior on a curated population. Production observes the served population and downstream outcomes. Link **assignment** (which revision policy selected), **exposure** (which revision actually generated), eligibility, fallback, cache/retry path, and outcome. Without this distinction, failover and partial rollout contaminate comparisons.
+
+Consider a canary with 1,000 eligible tasks randomly assigned to each arm. The release criterion is verified completion by the deadline. Assume the deadline has passed for every task and outcome logging is complete.
+
+| Outcome | Current release | Canary |
+|---|---:|---:|
+| Verified completions by deadline | 900 | 855 |
+| Other tasks that returned an answer | 100 | 45 |
+| Tasks that timed out before an answer | 0 | 100 |
+
+A dashboard that grades only returned answers shows an apparent gain from 90% to 95%. Users saw completion fall from 90% to 85.5%. Hold the rollout and trace the 100 timeouts through admission, routing, and inference. Keep every assigned task in the comparison even if fallback served it. If outcomes are still arriving, report the pending count and compare cohorts after the same observation window. [Microsoft Research on missing users in experiments](https://www.microsoft.com/en-us/research/articles/diagnosing-sample-ratio-mismatch-in-a-b-testing/)
 
 Sample online scoring according to volume, evaluator cost, expected defect rate, and detection-delay target. Random samples estimate rates. Risk-triggered samples diagnose tails but need weighting before aggregation. Run judges asynchronously when they are not on the serving critical path, and version their evidence package. Monitor judge calibration with blinded human labels because traffic drift can move the judge outside its qualified domain.
 

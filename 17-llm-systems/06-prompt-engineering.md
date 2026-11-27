@@ -4,7 +4,7 @@
 
 Ship the prompt with the instructions, context assembly rules, tool contracts, output schema, model settings, and policy that give it meaning. Keep stable inputs together for prefix reuse where supported. Track where untrusted content came from and validate structured outputs. Evaluate each change against the deployed revision and keep a rollback path.
 
-Prompt text can shape model behavior but cannot establish authority, factual truth, or side-effect safety. Those guarantees belong to policy, retrieval, typed interfaces, and verification. The durable skill is deciding which concern belongs in prose and which belongs elsewhere in the system.
+A prompt change can alter a tool call even when the output still passes schema validation. If the task names one customer and the model supplies a different customer's valid ID, the handler must check both the caller's authority and the intended target before acting. Test that boundary whenever the prompt, model, or tool description changes.
 
 ---
 
@@ -78,7 +78,7 @@ Chain-of-thought prompting, worked reasoning examples, self-consistency, and exp
 
 Treat reasoning structure as an evaluated system choice. Compare a concise goal-and-constraint prompt, task-specific worked examples, model-managed reasoning effort, and external candidate search under the same success, latency, and cost metrics. Keep explicit decomposition when it produces an auditable artifact or lets an external verifier inspect alternatives. Remove it when it only repeats computation the model already performs.
 
-Model migration should begin by removing historical compensations and reintroducing only those that repair measured failures. Repeated emphatic instructions, forced narration, and rigid step sequences can interact differently with a new model. Reasoning effort then becomes a routing and budget decision owned by [LLM Infrastructure](./05-llm-infrastructure.md), while durable external control flow remains an [orchestration](./02-orchestration-patterns.md) concern.
+During migration, keep the deployed prompt as a baseline. Test whether removing an old workaround improves results on the replacement model. Repeated emphatic instructions, forced narration, and rigid step sequences can interact differently with a new model. Reasoning effort then becomes a routing and budget decision owned by [LLM Infrastructure](./05-llm-infrastructure.md), while durable external control flow remains an [orchestration](./02-orchestration-patterns.md) concern.
 
 ---
 
@@ -158,7 +158,7 @@ Tool-use tests simulate the full protocol: correct tool selected, arguments sati
 
 ### Migration and rollout
 
-A model migration is a joint prompt-compiler change. Begin with the simplest prompt that expresses the product contract, add back only instructions that repair measured failures, and compare output length, tool behavior, refusal, schema validity, latency, cache share, and cost. Shadow testing discovers behavior differences. A canary limits impact. A stable request-manifest ID makes rollback and incident correlation immediate.
+When a model and its prompt change together, a regression can be hard to attribute. Where both prompts are supported, run the old and new prompt on each model using the same cases, tools, and grading rules. If only the new pairing fails, inspect how that model interprets the changed instruction. If both prompts fail on the new model, investigate model or adapter behavior first. Record unsupported pairings explicitly. Canary the qualified combination and keep the previous one available for rollback.
 
 Online experiments need outcome metrics and guardrails. Engagement alone can reward verbosity or agreeable misinformation. Include user correction, escalation, groundedness, successful tool completion, latency, and cost. Preserve experiment assignment for a session so prompt behavior does not alternate mid-conversation.
 

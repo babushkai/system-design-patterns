@@ -2,7 +2,7 @@
 
 ## Overview {#tl-dr}
 
-A model server processes a request in two phases. During prefill, it processes prompt tokens in parallel and can approach its compute limit. During decode, it advances each active sequence by one token per step. Reading weights and cached keys and values often limits that step. The roofline bound relates these limits:
+A model server processes a request in two phases. During prefill, it processes prompt tokens in parallel and can approach its compute limit. During ordinary autoregressive decode, each step advances an active sequence by one token. Reading weights and cached keys and values often limits that step. The roofline bound relates these limits:
 
 $$
 t_{step} \ge \max\left(\frac{F}{\eta_c C_{peak}},
@@ -10,7 +10,7 @@ t_{step} \ge \max\left(\frac{F}{\eta_c C_{peak}},
                          \frac{D_{link}}{B_{link}}\right),
 $$
 
-where $F$ is useful work, $D$ is data movement, and the $\eta$ terms capture the fact that an implementation never sustains every datasheet peak simultaneously. Batching, quantization, paged KV memory, specialized attention kernels, speculation, parallelism, and phase disaggregation change one or more terms in that bound. Capacity decisions should begin with this ledger and end with measured goodput on the real prompt, output, cache-hit, and concurrency distribution.
+Here $F$ counts floating-point operations. Divide it by the sustained compute rate to estimate compute time. The other terms estimate the time to move bytes through device memory and across the interconnect. The slowest term gives a lower bound on step time. For example, if memory traffic dominates decode, buying more peak compute alone may do little for the gap between tokens. Check that prediction under the expected concurrency and context lengths.
 
 ---
 

@@ -4,7 +4,7 @@
 
 Orchestration determines who chooses the next step and what evidence allows it to proceed. In a workflow, code defines the paths. In an agent loop, the model chooses a path based on what it observes. When branches run in parallel, the orchestrator also decides which results to wait for.
 
-Choose the least adaptive graph that reaches the required workload. Every adaptive branch needs a typed state transition, budget reservation, termination rule, and verifier. Model-internal reasoning can change the amount of external search that is useful, but it cannot replace durable state, authority boundaries, idempotency, or independent verification.
+A fixed sequence works when the dependencies are known in advance. Parallel branches need a rule for what happens if one is late. A report that requires every regional total must record a missing region or wait for it. A lookup against equivalent replicas can finish after the first valid reply. Make that decision before setting branch deadlines and cancellation rules.
 
 ---
 

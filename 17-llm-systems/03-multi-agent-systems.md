@@ -4,9 +4,9 @@
 
 Add a worker when it can contribute independent evidence or complete a separable piece of work. Decide who owns each write, how workers report results, and what happens when a worker times out. Those decisions determine whether parallel work helps the task finish.
 
-A robust starting topology inside one trust domain is an orchestrator with read-only workers. The orchestrator owns the goal, dependency graph, budgets, authoritative state, and final commit. Workers explore bounded subproblems and return typed evidence. Multiple writers require enforced disjoint write sets or explicit concurrency control. Debate or aggregation buys evidence only when branches add meaningfully different information or failure modes: five correlated samples do not constitute five independent experts.
+For an investigation across independent sources, let workers collect evidence and give one coordinator responsibility for resolving disagreements and publishing the result. If every worker reads the same stale source, agreement adds little confidence. If workers must edit the same record, define who can commit and how stale writes are rejected.
 
-Multi-agent execution is justified when the task contains parallel information acquisition or separable deliverables whose value exceeds duplicated context, coordination, synthesis, and tail-latency costs. It is usually the wrong answer for one tightly coupled code change, one coherent document, a latency-sensitive interaction, or any decision without a reliable verifier.
+Compare the team with one worker on the same tasks. Measure verified completions by deadline and total cost, including the coordinator's work combining results. That comparison shows whether the extra workers earn their place.
 
 ---
 

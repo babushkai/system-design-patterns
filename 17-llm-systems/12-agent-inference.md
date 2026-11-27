@@ -4,9 +4,7 @@
 
 Measure how many agent tasks finish within their deadlines and budgets. A task can make several model calls, wait for tools or approval, and launch parallel calls that compete for prefill capacity. Later calls may reuse earlier context. Plan capacity around the reuse you observe under your routing and eviction policies.
 
-The durable serving state is a logical session and context revision. KV cache is a derived, evictable acceleration artifact tied to an exact model/runtime/context identity. Losing it changes latency and cost, not correctness. Routing therefore balances cache reuse against queueing, failure domains, and tenant fairness. Residency policy compares the opportunity cost of holding idle KV with the expected cost of demotion, transfer, or re-prefill when the session returns.
-
-Capacity planning needs the joint distribution of steps per task, fresh and reusable tokens per step, tool-wait time, output length, fan-out, cache residency, model tier, and completion probability. Report cost and deadline success per task, plus the per-step metrics that explain them.
+A session waiting for a tool can release its accelerator while its cached keys and values still occupy device memory. Keeping them speeds up the next turn if the session returns soon. Evicting them frees capacity for another task but may force a second prefill. Preserve enough authorized session state to rebuild the request, then replay representative tool waits and bursts to choose an eviction policy. Report deadline success and cost per completed task.
 
 ---
 

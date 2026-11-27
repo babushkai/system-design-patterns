@@ -4,7 +4,7 @@
 
 The harness controls what happens between a model proposing an action and a tool changing state. It checks permissions and budgets, records the outcome, and verifies completion. Evaluate the model and harness together because changing either can change the result.
 
-Design the harness as a versioned state machine with typed provider and tool adapters. A crash, duplicate message, stale action, model migration, policy change, or user interruption must have defined semantics. Prompt assembly, context selection, and tool descriptions matter, but their canonical chapters are linked rather than repeated here.
+Consider a worker that crashes after a tool accepts a write but before the worker records the receipt. On restart, the harness has to discover whether the write committed. If the destination can look it up by a stable action ID, reconcile the result before resuming. If the outcome is unknowable and repeating the write could cause harm, pause the run for review.
 
 ---
 

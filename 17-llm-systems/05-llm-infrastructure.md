@@ -4,11 +4,9 @@
 
 A long prompt can delay users who are already receiving a response. The server must process the incoming prompt while active streams compete for time on the same accelerator. To locate the delay, measure queue wait, time to first token, and the gaps between tokens. If those gaps widen during long prefills, test a smaller prefill chunk. Check whether active streams recover and whether new requests still meet their first-token deadline. [vLLM scheduler tuning](https://docs.vllm.ai/en/latest/configuration/optimization/)
 
-Separate the global **control plane** (model catalog, policy, evaluation evidence, rollout state, quotas, pricing, and placement) from regional **data planes**: admission, routing, caches, queues, inference pools, and streaming. A provider API and a self-hosted model should implement the same logical contract but retain different failure semantics. Provider fallback is not transparent if models differ in tokenization, context limits, tool schemas, safety behavior, or output distribution.
+Regional gateways admit requests and select a deployment using published model, quota, and policy settings. During a provider outage, a backup route is usable only if it supports the request's context length, tools, and policy requirements. Measure the rate of valid completions within deadline alongside cost per successful request, including failed attempts.
 
-Optimize for goodput (the rate of requests that meet correctness, latency, and policy bounds) and report cost efficiency beside it. Raw GPU utilization, tokens per second, low API price, or goodput alone can each improve while another product constraint gets worse.
-
-Infrastructure covers the gateway, provider/self-hosted abstraction, global model/policy control plane, regional admission/routing/streaming data plane, and fleet operations. [GPU Inference Internals](./11-gpu-inference-internals.md) covers the device ledger. [Agent Inference](./12-agent-inference.md) covers session scheduling, KV residency, fan-out, and task goodput. [Harness Engineering](./09-harness-engineering.md) covers tool authority, effect commit, sandboxing, and durable agent state. A serving router must not become a workflow or authorization engine.
+For device-level limits, see [GPU Inference Internals](./11-gpu-inference-internals.md). When each call is healthy but the task is slow, follow the turns and tool waits in [Agent Inference](./12-agent-inference.md).
 
 ---
 

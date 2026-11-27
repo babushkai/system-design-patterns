@@ -4,7 +4,7 @@
 
 Fine-tune when a trained model delivers a measurable benefit over your best prompt, retrieval, or tool-based baseline and your team can maintain the training data and release process. Keep changing facts and access-controlled records in systems that can enforce updates, deletions, and permissions at request time.
 
-The system is larger than the optimizer: data rights and lineage, contamination-resistant evaluation, base/tokenizer/template compatibility, checkpoint recovery, privacy and safety testing, artifact registration, quantization qualification, adapter placement, rollback, and refresh. Parameter-efficient methods reduce trainable state but do not remove activation, data, serving, or governance costs. The durable asset is a reproducible behavior dataset and evaluation contract. Any individual base model or adapter will age.
+Suppose an adapter improves classification in offline tests. Before rollout, run the same cases with the tokenizer, template, quantization, and adapter loader that will serve traffic. Check the gain on held-out examples and measure latency when several adapters share a worker. Keep the previous serving configuration available until the candidate passes both checks.
 
 ---
 

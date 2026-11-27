@@ -4,7 +4,7 @@
 
 On every call, the context builder decides what the model can see. It draws from task state, session history, retrieved evidence, tool results, and memory. Track where each item came from, who may use it, how current it is, and how much of the token budget it consumes.
 
-The window is finite. Attention and recall are non-uniform. Input is repeatedly processed in multi-turn systems. Compaction is lossy. Those properties require explicit budget allocation, stable-prefix design, bounded tool results, evidence selection, validated compaction, inspectable memory, and observability of exactly what entered each request. Optimize the lifecycle of information across the task, not one prompt string.
+A long-running agent may need an old user decision more than its latest tool output. Keep decisions and outstanding work in durable state. When the window fills, summarize bulky observations and reconstruct the next request from that state. Test compaction by resuming the task: can the agent still identify the approved target and find the evidence it needs to finish?
 
 ---
 

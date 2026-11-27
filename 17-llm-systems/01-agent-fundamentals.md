@@ -4,7 +4,7 @@
 
 An agent observes part of its environment, chooses an action, and uses the result to decide what to do next. Results can arrive late or omit information. The harness records state, limits what the model can do, and checks the evidence before marking the task complete.
 
-The central design question is therefore not “which agent framework?” It is whether the task exposes a feedback signal strong enough to correct model error before the permitted actions cause unacceptable loss. Use a deterministic workflow when control flow is knowable. Introduce agency only for decisions that genuinely depend on observations made at runtime.
+Give the model a decision only when the next useful action depends on something it can observe. A build agent can use a compiler error to choose a repair and rerun the build to check it. A successful build still leaves a separate question for the harness: does the change meet the user's acceptance criteria? Use an explicit workflow when the steps and their order are already known.
 
 ---
 
