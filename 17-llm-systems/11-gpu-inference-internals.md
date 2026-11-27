@@ -68,7 +68,7 @@ Speculative decoding is the same arithmetic exploited from another angle: a smal
 
 ## The KV-Cache Ledger
 
-Attention requires every past token's key and value vectors. Engines cache those vectors so each new decode step projects only the new token instead of re-running the prior prefix. With caching, dense attention for one new token still scans a prefix of length $S$, so attention work is linear in $S$ per step and quadratic across a generated sequence. Re-running the full dense transformer over the growing prefix at every step adds repeated projection work and can make total attention work cubic in generated length. The cache therefore removes redundant computation. It does not make dense attention linear over the whole generation. It also competes with weights for both HBM *capacity* and HBM *bandwidth*.
+Full causal attention reads keys and values for every preceding position. Engines cache those vectors so each new decode step projects only the new token instead of re-running the prior prefix. With caching, dense attention for one new token still scans a prefix of length $S$, so attention work is linear in $S$ per step and quadratic across a generated sequence. Re-running the full dense transformer over the growing prefix at every step adds repeated projection work and can make total attention work cubic in generated length. The cache therefore removes redundant computation. It does not make dense attention linear over the whole generation. It also competes with weights for both HBM *capacity* and HBM *bandwidth*.
 
 Per-token size for a grouped-query attention (GQA) model:
 
@@ -76,15 +76,17 @@ Per-token size for a grouped-query attention (GQA) model:
 KV bytes/token = 2 (K and V) × layers × kv_heads × head_dim × bytes/param
 
 Llama-3-70B (80 layers, 8 KV heads, head_dim 128, BF16):
-  2 × 80 × 8 × 128 × 2 ≈ 320 KB per token
-  → a 128K-context sequence holds ≈ 40 GB of aggregate KV across its replica.
+  2 × 80 × 8 × 128 × 2 = 320 KiB per token
+  → a 131,072-token sequence holds 40 GiB of aggregate KV across its replica.
 ```
 
-The logical amount is sharded according to the serving parallelism. The BF16 weights themselves already require multiple 80 GB devices. Capacity planning therefore applies the same placement contract to both weight and KV shards rather than treating 40 GB as a stand-alone single-device deployment.
+The logical amount is sharded according to the serving parallelism. The BF16 weights themselves already require multiple 80 GB devices. Capacity planning therefore applies the same placement contract to both weight and KV shards rather than treating 40 GiB as a stand-alone single-device deployment.
 
-This equation gives aggregate logical KV memory across the replica. [Model Serving](../16-ml-systems/03-model-serving.md) covers platform admission, paging, and fragmentation.
+For models that mix full attention with sliding-window attention, calculate retained bytes per layer. A full-attention layer retains the entire prefix. A sliding-window layer needs only its configured window during decode. Sum the layer estimates, then measure allocated pages under load before setting admission limits. Block rounding and padding can increase the physical allocation. [vLLM hybrid KV cache design](https://docs.vllm.ai/en/latest/design/hybrid_kv_cache_manager/)
 
-The capacity story is well known. The *bandwidth* story is the one that surprises. During decode, attention reads prior KV state in addition to weights. Across a sharded replica, an illustrative logical batch of 32 sequences at 16K tokens with the sizing above contains `32 × 16,384 × 320 KB ≈ 168 GB` of aggregate KV, compared with about 70 GB of aggregate FP8 weights. The physical traffic per device depends on tensor/sequence parallelism, KV layout, kernels, and cache hierarchy, but the context-dependent term does not amortize like dense weights. GQA, latent KV representations, and lower-precision KV can therefore change throughput as well as capacity. Prefix reuse avoids recomputing the shared prefill. It does not eliminate decode-time reads of resident KV.
+The worked example gives aggregate logical KV memory across the replica. [Model Serving](../16-ml-systems/03-model-serving.md) covers platform admission, paging, and fragmentation.
+
+The capacity story is well known. The *bandwidth* story is the one that surprises. During decode, attention reads prior KV state in addition to weights. Across a sharded replica, an illustrative logical batch of 32 sequences at 16K tokens with the sizing above contains `32 × 16,384 × 320 KiB ≈ 172 GB` of aggregate KV, compared with about 70 GB of aggregate FP8 weights. The physical traffic per device depends on tensor/sequence parallelism, KV layout, kernels, and cache hierarchy, but the context-dependent term does not amortize like dense weights. GQA, latent KV representations, and lower-precision KV can therefore change throughput as well as capacity. Prefix reuse avoids recomputing the shared prefill. It does not eliminate decode-time reads of resident KV.
 
 ---
 

@@ -87,6 +87,10 @@ The reference term restrains drift from the starting policy. $\beta$ controls th
 
 Preference optimization can exploit artifacts of the data collector. If annotators prefer longer answers, the policy learns length. If a judge model produced both labels and later grades the release, the apparent improvement can be self-agreement. Run dimension-specific human evaluation and objective checks outside the preference pipeline.
 
+### Training with verifiable rewards
+
+When a task has an executable verifier, group relative policy optimization (GRPO) can train on several completions for the same prompt. The reward difference within each group supplies the learning signal. With a binary verifier, a group where every completion fails gives the trainer no direction on which answer was better. Track how often groups have identical rewards and inspect all-fail groups separately from all-pass groups. Check verifier coverage and task difficulty before spending more on rollouts. Gate release on held-out tasks with independent checks so a policy that exploits the training verifier is detectable. [TRL GRPO trainer and metrics](https://huggingface.co/docs/trl/en/grpo_trainer)
+
 ### Continued pretraining and domain adaptation
 
 Continued pretraining uses next-token learning over an unlabeled domain corpus before instruction tuning. It can improve vocabulary, syntax, and latent domain patterns, but it is more likely than LoRA-SFT to shift general capability and memorize source text. Corpus licensing, PII removal, deduplication, holdout contamination, and general-capability regression become central. A practical sequence is domain-adaptive pretraining → SFT on task demonstrations → optional preference optimization, with evaluation after each stage so a harmful stage can be removed.

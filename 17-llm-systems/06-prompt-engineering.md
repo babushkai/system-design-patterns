@@ -154,7 +154,7 @@ Metamorphic tests are particularly valuable because many tasks lack a single ref
 
 These relations reveal shortcut learning and prompt injection without requiring exact string matching.
 
-Tool-use tests simulate the full protocol: correct tool selected, arguments satisfy both schema and business preconditions, errors trigger bounded recovery, and a proposed side effect reaches the authorization gate exactly once. Evaluating only the final prose can hide a dangerous trajectory that happened to end well.
+Tool-use tests simulate the full protocol: correct tool selected, arguments satisfy both schema and business preconditions, errors trigger bounded recovery, and each attempted effect passes an authorization check before execution. Replay a timed-out attempt and verify that the destination records at most one committed effect for the same logical action. Evaluating only the final prose can hide a dangerous trajectory that happened to end well.
 
 ### Migration and rollout
 

@@ -112,7 +112,7 @@ A cache policy that lowers per-turn cost but increases timeouts or task abandonm
 
 ## KV Capacity and Residency Economics
 
-For a model with per-token KV footprint $k_m$, a session with $S$ retained tokens occupies approximately $S k_m$ bytes before paging metadata, replication, and speculative branches. Agent fleets can therefore be capacity-bound by many idle sessions waiting on tools even when active decode utilization is low.
+For full-attention layers with a constant per-token KV footprint $k_m$, a session with $S$ retained tokens occupies approximately $S k_m$ bytes before paging metadata, replication, and speculative branches. Agent fleets can therefore be capacity-bound by many idle sessions waiting on tools even when active decode utilization is low.
 
 At the end of a turn, the platform can keep KV in HBM, demote it to host/remote storage, transfer it to another worker, or evict it. A first-order decision compares:
 
@@ -283,7 +283,7 @@ Validate the model with open-loop load and trace replay. Include cold starts, ca
 | Question | Design consequence |
 |---|---|
 | Does the task return quickly after model turns? | Retain warm KV when reuse value exceeds HBM opportunity cost. |
-| Are waits long or unbounded? | Release accelerator leases and demote/evict. Canonical context guarantees recovery. |
+| Are waits long or unbounded? | Release accelerator leases and demote/evict. Test that the runtime can rebuild the prompt on a compatible worker and reconcile pending tool actions before resuming. |
 | Is the prefix large and stable across turns? | Invest in exact cache identity, affinity, and reuse-aware routing. |
 | Does compaction or model routing change the prefix frequently? | Discount affinity value and provision cold prefill capacity. |
 | Do siblings share a large base prefix? | Put shared material first and route to a compatible sharing domain, subject to isolation. |

@@ -142,6 +142,8 @@ Evaluate chunking using the real query distribution. For each labeled question, 
 
 ### Enrichment without laundering facts
 
+A fragment such as “revenue grew 8%” can lose the company and reporting period when it is indexed alone. One option is to generate a short document-specific description and index it alongside the fragment for lexical and embedding search. Compare recall at the same candidate budget against a cheaper baseline that copies the title and section heading. Keep citations anchored to the original passage. [Contextual retrieval](https://www.anthropic.com/research/contextual-retrieval)
+
 Generated titles, summaries, hypothetical questions, entities, and keywords can improve matching, but they are retrieval metadata, not authoritative source content. Store them as derived fields with model and prompt versions. Never present a generated summary as verbatim evidence. If enrichment changes, rebuild or version the affected representation so results are reproducible.
 
 ## Index and Representation Lifecycle

@@ -2,7 +2,7 @@
 
 ## Overview {#tl-dr}
 
-An LLM serving platform decides which requests it can finish within their deadlines and provider quotas. The gateway checks policy and selects a model revision. The scheduler protects interactive streams when long prompts arrive. Trace each request through retrieval, inference, and tool calls so operators can locate delays and account for work that continues after cancellation.
+A long prompt can delay users who are already receiving a response. The server must process the incoming prompt while active streams compete for time on the same accelerator. To locate the delay, measure queue wait, time to first token, and the gaps between tokens. If those gaps widen during long prefills, test a smaller prefill chunk. Check whether active streams recover and whether new requests still meet their first-token deadline. [vLLM scheduler tuning](https://docs.vllm.ai/en/latest/configuration/optimization/)
 
 Separate the global **control plane** (model catalog, policy, evaluation evidence, rollout state, quotas, pricing, and placement) from regional **data planes**: admission, routing, caches, queues, inference pools, and streaming. A provider API and a self-hosted model should implement the same logical contract but retain different failure semantics. Provider fallback is not transparent if models differ in tokenization, context limits, tool schemas, safety behavior, or output distribution.
 

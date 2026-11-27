@@ -311,6 +311,9 @@ Each case study starts from a product you can use today and works back to the me
 - [Embedding Tables and Sparse Model Infrastructure](16-ml-systems/17-embedding-tables-sparse-models.md)
 
 ### Part 17: LLM Systems
+
+A model call can succeed while the user's task fails. When an assistant cites an outdated policy, trace the answer back to the passage it received and the index revision that supplied it. When a tool call times out, check whether the operation committed before retrying it. When an agent misses its deadline, separate time spent waiting for tools from time spent queuing and generating tokens. These cases guide the design of the retrieval pipeline, agent runtime, and serving platform. The evaluation chapter shows how to tell whether a change improves outcomes for the users who receive it.
+
 - [LLM Agent Fundamentals](17-llm-systems/01-agent-fundamentals.md)
 - [Agent Orchestration Patterns](17-llm-systems/02-orchestration-patterns.md)
 - [Multi-Agent Systems](17-llm-systems/03-multi-agent-systems.md)

@@ -153,6 +153,8 @@ def render_toc(parts: list[dict[str, Any]] | None = None) -> str:
     blocks = []
     for part in parts or load_parts():
         lines = [f"### Part {part['number']}: {readme_label(part)}"]
+        if part.get("readmeDescription"):
+            lines.extend(["", part["readmeDescription"], ""])
         lines += [
             f"- [{chapter_heading(markdown_path(chapter['route']))}]({chapter['route']}.md)"
             for chapter in part["chapters"]
@@ -183,7 +185,7 @@ def render_manifest(parts: list[dict[str, Any]], doc: str | None = None) -> str:
         body = [f"      {inline('number')}: {part['number']},"]
         body.append(f"      {inline('dir')}: {inline(part['dir'])},")
         body.append(f"      {inline('title')}: {inline(part['title'])},")
-        for key in ("readmeTitle",):
+        for key in ("readmeTitle", "readmeDescription"):
             if part.get(key):
                 body.append(f"      {inline(key)}: {inline(part[key])},")
         body.append(f"      {inline('chapters')}: [")

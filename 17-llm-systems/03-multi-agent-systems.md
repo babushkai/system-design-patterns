@@ -138,7 +138,7 @@ $$
 
 Track token, currency, wall-clock, tool-operation, and concurrency budgets separately. Refund unused reservations when a child finishes. Do not let a retry bypass admission. A child can request more budget with an explanation and intermediate evidence. The parent may reallocate or terminate lower-value branches.
 
-Deadlines propagate similarly. A child deadline must leave enough time for aggregation, verification, and commit. If the root has 30 seconds remaining, starting a worker with a 30-second timeout guarantees an end-to-end miss.
+Deadlines propagate similarly. A child deadline must leave enough time for aggregation, verification, and commit. If the root has 30 seconds left and needs five seconds to combine and verify results, give the worker at most 25 seconds. A child that uses the full 30 seconds leaves no time to finish.
 
 ## State Ownership and Consistency
 
