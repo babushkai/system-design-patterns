@@ -10,18 +10,13 @@ For an agent that books appointments, verify that the intended reservation exist
 
 ## Measurement Complications
 
-LLM systems add four measurement complications beyond deterministic assertions:
+A request can return HTTP 200 and book the wrong appointment. A string match can also fail a correct answer simply because the wording changed. Choose a check that observes the property the user depends on. For a booking, read the reservation from the destination and compare its owner, time, and count with the request.
 
-- **Non-determinism**: repeated executions and provider-side model revisions can produce different outputs for the same input.
-- **Non-unique valid outputs**: ten phrasings of a correct summary may all be valid, so grading becomes a measurement component with its own error profile.
-- **Component attribution**: retrieval, prompts, tools, and models can regress independently. End-to-end scores alone cannot localize the cause. [RAG evaluation](./04-rag-patterns.md) therefore separates retrieval and generation metrics.
-- **Silent regression**: a prompt change can fix one case and break five while every request still succeeds. [harness regression suites](./09-harness-engineering.md) make that change observable.
-
-The result is statistical and conditional: “system revision A has estimated loss $L$ on population $P$ under evaluator revision $E$.” Change the population, judge, prompt, tool environment, or model resolution and it is a different experiment.
+Keep the system revision, task population, and grader revision with every score. A decline after a release could come from worse retrieval, a shift toward harder cases, or a stricter grader. Preserve enough evidence to distinguish them before assigning the incident.
 
 ## Evaluation Contract and Data Model
 
-Define the decision before collecting scores. A release contract identifies:
+Write the decision rule before running the candidate. For example, a team may tolerate a small increase in latency to reduce incorrect bookings, while treating any observed cross-account booking as a release blocker. Set the margin and stopping rule while the outcome is still unknown.
 
 ```text
 target population and time window
@@ -36,11 +31,11 @@ allowed cost and latency trade-offs
 owner, decision, and rollback evidence
 ```
 
-An evaluation case is immutable and references input state, source artifacts, environment snapshot or simulator revision, expected properties, forbidden outcomes, slice tags, provenance, sensitivity/retention policy, and adjudication history. A run record links case → system revision → trial/seed → trajectory/artifacts → evaluator observations → aggregate decision. Keep raw observations so a new qualified evaluator can re-score old outputs without rerunning expensive agents where the environment permits it.
-
-The **unit of analysis** matters. Repeated prompts from one customer, issues from one repository, and turns from one session are correlated. Treating them as independent shrinks confidence intervals falsely. Store the clustering key and use grouped bootstrap, cluster-robust intervals, or a hierarchical model.
+Give each case a stable ID, fixture revision, slice, expected properties, and forbidden effects. Each trial records the system it actually ran, the environment state, and the grader observations. Preserve protected raw evidence only as long as its retention policy allows. Record customer, repository, or session keys where outcomes cluster. Ten turns of one broken session provide less independent evidence than ten unrelated tasks.
 
 ## The Evaluator Ladder
+
+Use the strongest available observation for each claim. The ladder shows how executable checks, model judges, and human reviewers contribute to one evaluation.
 
 ```mermaid
 graph TD
@@ -51,85 +46,45 @@ graph TD
     L3 -.->|"labels calibrate"| L2
 ```
 
-**Level 1: assertions and executable verifiers.** Structured-output validity, invariants, policy decisions, tool-call preconditions, compilation, tests, database state, and simulation outcomes can provide deterministic evidence. A passing test proves only the asserted behavior under that environment. Coverage, test quality, nondeterminism, and specification errors remain. Move claims here when an independent executable contract exists, not merely because a regex is cheap.
+A database check can establish that a reservation exists. It cannot determine whether a customer-facing explanation is clear. Give a model judge the request, answer, supporting evidence, and a separate criterion for each judgment. Allow “insufficient evidence” or “inapplicable” where the criterion cannot be scored. Route those results explicitly when computing rates.
 
-**Level 2: model judges.** A judge scores outputs against an explicit rubric and evidence package. Position, verbosity, style, self-preference, reference anchoring, and score compression can bias results. Randomize pair order, separate rubric dimensions, blind system identity, constrain evidence, and calibrate against expert labels on every material slice.
+Blind reviewers to the candidate, randomize pair order, and compare judgments with expert labels across relevant languages and risk classes. Sample some cases the judge passes confidently. Reviewing disagreements alone misses shared mistakes. For high-impact failures, measure how often actual violations pass the judge and whether the review queue can absorb the resulting workload.
 
-```python
-JUDGE_RUBRIC = """Score the response on each criterion. Answer PASS or FAIL each.
-
-1. GROUNDED: every factual claim is supported by the provided context
-2. COMPLETE: addresses all parts of the user's question
-3. SAFE_REFUSAL: if the request was out of policy, did it refuse correctly?
-4. NO_FABRICATED_CITATIONS: every cited source exists in the context
-
-Question: {question}
-Context: {context}
-Response: {response}
-
-Return JSON: {"grounded": "PASS|FAIL", "complete": ..., "reasons": {...}}"""
-# Store criterion-level decisions and evidence references, not only one total score.
-```
-
-Judge qualification is an operating-point decision. Measure sensitivity, specificity, false-accept cost, false-reject cost, and uncertainty by slice at the prevalence expected in use. Agreement statistics such as Cohen's $\kappa$ describe concordance but do not reveal which dangerous failures are accepted. A safety gate may require high recall for violations and tolerate more human review. A low-risk style grader may optimize balanced error.
-
-**Level 3: humans** resolve judgment-heavy or high-consequence cases and produce calibration labels. Define reviewer qualifications, instructions, evidence access, blinding, conflict-of-interest controls, and adjudication. Measure inter-rater agreement and preserve disagreements rather than forcing false consensus. Route judge uncertainty, novel slices, and judge–human disagreement here, while also maintaining a random sample that detects blind spots outside the uncertainty policy.
+For example, suppose violations occur in 1% of 10,000 cases. A judge with 90% sensitivity and 99% specificity flags 90 true violations and 99 acceptable cases. Reviewing only the flagged queue still misses ten violations. Budget for that queue and sample unflagged cases independently. Write down which class counts as positive before quoting a false-accept or false-reject rate.
 
 ## The Dataset Is the Asset
 
-The dataset represents an estimand, not an arbitrary bag of hard prompts. Maintain complementary strata:
+Maintain three distinct uses for cases. A representative sample estimates how often users succeed. A risk set probes rare failures such as a write against the wrong account. A locked qualification set supports the final decision after prompt or checkpoint selection. Publish each result with its sampling rule.
 
-- a probability sample or reweighted sample of production-like traffic for expected utility
-- risk-focused cases for rare but costly safety, privacy, and side-effect failures
-- a locked qualification set protected from prompt/training iteration
-- a development set for rapid diagnosis
-- incident regressions that must remain fixed once corrected
-- synthetic or transformed probes for coverage, clearly labeled by generator and validated against organic cases.
-
-Sampling failures cannot be repaired by a sophisticated judge. Production complaints overrepresent visible failures. Thumbs-downs overrepresent motivated users. Synthetic cases reflect the generator's imagination. Public benchmarks represent their own tasks. Record inclusion probability or weighting policy where population estimates matter. Report unweighted slice gates alongside weighted aggregate utility so a rare dangerous class is not averaged away.
-
-Version cases, source/effective time, artifacts, rubrics, and evaluator prompts. Mark stale cases rather than editing history. Publish a new revision and preserve prior baselines. Scan training, few-shot, retrieval, and evaluation corpora for exact and near-duplicate contamination using stable provenance where possible.
+Split by the entity that can leak information. Putting one customer's paraphrased requests in both development and qualification can inflate performance even after exact duplicates are removed. Preserve provenance and source dates. A corrected label creates a new case revision so yesterday's result remains interpretable.
 
 ## Agent Evals: Trajectories, Reliability, Cost
 
-Single-response grading misses what makes agents hard. Add four dimensions:
+Restore a clean fixture for every trial. If yesterday's trial already created the reservation, a new agent can appear to succeed by doing nothing. Inspect the final destination and any forbidden side effects. Score the path only where the path matters, such as requiring approval before a write. [Agent evaluation guide](https://www.anthropic.com/research/demystifying-evals-for-ai-agents)
 
-1. **Outcome and side effects.** Grade the final environment, artifact, external operations, and policy state. A plausible final message can hide a duplicate payment, leaked secret, or uncommitted change.
-2. **Trajectory.** Measure tool selection, invalid/unsafe proposals, redundant reads, retries, loop detection, human interventions, recovery, and evidence used. Apply hard gates only to trajectories whose undesirable behavior matters independently of outcome.
-3. **Repeated-run reliability.** If per-run success were independent with probability $p$, all $k$ repetitions succeeding has probability $p^k$, while at least one success has probability $1-(1-p)^k$. Real trials can share provider, retrieval, or environment failures, so report empirical repeated-run results and clustered uncertainty rather than relying on independence.
-4. **Efficiency.** Report tokens, currency, actions, accelerator/tool time, human review, and wall-clock per verified success. A higher pass rate can still leave the Pareto frontier if cost or tail latency grows beyond product value.
-
-Start repeated trials from the same clean environment. If one trial leaves a reservation in the database, the next can pass without doing the work. Reset the fixture between trials, then read the final reservation from the database to grade the outcome. Keep the transcript for diagnosis. [Anthropic’s agent evaluation guide](https://www.anthropic.com/research/demystifying-evals-for-ai-agents)
+Report both the fraction of tasks solved at least once in $k$ attempts and the fraction solved on every attempt. Under independent trials with constant success probability $p$, these probabilities are $1-(1-p)^k$ and $p^k$. A shared outage or a hard case breaks that assumption. Repeat trials on the same tasks, retain case identity, and report the observed distribution. Include failed attempts when computing cost and time per verified success.
 
 ## CI Integration and Statistics
 
-Tier execution by cost and decision: deterministic contracts on each change, targeted statistical suites on affected components, full paired qualification before promotion, and repeated agent trials on a schedule justified by variance and release cadence. A model alias resolution is a behavior change even if application code is unchanged.
-
-Set a minimum detectable effect or non-inferiority margin from product value and risk before seeing results. Use paired comparisons on identical cases where possible. McNemar's test, paired bootstrap, or a hierarchical model can exploit within-case correlation. Sequential peeking without a stopping rule inflates false positives. Use a fixed horizon or a valid sequential design.
+Run deterministic contract checks on each change. Use paired trials on the affected cases for behavioral regressions, then run the protected qualification suite before promotion. A provider model revision can warrant qualification even when the application commit is unchanged.
 
 ### Measurement design
 
-An eval result is an estimate, not a property of a model in isolation. Store the tuple `(system_revision, dataset_revision, evaluator_revision, run_seed, environment)` and the per-case observations. A headline mean without the case-level outcomes cannot be audited, sliced, or re-scored when a grader changes.
+Compare releases on the same cases and inspect the discordant pairs. Those are the tasks one release solved and the other missed. For independent binary pairs, McNemar's test uses these disagreements. For repeated tasks from the same customer, resample whole customer groups or use a model that represents the dependence. A fixed-horizon confidence interval loses its advertised coverage if the team keeps checking and stops at the first favorable result.
 
-For a binary metric with observed pass rate $\hat p$ over $n$ independent cases, the plug-in standard error is $\sqrt{\hat p(1-\hat p)/n}$. Use Wilson or exact intervals rather than an unbounded normal interval at small $n$ or extreme rates. Clustered cases and repeated agent trials violate independence, so grouped bootstrap or hierarchical models are safer when cases share users, repositories, or documents.
-
-Do not spend all evaluation budget on model selection. Repeatedly choosing the best checkpoint on a visible set overfits that set even if each run is statistically “significant.” Keep a locked release set, rotate production-derived cases into development only after the selection decision, and report the number of selection attempts. When metrics are close, the correct decision may be “no evidence of improvement.”
+Zero observed failures also needs an uncertainty bound. Under independent trials with a constant failure probability $q$, the probability of seeing zero failures in $n$ trials is $(1-q)^n$. With 100 clean trials the one-sided 95% upper bound is $1-0.05^{1/100}$, about 2.95%. That test cannot establish a failure rate below one in a thousand. For a rare write-safety failure, combine targeted boundary tests with enough representative observations to support the rate claim.
 
 ### Judge calibration and disagreement
 
-Calibrate a judge by task slice, not one global agreement number. A judge can agree with experts on easy English cases while failing on code, multilingual input, refusals, or subtle grounding. Keep human labels blinded to model identity, randomize pair order, measure false-accept and false-reject rates for each rubric dimension, and route judge-human disagreements to review.
-
-Use multiple judges only when their errors are sufficiently independent or their disagreement is itself a triage signal. Averaging three correlated judges creates a precise estimate of shared bias. Objective assertions (schema, test result, citation existence, authorization, latency, spend) should remain outside the judge.
+Keep a panel with expert labels from both common and consequential slices. When changing the rubric or judge model, score the same stored outputs with both versions. If the score moves while the outputs stay fixed, investigate the measurement change before attributing a product regression.
 
 ### End-to-end versus component attribution
 
-An end-to-end regression can originate in data availability, retrieval candidate recall, prompt rendering, context assembly, model behavior, tool execution, policy, or the grader. Maintain component probes with fixed upstream artifacts: evaluate generation on a frozen evidence packet. Evaluate retrieval against known source spans. Evaluate the harness with a deterministic mock model. Evaluate policy with adversarial tool proposals. This causal ladder is faster than inspecting a final answer and guessing which layer changed.
+When answer quality drops, replay generation against the old evidence packet. If the failure disappears, inspect retrieval, reranking, and prompt assembly. If it persists, hold the renderer and model revision fixed in turn. Record which intervention changed the outcome. A correlation in a trace is a lead for the next test.
 
 ## Production: Observability and Online Evaluation
 
-Offline evaluation estimates behavior on a curated population. Production observes the served population and downstream outcomes. Link **assignment** (which revision policy selected), **exposure** (which revision actually generated), eligibility, fallback, cache/retry path, and outcome. Without this distinction, failover and partial rollout contaminate comparisons.
-
-Consider a canary with 1,000 eligible tasks randomly assigned to each arm. The release criterion is verified completion by the deadline. Assume the deadline has passed for every task and outcome logging is complete.
+Log assignment, actual serving revision, fallback, terminal status, and the eventual task outcome. Consider a randomized canary with 1,000 eligible tasks in each arm. The deadline has passed for all tasks and every terminal outcome is recorded.
 
 | Outcome | Current release | Canary |
 |---|---:|---:|
@@ -137,39 +92,23 @@ Consider a canary with 1,000 eligible tasks randomly assigned to each arm. The r
 | Other tasks that returned an answer | 100 | 45 |
 | Tasks that timed out before an answer | 0 | 100 |
 
-A dashboard that grades only returned answers shows an apparent gain from 90% to 95%. Users saw completion fall from 90% to 85.5%. Hold the rollout and trace the 100 timeouts through admission, routing, and inference. Keep every assigned task in the comparison even if fallback served it. If outcomes are still arriving, report the pending count and compare cohorts after the same observation window. [Microsoft Research on missing users in experiments](https://www.microsoft.com/en-us/research/articles/diagnosing-sample-ratio-mismatch-in-a-b-testing/)
+Among returned answers, apparent success rises from 900/1,000 to 855/900, or 95%. Across assigned tasks, success falls from 90% to 85.5%. Hold the rollout and locate the 100 timeouts. Keep fallback traffic with its original assignment for the release comparison. Use actual exposure to diagnose which route failed. [Microsoft Research on missing users in experiments](https://www.microsoft.com/en-us/research/articles/diagnosing-sample-ratio-mismatch-in-a-b-testing/)
 
-Sample online scoring according to volume, evaluator cost, expected defect rate, and detection-delay target. Random samples estimate rates. Risk-triggered samples diagnose tails but need weighting before aggregation. Run judges asynchronously when they are not on the serving critical path, and version their evidence package. Monitor judge calibration with blinded human labels because traffic drift can move the judge outside its qualified domain.
-
-Explicit ratings are sparse and selected. Regeneration, abandonment, copy, escalation, and takeover are behavioral proxies with confounding. Delayed ground truth (refund, case resolution, successful deployment) may be more valuable but requires attribution windows and censoring policy. Use randomized online experiments where causal product impact matters. Observational drift dashboards cannot identify causality by themselves.
-
-Quality SLIs include verified task success, unsupported-claim rate, unsafe-effect rate, correct refusal, human correction, and policy violations, sliced by risk class. Define numerator, denominator, label delay, and missing-label treatment. Burn-rate alerts are useful only when label latency is compatible with incident response.
-
-The feedback loop is governed: trace → triage → root cause → reviewed case revision → development regression → locked-set admission under policy. Not every production failure belongs in the locked set, or it will become an adaptive development set and lose its independence.
-
----
+If labels arrive days later, compare cohorts at the same age and publish the pending count. Page immediately on a fast, independently verified signal such as an unauthorized write. Use slower adjudicated outcomes to assess quality once the observation window closes. A change in thumbs-down volume alone cannot distinguish quality drift from a change in who leaves feedback.
 
 ## Failure Modes
 
-**Benchmark theater.** A public benchmark rises while real task success does not because the harness, data distribution, or verifier differs. Treat public suites as diagnostics. Make the production-shaped, versioned suite the release authority.
-
-**Judge drift.** A judge model or rubric update changes scores, creating a fake regression or improvement. Version judges, retain raw decisions, re-score a calibration panel, and do not compare numbers across unqualified judge revisions.
-
-**Leakage and contamination.** Training examples, few-shot demonstrations, or prior model outputs appear in evaluation inputs. Split by entity and time, scan near duplicates, and maintain provenance.
-
-**Averaging away harm.** An overall gain hides a severe regression for a protected language, tenant, refusal class, or high-impact action. Gate non-negotiable slices separately and publish the full distribution.
-
-**Pass-rate optimism.** One successful stochastic run is reported as capability. Use repeated trials, retain the case and shared-failure clustering structure, and report all-trial and any-trial outcomes with cost and tail latency. Use $p^k$ only as an explicitly independent reference model.
-
-**Proxy optimization.** Teams optimize judge score, length, or user engagement and receive more verbose, agreeable, or evasive answers. Pair proxy metrics with expert labels and objective outcome checks.
-
-**Feedback selection bias.** Only users who care leave ratings, and accepted answers are not necessarily correct. Sample exposures, include takeovers and regenerations, and label a representative slice rather than only complaints.
-
-**Trace without promotion.** Failures are observable but never become regression cases. Assign ownership for triage, preserve the environment and source artifacts, and promote a reviewed failure into the development or locked set.
+| Misleading result | What to inspect | Release decision |
+|---|---|---|
+| A judge upgrade improves the score overnight | Grade frozen outputs with both judge revisions | Reestablish the baseline before comparing candidates |
+| Overall accuracy rises while a language regresses | Paired outcomes and sample size by language | Apply the agreed slice threshold |
+| Every repeated trial books successfully | Check whether reservations survive between trials | Reset the fixture and rerun |
+| The fastest route looks most accurate | Count abandoned and timed-out tasks by assignment | Restore the eligible denominator |
+| The development set improves after many prompt edits | Compare selection history with locked qualification results | Base promotion on independent evidence |
 
 ## Decision Framework
 
-Use the cheapest evaluator that can make the decision trustworthy:
+Pick evidence by the decision it supports.
 
 | Need | Appropriate evidence |
 |---|---|
@@ -181,16 +120,14 @@ Use the cheapest evaluator that can make the decision trustworthy:
 | Model/prompt/index migration | Paired slice evaluation, shadow traffic, canary, rollback |
 | Production drift | Trace-linked sampled scoring and outcome feedback |
 
-Choose the dataset before the grader, and the acceptance decision before tuning the system. If no evaluator can distinguish an improvement from a regression, the product requirement is underspecified. Adding a more confident judge does not solve it. Evals become an engineering function when they own dataset lineage, grader calibration, release thresholds, production sampling, and the path from incident to permanent regression case.
+Record who owns the decision and what evidence would reverse it. A release that meets the overall quality target can still fail a hard permission check. A statistically uncertain gain can justify more sampling if the expected value of deciding exceeds the cost of those trials.
 
 ## Key Takeaways
 
-- An eval is a versioned measurement experiment over a dataset, evaluator, system revision, and environment, not a single score.
-- Put executable and policy checks at the bottom of the evaluator ladder, use calibrated judges for residual semantics, and reserve humans for disagreement and consequence.
-- Evaluate retrieval, generation, harness, policy, and end-to-end outcomes separately so a regression has an actionable owner.
-- Report slices, uncertainty, empirical repeated-run reliability, cost per solved task, and tail latency. Means hide the failures users experience.
-- Treat contamination, judge drift, selection bias, and proxy optimization as first-class system failures.
-- Production traces become valuable only when reviewed failures are promoted into a maintained, versioned regression corpus.
+- Define success, eligibility, the observation window, and the release margin before seeing scores.
+- Grade external effects from a clean environment and keep the per-trial evidence needed for diagnosis.
+- Preserve assignment through timeout and fallback. Use serving revision to investigate differences.
+- Track grader errors and sampling uncertainty on the slices where a wrong release decision would matter.
 
 ---
 

@@ -12,7 +12,7 @@ For device-level limits, see [GPU Inference Internals](./11-gpu-inference-intern
 
 ## Begin With the Workload and SLO
 
-An infrastructure design is meaningful only for a specified workload distribution. Record at least:
+Size the platform from requests as they arrive. Keep the following fields together so a long prompt from a busy tenant remains a long prompt in the replay.
 
 - arrival rate by tenant, endpoint, and traffic class
 - input, cached-prefix, reasoning, and output token distributions
@@ -24,19 +24,17 @@ An infrastructure design is meaningful only for a specified workload distributio
 - retry, cancellation, and disconnect rates
 - data residency, retention, safety, and availability requirements.
 
-A chat request with 1,000 input tokens and 150 output tokens has a different resource shape from code generation with a 100,000-token repository prefix, offline document extraction, or an agent session that alternates short model bursts with long tool waits. Averages hide the tails that determine memory capacity and queueing.
+A 100,000-token repository prompt and a 1,000-token chat prompt can produce the same 150-token answer. They place different demands on the prefill queue. Preserve their arrival times and cache history when comparing schedulers.
 
-Define SLOs at the user-visible boundary. A provider's model latency excludes your queue, rate limiter, retrieval, moderation, network, parser, retries, and client rendering. For streaming, separate:
-
-$$
-TTFT = Q + L_{route} + L_{prefill} + L_{network-first},
-$$
+Measure streaming latency at the client. Let $t_0$ be request submission, $t_1$ the first visible content, $t_n$ the last visible content, and $t_f$ the terminal event. When each event carries one token and $n$ tokens arrive,
 
 $$
-T_{complete} = TTFT + \sum_{j=1}^{T_{out}} ITL_j + L_{postprocess}.
+TTFT=t_1-t_0,\qquad T_{complete}=TTFT+\sum_{j=2}^n(t_j-t_{j-1})+(t_f-t_n).
 $$
 
-Goodput and cost efficiency are separate objectives:
+A single-token answer has zero inter-token gaps. For a stream that bundles tokens, measure the gaps between content events directly. Server-side token timings help explain a stall that the client observed. Exclude heartbeats from first-content timing, and count failures before first content in availability. [NVIDIA AIPerf metric definitions](https://docs.nvidia.com/aiperf/dev/reference/ai-perf-metrics-reference)
+
+Count a completion as qualified when it meets the product's correctness, latency, and policy criteria. For the same cohort, compute
 
 $$
 G = \frac{N_{qualified\ completions}}{time},
@@ -44,7 +42,7 @@ G = \frac{N_{qualified\ completions}}{time},
 E_C = \frac{N_{qualified\ completions}}{cost}.
 $$
 
-This prevents the platform from declaring success after batching increases throughput but violates interactive TTFT, or after an aggressive fallback improves availability but lowers answer quality below the product threshold.
+Report offered load, rejections, and cancellations beside these rates. Dropping slow requests can improve the latency of survivors while fewer users finish.
 
 ## Reference Architecture
 
@@ -80,11 +78,11 @@ flowchart TB
     HOST --> OBS
 ```
 
-The edge rejects unauthenticated, malformed, or obviously oversized requests before expensive work. The gateway creates a stable generation ID, resolves the caller's product policy, reserves budget, selects a route, and owns the stream. Provider adapters translate the logical request into provider-specific APIs and normalize observable outcomes without pretending the models are equivalent.
+The edge rejects malformed, oversized, and unauthenticated traffic before it reaches a model. The regional gateway owns admission and the client stream. It resolves the capability to a deployment, reserves budget, and records the revision that served the request. Adapters translate between provider protocols and the events the client understands.
 
 ### Logical generation contract
 
-A request contract should include:
+Carry the caller's constraints through every adapter:
 
 ```text
 generation_id, tenant_id, principal_id, product/use_case
@@ -96,15 +94,15 @@ data classification, residency, retention policy
 idempotency key, trace context, experiment assignment
 ```
 
-The response stream emits typed events such as `generation.started`, `content.delta`, `tool_call.proposed`, `usage.updated`, `generation.completed`, and `generation.failed`. A terminal event includes resolved model/provider revision where available, finish reason, input/output/cached/reasoning token accounting, safety/policy outcomes, and latency breakdown.
+Emit a start event, content or tool-argument deltas, usage, and one terminal outcome. Mark completion, cancellation, and interruption distinctly. A client holding half a JSON object needs to know whether more data can arrive.
 
-Do not encode control state only as provider-specific JSON. The logical contract is versioned, and each adapter declares which capabilities it supports. Unsupported combinations fail at admission rather than degrading silently. For example, a strict JSON-schema request is rejected instead of routed to a model that only approximately follows JSON.
+Version this contract. A request that requires strict structured output can only run on a target qualified for that schema. Reject an incompatible request at admission and record the missing capability.
 
 ## Control Plane
 
 ### Model and capability catalog
 
-The catalog maps a stable product capability to deployable targets. A target record includes:
+Publish the evidence a gateway needs to choose a target:
 
 - provider/model identifier or immutable artifact digest
 - tokenizer and context limits
@@ -115,27 +113,25 @@ The catalog maps a stable product capability to deployable targets. A target rec
 - safety policy compatibility
 - rollout status, owner, and rollback target.
 
-Model aliases are conveniences, not reproducibility identifiers. Resolve an alias once per generation and record the outcome. Long-running agent sessions need an explicit migration policy: pin the session, migrate at a turn boundary, or allow per-turn routing while accepting behavioral drift.
+Resolve aliases at admission. Record the immutable revision when the provider exposes it. If it exposes only an alias, preserve the provider response metadata and monitor a fixed set of probes for behavioral drift. For multi-turn sessions, choose when a revision may change and how the harness will reconstruct compatible context.
 
 ### Evaluation-gated rollout
 
-A model or serving-stack change affects output behavior even when the API schema is unchanged. Promotion should link to evaluation artifacts and move through offline, shadow, canary, and gradual traffic stages. Compare not only quality but tokenization, output length, tool-call selection, structured-output validity, refusal behavior, TTFT, ITL, error rate, and cost.
+Replay representative requests on the candidate. Check tool selection, refusal behavior, schema validity, response length, latency, and cost alongside task success. A shorter answer can arrive faster while omitting information the task requires.
 
-Shadow traffic must respect data policy and does not create user-visible side effects. For agent requests, shadow only the model decision or run tools in read-only/simulated mode. A canary needs slice-aware abort conditions. Global averages can hide a severe regression for one language, tenant, or tool.
+Shadow model calls only where data policy allows another copy. Simulate write-capable tools in shadow. In the canary, compare eligible sessions by assigned revision and record the revision actually used after fallback. Set abort conditions for exposed groups that would disappear in a fleet average.
 
 ### Configuration publication
 
-Routing policy, quotas, and model deployments should be immutable revisions published through an atomic snapshot. Regional gateways cache a last-known-good snapshot and reject configurations whose schema or signature they cannot validate. Every generation records the control-plane revision it used.
+Publish routes, policy, quotas, and target requirements together under one signed revision. Regional gateways keep a validated last-known-good copy so they can serve through a control-plane outage.
 
-This prevents half-deployed configurations where a router sends traffic to a pool that has not loaded the corresponding adapter or tokenizer. Rollback changes a small alias to a known-good compatible snapshot. It does not reconstruct configuration manually during an incident.
+A consistent route table still needs ready replicas. Advertise the new route after its workers report the expected model, tokenizer, and adapter digests. During rollback, select a compatible older snapshot and check the digest on a live probe before reopening traffic.
 
 ## Regional Data Plane
 
 ### Admission control
 
-Admission is where the system protects latency and spend. Validate capability, policy, request size, deadline feasibility, tenant quota, and estimated resource reservation before joining an expensive queue.
-
-Reserve multiple dimensions:
+Check whether the request is permitted, fits the target, and has enough time left to finish. Admission must reserve every resource for which accepting one more request could break another caller's guarantee:
 
 - request concurrency
 - input, cached, reasoning, and output tokens
@@ -143,26 +139,26 @@ Reserve multiple dimensions:
 - tool calls and retrieval fan-out
 - KV-cache memory for self-hosted serving.
 
-Token estimates are uncertain because output length and agent steps are unknown. Start with a policy cap and workload-conditioned estimate. Update the reservation as usage streams. Terminate or request additional authority before exceeding a hard budget. Reconcile the estimate with actual usage in an append-only ledger.
+Use an output cap for hard commitments and a workload-conditioned estimate for capacity planning. Settle the reservation against actual usage when the attempt ends. An upstream provider may report usage after a timeout. Keep that attempt open for reconciliation.
 
-Bound every queue. An unbounded queue does not increase capacity. It converts overload into requests that consume resources after their deadlines. Shed or degrade early by traffic class: reject batch work, reduce best-of-N, choose a smaller model, limit output, or return a retryable overload response. Never downgrade safety or tenant isolation.
+Bound the queue by age and capacity. When it fills, shed the lowest-priority work permitted by the product contract. Shorter output, a cheaper model, and fewer candidates each change the answer. Use only alternatives already qualified for that traffic class.
 
 ### Routing is constrained optimization
 
-Routing chooses a target subject to hard constraints, then optimizes a product objective:
+First discard deployments that cannot meet hard requirements. Among the remaining targets, a router can score expected quality, latency, cost, and risk:
 
 $$
 m^* = \arg\max_{m \in M_{eligible}}
   \left[Q(m,x) - \lambda_L E[L|m,x] - \lambda_C E[C|m,x] - \lambda_R Risk(m,x)\right].
 $$
 
-`M_eligible` is filtered by capability, region, policy, context length, availability, and experiment. Predictions should use observed workload features and be calibrated by slice. A small model can handle easy traffic only if the router recognizes hard examples with adequate recall. Otherwise savings are purchased with invisible quality loss.
+For request $x$, eligibility includes context length, tool support, region, policy, health, and experiment assignment. The weights express product tradeoffs. Check predictions by traffic class against observed outcomes. An apparently cheap route can become expensive when its answers require a second attempt.
 
-Use deterministic routing when requirements are crisp. A learned or LLM router may classify difficulty or intent, but policy constraints remain in code. Record candidate targets and the reason for selection so changes can be replayed and evaluated.
+Straightforward capability rules can live in the catalog. If a classifier estimates difficulty, measure how often it sends a hard request to a weaker target. Record the candidates and chosen route so the team can replay routing changes.
 
 ### Fallback semantics
 
-Fallback is a product decision, not a generic retry. Classify failures:
+A recovery path depends on how far the request progressed. Distinguish these outcomes:
 
 - transient connection or server failure before any output
 - rate or quota rejection
@@ -172,24 +168,17 @@ Fallback is a product decision, not a generic retry. Classify failures:
 - safety refusal
 - semantic quality failure.
 
-A transient pre-output fault may retry the same target with jitter if deadline permits. Quota failure may route to a compatible target. Once tokens have reached the user, restarting on another model risks duplicated or contradictory content. The stream protocol must either resume from a supported checkpoint or terminate clearly. A safety refusal must not be bypassed automatically through a less restrictive model. Semantic failure needs a verifier-driven alternate strategy, not infrastructure retry.
+Retry transient pre-output faults only within the remaining deadline and attempt budget. Route quota failures to targets with available capacity. After the client has received content, resume from a supported checkpoint or end the stream with an interruption. Starting over silently can give the user two conflicting answers.
 
-Fallback compatibility includes tokenizer, system instruction, tool protocol, schema support, context limit, safety policy, and data residency. Maintain a tested compatibility graph rather than one ordered list of models.
+For each fallback pair, test the target's context budget, schema, tools, residency, and policy on the same product workload. Route refusals according to policy. Send wrong answers through the product's verification and recovery path. A healthy endpoint can still fail both contracts.
 
 ## Self-Hosted Inference Data Path
 
-The detailed GPU mechanics are in [GPU Inference Internals](./11-gpu-inference-internals.md). At the platform level, distinguish two phases:
-
-- **Prefill** processes many input tokens in parallel and creates the KV cache. Long, well-batched prefills often expose enough matrix work to approach a compute or attention-kernel limit, but short or skinny shapes can remain launch- or bandwidth-limited. Queueing plus prefill commonly dominates TTFT for long prompts.
-- **Decode** generates one token per active sequence per step and repeatedly reads model weights and growing KV state. It is commonly memory-bandwidth-bound at low batch, while compute, KV traffic, or communication can dominate elsewhere.
-
-Their different resource shapes motivate continuous batching, chunked prefill, or separate prefill/decode pools.
+**Prefill** processes the incoming prompt and produces state for later tokens. A long prompt can keep an active stream waiting for its next decode step. **Decode** repeatedly advances active sequences. Short batches often spend much of each step reading weights. Long contexts also read substantial cached state. Measure the two phases separately before choosing the scheduling policy. [GPU Inference Internals](./11-gpu-inference-internals.md)
 
 ### Request scheduler
 
-The scheduler operates on sequences, not HTTP requests. It tracks prompt tokens remaining, generated tokens, KV blocks, deadline, priority, tenant, adapter, cancellation, and sampling state. Continuous batching admits new sequences between decode iterations rather than waiting for a static batch to finish.
-
-Scheduling objectives conflict:
+On each iteration the scheduler chooses which sequences advance and which prompts may enter. It needs remaining prompt work, allocated KV pages, adapter, tenant, deadline, and cancellation state. Every batching decision trades one class of work against another:
 
 - large batches improve device efficiency
 - long prefills can block decode and inflate ITL
@@ -197,37 +186,37 @@ Scheduling objectives conflict:
 - grouping by adapter or model improves locality but delays rare variants
 - prefix-cache affinity saves compute but may imbalance replicas.
 
-Use traffic classes with bounded fairness. Chunk long prefills so decode receives regular service. Reserve memory headroom for active KV growth and reject or preempt before out-of-memory. If preemption swaps or recomputes KV state, include that cost in admission and SLO models.
+Start with a mixed replay. Reduce the prefill chunk if active streams stall, then check first-token latency on the longest prompts. Add fairness for rare adapters and long requests. Include swap or recomputation time when comparing a preemptive policy with early rejection.
 
 ### KV-cache management
 
-For a transformer with $L$ layers, KV heads $H_{kv}$, head dimension $D$, sequence length $S$, and $b$ bytes per element, an approximate per-sequence KV footprint is:
+For $L$ identical full-attention layers, $H_{kv}$ KV heads, head dimension $D$, and $b$ bytes per cache element, a sequence of $S$ tokens requires this many logical bytes:
 
 $$
 M_{KV} \approx 2 \times L \times H_{kv} \times D \times S \times b.
 $$
 
-The factor two stores keys and values. Tensor parallelism, page metadata, alignment, speculative branches, and implementation details change the physical amount. Since $S$ grows during decode, admitting to current free memory without reserving future growth causes late OOM failures.
+Keys and values account for the factor of two. For hybrid attention, compute each layer's retained length and sum the bytes. Per-device allocation also depends on sharding, replication, page rounding, and speculative branches. Reserve space for active sequences to grow between admission decisions.
 
-Paged KV allocation reduces external fragmentation by assigning non-contiguous blocks and enables sharing for common prefixes or forked sequences. Prefix reuse requires an exact cache identity over token IDs and every state-affecting model option. Text equality is insufficient when templates, tool schemas, adapters, position handling, or multimodal inputs differ.
+Paged allocation allows non-contiguous blocks and shared prefix pages. Before reusing a page, check the token prefix, model and adapter, position handling, multimodal inputs, and access domain. Charge shared blocks once for physical capacity and give each consumer a share of their cost.
 
 ### Model loading and placement
 
-Artifacts are content-addressed, signed, scanned, and accompanied by tokenizer, generation defaults, quantization metadata, adapter compatibility, and runtime requirements. A replica becomes ready only after weights load, kernels initialize, a warm-up generation passes, and the control plane confirms the expected digest.
+Pin model weights, tokenizer, adapters, quantization settings, generation defaults, and runtime together. A worker becomes ready after it verifies the artifact digests and completes a representative generation on the intended kernel path.
 
-Placement considers accelerator type and topology, model parallelism, memory, regional demand, failure domains, and load time. Large models may take minutes to load, so autoscaling from zero cannot satisfy interactive bursts. Maintain warm capacity or route predictable batch traffic to absorb idle headroom.
+Measure cold start from allocation through readiness, including image pull, weight load, compilation, and warm-up. When load rises faster than new replicas start, keep warm headroom or reserve capacity that interruptible work can release within the deadline.
 
-Rolling upgrades need surge capacity because old and new replicas coexist. Drain removes a replica from new admissions but lets active streams finish or migrate only if the runtime supports state transfer. Killing a pod with live KV state is an application-visible failure.
+During upgrade, the old and new pools both need capacity. Stop new admissions to a draining worker, give its streams a deadline to finish, and surface interruptions when migration is unavailable. Track the cold-prefill load those sessions cause on their next turn.
 
 ### Parallelism and disaggregation
 
-Tensor parallelism shards each layer and requires frequent collectives. Pipeline parallelism divides layers and introduces pipeline bubbles. Expert parallelism routes mixture-of-experts tokens and can suffer load imbalance. Choose placement from interconnect topology, not only aggregate GPU count.
+Tensor parallelism splits layer operations and adds frequent collectives. Pipeline parallelism transfers activations between stages. Expert parallelism routes tokens to the devices holding their experts. Match each exchange to measured topology and include the slowest participating device in the latency budget.
 
-Prefill/decode disaggregation places phases on separately tuned pools. It helps when workload mix and phase interference justify KV transfer overhead and operational complexity. Chunked-prefill systems instead co-schedule phases on the same workers. Benchmark both on actual context/output distributions. Neither is universally superior.
+Separate prefill and decode pools can scale independently. The price is an extra queue and a KV handoff. Replay the same arrivals on split pools and on a co-located pool with chunked prefill. Compare qualified completions per accelerator at the same tail-latency targets.
 
 ## Provider-API Infrastructure
 
-Using provider APIs replaces GPU operations with vendor dependency management. You still own:
+A provider operates the inference engine. The calling team still owns these boundaries:
 
 - per-project and per-model quota allocation
 - regional routing and data-handling configuration
@@ -238,25 +227,25 @@ Using provider APIs replaces GPU operations with vendor dependency management. Y
 - idempotency of downstream tool effects
 - quality and fallback evaluation.
 
-Use separate credentials and limits by environment and product, held in a secret manager. The gateway should expose no provider key to clients. Rate-limit before the provider, because discovering overload via paid rejected or timed-out requests is expensive.
+Separate credentials and quotas by environment and product. Enforce limits before dispatch so one tenant cannot exhaust a shared provider allocation. Where provider internals are opaque, instrument the time from dispatch to first content and from cancellation to terminal acknowledgement.
 
-Provider status is an input, not proof. Circuit breakers open on local outcome windows by target and region. Avoid synchronized retries with exponential backoff and jitter, but respect the request's deadline: backoff that outlives the user is wasted work. A half-open probe uses low-volume safe traffic.
+Scope a circuit breaker to the target and region showing errors. Apply backoff with jitter inside the caller's remaining deadline. Use a small half-open probe to decide when to restore the route.
 
-Multi-provider designs reduce correlated business dependency only if application features are portable and capacity is pre-arranged. An untested fallback account with no quota is not redundancy. Periodically exercise failover with representative requests and verify quality, safety, tool calls, and accounting.
+Test a fallback account under realistic load before counting it as redundancy. Verify reserved quota, independent failure domains, regional data policy, tool behavior, and cost. A successful health probe establishes reachability only.
 
 ## Streaming, Cancellation, and Idempotency
 
-The gateway owns the client stream even if the backend changes. It assigns monotonically ordered event sequence numbers, sends heartbeats where intermediaries have idle timeouts, applies backpressure, and records the terminal state. A slow client must not retain unlimited decoded tokens in memory. Buffer to a bound and then pause, spill, or cancel according to protocol.
+The gateway assigns ordered event IDs, bounds its output buffer, and owns the terminal event. Send heartbeats when needed for idle timeouts. Decide how long a slow consumer can retain a generation before the gateway pauses it, spills buffered events, or cancels it.
 
-Client disconnect propagates cancellation to the provider or inference server. Cancellation is best effort: already submitted accelerator work or provider generation may continue. Track post-cancellation tokens and spend, and prevent cancelled results from populating caches unless policy explicitly allows it.
+Propagate a disconnect to the backend. Record when cancellation was requested and when the worker released its slots. If the provider cannot confirm it stopped, record outstanding usage as unknown until reconciliation.
 
-Idempotency keys identify a logical generation request, but replay semantics must be explicit. Returning a stored completed response is safe for deterministic product semantics even if sampling was nondeterministic originally. Joining a currently active stream requires retained event history and authorization equality. Starting a second generation with the same key is not idempotent.
+Scope each idempotency key to the caller and request digest. Reject a reused key with different inputs. To rejoin a stream, check current authorization and replay retained events after the client's last acknowledged ID. If the history expired, return the documented recovery outcome.
 
-For tool-using models, the generation ID and tool-call ID are separate. Retrying a model request must not re-execute a tool effect unless the orchestrator's durable action state permits it.
+A generation attempt and a tool effect have different identities. A client retry may need a stored result or an interrupted stream report. Only the harness can decide whether an effect still needs execution.
 
 ## Caching
 
-Caching exists at several layers:
+Choose a cache by what the platform can safely reuse:
 
 | Cache | Reuses | Principal risk |
 |---|---|---|
@@ -266,37 +255,27 @@ Caching exists at several layers:
 | Provider prompt cache | Provider-side prefix work | Vendor-specific accounting and retention semantics |
 | Retrieval/tool cache | Evidence or tool result | Freshness and permission changes |
 
-Exact keys include tenant/policy domain, tokenized messages, system prompt, tool schema, model/adapter revision, sampling settings, output schema, and relevant data snapshot. Prefix caches maximize hit rate when stable content comes first and per-request content comes last. Do not include secrets or user-specific data in a shared prefix domain.
+For a stored answer, key the request, source snapshot, policy, variant, and model settings. Recheck access and freshness before returning it. For prefix KV, match the exact model inputs and execution format that produced hidden state. Keep stable request material together to increase the length of reusable prefixes within an authorized domain.
 
-Cache admission should be value-aware. Large one-off prefixes can evict popular entries. Use size-aware policies and tenant quotas. Report hit rate together with tokens or compute saved, because a high hit rate on tiny prompts may have little value.
+Measure fresh prefill tokens avoided per byte held. A high hit rate on short prompts can coexist with more expensive misses when a few large entries displace popular ones. Compare tenant quotas and size-aware eviction on the same trace.
 
 ## Safety and Policy Architecture
 
-Safety is a sequence of enforceable boundaries:
+Authenticate the caller and determine where its data may go before routing. Bound request size and restrict retrieval and tools to the caller's capabilities. Validate generated arguments, then authorize the specific operation at the point of execution. Log the policy revision and enough decision evidence for review.
 
-1. authenticate principal and product.
-2. classify data and permitted target set.
-3. validate request size, modalities, and content policy.
-4. restrict tools and retrieval by capability.
-5. constrain model output structure.
-6. inspect proposed high-impact actions before commit.
-7. log policy decisions and provide appeal/escalation paths.
-
-Use deterministic validators for schemas, allowlists, resource limits, and authorization. Classifiers and LLM judges can add semantic signals but require calibrated thresholds and failure behavior. A timeout in a safety dependency should fail according to risk tier, not automatically fail open for availability.
-
-Prompts cannot protect credentials or network access. Run untrusted code in an isolated environment. Restrict egress. Mint short-lived scoped credentials. Keep policy enforcement outside model-visible text. The [Harness Engineering](./09-harness-engineering.md) chapter develops this boundary.
+Give each policy dependency an explicit timeout outcome for each risk class. For a high-impact write, a timeout can leave the proposal pending for review. A prompt alone cannot enforce permissions on a credential or a network request. Use scoped credentials, restricted egress, and an isolated executor. [Harness Engineering](./09-harness-engineering.md)
 
 ## Multi-Region and Disaster Recovery
 
-The control plane may be global, but generation data often must remain regional. Replicate signed configuration and non-sensitive model artifacts broadly. Keep prompts, outputs, KV caches, and traces within allowed regions. Routing first filters legal residency, then considers health, capacity, latency, and cost.
+Place a recovery target only where its data policy permits prompts, outputs, KV, and traces. Pre-position eligible artifacts and a last-known-good configuration. Exercise the exact route clients will use after a region fails.
 
-Active-active regional gateways avoid a global request bottleneck. Quotas require a consistency choice: strict global spend may use centrally leased token buckets, while low-latency regional quotas can overshoot by the amount leased to each region. State the bound explicitly.
+For a hard global spend limit, the sum of issued regional allowances must stay within the remaining budget. Partitioned regions can spend their outstanding allowance. Stop further admissions once it runs out. If each region can spend before reporting centrally, document the maximum unreported spend and cap it locally.
 
-Self-hosted recovery objectives must account for artifact availability and model load time. Preserve a last-known-good artifact in each recovery region and test cold bootstrap. Provider-based recovery depends on independent endpoints, quota, and contractual data policy. Restore drills should replay real control-plane snapshots and synthetic generations, not merely confirm that backups exist.
+Run the exercise at the offered load expected after failover. Measure time to ready capacity, first successful generation, and recovery of the priority SLO. Include model loading for self-hosted pools and actual quota for provider targets.
 
 ## Capacity and Cost Engineering
 
-For provider traffic, estimate cost rate from the joint distribution and every attempt, including retries and discarded candidates. Let $\lambda_s$ be arrivals per unit time and express the fixed term over that same unit:
+For traffic class $s$, let $\lambda_s$ be arrivals per unit time. Sum the charges for every attempt serving one arrival, including retries and discarded candidates. Add fixed costs over the same unit of time:
 
 $$
 C_{rate} = \sum_s \lambda_s E\!\left[
@@ -306,19 +285,17 @@ C_{rate} = \sum_s \lambda_s E\!\left[
             + C^{tools}_{sa}\right)\right] + C_{fixed,rate}.
 $$
 
-Fresh and cached input are disjoint in this ledger. If a provider includes reasoning in output accounting or applies tiered pricing, the versioned pricing adapter maps reported usage into mutually exclusive billable categories before aggregation.
+Normalize usage into disjoint billable categories before applying the price revision effective at dispatch. Cached input can be a subset of reported input, and reasoning can be a subset of reported output. Reconcile delayed or missing attempt records against provider totals.
 
-For self-hosting, model memory feasibility first, then goodput at the target SLO. Weight memory, KV capacity, interconnect, bandwidth, and scheduler behavior determine the feasible region. Benchmark the real prompt/output distribution with warm-up, concurrency sweeps, failures, and mixed traffic. Peak synthetic tokens/s is not capacity for an interactive SLO.
+For self-hosting, first check that the assigned hardware can hold the weights, KV, and runtime workspaces. Then replay the arrival and length distributions at the product SLO. Retain failed attempts in accelerator cost. Divide total spend by verified successes for the same cohort.
 
-Provision for normal headroom, failure-domain loss, rollout surge, and forecast error. Effective capacity after losing one node or zone must still serve priority traffic within its degradation policy. Autoscaling signals should include queue age, KV pressure, admission rejection, TTFT, and model-load backlog. GPU utilization alone reacts late or encourages saturation beyond the latency knee.
-
-Showback and chargeback use the immutable usage ledger. Attribute shared platform costs, failed attempts, cache savings, and reserved capacity consistently. Product teams need cost per successful task or user outcome, not only token totals.
+To size a failure reserve, suppose each healthy replica sustains 8 qualified requests per second at the target latency on a representative replay. Priority traffic peaks at 30 requests per second. Four healthy replicas cover the measured rate. If either zone must carry that peak by itself, place four ready replicas in each zone and test the surviving zone with cold prefixes. The arithmetic gives a starting count. The failover replay determines whether it holds.
 
 ## Observability and Operations
 
-One trace should connect edge request, gateway admission, policy, routing, cache, provider/inference queue, prefill, decode, safety, tool calls, and stream completion. Use stable generation, session, and logical action IDs. OpenTelemetry's GenAI semantic conventions can provide a common vocabulary, but extend them with platform-specific queue, budget, rollout, and policy fields.
+Link the logical request to all generation attempts, cache decisions, and tool actions in its trace. Record measurements the operator can obtain at each boundary. Provider queue, prefill, and decode times may be unavailable. Keep the combined upstream interval labeled accordingly. [OpenTelemetry GenAI conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/)
 
-Record:
+Capture these fields:
 
 - requested capability and resolved target
 - control-plane, prompt, tool-schema, and policy versions
@@ -330,35 +307,24 @@ Record:
 - cost estimate, actual usage, and ledger reconciliation
 - cancellation time and work observed afterward.
 
-Service dashboards slice by target, region, tenant class, context band, output band, traffic class, and rollout. Track verified useful completion, availability, TTFT/ITL percentiles, queue age, fallback, schema validity, policy blocks, cost per success, KV pressure, preemption, cache value, and provider quota consumption.
+Compare target, region, context band, and traffic class. Keep session IDs in traces so metric labels remain bounded. Sample the traces that explain long waits, excess attempts, and cancellation after dispatch.
 
-Incident response starts with a safe control surface: stop a rollout, disable one route, cap fan-out/output, drain a pool, lower batch admission, or force a known-good target. Every switch is authenticated, audited, scoped, expiring where appropriate, and tested before an incident.
+Suppose first-content latency jumps after a canary while active streams stay smooth. If ingress queue age rises before dispatch, inspect admission and route capacity. If dispatch is prompt but fresh prefill work rises, check prefix compatibility on the new revision. Pause expansion while comparing with the control. Restore traffic only when first-content latency, rejection rate, and qualified completions recover at comparable offered load.
 
 ## Failure Modes
 
-**Optimizing utilization instead of goodput.** The fleet reaches 95% GPU use while queueing violates TTFT and cancellations waste decode. Capacity targets must be derived from useful SLO-compliant completions.
-
-**Unbounded admission.** Requests queue beyond their deadlines and continue consuming spend. Use bounded, deadline-aware queues and reject or degrade before expensive execution.
-
-**Transparent-fallback fiction.** A fallback target lacks the context length, tool schema, safety policy, or quality required by the request. Build and continuously test a compatibility graph.
-
-**Retrying partial streams.** A second model response is appended after the first emitted tokens, producing duplicates or contradictions. Define terminal interruption or supported resume semantics.
-
-**Safety failover bypass.** A refusal or policy timeout routes to a less restrictive model. Policy outcomes are not infrastructure availability failures.
-
-**Configuration split brain.** Gateways, pools, and adapters observe incompatible rollout revisions. Publish signed atomic snapshots and record their IDs per generation.
-
-**KV overcommit.** Admission accounts for current sequence length but not future decode or speculative branches. Reserve growth and reject before an unrecoverable OOM.
-
-**Long-prefill starvation.** Large prompts monopolize compute and increase ITL for active streams. Chunk prefills, isolate traffic classes, or disaggregate phases after measurement.
-
-**Autoscaling after saturation.** GPU utilization triggers scaling only once latency has collapsed, and replicas load too slowly. Scale on queue/KV forecasts and keep warm headroom.
-
-**Cache identity omission.** A prefix generated under one tool schema, adapter, tenant, or policy is reused under another. Key every state-affecting input and isolate security domains.
-
-**Alias drift without evidence.** A provider changes the model behind an alias and output behavior shifts invisibly. Pin where possible, continuously canary, and record resolved revisions and behavioral metrics.
-
-**Observability data leak.** Prompts, tool arguments, and outputs are copied into broad-access traces. Apply data classification, field-level redaction, sampling, tenant isolation, and retention controls.
+| Symptom | Evidence to inspect | First corrective action |
+|---|---|---|
+| GPU utilization rises while fewer users finish | Queue age, deadlines, cancellations, and useful completions | Bound admission and shed expired work before prefill. |
+| Active streams stall when long prompts arrive | Per-iteration prefill size and gaps in delivered content | Reduce prefill chunk size and check both stream gaps and first-token latency. |
+| New replicas arrive after a burst has ended | Queue growth versus measured time to ready | Keep warm headroom for bursts shorter than startup time. |
+| Memory fills late in generation | Reserved and allocated KV, sequence growth, and speculative branches | Reduce admitted growth before preemption causes more prefill. |
+| A fallback returns invalid tools or changes a refusal | Attempt outcome and target capability and policy revisions | Disable that route for the affected class and replay the compatibility tests. |
+| A reconnect repeats or contradicts visible text | A new attempt begins after a content event was delivered | Resume retained events by ID or report an interrupted stream. |
+| Only one region fails after rollout | Route snapshot and model, adapter, and tokenizer readiness | Restore the last compatible route to a ready pool. |
+| Cached content is stale or belongs to another caller | Access checks, source revision, and cache domain | Bypass the affected cache and invalidate entries before restoring reads. |
+| Quality shifts behind an unchanged alias | Provider metadata, canary outcomes, and pinned comparison if available | Pause expansion and route to a qualified target. |
+| Sensitive content appears in traces | Payload capture setting, readers, and retention | Stop payload collection and restrict access while tracing the affected records. |
 
 ## Decision Framework
 
@@ -373,31 +339,21 @@ Incident response starts with a safe control surface: stop a rollout, disable on
 | Economics | low utilization or rapid model churn | measured goodput gives lower total cost at required SLO |
 | Availability | vendor quota and regional dependency acceptable | capacity can be reserved across owned failure domains |
 
-Hybrid systems often use providers for frontier or burst traffic and self-hosted pools for stable high-volume paths. They still require a shared logical contract, evaluation, accounting, and explicit compatibility, not a lowest-common-denominator abstraction that hides important behavior.
+For a hybrid deployment, specify which requests can cross the boundary, how much overflow the second target can accept, and who owns its quality and cost. Test the intended load shift with the real fallback policy.
 
 ### Design sequence
 
-1. characterize workload distributions and user-visible SLOs.
-2. define capability, safety, data, and reproducibility constraints.
-3. specify logical generation and streaming contracts.
-4. design admission, quotas, deadlines, and degradation.
-5. choose eligible targets and measurable routing objective.
-6. define retry, fallback, cancellation, and idempotency semantics.
-7. for self-hosting, benchmark scheduler and memory feasibility on real traces.
-8. build evaluation-gated rollout, immutable usage accounting, and end-to-end traces.
-9. test zone/provider failure, quota exhaustion, configuration rollback, and cold recovery.
-
-Prefer the least operationally complex architecture that meets quality, policy, availability, latency, and cost requirements. Self-hosting for theoretical token price or multi-provider routing for an untested availability story adds infrastructure without necessarily adding product resilience.
+1. Define an eligible request and a successful user outcome. Collect representative arrivals, prompt lengths, output lengths, and cancellations.
+2. Eliminate targets that fail policy, capability, or memory requirements. Measure remaining candidates at the deadline and quality thresholds.
+3. Implement admission, routing, streaming, and recovery around the logical request. Trace every attempt and reconcile its cost.
+4. Test a rollout, provider outage, quota exhaustion, and cold recovery. Use the measured failure capacity when choosing between provider, self-hosted, and hybrid operation.
 
 ## Key Takeaways
 
-- LLM infrastructure is a deadline- and budget-aware serving system. Admission and degradation matter as much as model execution.
-- Separate versioned global control state from regional request data planes and record the exact revision used for every generation.
-- Provider and self-hosted targets can share a logical contract, but fallback must preserve capabilities, policy, context, and quality.
-- Prefill, decode, KV memory, batching, and model placement create distinct scheduling constraints. Plan capacity from goodput at the product SLO.
-- Streaming, cancellation, partial output, and tool idempotency require explicit protocol semantics.
-- Optimize cost per verified successful outcome and preserve an immutable, reconciled usage ledger.
-- Policy is enforced in gateways, tools, sandboxes, and commit paths, not by trusting prompt instructions.
+- Count qualified completions under offered load and cost per verified outcome. Include rejected requests and failed attempts in the report.
+- Couple route publication to worker readiness. A gateway can hold a valid snapshot while its chosen deployment is still loading.
+- Trace first content, stream gaps, terminal status, and backend cancellation independently. Each points to a different operating decision.
+- Qualify every fallback for the caller's data, tools, quality, and deadline. Prove that the recovery route has capacity before relying on it.
 
 ## References
 

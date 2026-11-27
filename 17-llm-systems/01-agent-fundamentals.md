@@ -12,7 +12,7 @@ Give the model a decision only when the next useful action depends on something 
 
 ```mermaid
 graph LR
-    subgraph CHATBOT["Chatbot / Workflow"]
+    subgraph CHATBOT["Single model call"]
         UI1["User Input"] --> LLM1["LLM"] --> R1["Response"]
     end
 
@@ -30,18 +30,16 @@ graph LR
     end
 ```
 
-A chatbot maps one input to one output. A **workflow** chains LLM calls along a code path you wrote. An **agent** lets the model direct its own process: it decides which tool to call next based on what the last tool returned, and it keeps going until the goal is met or the harness stops it. That autonomy is the value and the risk: agents handle tasks you couldn't enumerate steps for, and they fail in ways you didn't enumerate either.
+A chat interface can front any of these designs. Here, the simplest case is a single model call that returns text. A workflow uses code to choose the next step. An agent delegates that choice to the model, which can inspect a tool result and choose a different action on the next turn.
 
-| Aspect | Chatbot | Workflow | Agent |
-|--------|---------|----------|-------|
-| Control flow | None | Your code | The model |
-| Actions | Text only | Predefined LLM calls | Tools chosen at runtime |
-| Steps | 1 | Fixed | Open-ended, bounded by harness |
-| Failure mode | Bad answer | Bad step output | Compounding drift across steps |
-| Cost profile | One admitted call | Sum of known branches and retries | Input-dependent and bounded by admission |
-| Right for | Q&A | Decomposable, known tasks | Open-ended tasks with verifiable outcomes |
+| Design choice | Single model call | Workflow | Agent loop |
+|---|---|---|---|
+| Who selects the next step? | Caller receives one answer | Application follows declared transitions | Model proposes an action after each observation |
+| What limits the work? | Input and output limits | Branch, loop, and retry limits | Harness enforces permissions, deadline, and spend |
+| Typical failure | Unsupported answer | Invalid intermediate result propagates | Repeated actions compound an early error |
+| Example | Summarize supplied text | Route and validate an expense report | Investigate a failed build and verify a repair |
 
-Start with the least adaptive form that reaches the workload. A workflow preserves explicit control when branches are enumerable. An agent earns authority only where observations reveal useful branches that could not be encoded economically. See [Orchestration Patterns](./02-orchestration-patterns.md) for the taxonomy and composition rules.
+For a failed build, parsing a known error code can stay in a workflow. Give the model a choice when the next file or test to inspect depends on what it just learned. [Orchestration Patterns](./02-orchestration-patterns.md)
 
 ## The Three Components
 
@@ -51,42 +49,43 @@ graph TD
     HARNESS["HARNESS<br/>Loop, system prompt, tool schemas,<br/>context lifecycle, permissions,<br/>checkpointing, telemetry"]
     ENVIRONMENT["ENVIRONMENT<br/>Filesystem, shell, APIs,<br/>browser, sandbox boundary"]
 
-    HARNESS --> MODEL
-    HARNESS --> ENVIRONMENT
-    MODEL <-.->|tool calls / results| ENVIRONMENT
+    HARNESS -->|request and observations| MODEL
+    MODEL -->|proposed action| HARNESS
+    HARNESS -->|authorized call| ENVIRONMENT
+    ENVIRONMENT -->|result| HARNESS
 ```
 
-- **Model.** The model implements a probabilistic policy over proposed actions and final responses. Its useful capability depends on the tool protocol, context, feedback latency, and verifier. Model-only benchmark results do not determine system performance.
-- **Harness.** Everything between the model and the world. This is where most engineering effort goes. See [Harness Engineering](./09-harness-engineering.md) for the full treatment.
-- **Environment.** What the agent can observe and change. Capability comes from task-relevant observations and effects, not raw tool breadth. A shell or filesystem helps only when its state is scoped, versioned, and connected to an independent success signal. Otherwise it increases blast radius without closing the feedback loop.
+- **Model.** Given the available observations, it proposes a response or an action. Measure whether those proposals lead to successful tasks with the actual tools and verifier.
+- **Harness.** This runtime builds the request, enforces policy, dispatches approved work, and records the result. [Harness Engineering](./09-harness-engineering.md)
+- **Environment.** The agent needs a place to observe progress. A build log can identify a failing test, a scoped checkout lets the agent propose a fix, and an independent test run can check it.
 
 ---
 
 ## The Agent Loop
 
-The abstract loop has four boundaries:
+One turn moves from a recorded observation to a proposed action and back to observed state.
 
 ```text
 state snapshot → model proposal → policy/execution → observation → new state
 ```
 
-The model proposal is not an action. It is untrusted structured data containing either a candidate tool invocation, a request for information, or a completion claim. The harness validates schema and preconditions, resolves authority, assigns a stable logical action identity, executes through the appropriate isolation boundary, and records the observation. This distinction prevents a model-generated tool call from bypassing authentication merely because it parsed correctly.
+A tool proposal carries arguments. The harness authenticates the caller, validates the arguments against current state, and assigns the logical action an ID before dispatch. A request for information or a completion claim follows its own transition.
 
-Native structured tool calling removes a syntax failure class, but not semantic failure: a valid argument can name the wrong account, use a stale resource revision, or request an unauthorized effect. Tool schemas should therefore encode representable structure while deterministic code enforces business invariants and policy.
+A schema can require an integer refund amount. The application must still check the currency, the refundable balance, and the caller's authority over that order.
 
-Multiple proposed actions are concurrent only when their read/write sets and snapshot semantics permit it. Independent reads may run together. Overlapping writes require serialization or optimistic revision checks. A read following a write must either observe the committed result or be explicitly bound to the prior snapshot. Parallel syntax in a model response does not imply safe parallel execution.
+Schedule concurrent reads against a defined snapshot. Serialize conflicting writes or make the destination reject a stale revision. When a second call depends on a first write, wait for the receipt and read the committed revision.
 
-The loop terminates through typed reasons: verified completion, user pause, approval wait, deadline, budget exhaustion, policy denial, non-convergence, or unrecoverable error. A natural-language “done” is a completion proposal. The harness decides whether the evidence contract is satisfied. [Harness Engineering](./09-harness-engineering.md) develops the runtime mechanics, while [Orchestration Patterns](./02-orchestration-patterns.md) covers the surrounding control-flow choices.
+Record why the loop stopped. An approval wait can resume, a denied action may require a new plan, and a depleted budget stops further work. Mark success only after checking the task's acceptance criteria. [Harness Engineering](./09-harness-engineering.md) and [Orchestration Patterns](./02-orchestration-patterns.md)
 
 ### Reasoning effort is a resource allocation
 
-Some model APIs expose reasoning-effort controls, while others express the trade-off through model choice or decoding configuration. Treat reasoning compute as one budget dimension. Additional deliberation is most valuable where a decision is hard to verify or commits an expensive branch. It has less value inside a tight loop with immediate deterministic feedback. Measure task success against total tokens, wall time, and action count rather than assuming more internal computation is uniformly better.
+Compare reasoning budgets on the same tasks. Extra computation may pay for itself before an expensive search branch. In a build loop, running a cheap failing test may resolve the uncertainty sooner. Compare verified completions, latency, tokens, and tool calls before changing the default.
 
 ---
 
 ## Execution Semantics: The Loop Is a Durable State Machine
 
-The toy loop keeps `messages` in process memory. A long-running agent has a durable **run** containing ordered **turns**, each turn may propose one or more **actions**, and each action has an execution record. These identities solve different ambiguity problems:
+Keep a durable record for the user goal, each model call, each proposed effect, and each execution attempt. After a restart, these IDs distinguish an unfinished action from a new request.
 
 ```text
 run_id       names one user goal and its durable lifetime
@@ -95,7 +94,7 @@ action_id    names one logical side effect requested by that invocation
 attempt_id   names one infrastructure attempt to execute the action
 ```
 
-If the model call times out, the harness must determine whether the provider created a response before retrying or accept that it may pay twice. If a tool call times out, the more dangerous ambiguity is whether the side effect happened. Retrying `read_file` is harmless. Retrying `send_payment` with a new identity can pay twice. The tool contract therefore carries `action_id` as an idempotency key, stores the first committed result, and returns it on repeated attempts. Attempt identity is for telemetry. Logical action identity is for correctness.
+A lost model response can cost a second generation. A lost refund response can cost a second refund. Persist the action ID and exact parameters before dispatch. Send the same key on a retry only while the destination guarantees deduplication for that operation.
 
 ```mermaid
 stateDiagram-v2
@@ -110,43 +109,44 @@ stateDiagram-v2
     AwaitingApproval --> Ready: denied result appended
     Executing --> Ready: durable tool result appended
     Executing --> Recovering: timeout / crash
-    Recovering --> Ready: reconcile by action_id
+    Recovering --> Ready: outcome resolved and recorded
+    Recovering --> Paused: outcome unknown and retry unsafe
     Ready --> Paused: user interruption / budget boundary
     Paused --> Ready: resume with new input
     Ready --> Failed: terminal policy or invariant violation
 ```
 
-State must commit around side effects. Record the proposed action and check whether policy permits it. Obtain any required approval before executing it with its stable action ID. Save the result before passing it to the model. A crash between execution and result persistence is reconciled by querying the tool with the same action ID or reading its idempotency record. “Exactly once” is not supplied by an agent framework: it is approximated at each side-effect boundary using the same outbox, idempotency, and reconciliation patterns as any distributed workflow.
+Suppose the refund request timed out after dispatch. Keep it pending while you check the provider's authoritative record. A matching receipt lets the run continue. If the result is still unknown, a retry is safe only under the provider's idempotency contract. Stripe's v1 API, for example, can prune a key after 24 hours. Once pruned, the same key can start a new request. If replay protection may have expired and the original result remains uncertain, stop automatic retries and route the case for reconciliation. [Stripe idempotent requests](https://docs.stripe.com/api/idempotent_requests)
 
-Parallel tool calls add a join. Reads against an immutable snapshot may execute freely. Writes that overlap the same resource need ordering or optimistic concurrency (expected file hash, row version, ETag). Tool results are appended in a deterministic order keyed by tool-call identity even if completion order varies. Otherwise a replay can assemble a different context and send the model down a new path. Cancellation also has semantics: stop scheduling new actions, attempt to cancel running ones, mark actions whose outcome is unknown, and reconcile them before resume. Killing the process is not cancellation.
+Record the order in which the model saw concurrent results. Replay that order, including failures and truncation. On cancellation, stop admitting new actions, signal running attempts, and retain any unresolved effect until the destination confirms its outcome.
 
-Durability does not mean storing unrestricted transcripts forever. Persist structured state, tool references, hashes, approvals, costs, and the context snapshot needed to reproduce a turn. Store sensitive raw inputs and outputs under separate access and retention policy, because transcripts may contain credentials, personal data, or proprietary documents. A resumable system that violates data minimization is not mature. It has merely made its privacy exposure durable.
+Store action receipts, approvals, version identifiers, and completion evidence independently of the chat transcript. Keep sensitive payloads in access-controlled storage with a retention period. After deletion, record which evidence remains available for recovery.
 
 ---
 
 ## Tools as Effect Contracts
 
-A tool is an effect contract, not merely a function description. Its control-plane record should declare input and output schemas, authenticated principal requirements, read/write set, reversibility, idempotency behavior, timeout, maximum result size, data classification, and reconciliation procedure. The model-visible description explains selection. The harness-visible contract determines execution.
+For each tool, document who can invoke it, which state it reads or changes, its timeout, result-size limit, and how to resolve an uncertain outcome. Give the model enough information to choose the tool. Keep authorization and execution checks in the handler.
 
-General-purpose execution tools offer reach but make effects harder to classify statically. Narrow structured tools expose better validation and least privilege but expand the catalog and can force inefficient call sequences. The right surface combines a small orthogonal core with typed tools at high-impact boundaries. Catalog discovery can defer rarely used schemas so tool breadth does not consume every context.
+A shell is useful for inspecting a changing codebase. A typed refund API can enforce a balance check and a deduplication key at the destination. Choose the smallest surface that supports the task. Load rarely used tool descriptions when needed.
 
-Result design closes the feedback loop. Return a typed status, concise observation, stable artifact or receipt reference, source revision, truncation indicator, and actionable error class. Large data belongs behind pagination or an artifact reference. An error should state which precondition failed without leaking secrets or encouraging the model to bypass policy.
+Return a status the caller can act on. A stale revision should identify the revision to refresh. A successful write should include a receipt. For large results, return an artifact reference or continuation token and mark the visible excerpt as partial.
 
-Protocols such as MCP standardize discovery and transport but do not establish trust. A connected server is another dependency and authority boundary: authenticate it, constrain exposed capabilities, pin compatible protocol/schema versions, and treat returned content as untrusted unless policy says otherwise. Detailed tool-surface design lives in [Harness Engineering](./09-harness-engineering.md) and [Coding Agent Tool Design](../19-compound-engineering/02-coding-agent-tool-design.md).
+For a remote tool, authenticate its operator and verify the capability, schema revision, and data policy before exposing it to a run. Treat instructions in its results as untrusted input. [Harness Engineering](./09-harness-engineering.md) and [Coding Agent Tool Design](../19-compound-engineering/02-coding-agent-tool-design.md)
 
 ---
 
 ## State, Context, and Memory
 
-Do not conflate three stores. **Run state** is authoritative structured data: goal, constraints, action status, approvals, budgets, and completion evidence. **Context** is the bounded view compiled for one model turn. **Memory** is information retained across a longer scope, such as a project convention or user preference. The transcript is neither the source of truth nor a safe cross-session memory database.
+**Run state** records the current goal, permissions, pending actions, budgets, and receipts. **Context** contains the subset the model may see on this turn. **Memory** carries selected information across runs, such as a project convention.
 
-This separation enables recovery and minimization. The runtime can rebuild a prompt from canonical state, retain sensitive artifacts under their own access policy, and compact conversational material without losing action receipts or constraints. Memory records need provenance, scope, expiry, and revocation. Context items need trust labels and token budgets. [Context Management](./08-context-management.md) owns the selection, compaction, caching, and memory lifecycle details.
+After compaction, rebuild the prompt from current state. Preserve outstanding actions and their receipts even if the summary drops the conversation that produced them. Give memory records a source, scope, expiry, and revocation path. [Context Management](./08-context-management.md)
 
 ---
 
 ## Verification as an Observation Channel
 
-Agency is tractable when the environment exposes observations that discriminate progress from plausible failure. Code tests, database invariants, simulators, artifact diffs, and reviewed screenshots are possible channels. They differ in coverage, latency, independence, and false-accept cost. None becomes ground truth merely because it is executable.
+Choose a check that can distinguish real progress from a plausible report. A build log proves the compiler ran. A passing regression test provides evidence about a particular behavior. Neither alone establishes that the user received the requested change.
 
 ```mermaid
 graph LR
@@ -155,76 +155,73 @@ graph LR
     VERIFY -->|pass| DONE["Done: claim with evidence"]
 ```
 
-Model the verifier as a sensor. A false acceptance commits bad state. A false rejection spends more work or blocks a valid result. Verification cadence therefore depends on the expected loss of undetected drift versus the cost and latency of sensing. Cheap local invariants can guard each transition. Expensive end-to-end or human checks belong at risk boundaries. Self-evaluation is useful for proposing defects, but it is correlated with the generator and cannot be treated as independent acceptance evidence without calibration.
+Measure how often the verifier accepts bad results and rejects good ones. Put cheap, high-coverage checks close to each action. Reserve slow integration checks or human review for changes whose consequences justify the delay. Calibrate a model judge against independent labels before relying on it.
 
-If a path contains conditional transition-success probabilities $p_i$, the first-order probability that all transitions are correct is $\prod_i p_i$. In practice the errors are correlated through shared context and evidence, so multiplying global average accuracies is not a reliability estimate. A verifier changes the state graph by detecting some failures and routing them into recovery. Its recall, false-positive rate, and recovery-success distribution determine the actual gain. The evaluation methodology belongs to [LLM Evaluation](./10-llm-evaluation.md). This chapter's foundational rule is that completion authority stays outside the model.
+For a fixed path, let $p_i$ be the probability that transition $i$ succeeds given that all earlier transitions succeeded. The probability they all succeed is $\prod_i p_i$ by the chain rule. Marginal stage pass rates cannot be substituted without an independence assumption. Measure failures detected, recoveries attempted, and final outcomes on complete runs. [LLM Evaluation](./10-llm-evaluation.md)
 
 ---
 
 ## Security Model
 
-An agent combines an untrusted decision-maker with a confused-deputy risk. The principal's authority must be attenuated to the current action: tool, resource, verb, tenant, expiry, and approved argument digest. The model never authenticates itself, grants itself access, or converts text found in a document into authority.
+A retrieved document can name an action the user never authorized. Bind execution to the authenticated principal, tenant, resource, verb, expiry, and approved parameters. Check those values outside the model.
 
-Isolation limits what executed code can observe and change. Policy decides whether the proposed effect is permitted. Approval delegates a specific effect. Provenance distinguishes user intent from untrusted data. These controls are complementary. A sandbox with unrestricted network credentials still leaks data, while a policy gate without isolation cannot contain a compromised interpreter. The concrete sandbox, egress, secret-broker, and approval architecture is developed in [Harness Engineering](./09-harness-engineering.md).
+Run untrusted code with scoped filesystem and network access. Keep credentials behind the tool boundary. For a newly approved action, recheck its parameters and resource revision immediately before execution. [Harness Engineering](./09-harness-engineering.md)
 
 ---
 
 ## Evaluating Agents
 
-Agent evaluation separates end state, trajectory, and operating envelope. End-state checks determine whether the environment satisfies the task contract. Trajectory checks capture redundant actions, unsafe proposals, policy interventions, recovery, and irreversible effects that a good final answer could hide. Operating metrics include wall time, tail latency, tokens, tool cost, and human attention per successful task.
+Evaluate what changed in the environment, how the system got there, and what the run cost. An agent can return the right final document after sharing an intermediate draft with the wrong recipient. The final artifact alone misses that failure.
 
-Because execution is stochastic, report the distribution across repeated runs and distinguish “at least one success” from “all repeated runs succeed.” Public benchmarks compare model–harness pairs on standardized environments. Product release decisions require representative internal tasks and real policy boundaries. [LLM Evaluation and Observability](./10-llm-evaluation.md) covers dataset design, judge calibration, statistics, and production feedback.
+Repeat representative tasks and report first-attempt success, consistency across attempts, latency, and cost per verified completion. Use traces to investigate policy interventions and unnecessary work. [LLM Evaluation and Observability](./10-llm-evaluation.md)
 
 ---
 
 ## Bounded Autonomy as a Control System
 
-The agent is a controller acting on an environment through delayed, lossy observations. Unbounded looping is therefore not a feature. It is an unstable controller with an unlimited actuator budget. Define a **capability envelope** across four axes: what it may observe, what it may change, how long or how much it may spend, and which evidence is required before completion. Autonomy can be high on one axis and low on another. A coding agent may read an entire repository and run thousands of local tests while requiring approval for one network call or push.
+Set permissions independently for observation, mutation, spend, and completion. A coding agent may inspect a repository and run local tests while a production deployment requires separate approval.
 
-Budgets should be nested. A run has wall-clock, token, monetary, action, and retry budgets. A tool has its own timeout, output limit, and side-effect policy. A subagent receives a delegated slice rather than inheriting the parent run's remaining authority. When a boundary is reached, the harness should produce a typed event (`budget_exhausted`, `approval_required`, `verification_failed`, `no_progress`) that can be surfaced to a human or handled by a declared policy. Silently asking the model to “try harder” hides the condition and often converts a bounded failure into repeated spend.
+Budget each run and reserve a share for verification. A delegated task inherits only the tools and resources it needs. When a limit is reached, return a reason such as `budget_exhausted` or `approval_required` so the caller can decide whether the work may resume.
 
-Progress detection is domain-specific. Repeated identical tool calls, unchanged verifier output, oscillating edits, and a growing context with no new durable artifact are signs of non-convergence. The harness can hash normalized actions and observations, detect cycles, and require the model to change strategy or pause. This is not a semantic proof that the task is stuck. It is a circuit breaker against the common mechanical loops that consume budget without information gain.
+Look for repeated actions that add no information. Three identical status polls may be reasonable for a running build. Three edits that restore the same failing revision call for a different plan. Compare the observed state as well as the call signature.
 
-Completion is a state transition authorized by evidence. The model proposes that it is done. The harness runs the relevant verifier and checks the task's acceptance contract. A passing test proves only what the test asserts, so completion evidence may combine tests, static checks, diff constraints, screenshots, policy checks, and a human review for judgment-heavy work. Store that evidence with the run. The final answer then reports the committed state and evidence rather than merely repeating the model's confidence.
+The harness closes the run when the verifier accepts the current artifact revision. Store that revision with the check results and any human decision. Reopen verification if the artifact changes.
 
-The correct autonomy level is earned empirically. Start with recommendation-only or read-only execution, collect traces and failure labels, add objective verifiers, then widen permissions for task classes whose unsafe-action and silent-failure rates meet a declared threshold. Do not grant broad autonomy because a demo succeeded. Demos sample the golden path, while authority must be sized against the tail.
+Widen permissions one task class at a time. Compare the new policy with the read-only or approval-gated baseline on the same workload. Inspect silent failures and high-impact actions before granting further authority.
 
 ---
 
 ## Failure Modes
 
-**Context drift** occurs when a long run forgets the original acceptance criteria or treats a stale summary as truth. The agent produces coherent work for the wrong problem. Preserve immutable goal/constraint fields outside free-form messages, version compaction summaries, and re-inject the acceptance contract at decision boundaries.
+**Lost constraint.** A compacted run proposes a change the user ruled out. Restore the current constraint from durable state and test the same continuation after compaction.
 
-**Ambiguous side-effect retry** happens when a tool times out after committing and the harness retries with a new identity. The duplicate email, deployment, or payment is caused by execution semantics, not model reasoning. Stable action IDs, idempotent tools, and reconciliation are the defense.
+**Duplicate effect.** Two attempts report different outcomes for one action. Group receipts by logical action ID, inspect the destination, and suspend retries where the result remains uncertain.
 
-**Authority laundering** occurs when a low-trust source (retrieved document, webpage, issue comment, or tool output) convinces the model to invoke a high-authority tool. Data provenance must survive context assembly, and policy must authorize the action from the user's intent and tool contract rather than from text the model read.
+**Untrusted instruction.** A tool result asks the agent to send data elsewhere. Check the destination and disclosure authority against the user's task before issuing any credential.
 
-**Verifier theater** uses a weak or self-authored check that always agrees with the agent. A model writing both the implementation and a test that merely reproduces its assumptions has not produced independent evidence. Prefer existing or independently specified invariants, mutation tests, differential checks, and human review for non-programmatic judgments.
+**Weak verification.** A generated test repeats an erroneous implementation assumption. Check an independently specified invariant or a previously observed failing case.
 
-**Non-convergent loop** repeats reads, edits, or retries without reducing uncertainty. Bound attempts, detect normalized action cycles, track verifier deltas, and stop with preserved state instead of consuming the remaining budget.
+**Repeated work.** The same operation consumes budget while the environment stays unchanged. Require new evidence, change the strategy, or pause with the unresolved question.
 
-**Partial parallel commit** lets one of several tool calls mutate state while another fails, after which the model assumes the whole plan failed and repeats it. Parallelize independent reads. Coordinate writes through explicit transactions, compensations, or per-action reconciliation.
+**Partial completion.** One parallel write commits and another fails. Persist both outcomes, recheck the failed action's preconditions, and resume only the unfinished work.
 
-**Irrecoverable transcript** stores messages but not environment version, tool result identity, approvals, or side-effect status. Replay starts from superficially similar text against a different world. Checkpoint the state machine and external references, not only the chat log.
+**Failed resume.** The chat transcript survives but the checkout or deployment receipt is missing. Recover authoritative state before asking the model to continue.
 
 ## Decision Framework
 
-Use a single model call when the task is one transformation over supplied context. Use a deterministic workflow when steps and branches are knowable in code. Introduce an agent only when the useful action sequence depends on observations that cannot be enumerated in advance, and when the environment provides enough feedback to correct errors.
+Use a single call for a bounded transformation, such as extracting fields from a supplied record. Use a workflow when code can express the branches. Delegate the next step when observations materially change which action is useful.
 
-Then ask four questions. First, **what is the oracle?** If success cannot be observed more reliably than the model can claim it, autonomy will hide errors. Second, **what is the blast radius?** Prefer reversible, scoped actions and require approval as irreversibility, external communication, privilege, or money increases. Third, **what state must survive interruption?** Long work with side effects needs durable execution and reconciliation. A short research loop may not. Fourth, **what simpler control structure fails?** Routing, prompt chaining, or evaluator loops are easier to test and cheaper to operate than open-ended agency.
+For an incident investigator, the design review should trace one uncertain operation end to end. Which observation identifies the next useful check? Which action could change production? Who authorizes it? What survives a lost response?
 
-The decisive design artifact is not the system prompt. It is the run state machine plus the tool/permission matrix, completion evidence, budgets, and failure policy. If those cannot be stated precisely, the system is not ready for more autonomy.
+Enable autonomous writes only for task classes with enforceable permissions, bounded spend, and a tested path from timeout to a known result. Keep an explicit escalation route for the remaining cases.
 
 ## Key Takeaways
 
-1. An agent is a model-directed control loop. The harness and environment determine its real capability and safety.
-2. Durable execution needs distinct run, turn, action, and attempt identities so retries and recovery have defined semantics.
-3. Side-effect correctness comes from idempotency, atomic state transitions, and reconciliation, not from asking the model to be careful.
-4. Tool descriptions, result shapes, errors, and permissions form the agent's effective API and should be designed like one.
-5. Context is working memory, not durable truth. Goals, constraints, state, and evidence need structured storage outside the transcript.
-6. Verification arrests compounding error. Completion is a harness decision backed by evidence, not a model stop token.
-7. The security boundary is sandbox and policy. Untrusted content cannot grant authority merely by appearing in context.
-8. Autonomy should widen only after task-specific evaluations show that the feedback loop can detect and recover from the tail failures.
+1. Let the model choose where to investigate and give the harness authority over execution.
+2. Keep a stable ID for each logical action and a separate ID for every attempt.
+3. Test recovery after the destination commits and before the caller records the receipt.
+4. Measure completion against the current artifact, the user's constraints, and the observed external effects.
+5. Increase autonomy when representative runs demonstrate that the system can detect and contain errors.
 
 ## References
 

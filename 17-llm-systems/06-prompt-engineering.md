@@ -10,7 +10,7 @@ A prompt change can alter a tool call even when the output still passes schema v
 
 ## Prompt Anatomy: The Request Is a Program
 
-A logical request usually contains the following layers, though provider serialization differs. Their ordering is constrained by reuse and attention. Their authority is constrained by provenance:
+Treat each request as a set of inputs with different owners and lifetimes. A developer controls the output schema. A user supplies the current goal. A retrieved document can supply evidence about that goal. It has no authority to grant the application another permission.
 
 ```text
 1. operator instructions stable per release        trusted, operator-authored
@@ -21,18 +21,13 @@ A logical request usually contains the following layers, though provider seriali
 6. current user turn     per-request               user-authorized content
 ```
 
-These are logical components, not a universal wire order: a provider may carry schema or tool configuration outside the model-visible token sequence. Within the rendered sequence, **stability order** (placing reusable material before volatile material where semantics permit) determines [prefix-reuse economics](./08-context-management.md). A changed token invalidates reuse after that boundary. **Trust order** preserves provenance: operator configuration, user intent, tool observations, and retrieved evidence have different authority even when one serialized request contains all of them. The compiler makes those labels legible to the model, while policy enforcement remains outside the request.
+Keep stable inputs together when the provider supports prefix caching. Put changing values where they preserve meaning and can reuse earlier tokens. Some providers serialize tools or schemas separately, so measure cached tokens on the rendered request. A diagram of the intended order cannot predict a cache hit by itself.
 
-Instruction altitude trades underspecification against an untestable prose state machine. Vague goals leave policy and failure behavior to model inference. A large hierarchy of special cases creates overlapping branches whose priority, coverage, and migration behavior are unclear. State the goal, hard constraints, output contract, and failure behavior in prose, but move enumerable transitions into orchestration, exact invariants into code or schemas, and nuanced distinctions into evaluated examples.
-
-Two structural tools are useful when they are tested on the target model:
-
-- **Delimiters** (XML-style tags (`<documents>`, `<user_query>`, `<rules>`) or typed content blocks) make boundaries legible and protect the renderer from accidental structural ambiguity. They do not neutralize hostile instructions or create a security boundary.
-- **Few-shot examples** demonstrate distinctions that are difficult to specify in prose. Curate them as a weighted part of the behavior program: cover decision boundaries, retain provenance, version policy-dependent examples, and measure the token and bias cost. For output syntax, prefer constrained structure and spend examples on judgment.
+Use examples for distinctions the schema cannot express, such as when to ask a clarifying question. Include cases on both sides of that boundary. Check whether removing an example changes decisions on held-out requests before paying for it on every call.
 
 ## Prompt Compilation and Request Identity
 
-Request construction should be a compiler pipeline rather than ad hoc string concatenation:
+A prompt template can stay at version 14 while a renderer update changes every request. Capture the inputs at the point where the application hands the request to the provider. During an incident, two traces with the same template and different tool-schema hashes immediately narrow the investigation.
 
 ```mermaid
 flowchart LR
@@ -46,10 +41,6 @@ flowchart LR
     TOK --> REQ[Canonical request + manifest]
 ```
 
-The typed intermediate representation distinguishes trusted instructions, user content, retrieved evidence, tool results, images, and generated summaries. Variables are inserted as data nodes, not interpreted as template syntax. This prevents a document containing a closing delimiter or braces from changing the structure of the request. Provider adapters then render the same logical request into the provider's message and content-block format.
-
-Every invocation should retain a request manifest:
-
 ```text
 prompt_source_version, renderer_version
 resolved_model_or_deployment, tokenizer_version
@@ -62,57 +53,33 @@ policy revision and experiment assignment
 canonical rendered-request hash
 ```
 
-This is the reproducibility boundary. “Prompt v14” is not enough if a changed template renderer reordered fields, a tool description drifted, memory injected a new entry, or a provider alias resolved differently.
-
 ### Rendering invariants
 
-Canonical rendering makes caching and debugging tractable. Serialize structured blocks deterministically, normalize only where semantics allow it, and never include volatile request IDs or timestamps in the stable prefix. Validate required variables and reject unknown ones. Silently dropping a field can remove a safety or product constraint. Compute token counts with the target tokenizer before admission because character limits do not predict model tokens across languages or code.
-
-Prompt templates need the same escaping discipline as HTML or SQL, but the goal is structural integrity rather than making hostile instructions harmless. Delimiting untrusted content prevents accidental boundary breakage. It does not grant security against a model that can still read the content. Authority remains enforced by the surrounding system.
-
----
+Build provider messages from typed content. Validate variables before rendering and escape data for the format it enters. Reject a missing constraint explicitly. For token admission, use the target tokenizer or the provider's counting interface and reserve room for the response. Keep sensitive payloads in their approved stores and log only the identifiers needed to reconstruct an authorized test case.
 
 ## Reasoning Instructions and Test-Time Compute
 
-Chain-of-thought prompting, worked reasoning examples, self-consistency, and explicit search can improve some models and task classes. Reasoning-oriented models may instead perform substantial deliberation in model-managed tokens or expose an effort control. Neither behavior is universal across models, and visible rationales are not faithful execution traces by default.
+A reasoning budget competes with the deadline and the output budget. For a task with an executable answer, run the same cases at two effort levels. Count verified solutions, timeouts, and cost across all attempts. An increase in accuracy among completed responses can hide a decline in the number of users who get a correct answer on time.
 
-Treat reasoning structure as an evaluated system choice. Compare a concise goal-and-constraint prompt, task-specific worked examples, model-managed reasoning effort, and external candidate search under the same success, latency, and cost metrics. Keep explicit decomposition when it produces an auditable artifact or lets an external verifier inspect alternatives. Remove it when it only repeats computation the model already performs.
-
-During migration, keep the deployed prompt as a baseline. Test whether removing an old workaround improves results on the replacement model. Repeated emphatic instructions, forced narration, and rigid step sequences can interact differently with a new model. Reasoning effort then becomes a routing and budget decision owned by [LLM Infrastructure](./05-llm-infrastructure.md), while durable external control flow remains an [orchestration](./02-orchestration-patterns.md) concern.
-
----
+Test a worked example or an external search step when errors reveal a specific missing distinction. Keep intermediate artifacts when another component uses them, such as a query plan that a validator can reject. A model's explanation of a successful run is weak evidence about how it reached the result.
 
 ## Structured Outputs: Syntax, Semantics, and Evolution
 
-Grammar- or schema-constrained decoding masks tokens that cannot continue a valid structure. Where supported, it moves malformed syntax from application retry logic into generation. The guarantee is bounded by the provider's supported schema subset and finish semantics: truncation, refusal, transport failure, or unsupported constraints can still produce no usable object.
+First inspect the terminal status. A refusal, a truncated stream, and a completed structured response require different handling. Parse the object only after the provider reports a compatible completion. Reissuing a refused request as a formatting retry can change a policy decision.
 
-Structure does not establish truth. A valid `account_id`, enum, or citation field may contain the wrong value. Apply three layers in order:
+A valid reservation request can still name the wrong account. Validate syntax against the supported schema, bind the account to the authenticated caller, and check the proposed reservation against the user's request. Represent missing evidence explicitly so the model can return an unknown value.
 
-1. **Decode constraint:** ensure the output can represent only the allowed syntactic forms.
-2. **Deterministic validation:** enforce ranges, cross-field invariants, resource existence, authorization, and expected base revision.
-3. **Semantic verification:** compare claims or decisions with evidence, executable checks, or human judgment.
-
-Schema design affects both behavior and operability. Use enums for closed product states, explicit nullable/unknown variants for uncertainty, stable identifiers instead of display names, and bounded collections. Avoid embedding business rules solely in field descriptions. The model may ignore them and downstream code cannot enforce prose.
-
-Version the schema and generated client type together. Additive changes are not automatically compatible when a constrained decoder, prompt example, consumer, or cache key depends on exact shape. Record the schema digest with every output, publish migrations for persisted objects, and canary schema/model pairs. Some runtimes compile grammars or automata on first use, so include schema compilation in cold-path latency and cache it by trusted digest.
-
----
+Version the schema with its consumers. Adding an enum value can break an older exhaustive switch. Exercise old clients against new outputs and include first-use grammar compilation in cold-start measurements.
 
 ## Tool Descriptions Are Part of the Request Program
 
-In agentic systems, tool definitions are part of the prompt program. The model chooses *whether* and *how* to act from names, descriptions, parameter types, and observed results, so changes to this surface require the same versioning and evaluation as system instructions.
+Give tools names that distinguish when to read, preview, or commit. A shared description such as “manage reservations” leaves the model to infer whether a call changes state. State the effect, required identifiers, and expected result. Derive the caller's identity in the handler.
 
-The description establishes a selection contract: action-oriented identity, the condition under which the tool is applicable, distinctions from neighboring capabilities, the provenance required for arguments, and the observation returned for each error class. Preconditions that affect authorization or correctness still execute in code. A field description such as `customer_id: authenticated session UUID` can tell the model where to obtain a value. It cannot stop a forged value, so the handler must bind or validate it against the principal.
-
-Catalog geometry affects selection. Overlapping tools create ambiguous decision boundaries, while one overly broad executor makes effect classification difficult. Consolidate semantic duplicates, keep high-impact operations narrow, and retrieve rarely used schemas through capability discovery when loading the entire catalog would consume context or destabilize a reusable prefix. Tool errors return typed, actionable state without exposing secrets or suggesting policy bypass. The harness-level effect contract remains in [Agent Fundamentals](./01-agent-fundamentals.md) and [Harness Engineering](./09-harness-engineering.md).
-
----
+Test selection on pairs of similar requests. “Show the appointment I could book” and “Book this appointment” should produce different effects. Inspect the proposed calls as well as the final text. If loading every tool displaces useful evidence, retrieve a smaller authorized catalog and measure how often the required tool is missing.
 
 ## Prompt Injection: An Architecture Problem Wearing a Prompt Costume
 
-Prompt injection is an integrity attack in which lower-authority content is interpreted as control. No prompt phrasing establishes a hard boundary when a model processes arbitrary hostile text while holding dangerous capabilities. Payloads can arrive through RAG documents, web pages, email, code comments, or tool output. The consequential outcome is usually an unauthorized action or disclosure rather than merely an incorrect answer.
-
-The request compiler preserves trust labels and structural boundaries. For example:
+A retrieved document can contain text that resembles a developer instruction. Keep its source attached when rendering it so the model can interpret it as evidence. Delimiters help the reader of the prompt identify that boundary.
 
 ```text
 <documents>
@@ -123,99 +90,54 @@ The request compiler preserves trust labels and structural boundaries. For examp
 </documents>
 ```
 
-Demarcation reduces structural ambiguity but remains a model-level signal. Instruction-hierarchy training, content transformations, and classifiers may reduce attack success on qualified tests. They do not grant authority. The architecture must remain safe when the model follows hostile content by using attenuated capabilities, separated secret and execution domains, effect-boundary authorization, data-loss controls, and human approval for high-impact actions. Never place secrets in system prompts. [Harness Engineering](./09-harness-engineering.md) covers these controls. Prompt compilation must preserve provenance and test hostile content against the exact request tuple.
-
----
+Enforce the boundary at the tool. For example, a document summarizer can read a document without acquiring permission to share it. Bind any later share operation to an authorized principal, recipient, and document revision. Test the application's behavior when the model proposes an unauthorized action anyway. The expected result is a denied operation with no external effect.
 
 ## Prompt Release Management
 
-The release artifact is the request manifest, not one prompt file. Version-control prompt sources and templates. Publish immutable resolved revisions. Qualify the tuple of model, renderer, tools, schema, retrieval/context policy, and decoding. Record that tuple with every invocation. A dashboard alias may select a revision, but it must not mutate the immutable artifact behind prior traces.
+Publish an immutable manifest for the prompt, renderer, tools, schema, model, and decoding settings. Record the manifest that actually served each request. Keep the previous qualified combination available and decide whether active sessions finish on it or migrate at a verified checkpoint.
 
-A change moves through offline paired evaluation, shadow execution where effects are suppressed, canary traffic with slice guardrails, and progressive rollout. Rollback changes the alias to a previously qualified tuple. Session behavior needs an explicit policy: pin the tuple for conversational consistency or migrate at a controlled boundary with compatibility checks.
-
-Prompt registries add value when they enforce ownership, lineage, qualification evidence, and alias history. A registry that merely stores mutable strings centralizes drift without controlling it. The same [deployment semantics](../16-ml-systems/06-model-deployment-rollouts.md) used for models apply here because prompts alter production behavior.
-
-Automated prompt optimization is a search procedure over the same release artifact. Its objective, search budget, candidate history, and selection attempts must be recorded. Repeated selection against one visible set overfits that set regardless of whether candidates were written by people or models. A locked qualification set and production outcome checks remain independent of the optimizer. The graded case corpus is more durable than any selected prompt because it can re-qualify a new model, compiler, or schema.
+Start with paired offline trials. Shadow production inputs only where data policy permits it and suppress external effects. In a canary, assign whole sessions and measure task outcomes, cost, and latency. An automated prompt optimizer needs a separate qualification set because repeated selection on its search set can improve the reported score without improving production behavior.
 
 ## Testing Prompt Programs
 
-Prompt tests have two layers. **Compiler tests** are deterministic: template variables, message order, escaping, canonical hashes, token budgets, tool-schema compatibility, and cache-prefix stability. Store rendered snapshots carefully (usually as hashes plus redacted fixtures) so tests do not turn sensitive production inputs into repository artifacts.
+Compiler tests catch missing fields, unstable serialization, oversized messages, and incompatible schemas before a model call. Behavior tests catch different failures. Keep fixtures for questions that require a tool and questions that resemble them but require no action. Change an irrelevant name, paraphrase the request, or reorder independent evidence and check that the decision still holds.
 
-**Behavior tests** are statistical. A case specifies input state, acceptable properties, forbidden behavior, evidence or tool expectations, and the slice it represents. Run multiple samples when decoding or provider behavior is stochastic. Report pass-rate confidence intervals and paired deltas against the current production pair `(model, prompt)`, rather than declaring a new prompt better from a handful of examples.
-
-Metamorphic tests are particularly valuable because many tasks lack a single reference answer. Examples include:
-
-- paraphrasing the user request should preserve the decision
-- changing an irrelevant name should not change a classification
-- removing decisive evidence should produce abstention or lower confidence
-- inserting an instruction inside an untrusted document should not change tool authority
-- reordering independent evidence should not reverse a factual answer
-- changing tenant or role should change only the information and actions that policy permits.
-
-These relations reveal shortcut learning and prompt injection without requiring exact string matching.
-
-Tool-use tests simulate the full protocol: correct tool selected, arguments satisfy both schema and business preconditions, errors trigger bounded recovery, and each attempted effect passes an authorization check before execution. Replay a timed-out attempt and verify that the destination records at most one committed effect for the same logical action. Evaluating only the final prose can hide a dangerous trajectory that happened to end well.
+For tool use, inspect what the destination recorded. A test that times out after the write should still find at most one committed operation after replay. Keep redacted fixtures and hashes where full requests contain private data.
 
 ### Migration and rollout
 
-When a model and its prompt change together, a regression can be hard to attribute. Where both prompts are supported, run the old and new prompt on each model using the same cases, tools, and grading rules. If only the new pairing fails, inspect how that model interprets the changed instruction. If both prompts fail on the new model, investigate model or adapter behavior first. Record unsupported pairings explicitly. Canary the qualified combination and keep the previous one available for rollback.
-
-Online experiments need outcome metrics and guardrails. Engagement alone can reward verbosity or agreeable misinformation. Include user correction, escalation, groundedness, successful tool completion, latency, and cost. Preserve experiment assignment for a session so prompt behavior does not alternate mid-conversation.
-
----
+If the model and prompt both change, test all supported old and new pairings on the same inputs. A failure confined to one pairing implicates the interaction. If both prompts fail on the new model, inspect model behavior and the adapter first. Record unsupported pairings. Canary the combination that passed qualification.
 
 ## Failure Modes
 
-**Over-prescription.** A procedural scaffold compensates for one model's failures, then constrains a different model or an unanticipated input. Defense: state goals and constraints. Ablate historical scaffolding during migration. Retain only measured value.
-
-**Format-by-pleading.** JSON requested in prose, parsed with regex, repaired with retries. Defense: constrained outputs where supported, explicit unsupported/truncation semantics, and typed validation at the boundary.
-
-**Untracked prompt drift.** Dashboard edits, no versioning, no eval gate. Quality changes with no audit trail. Defense: prompts in VCS, eval-gated deploys, resolved-prompt logging.
-
-**Example rot.** Few-shot examples embodying last quarter's policy, silently teaching outdated behavior. Defense: examples are test cases: owned, reviewed, and updated with policy.
-
-**Injection via the side door.** The chat input is sanitized while the RAG pipeline feeds the model raw hostile documents with tool access live. Limit tool privileges when processing retrieved content. Mark document boundaries explicitly and test how the system handles instructions embedded in a document.
-
-**Prompt-cache vandalism.** A well-meaning edit inserts per-request content at the start of a reusable prefix, sharply increasing fresh-input work and latency. Defense: stability-ordered anatomy and cached-token-share monitoring ([Context Management](./08-context-management.md)).
-
-**Model-update whiplash.** A provider model bump shifts behavior under a heavily-tuned prompt. Defense: pin model versions where offered, re-run the suite on every bump, and keep prompts at goal-altitude so they transfer.
-
-**Renderer drift.** The source prompt is unchanged but a serializer reorders content blocks or tool fields, breaking cache identity and behavior. Defense: version the compiler, canonicalize rendering, and record the final request manifest.
-
-**Template-structure injection.** Untrusted data is interpolated into a template in a way that closes a delimiter or creates a new message-like section. Defense: typed content nodes and provider rendering. Remember that structural escaping complements but does not replace privilege separation.
-
-**Eval overfitting.** Repeated prompt edits optimize a small public suite while organic failures worsen. Defense: holdout sets, production-derived slices, periodic refresh, and online outcome guardrails.
+| Production symptom | Check first | Response |
+|---|---|---|
+| Schema validation stays green while wrong records change | Compare requested and committed resource IDs | Bind the target and expected revision at the write boundary |
+| Fresh input tokens jump after a release | Diff the rendered prefix on identical fixtures | Move volatile fields and verify cache reuse on repeated calls |
+| A new model follows an obsolete rule | Inspect worked examples and policy versions | Retire the stale example and add a case for the current policy |
+| A dashboard edit changes behavior mid-session | Compare resolved manifests by turn | Restore the qualified revision and pin or explicitly migrate sessions |
+| Offline scores rise while users need more corrections | Inspect selection history and production slices | Qualify on a locked set and include representative traffic in the canary |
 
 ## Decision Framework
 
-Diagnose the failure class before editing prose:
+Use the observed error to choose which component to change.
 
-| Observed problem | First design lever |
+| Observation on a failing case | Test that distinguishes causes |
 |---|---|
-| Malformed structure | Native schema/grammar enforcement and typed parsing |
-| Wrong factual knowledge | Retrieval or a source-of-truth tool, not a longer instruction |
-| Wrong style or stable judgment | Clear contract, representative examples, then fine-tuning if scale justifies it |
-| Wrong tool selected | Tool taxonomy, names, trigger descriptions, and eval cases |
-| Unauthorized action | Capability and policy boundary outside the model |
-| Long-task drift | Context lifecycle, plan state, compaction, and recitation |
-| High latency or cost | Stable prefix, token budget, routing, and simpler orchestration |
-| Model migration regression | Remove legacy scaffolding, run paired slice evals, canary the model-prompt pair |
+| The parser rejects the output | Check the finish reason, requested schema digest, and actual provider support before changing prompt wording |
+| A valid object contains an outdated price | Replay with the authoritative price and revision in the evidence packet. If the error persists, inspect how the prompt binds evidence to the output |
+| The model calls a write tool during a preview | Compare the two tool descriptions and inspect the handler's authorization decision |
+| The answer changes after a long session | Rebuild the request from its context revision and check whether the relevant constraint survived compaction |
+| The model meets quality targets but misses the deadline | Compare queue time, fresh input tokens, reasoning budget, and output length with the deployed baseline |
 
-For each instruction, ask whether it is universal policy, request-specific context, an output type, a tool contract, or an evaluation criterion. Keep universal policy in trusted configuration and put request-specific facts in the current message or evidence packet. Define output types in schemas and enforce tool capabilities in code. Use the evaluation suite to check nuanced acceptance criteria. Prompts become brittle when these concerns are collapsed into one growing system message.
-
-Choose few-shot examples when the desired distinction is easier to demonstrate than describe and the examples fit the stable token budget. Choose fine-tuning when many examples encode a stable behavior and the measured inference or reliability gain covers training and lifecycle cost. Choose deterministic code whenever the rule can be implemented exactly.
-
----
+A prompt edit is cheap to publish and can be expensive to diagnose. Before making one, write down an input that reproduces the failure, the expected observable result, and the component capable of enforcing it. If the requirement is an exact permission or accounting rule, implement the check at the operation.
 
 ## Key Takeaways
 
-1. A prompt is a program: structured by stability (for caching) and by trust (for security), versioned and eval-gated like code.
-2. Write role, goal, hard constraints, output contract, and failure behavior at the right altitude. Test any procedural scaffold against a simpler baseline on the target model.
-3. Allocate reasoning effort like any other test-time resource. Externalize plans only when they provide durable state, parallelism, or independent verification.
-4. Constrained decoding guarantees representable syntax within a supported subset. Deterministic and semantic validators still own correctness.
-5. Tool names, descriptions, schemas, and error observations are model inputs that shape selection. Version and evaluate them with the rest of the request tuple.
-6. Prompt-injection impact is bounded by architecture (privilege separation, approval gates, and data/authority provenance), while delimiters and detection remain fallible signals.
-7. The eval set is the durable asset: models and prompts both change. Graded cases are what make each request tuple qualifiable.
+- Record enough of the rendered request to distinguish a prompt change from a renderer, tool, schema, or model change.
+- Measure reasoning effort and prefix reuse against successful tasks within deadline.
+- Parse completed structured outputs, verify their meaning, and authorize the resulting effects.
+- Qualify changes on paired cases and keep a tested path back to the previous serving combination.
 
 ---
 

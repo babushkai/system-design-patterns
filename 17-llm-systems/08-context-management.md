@@ -10,20 +10,20 @@ A long-running agent may need an old user decision more than its latest tool out
 
 ## The Context Window Is a Budget
 
-Every request presents the model with one bounded sequence or equivalent ordered content structure: system instructions, tool definitions, conversation state, retrieved documents, the current message, and space reserved for the response. Advertised model limits continue to grow, but a large repository, long-running agent trace, or document corpus can still exceed them, and quality can degrade well before the hard limit.
+Count what the server actually renders. Instructions, tool schemas, session history, evidence, attachments, and the current question all consume capacity. Reserve room for the response. Test task quality at realistic lengths because a request can fit the protocol limit and still lose a decisive fact.
 
-The budget must be allocated before optional material is selected. Let $W_m$ be the qualified usable window for model $m$, which may be below its protocol maximum. Feasibility requires
+Let $W_m$ be the largest usable window qualified for this model and workload, subject to the protocol limit. Before choosing optional material, check
 
 $$
 T_{instructions}+T_{tools}+T_{active\ state}+T_{evidence}+T_{history}
 +T_{current}+R_{output}+R_{variance} \le W_m.
 $$
 
-The first terms may have minimum reservations or hard inclusion rules. Optional evidence and history compete only for what remains. $R_{output}$ is a correctness reservation because truncation can cut a structured value or tool proposal. $R_{variance}$ covers token-estimation error, input growth, and any model-specific accounting that shares the limit. The allocator stores both planned and actual use by class, then recalibrates reservations from truncation, overflow, and task-success data. There is no portable percentage: limits follow the joint distribution of model, renderer, tool set, language, task, and output contract.
+Reserve $R_{output}$ for a complete answer or tool call and $R_{variance}$ for estimation error or other model-specific usage. Compare planned and actual use by class. If mandatory material exceeds the limit, choose a compatible route or stop with a reason. Silently dropping a permission condition changes the task.
 
 ## Context Assembly as a Materialized View
 
-Store canonical session and task state outside the model, then compile a request-specific view. A context item should carry:
+Keep task state outside the model. Give the assembler enough metadata to decide which items this request may use.
 
 ```text
 item_id, type, immutable content reference/hash
@@ -34,7 +34,7 @@ estimated tokens, priority, dependencies
 compaction level and source-item IDs
 ```
 
-The assembler resolves the authenticated principal, task and session revision, target model, and token budget. It fetches candidate items, removes unauthorized or expired state, resolves superseded facts, scores relevance and obligation, preserves required dependencies, and renders a deterministic ordered request. It emits a **context manifest** containing the selected item IDs, transformations, token counts, truncations, and final request hash.
+Resolve the caller, task revision, model, and budget first. Remove expired and unauthorized items, apply corrections, and render the selected material in a stable order. Alongside the request, record a **context manifest** with item IDs, source revisions, token counts, omissions, transformations, and a hash of the result.
 
 ```mermaid
 flowchart LR
@@ -50,11 +50,11 @@ flowchart LR
     OUT --> EV
 ```
 
-The canonical state remains the event log, artifacts, plan, and memory records. The prompt is disposable. This prevents a compacted summary from becoming the only copy of a decision and lets an incident replay which source items were visible without storing all sensitive content inline in a general trace system.
+The event log, artifacts, task state, and reviewed memory let the runtime rebuild the view. During an incident, the manifest identifies which revision the model saw. Traces can refer to restricted payloads without copying them into a general logging system.
 
 ### Allocation as constrained selection
 
-Let item $i$ have expected utility $u_i$, token cost $t_i$, freshness risk $r_i$, and dependencies. Context selection approximates:
+For optional items, estimate the benefit $u_i$, token cost $t_i$, and risk $r_i$ of stale content. One way to express the selection problem is
 
 $$
 \max_S \sum_{i\in S}(u_i-r_i)-redundancy(S)
@@ -62,64 +62,63 @@ $$
 T_{fixed}+\sum_{i\in S}t_i+T_{current}+T_{output}+T_{safety}\le W.
 $$
 
-Some items are mandatory rather than scored: system policy, current user intent, active constraints, tool result corresponding to an unresolved call, and evidence required for a cited claim. A dependency may require a table header with a selected row or an error message with the tool invocation that produced it. Greedy “top relevance per token” selection is a useful approximation only after these invariants are satisfied.
+First include the current intent, mandatory policy, open tool calls and results, and active constraints. Keep dependent items together. A table row can be useless without the column header. Score optional material only after reserving those costs.
 
-Use separate sub-budgets so one source cannot consume the window. Retrieval, history, memory, tool schemas, and current-turn attachments have different marginal value and different trust. When one exceeds its allocation, apply a type-specific policy: rerank evidence, prune superseded tool output, summarize old history, or expose tools through discovery instead of silently truncating the tail of the full request.
+Set separate limits for sources that can grow independently. When a tool returns a long log, retain the relevant excerpt and an authorized handle to the complete output. When search returns too many passages, rerank them inside the evidence budget. Both choices preserve space for the user's question.
 
 ---
 
 ## Token Economics: The Bill Is Shaped Like a Triangle
 
-Let turn $i$ append $d_i$ tokens and generate $o_i$ tokens. Without pruning, total input processed over $n$ turns is
+Let $B$ be a fixed prefix sent on each of $n$ calls. Let $d_i$ be the new input first included at call $i$, including any previous assistant output or tool result carried into that request. With an append-only transcript, the total submitted input is
 
 $$
-T_{input}=\sum_{i=1}^{n}\sum_{j=1}^{i} d_j.
+T_{input}=nB+\sum_{i=1}^{n}\sum_{j=1}^{i}d_j.
 $$
 
-If each turn adds roughly $d$, this is $d n(n+1)/2$: quadratic in turn count. A long agent can therefore spend far more reprocessing history than generating the final answer.
+With a 2,000-token fixed prefix and 500 new tokens per turn, ten calls submit 47,500 input tokens. Only 7,000 tokens appear in the last request. This counts logical input. A warm prefix cache can reduce the work and price of repeated tokens.
 
-Pricing and cache semantics differ by provider, model, deployment, and time, so retain variables rather than baking one multiplier into the architecture:
+For a cost model, assign every billed token to exactly one pricing category. For a provider that prices reads, writes, and uncached input separately, use
 
 $$
-C = c_f T_{fresh} + c_c T_{cached} + c_o T_{output}
-    + c_r T_{reasoning} + C_{tools} + C_{storage}.
+C = c_f T_{fresh} + c_w T_{write} + c_h T_{hit} + c_o T_{output} + C_{tools} + C_{storage}.
 $$
 
-In many offerings $c_c < c_f$, while output or reasoning tokens may be priced differently from fresh input. The exact ratios are configuration data. Architecture should maximize correctly reusable prefixes, bound repeated context, and measure provider-reported usage. Batch or asynchronous pricing can change the optimal path for evaluation and enrichment, but it must not be assumed for an interactive SLO.
+Map usage fields to the provider's billing rules. Count reasoning tokens once when the output total already includes them. Separate cache writes only when billed separately, and include pricing tiers or TTL differences where applicable. Compare the estimate with actual usage records. [Claude prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)
 
-Caching also reduces prefill work and can improve TTFT, but only for eligible prefixes and warm cache state. Capacity planning must include cold-cache events, eviction, model routing, and regional failover. A cost model that assumes every repeated token is cached will fail during rollout or incident traffic.
+A warm hit can reduce prefill time. A rollout, failover, eviction, or expired entry can turn the same logical input into cold work. Replay the workload under both conditions and compare first-token latency, task cost, and admitted throughput.
 
 ---
 
 ## Attention Is Not Uniform: Lost in the Middle and Context Rot
 
-A context window is not random-access memory. *Lost in the Middle* demonstrated position-dependent accuracy on multi-document QA, with stronger use of evidence near boundaries than in the middle for the evaluated models and tasks. Later long-context evaluations show that recall, distractor sensitivity, and reasoning quality vary with model, position, formatting, evidence density, and task. “Context rot” is a useful name for degradation as irrelevant or conflicting material grows, but it is an empirical workload property rather than one universal curve.
+In multi-document question answering and key-value retrieval experiments, moving the evidence changed accuracy even when all tokens fit. The tested models often performed better with evidence near the beginning or end. Recheck placement on the deployed model and task. [Lost in the Middle](https://arxiv.org/abs/2307.03172)
 
-Placement is therefore an evaluated part of context compilation. Mandatory policy and current intent receive stable, explicit structure. Evidence stays adjacent to the claims or task segment it governs. Chronology and table structure are not destroyed merely to place a high score at an edge. Repeating an obligation can increase salience but creates divergent copies unless every rendering is derived from one canonical field.
+Keep dates with the rules they qualify and units with table values. Test whether placing active constraints near the decision improves compliance. If a constraint must appear twice, render both copies from the same authoritative field so a correction reaches both.
 
-Selection quality matters as much as placement. Marginal evidence consumes tokens and can introduce distractors or contradictions, so evidence allocation should optimize sufficiency and redundancy rather than maximize chunk count. Qualification probes vary decisive-evidence position, distractor density, document structure, and context length on the actual task distribution. A synthetic needle measures one retrieval behavior, not the system's ability to reason over its own evidence.
+Hold the required evidence fixed and vary position, distractors, and length independently. A model that locates an isolated fact may still fail to combine two passages. Include multi-step tasks and score the resulting decision.
 
 ---
 
 ## Prefix Identity, Reuse, and Revision
 
-Prefix reuse is a derived optimization over one rendered request revision. A cache entry is correct only when its identity includes the token sequence and every state-affecting input: resolved model and tokenizer, adapter, template/compiler revision, tool schemas, position handling, multimodal content, and the provider/runtime's cache domain. Text equality alone is insufficient if another hidden input changes activations.
+A serving engine can reuse prefix state when the rendered tokens and the inputs that determine their activations are compatible. Include model revision, adapter, positions, and multimodal inputs where relevant. The caller's cache isolation scope also has to match. Two identical strings can belong to different domains.
 
-For request revisions $r_a$ and $r_b$, the reusable span is their longest compatible token prefix. Stable operator configuration and tool schemas therefore precede volatile per-turn content where the target protocol allows it. Canonical serialization prevents semantically irrelevant map order or whitespace changes from reducing reuse. Model migration, tool-set change, correction, minimization, and compaction create explicit divergence points. Correctness and deletion obligations take precedence over preserving a cache hit.
+The longest compatible prefix is an upper bound on reuse. Cache block size, minimum length, configured cache points, expiration, and replica placement can shorten the actual hit. Put stable material before volatile fields where the protocol allows. Invalidate a stale or unauthorized prefix immediately even when reuse was saving money.
 
-The context manifest records the eligible prefix, compatibility inputs, cache decision, and reported reused tokens. Comparing consecutive manifests distinguishes a legitimate revision from a volatile timestamp, request ID, nondeterministic serializer, or routing change inserted too early. Hit count alone is weak: report fresh and reused tokens, prefill work avoided, entry size, eviction, and tenant/policy domain. The serving-side residency and routing consequences belong to [Agent Inference](./12-agent-inference.md).
+To diagnose a sudden drop in cached tokens, compare manifests for successive calls. If the first changed token moved near the front after a template rollout, examine timestamps or unstable schema ordering. If the eligible prefix is unchanged, investigate expiry, routing, and eviction. Restore the affected configuration and confirm both first-token latency and cost per completed task. [Agent inference](./12-agent-inference.md)
 
 ---
 
 ## Long Context vs RAG
 
-"Load the working set" and "retrieve only what is needed" are two selection policies. A larger window changes their feasible region but does not remove freshness, authorization, evidence-allocation, cache, or attention constraints.
+Choose where the system should select evidence and how it will handle a miss.
 
-**Long context** fits a bounded, request- or session-scoped working set whose contents are repeatedly used. It removes an online retrieval-miss boundary, but pays cold prefill, residency/eviction, and distractor costs. “Loaded” still does not mean “used correctly,” and source identity must survive rendering if claims require attribution.
+**Long context.** Load a bounded, authorized snapshot when the task repeatedly needs much of its content. Measure cold prefill and whether the model can find the decisive passages among distractors.
 
-**RAG** fits a corpus larger or more dynamic than one request should load, especially when access control, temporal selection, correction, deletion, or evidence ranking must happen before model exposure. It adds corpus-publication and retrieval failure boundaries but makes selection independently observable.
+**Indexed retrieval.** Search at request time when the corpus changes frequently, permissions differ by caller, or only a small fraction of documents is relevant. Monitor publication lag and evidence recall.
 
-A hybrid uses retrieval to publish a bounded evidence snapshot and then reuses that snapshot across turns. **Just-in-time retrieval** instead lets observations determine later reads through typed tools. It reduces front-loaded context and supports exploratory tasks, but adds tool latency, stopping-policy, reproducibility, and wandering risk. These modes may coexist: load stable high-use evidence, retrieve the long tail, and record the exact source revisions seen.
+**Just-in-time retrieval.** Let the model request additional evidence after observing earlier results. Bound the number and duration of reads, record source revisions, and stop when the evidence supports the answer. A hybrid can load stable high-use material and retrieve the rest on demand.
 
 | Dimension | Long context | RAG | Agentic (just-in-time) |
 |---|---|---|---|
@@ -133,51 +132,51 @@ A hybrid uses retrieval to publish a bounded evidence snapshot and then reuses t
 
 ## Compaction Lifecycle and Publication
 
-A long-running session eventually crosses a qualified context, latency, or cost threshold. Compaction transforms a source event range into a smaller derived artifact plus lineage. It is not an in-place transcript edit. The canonical event graph, task state, and effect receipts remain authoritative under their retention policy. The compacted artifact is one materialized view.
+Compact before projected prompt length, latency, or cost exceeds its qualified budget. The compactor reads a specific range of canonical events and produces a shorter artifact linked to that range. Keep authoritative decisions and receipts according to their retention policy.
 
-A compaction job pins `source_revision`, declares the item classes and exact fields it must preserve, generates narrative compression only for residual prose, validates the result, and publishes a new context revision with compare-and-swap against the active base. If the session advances during the job, the artifact is stale and must be rebased or discarded. Publication also declares the cache divergence point and which source payloads can be rehydrated.
+Pin the source revision. Copy required structured fields, summarize residual prose, and validate the result. Publish with a compare-and-swap against the active revision. If a user corrected the task during summarization, retry against the new state. Record the new prefix boundary and which source artifacts remain available.
 
-Trigger policy uses projected next-turn feasibility and the measured benefit of a smaller view, not turn count. Compaction consumes generation and verification work and can invalidate prefix reuse, so a premature revision can cost more than it saves. Negative constraints, approvals, identifiers, unresolved effects, and completion evidence remain structured fields rather than relying on a summarizer to remember them. The validation contract appears in [Compaction Correctness and Evaluation](#compaction-correctness-and-evaluation).
+Estimate the benefit over the remaining calls. In an illustrative session, compaction costs 0.06 including validation and the first cold call. If each subsequent call saves 0.01 at the expected cache mix, six subsequent calls recover the cost. A task likely to finish in two calls gains little unless it would otherwise exceed the window. Validate constraint retention before applying either policy.
 
 ---
 
 ## Context Editing and Artifact Rehydration
 
-Context editing changes a rendered view without deleting canonical events. Tool observations, retrieved documents, generated artifacts, and prior model deliberation have different useful lifetimes. Represent each large item with an inline excerpt plus a durable receipt containing artifact identity, source revision, access policy, size, truncation state, and a rehydration operation. Later revisions may replace the excerpt with that receipt once no active dependency requires the full payload.
+Give large observations a bounded excerpt and an artifact reference. Record revision, size, access scope, truncation, and retrieval method. Once a task no longer depends on the entire payload, later calls can carry only the reference and relevant excerpt.
 
-Admission bounds result size before it enters the view. The boundary chooses among inline content, pagination, structured extraction, or an access-controlled artifact reference based on expected reuse and the cost of another read. A truncation marker must be machine-visible and preserve where the omitted content can be recovered. Otherwise the model may treat an incomplete observation as complete. Model-internal reasoning has no independent evidentiary status and need not be retained in future contexts unless a provider protocol requires a continuation token or the product explicitly stores a concise decision record.
+Cap output before inserting it into the request. Mark incomplete reads explicitly and provide pagination or an authorized read operation. Preserve continuation items required by the model protocol. Keep records of decisions and observed effects in canonical state.
 
-Editing creates a new manifest with source-item lineage and cannot remove unresolved tool-call/result pairs, approvals, current constraints, or evidence needed by a pending claim. Rehydration rechecks authorization, freshness, and base revision rather than assuming that an old reference still names visible or valid content. This is information-flow [backpressure](../06-scaling/07-backpressure.md): bound materialization while preserving the ability to retrieve canonical state.
+Recheck access, revision, and freshness on every rehydration. If the underlying file was deleted or permission revoked, mark the evidence unavailable and reconsider any pending claim that depended on it. Preserve unresolved call/result pairs when editing the prompt. [Backpressure](../06-scaling/07-backpressure.md)
 
 ---
 
 ## Memory: What Survives the Session
 
-Everything above manages context *within* a session. Memory is policy-governed information that may outlive one run: declared user preferences, project conventions, or reviewed lessons. Canonical memory may use versioned files for a small inspectable scope or typed records for larger systems. Retrieval indexes remain derived projections. The model may propose reads and writes, but the harness owns scope, validation, retention, revocation, and automatic loading.
+A saved preference or project convention can outlive a session. Assign it a subject, scope, provenance, and review policy. Give the model a way to propose updates while the runtime owns retention, authorization, and loading.
 
-The canonical record must remain inspectable and correctable. An embedding match is a retrieval candidate, not proof that an old claim is still valid for this user, project, or time. This is the same [feedback-loop contamination](../16-ml-systems/01-ml-system-fundamentals.md) problem as training on model-generated outcomes: an inferred memory can be repeatedly reintroduced until it appears authoritative unless provenance and review state remain visible.
+Treat an embedding match as a candidate. Verify it belongs to this user or project, check whether it was superseded, and distinguish a declared preference from a model inference. Repeated retrieval of an inference can otherwise make it look independently confirmed. [Feedback loops](../16-ml-systems/01-ml-system-fundamentals.md)
 
-The operational hazards are staleness and scope. A memory that was true in March ("the deploy script is `deploy.sh`") silently poisons sessions in July. Memory entries need the same treatment as [dataset versioning](../16-ml-systems/11-dataset-management-versioning.md) gives data: provenance and deletion when wrong. And memory written from one user's session must never load into another's: memory stores are per-tenant security boundaries, not shared caches.
+A remembered deploy command can outlive the script it names. Display the source and last confirmation time, allow correction, and scope project conventions to the correct repository and tenant. [Dataset versioning](../16-ml-systems/11-dataset-management-versioning.md)
 
 ### Memory lifecycle and write authority
 
-A memory record should identify subject, claim, source, observation time, scope, confidence, expiry or review time, superseded record, and the principal allowed to read or change it. Separate user-declared preference from model-inferred preference. An inference such as “user prefers short answers” should be visible and revocable and should not overwrite an explicit setting.
+Record who made the claim, when it was observed, which tasks it applies to, when to review it, and who can change it. A model-inferred preference should never silently replace an explicit user setting.
 
-Writing memory is a side effect. The model proposes a record. The harness validates schema, policy, duplication, and scope. Sensitive or high-impact memory may require confirmation. Store immutable revisions and a current alias. Deletion writes a tombstone, removes indexes and caches, and follows the retention policy for old payloads. Memory loaded into a context records its revision ID so an incident can explain which stale belief influenced a response.
+Validate a proposed memory write and record the accepted revision. For deletion, stop future loading immediately and propagate the tombstone to indexes and caches. Apply retention policy to historical payloads. Record the memory revision in each context that uses it.
 
-Do not write transient task state into long-term memory merely because it may be useful later. Use distinct stores for user profile, project conventions, task checkpoints, and episodic history, each with separate retention and retrieval policy. This limits both context pollution and cross-purpose privacy leakage.
+Keep in-progress task state in a checkpoint with its own lifetime. Loading a transient decision as a lasting preference can change the behavior of unrelated future sessions.
 
 ## Context State, Branches, and Concurrency
 
-Conversation history is an event stream, but an agent run may fork: parallel tool calls, regenerated responses, speculative plans, or user edits. Assign stable event IDs and parent references. A branch has a base revision. Its output cannot commit to current task state if that base has been superseded without reconciliation.
+Represent user edits, regenerated answers, and parallel results with event IDs and parent revisions. A worker may finish after the user changes the task. Compare its base revision with current state before incorporating its result.
 
-The model-visible transcript may linearize concurrent events, but canonical state should preserve their causal relation. Tool call and result IDs must match. A late result from a cancelled branch is recorded but not inserted into the active context as current truth. When two branches produce candidate artifacts, the orchestrator selects or merges them explicitly rather than concatenating both and asking the model to infer which won.
+Connect each tool result to its call ID. A late result can still prove a write occurred even after cancellation. Preserve that receipt, reconcile any effect, and apply the current task rules before allowing more work. A linear transcript alone loses this distinction.
 
-Session migration between models may alter chat templates, tool encodings, context limits, and cache identity. Recompile from canonical events instead of forwarding provider-rendered messages. Validate that the destination can represent every active tool call and content modality. Otherwise close or summarize the incompatible state at a controlled boundary.
+On migration, rebuild the request from canonical events. Verify the new model can express the active tools, modalities, and continuation state. If an open action cannot be represented, reconcile or pause it first.
 
 ## Compaction Correctness and Evaluation
 
-Compaction is a lossy state transformation and should have an acceptance contract. Given source event set $E$ and compacted artifact $S$, validate that $S$ preserves:
+Define which fields must survive compaction. Check the compacted artifact against the canonical state for each of the following.
 
 - the latest goal and acceptance criteria
 - active constraints, prohibitions, approvals, and unresolved questions
@@ -186,57 +185,49 @@ Compaction is a lossy state transformation and should have an acceptance contrac
 - open work, committed work, failures, and external side-effect receipts
 - provenance references for claims that may need rehydration.
 
-Use deterministic extraction for identifiers and state where possible, then let a model compress narrative. Compare the result to canonical task state. Reject a summary that contradicts it. Keep a recent verbatim tail and allow on-demand rehydration from archived events or artifacts.
+Copy exact IDs, permissions, open actions, and acceptance criteria from structured state. Have the model shorten narrative where a paraphrase is acceptable. Preserve recent turns or authorized links to larger evidence where the task needs them.
 
-Evaluate compaction by continuing representative tasks from either full or compacted state and comparing constraint adherence, completion, redundant actions, tool correctness, tokens, and latency. Add mutation tests that hide a negative constraint, change an ID, or omit a pending side effect. The validator should catch them. Summary fluency is not the metric.
+Replay the next action from full and compacted state on the same cases. Change a resource ID, omit a pending action, or drop a prohibition in a test artifact. Verify the runtime rejects the altered summary. Compare verified task success, redundant tool calls, latency, and cost after the checks pass.
 
 ## Context Observability
 
-For each model call, record the context-manifest ID, token allocation by item type, selected and omitted item counts, truncations, compaction generation, cache-eligible prefix length, reported cached tokens, and source revisions. Store sensitive payloads by access-controlled reference and redact general traces.
+Tie each model call to its context manifest. Record budget by source, selected and omitted item IDs, truncation, compaction revision, eligible prefix length, and reported cached tokens where available. Restrict access to payloads.
 
-Useful operational signals include input/output headroom, compaction rate and failure, tool-output truncation, memory injection and staleness, retrieval evidence density, cached-token share, cold-prefix TTFT, context-build latency, model truncation, and cost per successful task. Quality slices should correlate failures with context length, evidence position, compaction generation, and memory age.
+When quality drops on long tasks, compare failure rates by evidence position, compaction generation, memory age, and tool truncation. For latency or cost changes, split context-build time, fresh input, cache reads, and output growth. Start the investigation at the first stage that changed.
 
-Canary probes place required facts and constraints at controlled positions, verify recall, and exercise cache identity across request variants. Production-derived probes matter more than generic “needle” strings because formatting, distractors, and task semantics change attention behavior.
+Place known obligations at controlled positions in representative tasks. Exercise a user correction, a revoked source, and a late tool result. The probe succeeds when the next action follows the current constraint and cites available evidence.
 
 ---
 
 ## Structure the Context for the Agent's Own Attention
 
-Two context projections can isolate high-value state without changing canonical ownership.
+Two design choices can reduce how much history the model has to interpret on a decision turn.
 
-**Active-obligation projection.** Compile the current goal, acceptance conditions, prohibitions, approvals, and open dependencies from structured run state near the decision they govern. Do not ask the model to maintain a second authoritative todo list. Projection cadence and placement are qualified against drift and token cost. Every rendered copy carries the source revision so a correction updates all future views.
+**Render active obligations.** Place the current goal, acceptance criteria, approvals, and outstanding dependencies near the decision they govern. Generate them from authoritative state and track its revision. Vary placement in tests before paying the token cost on every turn.
 
-**Subagents as context partitions.** A bounded read-heavy subtask can consume its own context and return a provenance-rich result, keeping exploratory detail out of the parent. This trades context isolation and possible wall-clock parallelism for duplicated prefixes, coordination, and lossy handoff. Evaluate it against a single-agent baseline. [Multi-Agent Systems](./03-multi-agent-systems.md) defines the ownership and cost boundary.
+**Delegate bounded reads.** Give an independent investigation its own context and require a compact result with source revisions. Compare with a single-agent run on the same tasks. Count duplicated prefixes, coordination time, and omitted evidence alongside any latency gain. [Multi-agent systems](./03-multi-agent-systems.md)
 
 ---
 
 ## Failure Modes
 
-**Quadratic cost blowup.** An agent loop with no caching and no pruning re-processes a growing transcript every turn. The bill grows with the square of the conversation length and nobody notices until the invoice. Defense: cache discipline first, then editing/compaction thresholds, and per-task token budgets with alerts.
-
-**Cache thrash.** A timestamp in the system prompt, per-request tool filtering, or history rewriting silently drops the cache-hit rate to zero while everything still works. Defense: monitor cached-token share as an SLO. Treat a drop as an incident, not a curiosity.
-
-**Lost constraints after compaction.** The summary preserved the narrative and dropped the prohibition. The agent re-attempts something explicitly ruled out. Defense: compaction schemas with explicit slots for corrections/constraints, and keeping recent turns verbatim.
-
-**Context poisoning.** A hallucinated "fact," a wrong tool output, or an injected instruction enters the transcript early and every later turn reasons from it: errors compound because the context *is* the agent's world-model. Defense: validate tool outputs at the boundary, keep untrusted retrieved content clearly delimited ([prompt injection](./06-prompt-engineering.md)), and prefer restarting a poisoned session over arguing with it.
-
-**Context distraction.** Stuffing the window with marginally relevant retrieval measurably *lowers* accuracy versus a tighter context. Defense: rerank hard, cap retrieved tokens, and evaluate retrieval precision, not just recall.
-
-**Stale memory.** Yesterday's convention, confidently injected today. Defense: memory provenance, easy deletion, user-visible memory contents, and skepticism about auto-injecting anything the user can't see.
-
-**Summary as source of truth.** Compaction replaces the only copy of task decisions or external receipts. Defense: canonical event/artifact state outside the prompt and rehydratable summary references.
-
-**Cross-tenant context reuse.** A response, semantic memory, or prefix cache crosses an authorization domain. Defense: tenant/policy identity in every cache and retrieval key, with provider cache semantics included in the threat model.
-
-**Late branch contamination.** A result from a cancelled or superseded branch enters the active transcript as current state. Defense: causal event IDs, base revisions, and commit validation.
-
-**Silent truncation.** A renderer drops the tail or a tool result to fit, removing the user question or decisive error. Defense: type-specific budget policy, explicit truncation markers, and manifest-level rejection when mandatory items do not fit.
+| Symptom | Evidence to inspect | Recovery |
+|---|---|---|
+| Cost rises with turn count | Plot submitted, cached, and newly billed tokens by turn | Limit repeated history or compact where the measured savings justify it. |
+| First-token latency jumps after rollout | Compare rendered prefixes and actual cache reads for equivalent requests | Repair early prefix churn or routing and watch task latency recover. |
+| An agent repeats a prohibited action after compaction | Compare structured constraints and the next proposed action across revisions | Reject the bad summary and rebuild with the missing constraint. |
+| A tool error reappears as an asserted fact | Follow the claim to the original source and check trust and validity | Invalidate derived summaries and rebuild the view from verified state. |
+| More context lowers accuracy | Replay the same task with controlled distractors | Remove low-value passages while retaining evidence dependencies. |
+| A stale or foreign preference appears | Inspect memory subject, scope, policy, and revision | Revoke the incorrect entry, invalidate derivatives, and test affected scopes. |
+| A summary is the only surviving record of a write | Query the destination for the action receipt | Reconcile before another attempt and persist future receipts outside the prompt. |
+| An old branch supplies a new instruction | Compare parent revision and active task revision | Fence late results from active state and reconcile any external effects. |
+| Output parses correctly but omits a decisive field | Inspect truncation markers and compare rendered input with the manifest | Reserve space for mandatory items and fail admission when they do not fit. |
 
 ---
 
 ## Decision Framework
 
-Choose context architecture in dependency order:
+Record the following decisions for each task class and test them together.
 
 | Decision | Mechanism | Required evidence |
 |---|---|---|
@@ -248,22 +239,18 @@ Choose context architecture in dependency order:
 | Branch and correction semantics | Parent-linked context revisions with compare-and-swap publication | Late branches cannot enter authoritative state |
 | Persistent memory | Versioned canonical records plus optional derived index | Scope, revocation, expiry, and tenant isolation |
 
-The correct context is the smallest authorized view that preserves the task's obligations and sufficient evidence at the required success rate. Cache value does not override correction, deletion, or policy. Window fit does not prove attention. Compaction is unavailable until its acceptance contract can reject a lossy state mutation.
+Accept the policy when representative continuations meet their task and latency goals and survive correction, revocation, and branch changes. When a mandatory field is missing, reject the rendered request or compacted revision before it reaches the model.
 
 ---
 
 ## Key Takeaways
 
-1. A context is a policy-filtered materialized view. Canonical task, evidence, effect, and memory state live outside the prompt.
-2. Budget feasibility reserves mandatory state, output, and variance before allocating optional history or evidence.
-3. Repeated context creates triangular input work. Prefix reuse helps only under a complete compatibility identity and measured cache behavior.
-4. Attention use is position-, task-, formatting-, and model-dependent. Qualify selection and placement rather than equating fit with recall.
-5. Long context, indexed retrieval, and just-in-time tools are complementary working-set policies with distinct freshness and failure boundaries.
-6. Compaction publishes a lineage-preserving derived revision through validation and compare-and-swap. Canonical payload retention follows policy, not tracing convenience.
-7. Large observations become bounded excerpts plus rehydratable receipts, and every rehydration rechecks authorization and freshness.
-8. Memory is a versioned, scoped, revocable store. Similarity indexes are derived candidates, never authority.
-9. Parent-linked context revisions prevent late branches, corrections, and model migrations from silently rewriting active state.
-10. Context manifests connect allocation, omissions, truncation, cache reuse, compaction, source revisions, and task outcomes.
+1. Rebuild the model's working view from authorized, versioned state on each call.
+2. Reserve room for active obligations and the response before allocating space to optional evidence.
+3. Measure eligible prefix length, actual cache reads, and cold-request latency separately.
+4. Treat compaction as a candidate revision. Check what the agent does next before accepting it.
+5. Keep memory scoped, correctable, and traceable. Recheck authorization when restoring older evidence.
+6. Use parent revisions to keep late tool results from silently changing the active task.
 
 ---
 

@@ -16,28 +16,28 @@ Here $F$ counts floating-point operations. Divide it by the sustained compute ra
 
 ## The Hardware Ledger
 
-Record five quantities for the exact accelerator and form factor: usable HBM capacity, sustained HBM bandwidth, dense tensor-core throughput at the deployed precision, collective/link bandwidth for the chosen topology, and power. Do not mix SXM and PCIe variants or sparse and dense tensor-core figures. Vendor tables often mark structured-sparsity throughput with a footnote. A dense model receives the dense rate.
+Start with one accelerator SKU and one deployment topology. Record usable memory after runtime initialization, sustained memory bandwidth, dense compute throughput at the deployed precision, collective bandwidth and latency, and power. A different form factor can change several inputs at once.
 
-As a worked example, NVIDIA publishes 80 GB HBM3, 3.35 TB/s peak HBM bandwidth, and 900 GB/s aggregate NVLink bandwidth for H100 SXM. Its published BF16 and FP8 tensor-core figures include structured sparsity. The corresponding dense arithmetic rates are half those values. H200 retains the Hopper compute architecture while increasing HBM capacity and bandwidth, illustrating why memory-system changes can improve decode even when peak arithmetic is unchanged. These are example inputs, not timeless constants. Attach the datasheet revision and measured sustained efficiencies to a capacity model.
+For an H100 SXM, NVIDIA lists 80 GB of HBM3, 3.35 TB/s of peak HBM bandwidth, and 900 GB/s of aggregate NVLink bandwidth. Its headline BF16 and FP8 tensor-core figures include structured sparsity. Use half those figures for this dense example. [NVIDIA H100 specifications](https://www.nvidia.com/en-us/data-center/h100/)
 
-The number that organizes everything else is **machine balance**: peak compute divided by memory bandwidth.
+Dividing peak arithmetic throughput by peak memory bandwidth gives the arithmetic intensity needed to reach both limits:
 
 ```text
 H100 example, dense BF16: 989e12 FLOPS / 3.35e12 B/s ≈ 295 FLOPs per byte
 H100 example, dense FP8:  1979e12 / 3.35e12          ≈ 590 FLOPs per byte
 ```
 
-A workload below machine balance cannot saturate both peak arithmetic and memory bandwidth. The roofline identifies the limiting resource, while measured efficiency terms account for kernel shape, occupancy, cache behavior, launch overhead, synchronization, and power clocks. The bound is diagnostic, not a latency prediction by itself.
+At lower intensity, moving bytes takes longer than executing the arithmetic in this idealized model. Compare that prediction with measured kernel time and memory traffic. Small shapes, launch stalls, and collectives can leave both resources underused.
 
-The H100-to-H200 example separates two benefits: more capacity admits larger models, batches, or contexts. More bandwidth raises the roof for bandwidth-bound decode. Neither guarantees proportional application speedup when collectives, KV traffic, host scheduling, or compute dominate.
+H200 illustrates the difference between memory capacity and bandwidth. Extra capacity can admit a larger batch. Extra bandwidth can shorten a decode step dominated by memory reads. Measure each effect separately when deciding whether a hardware change will meet a latency target.
 
 ---
 
 ## Roofline: Why Decode Is Memory-Bound
 
-A transformer forward pass performs roughly `2 × P` FLOPs per token, where `P` is the parameter count (each parameter participates in one multiply and one accumulate). The bytes side depends on batch size, because weights are read from HBM *once per forward pass* and shared across every sequence in the batch.
+For a dense model with about $P$ active weights in its projections, count roughly $2P$ multiply-add FLOPs per token. Attention over the retained context adds work. As a first estimate, assume the weights stream from HBM once per batch step and all sequences share that read.
 
-**Decode at batch size 1.** Generating one token for one sequence:
+**One active sequence.** With one byte per weight, use the following idealized budget:
 
 ```text
 Llama-3.3-70B in FP8: weights ≈ 70 GB
@@ -49,152 +49,142 @@ Arithmetic intensity ≈ 140e9 / 70e9 = 2 FLOPs/byte
 Machine balance (H100, FP8): 590 FLOPs/byte  →  intensity is ~295× below balance
 ```
 
-The GPU spends its time streaming weights, not multiplying. The tokens/sec ceiling follows directly:
+If every decode step reads 70 GB of weights on one H100 SXM, the weight-only bandwidth ceiling is
 
 ```text
 Single-stream ceiling = bandwidth / bytes per token
                       = 3.35 TB/s / 70 GB ≈ 48 tokens/sec
 ```
 
-The quotient is an optimistic weight-only upper bound, not a guaranteed 48 tokens/s. KV reads, embedding/output layers, non-matrix operations, allocator metadata, kernel inefficiency, and clocks add traffic or reduce sustained bandwidth. An observed result above the naive bound signals that an assumption changed (weights were shared across a batch, compressed, cached at another level, sparsely activated, or not all bytes were read), not that the roofline was violated.
+This gives about 48 tokens/s before KV reads, launch overhead, other operations, and bandwidth losses. It also assumes the weights, cache, and workspaces fit on that device. A faster measurement calls for checking the assumed bytes read per output token, the number of devices, and whether proposals allowed several tokens to advance in one step.
 
-**Decode at batch size B.** The same weight read now serves $B$ sequences: FLOPs scale with $B$, while weight bytes do not. With $b_w$ bytes per stored weight, weight-only arithmetic intensity is $2B/b_w$ FLOPs per byte. On the stated H100 example this reaches machine balance around $B\approx295$ for both dense BF16 and dense FP8. This is not an admission target: KV reads, activation traffic, collectives, padding, and the latency SLO alter or preclude that crossover.
+**A batch of $B$ sequences.** Each step now produces $B$ tokens. With $b_w$ bytes per weight, weight-only intensity rises to $2B/b_w$. For dense FP8 the H100 balance above implies $B\approx295$. Dense BF16 reaches a similar crossover because its weights are twice as wide and its peak arithmetic rate is about half. KV traffic and per-stream deadlines may bind much earlier.
 
-**Prefill.** Processing $N$ prompt tokens performs approximately `2 × P × N` dense-model FLOPs while amortizing weight reads across tokens. Weight-only intensity therefore grows roughly with $N$. Short or skinny prefills may remain launch- or bandwidth-limited, while long prompts introduce attention work and activation traffic that the simple parameter-count model omits. The important asymmetry is empirical: prefill and decode often occupy different roofline regions, so co-scheduling policy must control their interference.
+**Prefill.** Processing $N$ new positions together brings approximately $2PN$ projection FLOPs. The same weights serve many positions. Long contexts add attention work, and short prompts can leave the device underoccupied. Profile both phases with the prompt and context lengths the scheduler actually groups together.
 
-Speculative decoding is the same arithmetic exploited from another angle: a small draft model proposes k tokens, and the large model *verifies all k in one forward pass*: one weight read amortized over k tokens, exactly like batching, but within a single stream. That is why speculation helps most at low batch (spare compute everywhere) and fades at high batch (compute already spoken for).
+**Speculative decode.** A drafter proposes several future tokens. The target evaluates candidate positions together and can advance more than one token in a verification step. Speedup depends on accepted tokens per round, draft cost, and how verification competes with other sequences. Measure delivered tokens per second at the required concurrency. The original speculative sampling algorithm preserves the target distribution under its acceptance and correction rules. [Fast Inference from Transformers via Speculative Decoding](https://arxiv.org/abs/2211.17192)
 
 ---
 
 ## The KV-Cache Ledger
 
-Full causal attention reads keys and values for every preceding position. Engines cache those vectors so each new decode step projects only the new token instead of re-running the prior prefix. With caching, dense attention for one new token still scans a prefix of length $S$, so attention work is linear in $S$ per step and quadratic across a generated sequence. Re-running the full dense transformer over the growing prefix at every step adds repeated projection work and can make total attention work cubic in generated length. The cache therefore removes redundant computation. It does not make dense attention linear over the whole generation. It also competes with weights for both HBM *capacity* and HBM *bandwidth*.
+Full causal attention uses past keys and values when computing the next position. Caching them avoids projecting the old positions again. A new token at context length $S$ still attends over $S$ positions. Across $N$ newly generated tokens after a prompt of length $S_0$, the number of past positions visited scales with $NS_0+N(N-1)/2$ per head.
 
-Per-token size for a grouped-query attention (GQA) model:
+Count both K and V using the precision of the cache elements. For full attention with identical grouped-query layers:
 
 ```text
-KV bytes/token = 2 (K and V) × layers × kv_heads × head_dim × bytes/param
+KV bytes/token = 2 × layers × kv_heads × head_dim × bytes/cache element
 
-Llama-3-70B (80 layers, 8 KV heads, head_dim 128, BF16):
-  2 × 80 × 8 × 128 × 2 = 320 KiB per token
-  → a 131,072-token sequence holds 40 GiB of aggregate KV across its replica.
+Llama 3.1 70B, BF16 KV:
+2 × 80 × 8 × 128 × 2 = 327,680 bytes per token = 320 KiB
+131,072 tokens × 320 KiB = 40 GiB of logical KV per sequence
 ```
 
-The logical amount is sharded according to the serving parallelism. The BF16 weights themselves already require multiple 80 GB devices. Capacity planning therefore applies the same placement contract to both weight and KV shards rather than treating 40 GiB as a stand-alone single-device deployment.
+The 128K example uses Llama 3.1. Its 70B model supports that context size. Place the weights, each rank's actual KV shards or replicas, and workspaces before estimating concurrent sequences. [Meta Llama 3.1 model card](https://github.com/meta-llama/llama-models/blob/main/models/llama3_1/MODEL_CARD.md)
 
 For models that mix full attention with sliding-window attention, calculate retained bytes per layer. A full-attention layer retains the entire prefix. A sliding-window layer needs only its configured window during decode. Sum the layer estimates, then measure allocated pages under load before setting admission limits. Block rounding and padding can increase the physical allocation. [vLLM hybrid KV cache design](https://docs.vllm.ai/en/latest/design/hybrid_kv_cache_manager/)
 
-The worked example gives aggregate logical KV memory across the replica. [Model Serving](../16-ml-systems/03-model-serving.md) covers platform admission, paging, and fragmentation.
+Paged allocation, prefix sharing, and fragmentation change the physical footprint. Distinguish logical bytes needed by the sequences from physical pages reserved by the allocator. [Model Serving](../16-ml-systems/03-model-serving.md)
 
-The capacity story is well known. The *bandwidth* story is the one that surprises. During decode, attention reads prior KV state in addition to weights. Across a sharded replica, an illustrative logical batch of 32 sequences at 16K tokens with the sizing above contains `32 × 16,384 × 320 KiB ≈ 172 GB` of aggregate KV, compared with about 70 GB of aggregate FP8 weights. The physical traffic per device depends on tensor/sequence parallelism, KV layout, kernels, and cache hierarchy, but the context-dependent term does not amortize like dense weights. GQA, latent KV representations, and lower-precision KV can therefore change throughput as well as capacity. Prefix reuse avoids recomputing the shared prefill. It does not eliminate decode-time reads of resident KV.
+Now take 32 unrelated sequences at 16,384 tokens each with the same BF16 cache. Their aggregate KV is $32\times16{,}384\times320$ KiB, or 160 GiB (about 172 GB). That exceeds the roughly 70 GB of FP8 weights in the earlier example. This is a logical footprint. Measure actual HBM traffic because sharding, cache hits, shared prefixes, and the attention kernel determine how often each device reads a page. Prefix reuse saves work during prefill. Subsequent decode still attends to earlier positions. [vLLM automatic prefix caching](https://docs.vllm.ai/en/latest/features/automatic_prefix_caching/)
 
 ---
 
 ## Kernels: FlashAttention and the Memory Hierarchy
 
-The roofline logic recurses one level down. Inside the GPU, the hierarchy is HBM (TB/s, tens of GB) → L2 (~50 MB) → SRAM/shared memory per streaming multiprocessor (~228 KB on H100, ~20 TB/s aggregate). Kernels are fast when they keep intermediate results in SRAM and touch HBM once.
+A conventional attention implementation can write the score matrix to HBM, read it for softmax, then write and read the probabilities for the value product. For a square 8,192-position BF16 matrix, each such transfer is 128 MiB per head. Four transfers across 64 heads and 80 layers would move about 2.5 TiB for those intermediates alone. This illustration assumes full matrices and separate operations.
 
-Naive attention materializes the N×N score matrix in HBM:
+FlashAttention instead computes tiles in on-chip memory and updates the softmax statistics as tiles arrive. Dense attention still performs quadratic arithmetic in sequence length. Avoiding the full intermediate matrix in HBM changes the time spent moving data. [FlashAttention](https://arxiv.org/abs/2205.14135)
 
-```text
-One layer, one head, N = 8,192, BF16:
-  S = QKᵀ: 8192² × 2 B ≈ 134 MB written to HBM, read back for softmax,
-  written again, read again for ×V: ≈ 0.5 GB of HBM traffic per head,
-  × 64 heads × 80 layers ≈ multiple TB per single forward pass. Unusable.
-```
-
-FlashAttention tiles Q, K, and V into on-chip memory and computes softmax incrementally, avoiding materialization of the full $N\times N$ score and probability matrices in HBM. The attention arithmetic remains quadratic in sequence length for dense attention. The gain comes from lower HBM I/O and better tiling, not from changing the algorithm to linear-time attention. Hardware-specific versions further overlap matrix and softmax work and support lower-precision paths.
-
-Two other kernel-level facts matter operationally:
-
-- **Kernel launch and host scheduling are decode taxes.** A decode iteration invokes many small operations, so host launch latency can become visible at small batches. Graph capture and operator fusion amortize that control overhead, but dynamic shapes, adapters, and sampling features can reduce graph reuse.
-- **Kernel compatibility is part of model qualification.** Paged-KV layout, GQA/MLA shape, quantization, speculation, and accelerator generation determine which fused path is available. A fallback kernel may be correct yet move substantially more data, so record kernel selection in performance traces.
+A latency regression after a runtime change can come from kernel selection even when the weights are identical. Compare traces for the same shapes, attention layout, precision, and adapter. Check whether the fused kernel ran, how much HBM traffic it generated, and whether graph capture still covered common decode shapes. If host launch gaps dominate, tuning device bandwidth will have little effect.
 
 ---
 
 ## Batching Economics
 
-For dense decode, a first-order step model is
+Estimate bytes moved by a full-attention dense decode batch and the projection FLOPs for that batch:
 
 $$
 D_{step}(B,S) \approx W + B\,S\,K + D_{activation},
 \qquad F_{step}(B) \approx 2PB,
 $$
 
-where $W$ is weight bytes, $B$ active sequences, $S$ their effective context length, and $K$ KV bytes per token. Weight traffic amortizes with $B$, while per-sequence KV traffic does not. Total throughput initially rises quickly, then approaches a compute, KV-bandwidth, or scheduler limit. Per-stream inter-token latency can deteriorate throughout.
+Here $W$ counts weight bytes, $B$ active sequences, $S$ mean retained length, and $K$ KV bytes per cached token. The estimate assumes one logical read of each sequence's past keys and values, uniform KV shape, and no sharing across sequences. Add attention FLOPs for long contexts. Use hardware counters to determine how much traffic reached HBM.
 
-Continuous batching keeps the active set populated by admitting and retiring sequences at iteration boundaries. It improves utilization but introduces scheduling choices around priority, adapter locality, KV residency, and long prefills. The economic objective is accelerator cost divided by SLO-compliant output tokens, including rejected, preempted, and cancelled work. Hourly accelerator price and sustained efficiency are deployment inputs, not constants suitable for a universal example.
+Continuous batching replaces completed sequences between steps. Raising the batch cap can increase output throughput while lengthening each step for every stream. At a fixed arrival trace, sweep the cap and record offered requests, successful completions within the SLO, and the longest content gaps. Divide accelerator spend during the run by qualified completions to include time spent on failed work.
 
-Benchmark across concurrency until the goodput curve reaches its knee. The selected operating point must leave headroom for length variance, failures, rollout surge, and cache misses. The maximum-throughput point is usually an overload condition for an interactive service.
+Repeat near the selected operating point with longer prompts, cache loss, and reduced fleet capacity. Keep enough room below saturation for the required failure case.
 
 ---
 
 ## Quantization: Change the Byte and Compute Ledger
 
-Lower precision reduces stored bytes only to the extent that scales, zero points, grouping metadata, padding, and dequantization work permit. A native low-precision tensor-core path can reduce both memory traffic and arithmetic time. Weight-only quantization primarily changes weight traffic and adds dequantization. KV quantization changes the context-dependent term. Consequently, the same artifact can accelerate low-batch decode while providing little gain (or a regression) for compute-bound prefill.
+A $b$-bit weight representation has a raw footprint of $Pb/8$ bytes. Measure resident weights, scales, zero points, padding, and runtime workspaces after load. Check that the deployed hardware has an efficient kernel for the actual shape and precision.
 
-For a $b$-bit weight representation, the ideal weight footprint is $Pb/8$, but capacity planning uses the serialized artifact plus runtime workspaces. The ideal bandwidth speedup from halving $W$ is bounded by the fraction of step time attributable to weight traffic. Once KV, collectives, sampling, or compute dominates, Amdahl's law caps the gain.
+Weight-only quantization can reduce low-batch decode time even when prefill gains little. KV quantization addresses a different term that grows with retained context. If weight reads consume half the baseline step and their time falls by half, the new step takes 75% of baseline, a speedup of about 1.33× under otherwise identical conditions.
 
-The governing rule from [Model Serving](../16-ml-systems/03-model-serving.md) applies with extra force here: aggregate language-model loss can hide task- and slice-specific quantization damage. Precision, calibration data, grouping, outlier handling, kernels, and workload all affect the result. Treat each quantized model/runtime tuple as a new artifact and qualify task quality, safety, latency, memory, and fallback behavior ([LLM Evaluation](./10-llm-evaluation.md)).
+Qualify the specific model, calibration data, precision, and kernel revision together. Test long-context retrieval, code, structured output, and other high-value slices for quality as well as speed. Keep a rollback target that fits the deployed hardware. [Model Serving](../16-ml-systems/03-model-serving.md) · [LLM Evaluation](./10-llm-evaluation.md)
 
 ---
 
 ## Parallelism: TP, PP, EP
 
-When the model outgrows one GPU (in capacity or in required ceiling), you split it. The three axes have sharply different communication profiles:
+Choose a partition by asking what crosses the link on each generated token.
 
-**Tensor parallelism (TP)** slices layer operations across devices and introduces frequent collectives on the token-critical path. It is effective only while the selected topology's collective latency and bandwidth remain small relative to local compute and memory work. TP usually stays within the fastest coherent or switched accelerator domain. The ideal local weight-traffic reduction is divided by TP degree. Collective and synchronization costs prevent linear scaling.
+**Tensor parallelism** splits layer operations across devices. Each rank reads a smaller weight shard, then exchanges intermediate results through frequent collectives. Measure collective latency at the message sizes used by decode. Aggregate link bandwidth alone says little about the cost of many small synchronizations.
 
-**Pipeline parallelism (PP)** assigns contiguous layer blocks to stages and transfers activations across boundaries. It tolerates slower links than TP but introduces bubbles, stage imbalance, and additional buffering. Decode's token dependency makes microbatching harder than in training. Large deployments often compose TP inside a fast domain with PP across domains, but the degrees follow the measured topology and model partition rather than a fixed node size.
+**Pipeline parallelism** assigns layers to stages and sends activations to the next stage. A single sequence follows the stages in order. Concurrent microbatches can fill the pipeline if the stages are balanced. Compare idle time at each stage with transfer time before increasing pipeline depth.
 
-**Expert parallelism (EP)** distributes mixture-of-experts parameters and routes tokens through an all-to-all exchange. Only active experts perform arithmetic for a token, but inactive expert weights still consume distributed capacity. Small batches underutilize experts. Large batches expose routing skew and communication. Capacity and latency models therefore need total parameters, active parameters per token, expert placement, routing distribution, and straggler behavior, not only the advertised active-parameter count.
+**Expert parallelism** routes tokens to sharded experts in a mixture-of-experts model. Total expert weights determine memory capacity. The activated experts and their token counts determine work in one step. Inspect the busiest rank and time in token exchange. Uneven routing can delay a whole batch even when average expert utilization is low.
 
 ---
 
 ## Disaggregation: Splitting Prefill from Decode
 
-Prefill and decode can interfere when co-scheduled: a large prefill occupies compute and memory resources while active decodes wait. Chunked prefill limits the blocking interval. *Disaggregated serving* instead places phases on separate pools and transfers the prompt KV state between them.
+If long prefills delay active decode, first measure how much chunking restores stream latency in one pool. Splitting the phases gives each its own queue and capacity policy. It also moves KV onto the decode worker's critical path.
 
-The transfer is justified only when saved phase interference and independent placement exceed serialization, network, admission, and cache-management costs:
+For $D_{KV}$ bytes over an effective path bandwidth $\eta_n B_{network}$, a simple model for a complete handoff is
 
 $$
 t_{transfer} = \frac{D_{KV}}{\eta_n B_{network}} + t_{setup}.
 $$
 
-Layer-wise streaming can overlap transfer with decode startup. Tiered KV storage can avoid recomputation for reusable prefixes, but moves the bottleneck to lookup, network/storage bandwidth, eviction, and security-domain-aware cache identity.
+For example, 4 GiB transferred at a sustained aggregate 40 GiB/s takes 100 ms before setup or queueing. Overlap can hide some of that time from the client. Parallel shard transfers can also compete for the same switch. Measure the time until the decode worker can actually advance and the bytes still in flight after cancellation.
 
-Disaggregation also permits heterogeneous pools when one phase benefits more from compute and the other from bandwidth/capacity. It adds queues, failure boundaries, KV routing, and stranded-capacity risk, so compare it with co-located chunked prefill under the same workload. Sizing the pools is covered in [ML Capacity & Cost Planning](../16-ml-systems/14-ml-capacity-cost-planning.md). The operator view is in the [LLM Inference Platforms case study](../08-case-studies/13-llm-inference-platforms.md).
+Compare chunked and split pools under the same hardware budget and arrival trace. Include a failed handoff and a period of skewed phase demand. A split pool that scales well at the average mix may strand capacity when most new work is decode. [ML Capacity & Cost Planning](../16-ml-systems/14-ml-capacity-cost-planning.md) · [LLM Inference Platforms](../08-case-studies/13-llm-inference-platforms.md)
 
 ---
 
 ## Constrained Decoding Has a Separate Control Cost
 
-Structured outputs mask invalid next tokens according to grammar state. Efficient runtimes compile grammars, cache token masks, and overlap mask construction with model execution. Deterministic spans may be advanced without a full model step. The residual cost depends on schema compilation, tokenizer interaction, grammar ambiguity, batch diversity, CPU/GPU synchronization, and cache reuse. Measure cold and warm paths separately, and key compiled artifacts by trusted schema and tokenizer digests. A highly dynamic schema can make control-plane compilation visible even when per-token masking is small.
+A grammar-constrained decoder tracks which next tokens are legal. Compilation and token-mask construction can add CPU time before the GPU advances. Some engines can skip sampling for deterministic spans. Compare cold-schema, warm-schema, and mixed-schema requests at the same output length. Key compiled artifacts by schema, tokenizer, and relevant runtime options. Report compilation and per-step overhead separately. [XGrammar](https://arxiv.org/abs/2411.15100)
 
 ---
 
 ## Measuring It: The Metrics That Map to the Roofline
 
-Each serving metric corresponds to a hardware regime, which is what makes them diagnostic rather than decorative:
+Use the client trace to choose where to look, then use the device trace to test the explanation.
 
-- **TTFT (time to first token)**: includes queue and prefill. Diagnose it against prompt length, arithmetic intensity, attention shape, launch/communication overhead, and prefix reuse rather than assuming one bottleneck.
-- **TPOT / ITL (time per output token / inter-token latency)**: exposes decode scheduling and the active weight/KV/collective ledger. Bandwidth often dominates at low batch, while compute, KV traffic, or communication can dominate elsewhere.
-- **Throughput (tok/s per GPU)**: the amortization metric. Meaningless without the latency it was bought at.
-- **Goodput**: qualified completions or tokens per unit time within the declared SLO. Interpret it with offered load, rejection, cost, and headroom.
+| Observation | Next measurement |
+|---|---|
+| First visible content is late | Separate queue age, uncached prefill time, and transport. Compare within the same prompt-length band. |
+| Streams pause between updates | Compare client content gaps with engine step latency. Check competing prefills, active KV length, collectives, and buffering. |
+| More tokens per GPU but fewer users finish | Count rejected, cancelled, and late requests at the same offered arrival rate. |
+| One kernel or topology wins a synthetic test | Replay production-shaped arrivals with the same warm and cold prefix mix. Measure quality, latency, and spend per qualified completion. |
 
-Benchmark with the workload's joint prompt/output/context/concurrency distribution and its real cache policy. Useful tools can replay length distributions and report percentile TTFT/ITL. Standardized suites provide cross-system reference points. Fixed-length prompts hide scheduler interference and KV pressure, assumed cache-hit rates hide cold-path capacity, and means hide user-visible stalls. Use open-loop load to expose queueing and report both admitted and rejected work.
+Issue benchmark arrivals independently of completions when testing overload. A client that waits for each answer before issuing another request reduces offered load as latency rises. Include cold starts and burst lengths in the report so the next operator can reproduce the result.
 
 ---
 
 ## Multi-Tenant Isolation and Accelerator State
 
-The device ledger is also a data-classification ledger. Weights and adapters are intellectual-property artifacts. Prompts, embeddings, activations, sampled logits, and KV pages can contain customer-derived state. Kernels and collective buffers move that state through device memory, host-pinned memory, peer links, and optional cache tiers.
+A running replica holds tenant-derived data in KV pages, activations, host buffers, and optional storage tiers. Trace where each copy goes during normal operation, transfer, drain, and crash collection.
 
-Temporal sharing inside one process/runtime is an efficiency boundary, not independent tenant isolation. The serving engine must bind every KV/page/prefix allocation to tenant, model, adapter, context revision, and allocation generation. Validate ownership on lookup and free. Prevent stale directory entries from returning reassigned pages. Keep debug/profiler/core-dump paths outside untrusted tenants. A length or cache-hit side channel may still expose sensitive workload metadata even when payload bytes do not cross.
+Bind a cache handle to its access domain and allocation generation. Check both before dereferencing a page. When a block returns to the allocator, fence old references before assigning it to another tenant. Restrict profiler output and dumps that can contain payloads.
 
-For mutually untrusted workloads, choose an isolation domain from the actual threat model: dedicated devices/nodes, supported hardware partitions, or virtual machines with qualified accelerator isolation. NVIDIA documents that MIG assigns separate memory-system paths and compute resources to GPU instances on supported hardware. That improves fault/QoS and memory isolation, but host kernel, driver, orchestration, image supply chain, management privileges, network/storage, and telemetry remain shared control surfaces. A container namespace alone should not be described as a hardware security boundary.
+Choose the hardware boundary the threat model requires. Supported MIG instances partition selected compute and memory resources. Driver, management privileges, networking, and telemetry still need separate controls. Verify the exact SKU, partition mode, and teardown procedure before accepting workloads from a different trust domain. [NVIDIA MIG User Guide](https://docs.nvidia.com/datacenter/tesla/mig-user-guide/latest/)
 
-Placement and teardown are lifecycle operations:
+Exercise reassignment as a complete lifecycle:
 
 ```text
 admit tenant/security domain
@@ -207,52 +197,41 @@ admit tenant/security domain
   -> reassign only after verification
 ```
 
-If the platform cannot state what reset or isolation guarantee applies to a device generation and sharing mode, do not reuse it across a stronger trust boundary. Encrypting off-device KV protects storage and transport only when keys, tenant-bound authenticated metadata, deletion, and cache generations are correct. [Agent Inference](./12-agent-inference.md) covers distributed KV identity and residency. [LLM Infrastructure](./05-llm-infrastructure.md) covers tenant admission and fleet placement. Device/runtime sharing defines the hardware ledger and isolation assumptions.
+Retain evidence that references were revoked and that the required reset or sanitization completed. Apply the same expiry and access policy to off-device copies. A failed teardown leaves the device unavailable for reassignment until an operator can establish its state. [Agent Inference](./12-agent-inference.md) · [LLM Infrastructure](./05-llm-infrastructure.md)
 
 ---
 
 ## Failure Modes
 
-**KV pressure cascades.** Memory fills with cached sequences → the scheduler preempts one, evicting its KV → the sequence later resumes with a full re-prefill → which adds compute load and evicts someone else. Symptom: throughput collapses and TTFT spikes under load that "should fit." Diagnose preemption and recomputation, tighten admission or residency, and compare added capacity with a separately qualified lower-precision KV/runtime path.
-
-**TP across a slow interconnect.** Tensor parallelism over a link whose collectives are slow relative to local work puts frequent layer-level communication on the token-critical path. The deployment remains correct at a fraction of expected throughput. Map TP and PP only after measuring the actual collective and activation-transfer schedule on each topology.
-
-**The quantization eval gap.** The INT4 model matches perplexity, passes the smoke test, ships, and a week later math-heavy or code-heavy traffic shows a regression no serving metric caught. Quality gates must be task evals, run per quantization artifact, not per model family.
-
-**Throughput tuning past the SLO.** Benchmarks reward batch sizes and chunk sizes that a p99 inter-token SLO forbids. Any tok/s figure quoted without its latency percentile is a red flag in a design review.
-
-**Long-context surprise.** A feature raises average context from 4K to 64K. Per-token KV traffic grows 16×, the decode ceiling drops, and the fleet sized for 4K saturates. Context-length distribution is a first-class capacity input, same as QPS.
-
-**Straggler experts.** In MoE serving, a hot expert (or a slow GPU hosting one) gates every token in the all-to-all. P99 latency degrades fleet-wide. Requires per-expert load metrics and redundant placement of hot experts.
-
-**Stale KV page reuse.** A page is returned to the allocator, reassigned to another security domain, and an old cache-directory generation still references it. The result can be incorrect attention state or cross-tenant disclosure. Use generation-fenced allocators and directories, ownership checks at dereference, qualified teardown, and adversarial reuse tests under eviction and worker restart.
+| Symptom | Likely mechanism | Test and response |
+|---|---|---|
+| Queue age rises with recomputed tokens | KV eviction creates more prefill work, which displaces active sessions | Correlate preemptions with resumed prefixes. Cap admitted growth and check that useful completions recover. |
+| Adding a TP rank slows decode | Small collectives dominate the token path | Profile message sizes and per-rank wait. Try fewer ranks or a faster link domain. |
+| Quantized rollout is fast but users retry | A difficult quality slice regressed | Replay affected tasks against the prior artifact and roll back on the product gate. |
+| Long prompts change a stable fleet's latency | Full-attention KV reads grow with retained length | Compare traffic by context band. A 4K-to-64K increase scales that layer's logical KV read by 16×. Measure whole-step impact before buying capacity. |
+| One expert stalls many requests | Tokens concentrate on a rank or its link slows | Compare per-expert load and rank duration. Test rebalancing or replication where memory allows. |
+| Cache hits return inconsistent output after worker restart | An old handle may refer to a reassigned block | Disable affected reuse, check generation and ownership validation, and exercise eviction and restart before re-enabling it. |
 
 ---
 
 ## Decision Framework
 
-| Situation | Reach for |
+| Design decision | Evidence required |
 |---|---|
-| Single-stream latency matters most | Reduce weight/KV bytes, evaluate speculation, and use only enough parallelism to meet the bound |
-| Throughput/cost matters most | Continuous batching near the SLO knee. Compare dense and MoE fleet economics |
-| Long contexts dominate | Smaller KV representations, qualified KV precision, prefix reuse, and bandwidth/capacity headroom |
-| Model fits one GPU | Capacity does not require TP. Compare one device with TP only if aggregated bandwidth or compute improves the target latency enough to pay collective overhead |
-| Model exceeds one accelerator but fits a fast link domain | Benchmark TP within that domain |
-| Model exceeds one fast link domain | Compose TP/PP from measured collective and activation-transfer costs. Add EP for MoE |
-| Mixed prefill/decode interference | Compare co-located chunking with disaggregation. Split only when reduced interference and independent placement exceed KV transfer, extra queues, and stranded capacity |
-| Deciding whether to buy compute or bandwidth | Use phase-specific roofline and goodput benchmarks. Do not infer from peak FLOPS alone |
+| Keep a model on one device or introduce TP | Establish memory fit and single-stream latency first. Include added collective time when comparing rank counts. |
+| Increase batching | Show more completions per accelerator at the same arrival mix, quality gate, and tail-latency targets. |
+| Change precision or KV format | Demonstrate savings in the limiting byte term, kernel support, and acceptable quality for long contexts. |
+| Split a model across link domains | Compare measured TP collectives with pipeline transfers and idle stages. Include expert exchange for MoE. |
+| Separate prefill from decode | Show that saved interference and independent scaling pay for KV handoff and the extra queues under both typical and skewed demand. |
 
 ---
 
 ## Key Takeaways
 
-1. **Prefill and decode often occupy different roofline regions, but neither has one universal bottleneck.** Compute useful work, bytes, and communication for the actual shapes before trusting a benchmark.
-2. **`bandwidth ÷ bytes per step` is an upper bound, not a benchmark result.** Include weights, KV, activations, collectives, metadata, and sustained-efficiency factors.
-3. **Batching, speculation, and quantization can improve useful work per byte through different mechanisms and with different acceptance, control, and quality costs.**
-4. **KV cache is a bandwidth problem, not just a capacity problem.** Long contexts increase the byte term. GQA, latent representations, and qualified lower-precision KV can reduce it when the runtime supports them.
-5. **Parallelism follows the interconnect**: TP needs frequent fast collectives, PP trades bandwidth for bubbles, and EP adds routed all-to-all plus skew.
-6. **Goodput is a primary capacity objective, not a complete report.** State offered load and SLOs, then report goodput with rejection, cost, headroom, bottleneck metrics, means, and tail percentiles.
-7. **Quantization is a new model and runtime artifact.** Its speedup follows Amdahl's law, and its release requires task, safety, and serving evaluation.
+1. Estimate projection FLOPs and bytes moved for the actual phase and batch. Use sustained measurements to find which limit the runtime reaches.
+2. Count KV elements with the deployed layer layout and cache precision. Allocate per rank and leave room for active sequences to grow.
+3. Keep a client-visible latency metric next to each optimization. A change that raises aggregate throughput can also lengthen every stream gap.
+4. Qualify the whole serving revision. Precision, kernels, topology, scheduler, and cache policy jointly determine cost, quality, and recovery behavior.
 
 ## References
 

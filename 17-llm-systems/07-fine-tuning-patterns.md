@@ -10,36 +10,36 @@ Suppose an adapter improves classification in offline tests. Before rollout, run
 
 ## When to Fine-Tune (and When Not To)
 
-The question arrives as "should we fine-tune?" and should be answered by walking a ladder in cost-of-ownership order:
+Start with the defect you can reproduce and the cheapest intervention that could fix it.
 
-**1. Prompting and deterministic interfaces.** Establish the strongest qualified baseline using concise instructions, representative examples, structured outputs, tools, and the intended reasoning budget. Prompting has low iteration latency but nonzero inference-token, evaluation, and maintenance cost. Its economics depend on the deployed model and measured prefix reuse, not a universal cached-token ratio.
+**Prompt or interface.** If the model chooses a valid action but formats it incorrectly, test a schema and validator. Compare prompts with representative examples under the intended model, reasoning budget, and cache behavior.
 
-**2. Retrieval and source-of-truth tools.** If the gap is mutable knowledge, authorization-sensitive data, exact calculation, or evidence, supply it at inference. Retrieval can publish corrections and enforce current ACLs independently of weight refresh. Fine-tuned weights do not provide record-level attribution or immediate deletion semantics. Training on sensitive facts expands the governance boundary (see [ML risk and governance](../16-ml-systems/09-ml-risk-governance.md)).
+**Evidence or tool.** If the answer depends on current stock, access rights, or an exact calculation, read the source at request time. The owner can then correct or revoke the record independently of a model deployment. Training on the same data expands the privacy boundary. [ML risk and governance](../16-ml-systems/09-ml-risk-governance.md)
 
-**3. Fine-tuning.** What remains is *behavior and economics*, and here tuning is genuinely strong:
+**Training.** Consider changing weights when the model still makes a recurring behavioral error with the right evidence, or when a smaller model could deliver the same result at lower cost.
 
-| Motivation | Why tuning wins | Typical shape |
+| Motivation | What to measure | Candidate intervention |
 |---|---|---|
 | Style/format lock-in | Stable examples can move repeated behavioral guidance into weights | Curated SFT, compared with schema/prompt baseline |
 | Distillation for cost/latency | A smaller model may reproduce bounded teacher behavior on the target distribution | Teacher/corrected data plus student SFT and coverage tests |
 | Deep domain adaptation | A measured representation or task gap remains after supplying evidence | Continued pretraining and/or SFT, compared with retrieval baseline |
 | Reliability on a narrow task | Repeated behavior can be learned from governed corrections | SFT on representative successes, corrected failures, and abstentions |
-| Latency floors | Shorter prompts (no few-shot block) and smaller models cut TTFT | SFT replacing the prompt scaffolding |
+| First-token latency | Time saved by removing examples, including on warm-cache requests | Compare tuned and prompted models on the actual traffic mix |
 
-Treat the tune as a product line rather than a one-off job. The proposal should include the baseline experiment, dataset and legal basis, qualification suite, serving artifact, break-even volume, owner, rollback, deletion response, and refresh trigger. If the second run cannot be reproduced from sealed inputs, the first checkpoint is a stranded experiment rather than an operable model.
+Give the project an owner for data refresh, qualification, rollback, and deletion requests. Include those costs in the proposal. A checkpoint you cannot reproduce or replace leaves the service dependent on one set of weights.
 
 ### Frame the tune as a falsifiable intervention
 
-A training proposal should state the target behavior, affected workload slices, incumbent baseline, acceptable regressions, and expected serving benefit. For example: “increase valid tool selection on multilingual return requests from 91% to 97% while factual-answer accuracy drops no more than 0.5 points. Reduce median input tokens by 1,200 and cost per successful case by 30%.” That statement determines the data, evaluation, and rollout. “Make the model know our business better” does not.
+For example, propose raising valid tool selection on multilingual returns from 91% to 97% while limiting factual accuracy loss to 0.5 percentage points. If the business case also requires saving 1,200 median input tokens and 30% per successful case, test those outcomes on the same traffic. Agree on the decision thresholds before choosing the training data.
 
-The artifact under test is the complete inference configuration:
+Record the full configuration for each comparison.
 
 $$
 Behavior = f(base\ revision, adapter, chat\ template, system\ prompt,
              tools, decoding, retrieval, runtime).
 $$
 
-A tuned checkpoint cannot be qualified independently of its template and serving stack. A tokenizer change, altered stop token, different quantized base, or new tool schema can erase the apparent gain even if adapter bytes are unchanged.
+A serving rollout can change tokenization, stop behavior, or tool formats while the adapter bytes stay identical. Replay the same labeled requests through both rendered configurations to isolate the change.
 
 ---
 
@@ -47,11 +47,11 @@ A tuned checkpoint cannot be qualified independently of its template and serving
 
 ### Supervised Fine-Tuning (SFT)
 
-Supervised fine-tuning continues training on `(input → desired output)` pairs with prompt-token loss masked so only the completion is learned. Subsequent methods differ in pair construction and which parameters move.
+Supervised fine-tuning fits a next-token objective on examples of desired behavior. Choose which tokens receive loss. A prompt-completion dataset can train on completion tokens, and a chat dataset can restrict loss to assistant turns when the template marks those spans. Inspect the labels from an actual batch before starting an expensive run. [TRL SFT trainer](https://huggingface.co/docs/trl/en/sft_trainer)
 
 ### LoRA and QLoRA: Parameter-Efficient Mechanics
 
-Full fine-tuning updates every selected base parameter and therefore holds or shards weights, gradients, optimizer state, and activations. **LoRA** freezes a base matrix $W$ and learns a low-rank update $BA$:
+Full fine-tuning stores or shards gradients and optimizer state for the trainable base weights. LoRA freezes the base matrix $W$ and learns a low-rank update $BA$.
 
 ```text
 h = Wx + (α/r)·B·A·x
@@ -61,19 +61,19 @@ For W in R^(d_out × d_in):
   LoRA trainable parameters = r × (d_in + d_out)
 ```
 
-The reduction depends on layer dimensions, target modules, and rank. **QLoRA** stores the frozen base in a quantized representation while training adapter parameters at a higher compute precision. It reduces base-weight memory, but activations, temporary dequantization state, adapter optimizer state, sequence length, and runtime kernels still determine whether a configuration fits. The QLoRA paper's single-device result is an existence proof for a specific stack, not a capacity guarantee for every model or sequence length.
+Rank and target layer dimensions determine how many parameters train. QLoRA also stores the frozen base in quantized form and computes updates at higher precision. Measure peak memory at the required batch and sequence length. Activations, temporary buffers, and adapter optimizer state still consume device memory.
 
-Choose target modules and rank through ablation. Low rank can underfit a complex distribution shift. Excessive rank raises memory and can overfit without improving the product metric. A merged adapter removes runtime adapter selection but creates a separate full artifact. An unmerged adapter preserves composability and multi-tenant serving but adds compatibility, cache, scheduling, and isolation concerns.
+Compare ranks and target modules on the hard workload slices. Stop increasing rank when held-out performance stops improving. A larger adapter costs more to train, store, and load.
 
-At the end you either **merge** the adapter into the base weights (zero serving overhead, one artifact) or keep it separate, which enables the serving pattern below.
+Merging $BA$ into $W$ removes the separate adapter operation at inference. Keep adapters separate when the fleet needs to switch variants without loading another full base. Qualify a merged or requantized artifact on its actual serving kernels.
 
 ### Preference Optimization: DPO and Friends
 
-SFT teaches the model what target outputs look like. Preference methods fit relative judgments where no single reference completion captures the objective. Online RLHF introduces rollout, reward-model, policy, reference, and value/optimizer state plus reward-hacking and stability risks. **DPO** trains directly on `(prompt, chosen, rejected)` triples relative to a reference policy, avoiding online policy rollouts and a separately served reward model in the optimization loop. This simplifies one class of preference training but does not make pair collection, reference choice, regularization, or evaluation trivial. Other objectives encode different assumptions about feedback and policy drift. Choose from the label contract rather than framework defaults.
+Demonstrations specify an answer to imitate. A preference pair records which of two answers the reviewer prefers for the same prompt. Direct Preference Optimization (DPO) uses those pairs and a reference model without online rollouts during fitting. Compare its annotation cost with the cost of collecting corrected demonstrations. Online RLHF adds live sampling, a reward signal, and policy optimization.
 
-Policy optimization with verifiable rewards uses executable or otherwise checkable outcomes instead of a learned preference score. It is attractive where rollouts can be sandboxed and reward cannot be cheaply gamed: formal answers, tests, or constrained environments. It introduces rollout infrastructure, variance, credit assignment, environment versioning, and reward-hacking risk. Compare it with rejection sampling or SFT on verified successes before operating an online RL loop.
+For outcomes a program can check, compare training on verified successes with optimizing a policy through repeated rollouts. The latter also requires a versioned environment, sampling capacity, and tests for ways to earn reward while failing the task.
 
-For a prompt $x$, preferred response $y_w$, rejected response $y_l$, policy $\pi_\theta$, and frozen reference $\pi_{ref}$, DPO increases the relative log-probability margin of the preferred pair:
+For prompt $x$, chosen answer $y_w$, and rejected answer $y_l$, the DPO loss compares their log probabilities under the policy and frozen reference.
 
 $$
 \mathcal{L}_{DPO} = -\log \sigma \left(\beta
@@ -83,25 +83,25 @@ $$
 \right]\right).
 $$
 
-The reference term restrains drift from the starting policy. $\beta$ controls that trade-off. The equation also exposes a data requirement: a preference pair must express a meaningful distinction. If `chosen` and `rejected` differ in several dimensions (correctness, verbosity, tone, and formatting), the model cannot know which preference to learn. Capture rubric dimension and annotator rationale, balance response position, include close calls, and measure label agreement.
+The coefficient $\beta$ scales the preference margin against the reference. Label the reason for each choice. If the better answer is always longer, the trainer has little evidence to distinguish correctness from length. Include close pairs and counterexamples, randomize display order, and measure annotator agreement.
 
-Preference optimization can exploit artifacts of the data collector. If annotators prefer longer answers, the policy learns length. If a judge model produced both labels and later grades the release, the apparent improvement can be self-agreement. Run dimension-specific human evaluation and objective checks outside the preference pipeline.
+Evaluate preferred style separately from factuality. If the same judge produced the training labels and scores the checkpoint, compare both candidates in a blinded human assessment and run an independent correctness check.
 
 ### Training with verifiable rewards
 
-When a task has an executable verifier, group relative policy optimization (GRPO) can train on several completions for the same prompt. The reward difference within each group supplies the learning signal. With a binary verifier, a group where every completion fails gives the trainer no direction on which answer was better. Track how often groups have identical rewards and inspect all-fail groups separately from all-pass groups. Check verifier coverage and task difficulty before spending more on rollouts. Gate release on held-out tasks with independent checks so a policy that exploits the training verifier is detectable. [TRL GRPO trainer and metrics](https://huggingface.co/docs/trl/en/grpo_trainer)
+Group relative policy optimization (GRPO) samples several completions per prompt and compares rewards within the group. With a binary verifier, both all-pass and all-fail groups have zero reward variation. Inspect them separately. The former may be too easy. The latter may expose an impossible task, a verifier defect, or a capability gap. Test these explanations before buying more rollouts. Qualify the resulting policy with independent checks. [TRL GRPO trainer](https://huggingface.co/docs/trl/en/grpo_trainer)
 
 ### Continued pretraining and domain adaptation
 
-Continued pretraining uses next-token learning over an unlabeled domain corpus before instruction tuning. It can improve vocabulary, syntax, and latent domain patterns, but it is more likely than LoRA-SFT to shift general capability and memorize source text. Corpus licensing, PII removal, deduplication, holdout contamination, and general-capability regression become central. A practical sequence is domain-adaptive pretraining → SFT on task demonstrations → optional preference optimization, with evaluation after each stage so a harmful stage can be removed.
+Continued pretraining learns from unlabeled domain text. Test it when vocabulary, syntax, or representation appears to limit downstream performance even with the right evidence available. Deduplicate and screen the corpus, hold out sensitive material, and run general-capability checks after each stage. Follow with supervised or preference tuning only if the task still calls for it.
 
-Do not confuse corpus perplexity improvement with product success. A model can predict legal text better without becoming safer or more accurate at legal question answering. Perplexity diagnoses representation fit. Task and safety evaluations determine release value.
+Lower perplexity on domain text says the model predicts that text better. Put the checkpoint through the product task before approving release.
 
 ### Distillation
 
-Distillation transfers behavior from a teacher or ensemble into a student on a bounded distribution. The student need not match the teacher outside that support, so coverage and abstention are part of the contract. Teacher generations should retain prompt, sampling, model, evidence, and verification provenance. Self-grading by the same teacher is a correlated filter, not independent truth. Use executable checks, expert correction, or a calibrated judge where possible, and verify that data licenses and provider terms permit the intended training and deployment.
+A student learns a bounded behavior from teacher outputs, expert corrections, or both. Preserve the teacher revision, prompt, sampling settings, and verification results. Test where the student should abstain or escalate. Check the rights to train on and deploy the data before generating a large corpus.
 
-The break-even condition is volume-dependent:
+Compare both systems over the same operating period and workload. With equal qualified completion rates, the number of incoming tasks needed to recover fixed costs is
 
 $$
 N_{break-even} =
@@ -109,187 +109,167 @@ N_{break-even} =
 {C_{baseline/task}-C_{student/task}},
 $$
 
-provided the student satisfies every quality and safety gate. Include failed tasks and fallback-to-teacher cost in both per-task terms.
+where each variable cost includes retries and fallbacks per incoming task. For illustration, 12,000 in fixed costs and a saving of 0.03 per task break even at 400,000 tasks. If fallback expense cuts the saving to 0.01, the requirement rises to 1.2 million tasks. A zero or negative saving has no finite payback. If success rates differ, compare total cost for the same number of verified outcomes and keep the quality gates in force.
 
 ---
 
 ## Data Is the Product
 
-The training corpus and its lineage determine what intervention can be reproduced, inspected, deleted, and refreshed. Model and data are both release inputs. Neither is a commodity when its exact revision changes behavior.
+Preserve enough information to reconstruct the training population and explain the inclusion or exclusion of each example.
 
-**Curation controls signal.** Small high-quality instruction sets can outperform much larger noisy sets for some adaptation tasks, as LIMA illustrates, but sample complexity depends on base capability, task diversity, and desired coverage. Track marginal gain as examples are added and retain hard negative, abstention, and rare-policy slices instead of optimizing row count.
+**Curate for the target behavior.** Plot held-out gain as you add reviewed examples. Include hard negatives, rare policy cases, and legitimate refusals. The number of records alone says little about coverage.
 
-**Mine production with selection controls.** Real traces expose the served distribution, but feedback is biased by exposure, user action, and incumbent behavior. Sample both successes and failures, retain assignment/exposure metadata, correct outputs through a governed label process, and keep a locked evaluation path. The [label-system](../16-ml-systems/10-label-ground-truth-systems.md) chapter covers adjudication and sampling.
+**Sample actual traffic.** Collect successes as well as failures. Record which users saw which model and how examples were selected. Have an independent reviewer correct labels before admission. [Label systems](../16-ml-systems/10-label-ground-truth-systems.md)
 
-**Deduplicate, decontaminate, split honestly.** Near-duplicate examples silently overweight their pattern. Eval examples leaking into training data produce the classic too-good-to-be-true validation score ([leakage](../16-ml-systems/05-training-pipelines.md), in fine-tuning clothes). Split by *entity or scenario*, not by row, when generalization to new entities is the goal.
+**Separate related cases.** Assign one conversation or customer scenario to one split when testing generalization to unseen scenarios. Check near duplicates across splits. [Training pipelines](../16-ml-systems/05-training-pipelines.md)
 
-**Version the dataset like a release artifact.** Snapshot, hash, and record the exact training set with the produced model: a tuned model whose data can't be reconstructed can't be debugged, audited, or legally defended. The full argument lives in [dataset management](../16-ml-systems/11-dataset-management-versioning.md). Fine-tuning inherits all of it, plus a sharper privacy edge: PII in training data can resurface verbatim in generations, so scrubbing happens *before* training, not in the output filter.
+**Version the inputs.** Record the immutable dataset manifest with the model. Remove sensitive material before creating the training snapshot, and retain enough lineage to locate affected artifacts after a correction. [Dataset management](../16-ml-systems/11-dataset-management-versioning.md)
 
-**Format for the target.** Chat-tuned bases encode template assumptions through roles and special tokens. A training/serving mismatch silently changes the learned sequence distribution. Pin tokenizer, chat template, role boundaries, loss mask, and serving-time instruction contract as one compatibility tuple.
+**Match production formatting.** Pin role boundaries, tokenizer, chat template, tool serialization, and loss mask. Decode a training sample and compare it with the request the server actually sends.
 
 ### Dataset contract and lineage
 
-Each example needs more than prompt and completion. Store a stable example ID, source and consent basis, creation method, annotator or teacher provenance, rubric, language/domain slice, policy version, quality status, and content hash. For conversation data, preserve role boundaries and tool-call/result pairing. A generated tool result that never came from the real tool should be marked synthetic. Otherwise the model learns impossible API behavior.
+Give each example a stable ID, source, authorized use, content hash, annotation provenance, policy version, and workload slice. Preserve tool-call/result pairing. Label simulated tool responses so an evaluator can distinguish them from observed behavior.
 
-Publish training data as immutable manifests. A manifest references exact shards and transformations, records exclusions and tombstones, and is sealed before training. The run records the manifest digest rather than a mutable table query. Dataset construction code, tokenizer, chat template, truncation, packing, loss mask, and sampling weights are part of lineage.
+Seal exact shard references and transformation versions in a manifest. Include exclusions, tombstones, tokenizer, template, truncation, packing, sampling, and loss configuration. A mutable query cannot reproduce last month's run after the source changes.
 
 ### Mixture design
 
-The effective training distribution is controlled by sampling, not raw row counts. Let dataset $D_j$ have sampling weight $w_j$. The training objective is approximately
+Sampling long support conversations and short classification tasks equally by example can give them very different token exposure. For dataset weights $w_j$ the nominal mixture is
 
 $$
 \mathcal{L} = \sum_j w_j E_{(x,y)\sim D_j}[\ell(x,y)],
 \qquad \sum_j w_j = 1.
 $$
 
-A small high-weight slice can dominate learning. A huge low-weight safety slice may barely appear. Define weights from product importance and regression risk, then log realized example and token proportions. Sampling by examples overweights long conversations in tokens. Sampling by tokens changes exposure again. Report both.
+Log realized examples, tokens, and tokens that actually receive loss by source. A dataset can dominate the batch by token count while contributing little supervised signal after masking.
 
-Include negative and abstention behavior deliberately. A dataset containing only answerable requests teaches the model to answer everything. Tool-use data must include when not to call a tool, ambiguous arguments requiring clarification, permission denial, transient error, irreversible-action approval, and successful recovery.
+Include clarification, abstention, denied access, tool failure, and successful recovery. An all-success dataset provides no examples of when the model should stop or request help.
 
 ### Splitting and contamination
 
-Random row splits are often invalid. Split by customer, case, document, repository, time window, or underlying scenario so near-duplicate turns cannot cross boundaries. Maintain a provenance graph and similarity-based contamination scan across pretraining, SFT, preference, and eval datasets. Exact hashes catch copies. MinHash or embedding neighbors catch paraphrased and templated duplicates, which require reviewed thresholds.
+Match the split to deployment. Hold out a customer to test generalization to new customers, or hold out later dates to test drift. Look for shared source documents, repeated scenarios, and paraphrases across accessible training and evaluation sets. For an opaque base corpus, record the residual uncertainty.
 
-Use a time-forward test when the product faces drift. Keep a locked qualification set that prompt and training authors cannot inspect freely, plus a rotating production-derived set that reflects new failures. No single split serves both unbiased model selection and ongoing incident learning.
+Keep a frozen qualification set away from training authors. Use a separate rotating set for incident-driven iteration. Once authors tune against a failure case, treat it as a regression test.
 
 ---
 
 ## Training Mechanics Worth Knowing
 
-Learning rate, schedule, effective token batch, sequence length, packing, loss mask, target modules, rank, precision, and training duration interact with model family and data. Copying one recipe across bases is not reproducibility. Run a small design of experiments around a documented baseline and select on held-out product metrics, not minimum training loss.
+Choose a small experiment around a pinned baseline. Vary learning rate, training duration, sequence handling, and adapter size deliberately. Record effective supervised tokens per update so two runs with different padding or masking remain interpretable.
 
-Train and validation loss diagnose optimization fit but not behavior alone. Falling train loss with worsening held-out loss suggests overfitting or split leakage. Flat curves can indicate optimizer scale, frozen targets, masking errors, or weak data signal. Stable loss can coexist with regression on rare safety or tool slices. Monitor slice metrics and general-capability probes at checkpoints, then retain the earliest checkpoint on the product Pareto frontier.
+Falling training loss with rising held-out loss warrants an overfitting or distribution-shift check. Cross-split leakage can make validation look deceptively good. For a flat loss curve, inspect trainable parameters, label masks, gradient norms, and the learning rate before changing architecture.
 
-Training frameworks and hosted APIs package mechanics but do not remove the [training-pipeline](../16-ml-systems/05-training-pipelines.md) contract: immutable inputs, versioned environment, deterministic-enough replay, checkpoint integrity, data cursor recovery, metrics, and artifact lineage.
+Require the same evidence from a hosted run as from a local one wherever the provider exposes it. Record immutable inputs, environment, checkpoint integrity, recovery point, and the exact artifact evaluated. [Training pipelines](../16-ml-systems/05-training-pipelines.md)
 
 ### Memory accounting
 
-For full Adam training, budget model parameters, gradients, two optimizer moments, master weights where used, activations, temporary buffers, and communication workspaces. A rough per-parameter state can exceed 16 bytes before activations. Sharding strategies distribute different terms:
+Calculate memory separately for weights, gradients, Adam moments, optional master weights, activations, temporary buffers, and collectives. For example, two-byte weights, two-byte gradients, two four-byte moments, and four-byte master weights total 16 bytes per parameter before activations. Confirm which copies the implementation keeps.
 
-- data parallelism replicates model and optimizer state
-- ZeRO/FSDP shards optimizer state, then gradients, then parameters by stage
-- tensor and pipeline parallelism split model computation when one sharded unit still does not fit
+- replicated data parallelism keeps a full local copy of model and optimizer state
+- ZeRO stages progressively partition optimizer states, gradients, and parameters. FSDP memory depends on the sharding strategy and temporary all-gathers
+- tensor and pipeline parallelism split computation when the model or one layer exceeds a device
 - activation checkpointing trades recomputation for activation memory
 - sequence/context parallelism addresses long-sequence activation pressure.
 
-LoRA reduces trainable optimizer state, but the frozen base, activations, and forward/backward compute remain. For a linear layer $W \in \mathbb{R}^{d_{out}\times d_{in}}$, LoRA adds
+LoRA needs optimizer state for the adapter parameters while training still runs forward and backward computations through the frozen network. For a layer $W \in \mathbb{R}^{d_{out}\times d_{in}}$, the extra trainable parameter count is
 
 $$
 r(d_{in}+d_{out})
 $$
 
-trainable parameters instead of $d_{in}d_{out}$. Total memory depends on target modules, rank, sequence length, batch, quantization, checkpointing, and runtime kernels. “fits on one GPU” is a measured configuration, not a property of QLoRA itself.
+Measure peak memory at the longest admitted sequence, the intended microbatch, and the actual precision and checkpointing settings.
 
 ### Sequence construction and loss semantics
 
-Train on tokenized sequences exactly as the serving template will produce them. Mask padding. For assistant behavior, usually mask system/user/tool-result tokens and train on assistant tokens. For continued pretraining, train all tokens. Tool calls may need separate weighting from prose so a large natural-language corpus does not drown the small structured-action signal.
+Render a training dialogue and its production equivalent through the same tokenizer. Inspect system, user, assistant, tool, termination, and padding labels. A conversation ending in a long tool result may contain almost no supervised assistant tokens after truncation.
 
-Packing short examples removes padding waste, but attention and position IDs must prevent one example from leaking into the next. Truncation policy is a model behavior decision: dropping the end can remove the answer. Dropping the beginning can remove instructions. Silently discarding long examples biases the trained distribution toward easy short cases. Measure truncation by slice and construct windows intentionally.
+Packing reduces padding. For independent examples, verify their attention boundaries and position handling, and mask labels that would train a transition across examples. Position IDs alone cannot enforce isolation. Measure which languages, tools, and sequence lengths lose supervision under truncation.
 
 ### Reproducible training and recovery
 
-A run manifest pins code/container, base and tokenizer digests, dataset manifest, sampling weights, template, optimizer/scheduler, precision, distributed topology, seed, and library/kernel versions. Exact bitwise reproduction across accelerator counts is rarely realistic, but statistical reproduction should be: repeated runs land within a declared metric tolerance.
+Pin the dataset, sampling, model, tokenizer, code, kernel versions, topology, seed, precision, and schedule. Define the tolerance within which a repeat run should reproduce held-out outcomes.
 
-Checkpoint model/adapter, optimizer, scheduler, random states, data-loader cursor, and consumed-sample counts consistently. On distributed failure, restore the whole logical step. Mixing a new data cursor with old optimizer state changes the run. Validate checkpoints by loading and generating, not only by successful upload.
+Write model, optimizer, schedule, random state, and data cursor at the same logical step. Test recovery by interrupting a short run and resuming. Verify the next examples consumed, next learning rate, and checkpoint metrics against an uninterrupted run. Generating from restored weights tests inference only.
 
-Monitor loss by data slice, token type, and sequence length. A single aggregate loss can fall while the rare tool or safety examples regress. Gradient norms, skipped steps, overflow, learning-rate progression, tokens/sec, padding ratio, and host/input stalls distinguish numeric failure from data-pipeline underutilization.
+Report loss and supervised token counts by slice alongside throughput, overflow, skipped updates, and host stalls. For a rare action regression, check whether its examples were sampled and labeled before changing the optimizer.
 
 ---
 
 ## Serving Tuned Models
 
-The deployment decision interacts with the tuning method more than teams expect:
+Choose how the serving fleet will identify, load, and retire each variant.
 
-**Merged model.** Fold the LoRA update into the base and publish one qualified artifact. This removes per-request adapter selection but duplicates weight storage and rollout capacity per variant. It fits a small stable variant set with enough traffic to justify dedicated replicas.
+**Merged weights.** A popular stable variant can justify dedicated replicas and avoid a separate adapter operation. Budget storage and warm rollback capacity for the full model.
 
-**Multi-adapter serving.** Keep adapters separate and resolve one or more compatible adapters per request over a shared base. This amortizes base weights across a sparse variant catalog, but adapter residency, cold load, batching compatibility, per-tenant isolation, and cache thrash become control-plane concerns. Compare the measured adapter working set with HBM/host capacity before assuming one pool can serve every tenant variant.
+**Shared base.** Keep multiple compatible adapters over a common base when variants see sparse traffic. Measure cold-load latency, memory demand, and batch behavior using the observed tenant mix.
 
-**Champion/challenger release.** Register lineage to the exact data, base, tokenizer, template, optimizer, and serving artifact. Gate against the qualified prompting/retrieval baseline. Shadow effects safely. Canary by stable session assignment. Retain a tested rollback target. An adapter is compatible with exact base weights and target modules, not merely a marketing family name. A base or runtime change creates a new candidate that must be re-qualified and may require retraining.
+**Release.** Bind the adapter to the exact base, tokenizer, template, and tool versions. Shadow proposed actions without executing them, then canary with stable session assignment. Keep a qualified previous artifact available throughout rollout.
 
 ### Adapter control plane
 
-An adapter registry records adapter digest, compatible base digest and tokenizer, target modules, rank/scaling, training/eval lineage, tenant or product owner, policy status, and lifecycle state. The gateway resolves a logical variant to `(base, adapter, template, decoding)` atomically. A request cannot mix an adapter with a merely similar base family.
+Resolve every request to an immutable base, adapter, and configuration. The registry records the target modules, rank, scale, training lineage, permitted tenant, owner, and release status. Reject a mismatched base digest at load time.
 
-Multi-adapter serving adds a cache and scheduler. Popular adapters remain resident. Cold adapters load from signed storage. Requests may batch together only if the runtime preserves correct adapter application. Admission includes adapter memory and load deadline. Per-tenant quotas prevent one customer with many variants from thrashing the adapter cache. Eviction and prefetch use observed request frequency and size, not count alone.
+Reserve memory and check the remaining request deadline before a cold adapter load. Measure load time and eviction by adapter and tenant. If a burst of rare variants displaces a hot one, test tenant quotas or a separate cold pool and measure both cohorts.
 
-Never accept arbitrary user-uploaded adapters into a trusted process without validation. Adapters can drastically alter safety behavior and may target unexpected modules. Scan formats, disallow executable serialization, verify signatures and compatibility, isolate untrusted variants, and re-run policy evaluations.
+Validate shape, target modules, artifact format, and trusted signatures before loading an adapter. Use a non-executable serialization format and isolate untrusted variants. Test behavior under the policy the deployment will enforce.
 
 ### Quantization and compilation qualification
 
-Quantizing or compiling a tuned model creates a new release candidate. Small numeric changes can affect narrow decision boundaries, structured output, or long-context behavior. Evaluate the exact serving artifact and kernel stack, compare output distributions by slice, and retain the unquantized reference for diagnosis. Calibration data for post-training quantization must represent the tuned workload and comply with the same data governance.
+Treat quantization or compilation as a distinct release. If a new variant regresses, replay the same inputs through the reference and deployed kernels with identical tokenization. For methods that need calibration data, check its coverage by language, sequence length, and tool format.
 
 ## Evaluation, Release, and Feedback
 
-Evaluation begins before data collection so annotations match the intended metrics. Separate task correctness, factuality, calibration/abstention, tool trajectory, format, style, safety, and general capability. A weighted “quality” score can hide a catastrophic regression. Use per-dimension gates for non-negotiable properties and a product utility function only for tradeable ones.
+Choose separate release gates for the failures users cannot absorb, such as an incorrect action or unauthorized disclosure. Track style, format, latency, calibrated abstention, and task success separately so one improvement cannot conceal a failed gate.
 
-Repeatedly testing candidate checkpoints against one set creates selection overfitting. Keep a development set for iteration, a locked qualification set for release, and a final human comparison on sampled production-like traffic. Use paired examples and confidence intervals. For preference-shaped behavior, randomize response order and blind annotators to model identity.
+Tune on development data, lock the candidate, then evaluate on withheld cases. Pair incumbent and candidate on the same inputs and report uncertainty. Blind the evaluator and randomize display order for preference tests.
 
-Shadow traffic is safe only when tuned tool calls do not execute effects. Compare proposed trajectories or use sandbox tools. Canary rollout pins session assignment, records the full inference configuration, and watches delayed outcomes long enough to catch user corrections and escalation. Rollback moves an alias to the prior qualified tuple. It must not depend on rebuilding weights during the incident.
+Shadow traffic with tool writes disabled. On canary traffic, record both assigned and served revisions and wait for delayed corrections. If requests routed to a tuned variant show worse results, check fallback exposure and the exact rendered template before blaming weights. Roll back the serving alias while diagnosing a failed release.
 
-Production feedback is not automatically a label. Thumbs-up is selection-biased. A user may accept a wrong answer. Successful tool completion may reflect forgiving downstream systems. Store feedback with exposure and outcome context, sample corrections for expert labeling, and prevent a newly tuned model from training directly on its own unchecked outputs. The [feedback-loop](../16-ml-systems/04-model-monitoring.md) risk is strongest when generated data dominates future training.
+A positive rating can accompany a wrong answer. A successful tool call can act on the wrong resource. Sample production outcomes for independent review before feeding them into another tune. Track how much of each training slice came from the model itself. [Feedback loops](../16-ml-systems/04-model-monitoring.md)
 
 ## Privacy, Safety, and Model Governance
 
-Training changes the model artifact's data-governance boundary. Minimize and redact data before it enters the immutable training snapshot. Restrict raw trace access. Preserve consent and licensing fields. Define retention for examples, checkpoints, and intermediate caches. Output filters cannot reliably undo memorization.
+Document what the team may collect, train on, retain, and deploy. Minimize personal data before snapshotting and restrict access to raw traces, checkpoints, and intermediate caches.
 
-Membership and extraction tests are risk signals, not proofs that a model contains or lacks one record. Limit verbatim repeated sequences, deduplicate aggressively, and use privacy-preserving training such as differential privacy only when its quantified privacy/utility trade-off matches the threat model. Legal deletion may require excluding the record from future runs and retraining or using an approved unlearning procedure. Deleting the source row does not modify existing weights.
+Track which runs consumed a record. A source deletion leaves earlier checkpoints intact. Follow the applicable deletion process for those artifacts. Extraction or membership tests can reveal exposure, but a negative sample cannot certify erasure. For differential privacy, evaluate the privacy budget and utility trade-off on the actual training configuration.
 
-Safety tuning does not replace runtime policy. Distribution shift, adversarial input, a changed system prompt, or a new tool surface can bypass learned refusal. The serving layer still enforces authorization, sandboxing, rate limits, and action approvals. Red-team both the base and adapter because tuning can create new jailbreak or data-exfiltration behavior.
+Keep access checks, rate limits, isolation, and action approval in the runtime. Test the tuned model with changed prompts and tools, then verify that the external controls still hold when the model proposes an invalid action.
 
 ---
 
 ## Failure Modes
 
-**Tuning what prompting solves.** A quarter of engineering for what a rewritten prompt plus five examples achieves. Defense: the prompting baseline is a mandatory pre-experiment, and the tune must beat it on the eval set to ship.
-
-**Knowledge baked into weights.** A model can repeat an outdated fact after its source changes or a user requests deletion. Retrieve mutable facts from a source you can update and cite. Use training to change behavior.
-
-**Data leakage and contamination.** Eval examples (or near-duplicates) in the training set produce a mirage of quality. Defense: hash-based dedup across train/eval, entity-level splits, and suspicion of any dramatic jump.
-
-**Catastrophic forgetting.** The narrow tune erodes general capability nobody thought to test. Defense: general-capability probe suite in the gate, mixed general data in training.
-
-**Style drift laundered as success.** The tuned model *sounds* more on-brand, and a judge model rewards the confidence while factuality quietly drops. Score correctness and style separately so a gain in one cannot hide a regression in the other.
-
-**Unreproducible artifact.** Great model, unknown data, departed author. Defense: the reproducibility contract (data snapshot hash, base model + revision, config, seed) enforced at registry time, exactly as for any [model registry](../16-ml-systems/13-model-registry-metadata.md) entry.
-
-**Stranded adapter.** The base model family moves two generations. The adapter is welded to obsolete weights and the data pipeline to regenerate it was never built. Defense: budget the refresh pipeline, not the one-off run. Keep the training set (the durable asset) in better shape than the checkpoint.
-
-**Template mismatch.** Training uses one chat template or tool serialization and serving uses another. The model appears inexplicably worse despite correct weights. Defense: version the complete inference tuple and test the rendered token sequence.
-
-**Preference shortcut.** DPO learns that preferred responses are longer, more confident, or contain a recurring phrase. Defense: control pair differences, balance artifacts, and evaluate rubric dimensions independently.
-
-**Packing leakage.** Tokens from one packed example attend to another or loss masks include user/tool text. Defense: test attention boundaries, position IDs, labels, and decoded training batches as first-class pipeline artifacts.
-
-**Adapter cache thrash.** Per-tenant variants repeatedly load and evict, making TTFT unpredictable and storage a hot dependency. Defense: admission-aware adapter residency, prefetch, quotas, and a measured fallback policy.
-
-**Unchecked feedback loop.** The model's own outputs become tomorrow's training truth, amplifying a mistake. Defense: provenance, expert correction, holdout evaluation, and limits on synthetic-data share by slice.
+| What goes wrong | How to test it | Release decision |
+|---|---|---|
+| The improvement disappears against a stronger prompt | Pair the tune with the best serving baseline on the same cases | Keep the cheaper qualified system. |
+| A model repeats a superseded fact | Correct the source and replay the case | Fetch mutable facts at request time. |
+| Validation jumps while production stays flat | Trace documents, customers, and near duplicates across splits | Rebuild the holdout before trusting the score. |
+| Style improves as factual or general capability declines | Score each dimension with independent checks | Block the failing slice and examine data mix. |
+| The model trained successfully but produces wrong tool calls in serving | Compare actual prompt token IDs, delimiters, tool schemas, and loss masks | Fix the first divergence and replay the same cases. |
+| A preference model rewards verbosity | Match answer lengths and randomize position in a blinded test | Recollect ambiguous pairs and judge correctness separately. |
+| Training improves only when examples share a packed sequence | Inspect the attention boundary and first predicted label of each example | Fix packing and requalify the resulting checkpoint. |
+| An adapter misses first-token deadlines | Separate load wait from queue and prefill time for warm and cold requests | Change residency or routing and measure displaced tenants. |
+| A base upgrade strands the adapter | Restore the pinned base, rebuild from its manifest, and exercise rollback | Retain the compatible deployment until a replacement passes. |
+| Generated errors recur in later releases | Follow teacher and feedback lineage across dataset versions | Quarantine unchecked examples and independently relabel affected slices. |
 
 ---
 
 ## Decision Framework
 
-*Did a strong prompt with examples and schema enforcement fail, measurably, on an eval set?* If it wasn't tried, or there's no eval set, the answer to "should we fine-tune" is no, not yet.
+Start with labeled tasks and a qualified incumbent. If new evidence or a deterministic interface resolves the failure, measure that path in production conditions. If a stable behavior gap remains, run the smallest training experiment that could change the decision.
 
-*Is the gap knowledge or behavior?* Knowledge → retrieval. Behavior (style, format, task skill, tool reliability) → tuning is on the table.
-
-*What's the unit economics goal?* First compare a smaller existing target, routing, prompt/context reduction, quantization, batching, and caching under the same quality constraints. Distillation is justified when a student can reproduce the bounded behavior more economically after including teacher generation, training, qualification, fallback, serving, and refresh cost. Its break-even model uses verified successful volume, not raw tokens alone.
-
-*One model or many variants?* Per-tenant/per-task variants → LoRA + multi-adapter serving. Single flagship behavior → merge and serve plain.
-
-*Can you fund the loop?* Data refresh, re-training on base-model upgrades, eval maintenance, rollback capacity. A fine-tune is a product line, not a project.
+For a cheaper student, include teacher fallback and refresh in the break-even calculation. For many tenant variants, compare cold-load latency and isolation against dedicated replicas. Approve rollout only when the exact serving artifact passes the agreed slices, fits the operating budget, and has a tested rollback path.
 
 ---
 
 ## Key Takeaways
 
-1. Qualify prompting, deterministic tools, and retrieval before training. A tune must produce a measured system-level gain over that baseline.
-2. Use weights for stable behavior and representation changes, not as the authority for mutable or permissioned facts.
-3. LoRA/QLoRA reduces trainable and base-weight state under explicit module, rank, precision, and sequence assumptions. It does not eliminate activation, evaluation, serving, or governance cost.
-4. Preference and verifiable-reward objectives encode different feedback contracts and failure modes. Choose them from label and verifier semantics rather than fashion.
-5. Distillation is a bounded-distribution compression program whose business case depends on verified quality, fallback rate, volume, and refresh cost.
-6. Data lineage, mixture weights, loss masks, contamination controls, and split semantics determine what behavior the run actually learns.
-7. Multi-adapter serving trades duplicated bases for residency, compatibility, scheduling, isolation, and cache-management complexity.
-8. A tuned model is a model release: registry lineage, offline gates including the prompting baseline, canary rollout, and re-qualification whenever the base model moves.
+1. Identify the recurring behavior or cost gap with a deployed-quality baseline.
+2. Treat source data, masks, sampling, and split boundaries as part of the learned behavior. Verify them on real batches.
+3. Select the objective from the feedback available. Demonstrations, preferences, and verifiable rewards answer different questions.
+4. Measure memory and latency on the actual base, adapter, precision, sequence length, and tenant mix.
+5. Qualify the serving artifact and keep enough lineage to recover, roll back, and retrain.
 
 ---
 
@@ -310,6 +290,7 @@ Safety tuning does not replace runtime policy. Distribution shift, adversarial i
 
 ## Related Chapters
 
+- [Prompt Engineering](06-prompt-engineering.md): how to qualify the prompt baseline that a trained model must beat
 - [Retrieval-Augmented Generation Systems](04-rag-patterns.md): the usual first alternative: put the knowledge in retrieval rather than in weights
 - [Training Pipelines](../16-ml-systems/05-training-pipelines.md): a fine-tune is a training run, with every lineage obligation that implies
 - [Dataset Management and Versioning](../16-ml-systems/11-dataset-management-versioning.md): an instruction dataset you cannot version cannot be retrained or audited
