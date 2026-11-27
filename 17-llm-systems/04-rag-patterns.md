@@ -1,12 +1,12 @@
 # Retrieval-Augmented Generation Systems
 
-## TL;DR
+## Overview {#tl-dr}
 
-Retrieval-augmented generation (RAG) is a versioned search and evidence-publication system coupled to a probabilistic generator. Correctness depends on document identity, parsing, update and deletion semantics, authorization before retrieval, query understanding, hybrid candidate generation, reranking, evidence-budget allocation, citation provenance, abstention, and separate evaluation of retrieval and generation.
+When a retrieval-augmented generation (RAG) system gives a wrong answer, trace the evidence. Did the index contain the right document revision? Could the user access it? Did retrieval and reranking put the relevant passage in the prompt? If so, check whether the answer follows from that passage and cites it accurately.
 
 A production design has two planes. The **indexing control plane** discovers sources, creates immutable document revisions, parses and enriches content, builds versioned sparse/dense indexes, validates them, and atomically publishes a corpus snapshot. The **query data plane** authenticates the caller, plans a retrieval request, applies mandatory filters, retrieves and reranks candidates, assembles an evidence packet, generates an answer under a grounded-output contract, and records claim-to-source provenance.
 
-Use long context when the authoritative corpus is small and request-scoped; use pipeline RAG when retrieval steps are stable; use agentic retrieval when query decomposition must adapt at runtime and each extra search has an evidence-based stopping rule. Fine-tuning changes model behavior, not current factual memory, and is not a substitute for retrieval.
+Use long context when the authoritative corpus is small and request-scoped. Use pipeline RAG when retrieval steps are stable. Use agentic retrieval when query decomposition must adapt at runtime and each extra search has an evidence-based stopping rule. Fine-tuning changes model behavior, not current factual memory, and is not a substitute for retrieval.
 
 The Search section covers [index architecture](../14-search-systems/01-inverted-indexes.md), [lexical execution](../14-search-systems/02-full-text-search.md), [vector retrieval](../14-search-systems/03-vector-search.md), and [ranking/evaluation](../14-search-systems/04-ranking-algorithms.md). RAG adds corpus and ACL publication, evidence-packet assembly, grounded generation, claim provenance, abstention, and joint retrieval/generation evaluation. A vector database is one query-plane component, not the RAG system boundary.
 
@@ -25,7 +25,7 @@ Before choosing an embedding model or database, specify what “knowledge” mea
 - Can an answer combine public and confidential sources, or would that leak membership through phrasing?
 - How quickly must corrections and deletions become unanswerable, including in caches and generated artifacts?
 
-These requirements determine storage and publication semantics. A support assistant over public manuals tolerates eventual indexing; a legal research system needs precise source editions and quotations; a tenant-isolated enterprise assistant requires authorization at every retrieval stage; an incident assistant may value minute-level freshness over perfect reranking.
+These requirements determine storage and publication semantics. A support assistant over public manuals tolerates eventual indexing. A legal research system needs precise source editions and quotations. A tenant-isolated enterprise assistant requires authorization at every retrieval stage. An incident assistant may value minute-level freshness over perfect reranking.
 
 ## Architecture: Two Planes and One Evidence Contract
 
@@ -105,13 +105,13 @@ The manifest is the transaction boundary. Updating dense vectors first and metad
 
 ### Updates, deletions, and temporal semantics
 
-An edit creates a new revision and new fragments; it does not mutate evidence already cited by an audited answer. The current-corpus alias stops referencing the old revision, while historical systems may retain it under policy.
+An edit creates a new revision and new fragments. It does not mutate evidence already cited by an audited answer. The current-corpus alias stops referencing the old revision, while historical systems may retain it under policy.
 
 Deletion has at least four meanings:
 
-- **source deletion:** the upstream object no longer exists;
-- **access revocation:** content still exists but this principal or tenant may no longer retrieve it;
-- **legal erasure:** payload and derived representations must be removed under a deadline;
+- **source deletion:** the upstream object no longer exists
+- **access revocation:** content still exists but this principal or tenant may no longer retrieve it
+- **legal erasure:** payload and derived representations must be removed under a deadline
 - **correction:** an old revision must not answer current questions but may remain in an audit archive.
 
 Propagate a tombstone through sparse indexes, dense indexes, metadata stores, caches, derived summaries, and replicas. Authorization revocation should take effect in the query path immediately, independent of slower physical deletion. Track deletion lag as a service-level objective and run “canary deletion” probes that attempt to retrieve known tombstoned IDs.
@@ -122,21 +122,21 @@ For time-sensitive domains, store both transaction time (when the system learned
 
 Parsing errors set an upper bound on retrieval quality. Preserve structure rather than flattening every source into text:
 
-- headings and section hierarchy;
-- page, paragraph, sentence, and character coordinates;
-- tables as cells plus row/column headers and a textual rendering;
-- code symbols, files, imports, and call relationships;
-- transcript speakers and timestamps;
-- image captions and OCR confidence;
+- headings and section hierarchy
+- page, paragraph, sentence, and character coordinates
+- tables as cells plus row/column headers and a textual rendering
+- code symbols, files, imports, and call relationships
+- transcript speakers and timestamps
+- image captions and OCR confidence
 - list nesting, footnotes, formulas, and document language.
 
 Record parser warnings and coverage. A parser that emits clean text for 95% of pages and silently drops tables from the remaining 5% is more dangerous than one that fails visibly.
 
 ### Chunk boundaries are an information-retrieval choice
 
-Fixed token windows are a baseline, not a universal design. Small fragments improve targeting but lose context; large fragments preserve context but dilute similarity and consume the evidence budget. Overlap can repair boundary loss but creates duplicates and citation ambiguity.
+Fixed token windows are a baseline, not a universal design. Small fragments improve targeting but lose context. Large fragments preserve context but dilute similarity and consume the evidence budget. Overlap can repair boundary loss but creates duplicates and citation ambiguity.
 
-Prefer structure-aware fragmentation: keep a heading path with each paragraph; preserve short tables or functions intact; split very long units recursively; attach a small local neighborhood only after retrieval. A common **child-to-parent** pattern embeds focused child fragments, retrieves them, then expands to a parent section for generation. This separates the unit optimized for matching from the unit optimized for reading.
+Prefer structure-aware fragmentation: keep a heading path with each paragraph. Preserve short tables or functions intact. Split very long units recursively. Attach a small local neighborhood only after retrieval. A common **child-to-parent** pattern embeds focused child fragments, retrieves them, then expands to a parent section for generation. This separates the unit optimized for matching from the unit optimized for reading.
 
 Evaluate chunking using the real query distribution. For each labeled question, measure whether at least one fragment contains sufficient evidence, whether the fragment ranks within the candidate budget, and how many irrelevant tokens expansion introduces. There is no globally correct chunk size.
 
@@ -146,7 +146,7 @@ Generated titles, summaries, hypothetical questions, entities, and keywords can 
 
 ## Index and Representation Lifecycle
 
-Dense retrieval maps queries and fragments into a vector space; sparse retrieval preserves lexical evidence such as identifiers, names, error codes, and rare terms. Most heterogeneous corpora need both.
+Dense retrieval maps queries and fragments into a vector space. Sparse retrieval preserves lexical evidence such as identifiers, names, error codes, and rare terms. Most heterogeneous corpora need both.
 
 A representation version should specify:
 
@@ -172,16 +172,16 @@ Approximate-nearest-neighbor parameters trade memory, build cost, query latency,
 
 Query planning converts a user turn and authorized session context into a retrieval program. It may perform:
 
-- intent and answerability classification;
-- temporal and entity resolution;
-- query rewriting for acronyms, spelling, and conversational references;
-- mandatory tenant, source, language, region, or effective-time filters;
-- decomposition of multi-hop questions;
-- selection among lexical, dense, structured, graph, or external search;
-- allocation of candidate, reranking, and evidence-token budgets;
+- intent and answerability classification
+- temporal and entity resolution
+- query rewriting for acronyms, spelling, and conversational references
+- mandatory tenant, source, language, region, or effective-time filters
+- decomposition of multi-hop questions
+- selection among lexical, dense, structured, graph, or external search
+- allocation of candidate, reranking, and evidence-token budgets
 - a stopping decision when sufficient evidence has been found.
 
-Keep mandatory security filters outside model discretion. The model may propose `product = "X"`; policy code injects `tenant_id`, ACL predicates, and allowed source classes from the authenticated context.
+Keep mandatory security filters outside model discretion. The model may propose `product = "X"`. Policy code injects `tenant_id`, ACL predicates, and allowed source classes from the authenticated context.
 
 ### Pipeline versus agentic retrieval
 
@@ -189,13 +189,13 @@ Pipeline RAG runs a fixed plan: rewrite → retrieve → rerank → assemble →
 
 Agentic retrieval lets a model inspect results and issue follow-up searches. It helps when the number and type of searches are input-dependent: resolving an ambiguous entity, comparing sources, or following references. The agent still operates through a retrieval API with budgets. Each iteration records the hypothesis, query, new evidence IDs, and remaining information gap. Stop when new evidence gain is low, the answer contract is satisfied, or the deadline/spend budget is exhausted.
 
-“Search until confident” is not a stopping rule; model confidence is often highest on coherent but incomplete evidence.
+“Search until confident” is not a stopping rule. Model confidence is often highest on coherent but incomplete evidence.
 
 ## Candidate Generation and Ranking
 
 ### Sparse and dense retrieval
 
-BM25-style sparse retrieval rewards term overlap while correcting for document length and term frequency. Dense retrieval captures semantic similarity. Sparse search dominates on exact identifiers and rare names; dense search helps with paraphrases and conceptual questions.
+BM25-style sparse retrieval rewards term overlap while correcting for document length and term frequency. Dense retrieval captures semantic similarity. Sparse search dominates on exact identifiers and rare names. Dense search helps with paraphrases and conceptual questions.
 
 Generate candidates independently and fuse ranks. Reciprocal rank fusion is robust when raw scores are incomparable:
 
@@ -203,7 +203,7 @@ $$
 RRF(d) = \sum_{r \in retrievers} \frac{1}{k + rank_r(d)}.
 $$
 
-The constant $k$ limits the effect of a first-place result. Learn weights only with enough labeled traffic and monitor by query slice; an average gain can hide severe regressions for identifiers or non-English text.
+The constant $k$ limits the effect of a first-place result. Learn weights only with enough labeled traffic and monitor by query slice. An average gain can hide severe regressions for identifiers or non-English text.
 
 ### Filters before similarity
 
@@ -213,7 +213,7 @@ If prefiltering creates tiny partitions, use an architecture that preserves both
 
 ### Reranking
 
-Candidate retrieval optimizes recall under a wide budget; reranking spends more compute to improve precision. Cross-encoders or LLM rerankers see the query and candidate jointly and can capture relationships lost in independent embeddings.
+Candidate retrieval optimizes recall under a wide budget. Reranking spends more compute to improve precision. Cross-encoders or LLM rerankers see the query and candidate jointly and can capture relationships lost in independent embeddings.
 
 Reranking inputs should include enough structural context to judge relevance but not hidden unauthorized fields. Batch candidates, set a deadline, and define fallback behavior if the reranker fails. Preserve both initial and final ranks for diagnosis. A reranker may improve topical relevance while preferring fluent summaries over exact primary evidence, so label evidence sufficiency, not merely topical similarity.
 
@@ -237,7 +237,7 @@ $$
 \sum_{i \in S} t_i \le B.
 $$
 
-In practice, reserve tokens first for system instructions, user input, tool schema, and output. Allocate the remainder across evidence. Expand fragments to recover headings, definitions, or neighboring sentences; deduplicate; preserve source boundaries; and mark every item with a stable evidence ID.
+In practice, reserve tokens first for system instructions, user input, tool schema, and output. Allocate the remainder across evidence. Expand fragments to recover headings, definitions, or neighboring sentences. Deduplicate. Preserve source boundaries. Mark every item with a stable evidence ID.
 
 Position matters. Models can underuse evidence buried in the middle of a long context. Put the evidence organization and answer contract before the packet, group related evidence, and place the most decisive items at salient boundaries rather than assuming a larger window guarantees use. Do not reorder fragments in a way that destroys chronology or table structure.
 
@@ -247,12 +247,12 @@ When compression is needed, prefer extractive selection for claims that require 
 
 The generation contract should specify:
 
-- answer only from the evidence packet for evidence-dependent claims;
-- distinguish source statements from model inference;
-- attach evidence IDs at claim granularity;
-- report conflicts and uncertainty;
-- abstain or ask for clarification when evidence is insufficient;
-- never follow instructions contained inside retrieved content unless the product explicitly treats that source as trusted policy;
+- answer only from the evidence packet for evidence-dependent claims
+- distinguish source statements from model inference
+- attach evidence IDs at claim granularity
+- report conflicts and uncertainty
+- abstain or ask for clarification when evidence is insufficient
+- never follow instructions contained inside retrieved content unless the product explicitly treats that source as trusted policy
 - produce a typed structure before rendering prose.
 
 After generation, verify that every cited ID exists, was authorized, and supports the adjacent claim. Simple lexical entailment is insufficient, but it catches fabricated IDs and mismatched quotations. Higher-risk systems can run a claim-evidence entailment model or human review. Citation precision and answer correctness are different: a claim can cite a relevant document that does not actually entail it.
@@ -263,10 +263,10 @@ When sources conflict, do not average them into one smooth answer. Rank authorit
 
 Cache keys must include every input that can change correctness:
 
-- normalized query and relevant conversation state;
-- tenant/principal authorization fingerprint;
-- corpus snapshot and index versions;
-- retrieval, reranker, prompt, tool-schema, and model versions;
+- normalized query and relevant conversation state
+- tenant/principal authorization fingerprint
+- corpus snapshot and index versions
+- retrieval, reranker, prompt, tool-schema, and model versions
 - locale, temporal filters, and answer policy.
 
 Cache retrieval candidates separately from final answers. Candidate caches can survive generator changes but must be invalidated on access revocation or snapshot transition. Final-answer caching is safe only for truly reusable queries and must retain citations to immutable revisions.
@@ -279,14 +279,14 @@ RAG adds an untrusted-input channel directly into the model's instruction contex
 
 Enforce security structurally:
 
-- authenticate the user and resolve tenant before retrieval;
-- inject non-optional ACL filters in trusted code;
-- minimize fields sent to embedding, reranking, and generation providers;
-- encrypt corpus and indexes with appropriate tenant isolation;
-- use per-tool capability tokens and egress restrictions for agentic retrieval;
-- scan or sandbox active content and attachments;
-- redact sensitive data in traces and evaluation datasets;
-- prevent answer and embedding caches from crossing authorization domains;
+- authenticate the user and resolve tenant before retrieval
+- inject non-optional ACL filters in trusted code
+- minimize fields sent to embedding, reranking, and generation providers
+- encrypt corpus and indexes with appropriate tenant isolation
+- use per-tool capability tokens and egress restrictions for agentic retrieval
+- scan or sandbox active content and attachments
+- redact sensitive data in traces and evaluation datasets
+- prevent answer and embedding caches from crossing authorization domains
 - record policy decisions and evidence IDs for audit.
 
 Existence is sensitive. Result counts, similarity scores, document titles, and latency can reveal a hidden document even when content is filtered later. Test non-membership leakage, not just whether final text contains a secret.
@@ -328,7 +328,7 @@ End-to-end answer scores do not locate defects. Evaluate layers separately:
 
 Candidate recall is often measured as `Recall@K`. Ranking metrics include mean reciprocal rank and normalized discounted cumulative gain when multiple graded-relevance items exist. Report them by query type, language, tenant/corpus, freshness band, and answerability.
 
-Build evaluation examples from production failures, expert-authored questions, source changes, and adversarial cases. Each example should identify acceptable source revisions or facts, not one brittle reference sentence. Synthetic question generation expands coverage but inherits the generator's view of what is salient; keep a human-curated anchor set and track synthetic versus organic slices separately.
+Build evaluation examples from production failures, expert-authored questions, source changes, and adversarial cases. Each example should identify acceptable source revisions or facts, not one brittle reference sentence. Synthetic question generation expands coverage but inherits the generator's view of what is salient. Keep a human-curated anchor set and track synthetic versus organic slices separately.
 
 RAG-specific model graders such as RAGAS or ARES can scale evaluation of context relevance and faithfulness, but they remain calibrated estimators. Validate grader agreement against expert labels, measure uncertainty, version prompts/models, and avoid using the same uncalibrated judge as both optimization target and release authority.
 
@@ -336,10 +336,10 @@ RAG-specific model graders such as RAGAS or ARES can scale evaluation of context
 
 Counterfactuals reveal whether the system actually uses retrieval:
 
-- remove the decisive evidence and expect abstention or changed output;
-- insert a plausible contradictory distractor and expect source-policy resolution;
-- replace the answer span while keeping surrounding prose and expect the answer to follow the authorized source;
-- revoke access and expect no retrieval, citation, cache hit, or membership signal;
+- remove the decisive evidence and expect abstention or changed output
+- insert a plausible contradictory distractor and expect source-policy resolution
+- replace the answer span while keeping surrounding prose and expect the answer to follow the authorized source
+- revoke access and expect no retrieval, citation, cache hit, or membership signal
 - publish a corrected revision and verify the current answer changes while historical replay remains stable.
 
 ### Trace schema and service health
@@ -362,7 +362,7 @@ Operational indicators include source discovery lag, parse failure rate, index c
 
 **Reranking absent evidence.** Teams tune an expensive reranker while the correct fragment never enters the candidate set. Diagnose coverage and candidate recall first.
 
-**Context stuffing.** Increasing `top_k` raises token cost and introduces distractors; important evidence becomes hard to use. Allocate an evidence budget and optimize sufficiency plus redundancy.
+**Context stuffing.** Increasing `top_k` raises token cost and introduces distractors. Important evidence becomes hard to use. Allocate an evidence budget and optimize sufficiency plus redundancy.
 
 **Citation decoration.** The answer lists plausible sources that do not entail its claims. Generate claim-level evidence links and verify them after generation.
 
@@ -389,25 +389,25 @@ Choose the knowledge strategy first:
 
 Then make the system-design decisions in dependency order:
 
-1. knowledge authority, time, deletion, and access semantics;
-2. stable document/revision/fragment identity and provenance;
-3. snapshot publication and rollback;
-4. parsing and evidence units by source structure;
-5. sparse/dense/structured candidate paths and filters;
-6. reranking and evidence-budget policy;
-7. grounded output, citation, conflict, and abstention contract;
+1. knowledge authority, time, deletion, and access semantics.
+2. stable document/revision/fragment identity and provenance.
+3. snapshot publication and rollback.
+4. parsing and evidence units by source structure.
+5. sparse/dense/structured candidate paths and filters.
+6. reranking and evidence-budget policy.
+7. grounded output, citation, conflict, and abstention contract.
 8. offline layer metrics, online outcomes, tracing, and incident recovery.
 
 Do not select an embedding model from a generic leaderboard before building a representative retrieval set. The correct design is the least complex pipeline that satisfies freshness, authorization, evidence, latency, and measured answer-quality requirements.
 
 ## Key Takeaways
 
-- RAG is a versioned evidence system; vector search is one rebuildable projection inside it.
+- RAG is a versioned evidence system. Vector search is one rebuildable projection inside it.
 - Publish corpus snapshots transactionally so content, metadata, ACLs, sparse indexes, and dense indexes describe the same world.
-- Separate candidate recall, ranking, context utilization, groundedness, and answer quality; an end-to-end score alone cannot diagnose the system.
+- Separate candidate recall, ranking, context utilization, groundedness, and answer quality. An end-to-end score alone cannot diagnose the system.
 - Authorization must constrain retrieval before candidates reach rerankers, caches, logs, or models.
 - Retrieval and generation communicate through provenance-rich evidence packets, and citations bind claims to immutable source spans.
-- Hybrid retrieval, reranking, and context expansion solve different stages; later stages cannot recover evidence omitted earlier.
+- Hybrid retrieval, reranking, and context expansion solve different stages. Later stages cannot recover evidence omitted earlier.
 - Long context, pipeline RAG, agentic retrieval, structured queries, and fine-tuning are complementary choices with different knowledge contracts.
 
 ## References

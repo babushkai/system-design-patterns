@@ -1,8 +1,8 @@
 # Harness Engineering
 
-## TL;DR
+## Overview {#tl-dr}
 
-The harness is the trusted runtime between a probabilistic model and stateful tools. It compiles canonical task state into a model request, validates proposals, authorizes and schedules effects, journals observations, manages context revisions, enforces budgets, verifies completion, and emits evidence. Model and harness behavior are inseparable in an agent evaluation, but correctness guarantees belong to deterministic runtime boundaries.
+The harness controls what happens between a model proposing an action and a tool changing state. It checks permissions and budgets, records the outcome, and verifies completion. Evaluate the model and harness together because changing either can change the result.
 
 Design the harness as a versioned state machine with typed provider and tool adapters. A crash, duplicate message, stale action, model migration, policy change, or user interruption must have defined semantics. Prompt assembly, context selection, and tool descriptions matter, but their canonical chapters are linked rather than repeated here.
 
@@ -29,7 +29,7 @@ Capability is co-produced: model policy, context, tool affordances, environment 
 
 ## The Harness as a Runtime
 
-Treat the harness as a small operating system for a probabilistic process. The model proposes an event; the runtime validates it, applies policy, executes an effect, records the result, and exposes a new state to the next turn.
+Treat the harness as a small operating system for a probabilistic process. The model proposes an event. The runtime validates it, applies policy, executes an effect, records the result, and exposes a new state to the next turn.
 
 ```mermaid
 stateDiagram-v2
@@ -52,7 +52,7 @@ stateDiagram-v2
 
 The durable identity hierarchy is `session_id → run_id → turn_id → action_id → attempt_id`. A retry creates a new attempt but retains the logical action ID, which is the idempotency key for an external write. Persist the model request manifest, tool proposals, policy decisions, results, workspace revision, and verifier output before advancing state. This makes a crash a resume point rather than an excuse to repeat an uncertain side effect.
 
-The model is allowed to be nondeterministic; the runtime is not allowed to forget what happened. Record provider/model revision, prompt and tool-schema versions, input and output usage, finish reason, and policy snapshot. A replay uses recorded model responses for old turns and re-executes only explicitly safe, deterministic checks. Never replay a payment, deployment, or email merely because the process restarted.
+The model is allowed to be nondeterministic. The runtime is not allowed to forget what happened. Record provider/model revision, prompt and tool-schema versions, input and output usage, finish reason, and policy snapshot. A replay uses recorded model responses for old turns and re-executes only explicitly safe, deterministic checks. Never replay a payment, deployment, or email merely because the process restarted.
 
 ---
 
@@ -60,9 +60,9 @@ The model is allowed to be nondeterministic; the runtime is not allowed to forge
 
 The harness compiles canonical run state, tool capabilities, memory, evidence, recent events, and output constraints into one provider request plus a manifest. The compilation is deterministic for a fixed state revision and configuration. It preserves trust labels, canonical ordering, truncation decisions, schema digests, and token allocation so an incident can reconstruct what the model was allowed to observe.
 
-The prompt is advisory configuration for the model, not the policy engine. Universal behavioral guidance belongs in a versioned prompt source; task state stays in durable records; evidence and tool results retain provenance; schemas enforce representable structure; authorization remains outside the request. [Prompt Engineering](./06-prompt-engineering.md) defines the compiler, and [Context Management](./08-context-management.md) defines selection and compaction.
+The prompt is advisory configuration for the model, not the policy engine. Universal behavioral guidance belongs in a versioned prompt source. Task state stays in durable records. Evidence and tool results retain provenance. Schemas enforce representable structure. Authorization remains outside the request. [Prompt Engineering](./06-prompt-engineering.md) defines the compiler, and [Context Management](./08-context-management.md) defines selection and compaction.
 
-Request assembly may fail before model admission: mandatory state does not fit, an active tool call cannot be represented by the target provider, a schema is unsupported, data residency excludes every model, or the context revision is stale. Return a typed error or invoke a declared migration/compaction policy; silently dropping a constraint is not graceful degradation.
+Request assembly may fail before model admission: mandatory state does not fit, an active tool call cannot be represented by the target provider, a schema is unsupported, data residency excludes every model, or the context revision is stale. Return a typed error or invoke a declared migration/compaction policy. Silently dropping a constraint is not graceful degradation.
 
 ---
 
@@ -70,17 +70,17 @@ Request assembly may fail before model admission: mandatory state does not fit, 
 
 The registry separates model-facing selection metadata from execution metadata. A tool revision declares schema, handler artifact, authenticated principal type, read/write set, side-effect class, idempotency and reconciliation contract, timeout, output budget, data classification, network policy, owner, and compatibility state. Only an immutable qualified revision enters a run manifest.
 
-An action transaction proceeds through `proposed → validated → authorized → leased → executing → committed | uncertain | failed | compensated`. Persist transitions before they become externally visible. A timeout after dispatch enters `uncertain`; it does not prove failure. Reconciliation queries the destination by logical action ID or receipt before retry. Compensation is domain-specific and may be corrective rather than reversible.
+An action transaction proceeds through `proposed → validated → authorized → leased → executing → committed | uncertain | failed | compensated`. Persist transitions before they become externally visible. A timeout after dispatch enters `uncertain`. It does not prove failure. Reconciliation queries the destination by logical action ID or receipt before retry. Compensation is domain-specific and may be corrective rather than reversible.
 
-Tool discovery returns only capabilities allowed for the principal and task, then freezes selected schema revisions for the turn. A disappearing or mutated tool during a run becomes a compatibility event. General code execution receives a sandbox and attenuated capabilities; high-impact operations retain narrow typed interfaces even when code could technically invoke them. Detailed ergonomics live in [Coding Agent Tool Design](../19-compound-engineering/02-coding-agent-tool-design.md).
+Tool discovery returns only capabilities allowed for the principal and task, then freezes selected schema revisions for the turn. A disappearing or mutated tool during a run becomes a compatibility event. General code execution receives a sandbox and attenuated capabilities. High-impact operations retain narrow typed interfaces even when code could technically invoke them. Detailed ergonomics live in [Coding Agent Tool Design](../19-compound-engineering/02-coding-agent-tool-design.md).
 
 ---
 
 ## Context Revision Lifecycle
 
-The harness stores an append-only canonical event graph and produces disposable context revisions. A revision records source item IDs, trust/policy decisions, compaction lineage, selected tool schemas, token allocation, and rendered-request hash. Compaction or correction creates a new revision; it does not rewrite the evidence ledger.
+The harness stores an append-only canonical event graph and produces disposable context revisions. A revision records source item IDs, trust/policy decisions, compaction lineage, selected tool schemas, token allocation, and rendered-request hash. Compaction or correction creates a new revision. It does not rewrite the evidence ledger.
 
-Context budgets reserve mandatory state and output headroom before optional evidence. Tool results enter through a result envelope and may be represented later by a receipt or artifact reference. Memory writes are policy-checked effects with scope and expiry. Subagent contexts fork from an explicit parent revision and return typed claims/evidence, not an implicit shared transcript. The full lifecycle belongs to [Context Management](./08-context-management.md); the harness's job is enforcing its contracts.
+Context budgets reserve mandatory state and output headroom before optional evidence. Tool results enter through a result envelope and may be represented later by a receipt or artifact reference. Memory writes are policy-checked effects with scope and expiry. Subagent contexts fork from an explicit parent revision and return typed claims/evidence, not an implicit shared transcript. The full lifecycle belongs to [Context Management](./08-context-management.md). The harness's job is enforcing its contracts.
 
 ---
 
@@ -115,19 +115,19 @@ The details that matter:
 
 - **Stop conditions are a contract.** `end_turn` means the model *claims* completion: run the verifier before reporting success. Distinguish max-tokens truncation (continue), refusal (surface to human), and tool-use (loop).
 - **Checkpoint every turn.** Serialized messages + workspace snapshot = resumable runs, replayable bugs, and the substrate for durable-execution engines. "The pod restarted" should cost one turn, not the task.
-- **Interruptibility is a feature, not an edge case.** Humans steer mid-run; injected user messages must land between turns without corrupting tool-call/result pairing.
+- **Interruptibility is a feature, not an edge case.** Humans steer mid-run. Injected user messages must land between turns without corrupting tool-call/result pairing.
 - **Normalize tool results.** One envelope (status, content, truncation marker, timing) regardless of source: models handle uniform structure measurably better than ad-hoc strings.
-- **Detect loops in the harness.** Hash recent tool-call signatures; on repetition, inject steering or escalate. Models repeat failing actions with cosmetic variations; the harness sees the pattern before the model admits it.
+- **Detect loops in the harness.** Hash recent tool-call signatures. On repetition, inject steering or escalate. Models repeat failing actions with cosmetic variations. The harness sees the pattern before the model admits it.
 
-`asyncio.gather` is safe only after the runtime has classified read/write sets and external-effect semantics. Two read-only calls can run concurrently; two writes to one artifact need serialization or an optimistic revision check; a write and a read of the same resource need an explicit snapshot rule. The scheduler also propagates the parent deadline and reserves child budgets before launching work. Otherwise parallelism creates races while appearing to improve latency.
+`asyncio.gather` is safe only after the runtime has classified read/write sets and external-effect semantics. Two read-only calls can run concurrently. Two writes to one artifact need serialization or an optimistic revision check. A write and a read of the same resource need an explicit snapshot rule. The scheduler also propagates the parent deadline and reserves child budgets before launching work. Otherwise parallelism creates races while appearing to improve latency.
 
 ### Durable workspace state
 
-Files are not automatically durable just because they are on disk. The harness records workspace revision, changed paths, command exit status, and artifact hashes at checkpoints. A resumed run either restores a known snapshot or explicitly continues from the current revision after checking for user changes. External repositories, databases, and cloud resources require receipts or reconciliation; a local checkout cannot prove that a deployment did not happen.
+Files are not automatically durable just because they are on disk. The harness records workspace revision, changed paths, command exit status, and artifact hashes at checkpoints. A resumed run either restores a known snapshot or explicitly continues from the current revision after checking for user changes. External repositories, databases, and cloud resources require receipts or reconciliation. A local checkout cannot prove that a deployment did not happen.
 
 ### Verification layer
 
-Expose independent observations wherever the environment permits: tests and invariants after edits, rendered-state inspection for interfaces, and diff or state review before commit. Executability does not guarantee coverage, but self-assessment is correlated with generation and cannot substitute for an acceptance contract. Where deterministic evidence is unavailable, a qualified semantic judge may route or gate only at the operating point established for that risk class; high-consequence uncertainty remains with human authority.
+Expose independent observations wherever the environment permits: tests and invariants after edits, rendered-state inspection for interfaces, and diff or state review before commit. Executability does not guarantee coverage, but self-assessment is correlated with generation and cannot substitute for an acceptance contract. Where deterministic evidence is unavailable, a qualified semantic judge may route or gate only at the operating point established for that risk class. High-consequence uncertainty remains with human authority.
 
 ---
 
@@ -145,17 +145,17 @@ graph LR
     C -->|denied| DENY["Typed denial observation"]
 ```
 
-A tool name or workspace location does not determine safety. The policy input is the authenticated principal, delegated task, requested verb, semantic resource and path, data classification, destination, base revision, reversibility, and expected external effect. A read can expose a secret; a local write can alter executable policy or destructive configuration. Automatic authorization is valid only when the complete tuple matches a standing rule.
+A tool name or workspace location does not determine safety. The policy input is the authenticated principal, delegated task, requested verb, semantic resource and path, data classification, destination, base revision, reversibility, and expected external effect. A read can expose a secret. A local write can alter executable policy or destructive configuration. Automatic authorization is valid only when the complete tuple matches a standing rule.
 
-Execution then occurs in an isolation domain with explicit mounts, egress, resource limits, and a secret broker. Untrusted content remains data, but that label is not containment; the capability envelope must make the worst permitted effect acceptable even if the model follows a hostile instruction. Approval binds an exact digest and resource revision, and policy rechecks it at commit. Batch review and narrow standing rules reduce approval fatigue without broadening authority invisibly.
+Execution then occurs in an isolation domain with explicit mounts, egress, resource limits, and a secret broker. Untrusted content remains data, but that label is not containment. The capability envelope must make the worst permitted effect acceptable even if the model follows a hostile instruction. Approval binds an exact digest and resource revision, and policy rechecks it at commit. Batch review and narrow standing rules reduce approval fatigue without broadening authority invisibly.
 
 ### Capability attenuation
 
-The model should never receive a credential whose authority exceeds the current action. The gateway authenticates the human or service principal; the policy layer maps the requested effect to a capability; the sandbox broker mints a short-lived token scoped to resource, verb, tenant, and expiry. Tool output contains a receipt, not the secret used to obtain it. Approval binds to an action digest and base resource revision, so changing the recipient, command, or patch invalidates the approval.
+The model should never receive a credential whose authority exceeds the current action. The gateway authenticates the human or service principal. The policy layer maps the requested effect to a capability. The sandbox broker mints a short-lived token scoped to resource, verb, tenant, and expiry. Tool output contains a receipt, not the secret used to obtain it. Approval binds to an action digest and base resource revision, so changing the recipient, command, or patch invalidates the approval.
 
-A remote tool protocol authenticates a transport; it does not make every advertised tool trustworthy or authorize a domain effect. Register a remote server by canonical origin, operator/trust domain, protocol and schema revision, permitted capability classes, and data-handling policy. Pin the registry snapshot used by a run, diff schema/description changes like code, and require the handler to derive the principal and tenant from verified identity rather than model-supplied arguments.
+A remote tool protocol authenticates a transport. It does not make every advertised tool trustworthy or authorize a domain effect. Register a remote server by canonical origin, operator/trust domain, protocol and schema revision, permitted capability classes, and data-handling policy. Pin the registry snapshot used by a run, diff schema/description changes like code, and require the handler to derive the principal and tenant from verified identity rather than model-supplied arguments.
 
-For HTTP MCP servers, follow the protocol's current authorization profile: bind the token to the intended resource/audience, validate it at the resource server, and never pass an upstream token through to another server. The client or credential broker stores each server's token outside model-visible context and attenuates access to the action when possible. Session IDs correlate protocol state; they are not authentication. A newly discovered server, changed tool description, or successful OAuth flow remains untrusted until local policy admits its exact capability.
+For HTTP MCP servers, follow the protocol's current authorization profile: bind the token to the intended resource/audience, validate it at the resource server, and never pass an upstream token through to another server. The client or credential broker stores each server's token outside model-visible context and attenuates access to the action when possible. Session IDs correlate protocol state. They are not authentication. A newly discovered server, changed tool description, or successful OAuth flow remains untrusted until local policy admits its exact capability.
 
 Policy checks run again at commit. A plan approved ten minutes ago may now target a changed branch, expired URL, revoked user, or different production environment. “The model already asked” is not an authorization cache.
 
@@ -173,9 +173,9 @@ End-to-end statistical evaluation measures the model–harness pair on represent
 
 ## Cost, Backpressure, and Tenant Isolation
 
-Every run receives hierarchical reservations for model tokens/spend, wall time, tool operations, fan-out, and concurrency. A child cannot escape the parent's remaining budget. Admission rejects work that cannot finish within its deadline or tenant allocation; bounded queues shed or degrade before expired work reaches an expensive model.
+Every run receives hierarchical reservations for model tokens/spend, wall time, tool operations, fan-out, and concurrency. A child cannot escape the parent's remaining budget. Admission rejects work that cannot finish within its deadline or tenant allocation. Bounded queues shed or degrade before expired work reaches an expensive model.
 
-Cost attribution includes every attempt, discarded branch, verifier, tool, storage artifact, sandbox, and human review. The denominator is verified successful tasks. Parallel reads can reduce critical-path time while increasing spend; delegation can protect parent context while multiplying prefixes; compaction saves future input but costs a generation and cache revision. Measure marginal value by task slice.
+Cost attribution includes every attempt, discarded branch, verifier, tool, storage artifact, sandbox, and human review. The denominator is verified successful tasks. Parallel reads can reduce critical-path time while increasing spend. Delegation can protect parent context while multiplying prefixes. Compaction saves future input but costs a generation and cache revision. Measure marginal value by task slice.
 
 Tenant isolation covers queues, caches, memory, sandboxes, credentials, traces, and artifact stores. Weighted fair scheduling prevents one recursive agent from consuming the fleet. A global emergency control can cap fan-out, output, reasoning effort, or selected model tiers, but cannot weaken authorization or data isolation.
 
@@ -193,15 +193,15 @@ Rollout progresses through deterministic contract tests, offline task evaluation
 
 | Failure | Symptom | Harness countermeasure |
 |---|---|---|
-| Context rot | Quality degrades late in long sessions | Earlier compaction; tool-output budgets; file-based plan |
-| Goal drift | Output solves an adjacent task | Plan artifact + re-read after compaction; verify against original spec |
+| Context rot | Quality degrades late in long sessions | Earlier compaction, tool-output budgets, file-based plan |
+| Goal drift | Output solves an adjacent task | Plan artifact + re-read after compaction. Verify against original spec |
 | Loop divergence | Same failing call, cosmetic variations | Signature detection → steering injection → escalation |
-| Tool-selection confusion | Wrong tool among overlapping ones | Consolidate tools; sharpen descriptions; eval per-tool precision |
+| Tool-selection confusion | Wrong tool among overlapping ones | Consolidate tools. Sharpen descriptions. Eval per-tool precision |
 | Context flooding | One tool call fills the window | Hard output caps with informative truncation |
-| Cache collapse | Cost spikes, latency up | Prefix-stability test in CI; cache-hit-rate alerting |
-| Injection compliance | Agent follows instructions from data | Provenance tagging; trifecta decomposition; outward-action gates |
+| Cache collapse | Cost spikes, latency up | Prefix-stability test in CI, cache-hit-rate alerting |
+| Injection compliance | Agent follows instructions from data | Provenance tagging, trifecta decomposition, outward-action gates |
 | Unverified success | "Done!" but tests fail | Verifier between `end_turn` and user-visible success |
-| Lost runs | Crash/timeout loses hours of work | Per-turn checkpointing; durable execution; resumability tests |
+| Lost runs | Crash/timeout loses hours of work | Per-turn checkpointing, durable execution, resumability tests |
 | Stale side effect | Retry repeats an operation that may already have committed | Idempotency keys, receipts, reconciliation state |
 | Write race | Parallel calls overwrite or semantically contradict one another | Read/write sets, fencing, serialized commit |
 | Approval drift | Approved action changes before execution | Action digest and resource revision bound to approval |
@@ -214,11 +214,11 @@ Choose harness complexity from the consequence of failure and the shape of work:
 | Design question | Consequence |
 |---|---|
 | Is the task a fixed sequence with typed checks? | Use a workflow and keep model control local to bounded nodes. |
-| Can the environment verify progress after each action? | A bounded agent loop is viable; make the verifier the commit gate. |
+| Can the environment verify progress after each action? | A bounded agent loop is viable. Make the verifier the commit gate. |
 | Are actions read-only, reversible, or irreversible? | Increase sandboxing and approval strength as effect reversibility decreases. |
 | Are concurrent tool calls independent? | Parallelize only after read/write and snapshot analysis. |
 | Can a run outlive one process or context window? | Persist event state, workspace revisions, and idempotency/reconciliation data. |
-| Is quality judged by a reliable oracle? | Automate acceptance; otherwise route uncertainty to a human. |
+| Is quality judged by a reliable oracle? | Automate acceptance. Otherwise route uncertainty to a human. |
 | Does the model see untrusted content and private data? | Remove an exfiltration channel or put outward effects behind a gate. |
 
 Build the smallest runtime that makes the desired guarantee enforceable. Add compaction, delegation, speculative execution, or adaptive routing only when a measured workload failure justifies it and the state/recovery semantics are written down. A harness is complete when another engineer can explain what happens after a timeout at every state transition.
@@ -227,13 +227,13 @@ Build the smallest runtime that makes the desired guarantee enforceable. Add com
 
 ## Key Takeaways
 
-1. Benchmark scores belong to model+harness pairs; the harness is the half you own, and it compounds across model generations.
-2. Canonical state is an event graph; each prompt is a disposable, policy-filtered context revision with a reproducible manifest.
+1. Benchmark scores belong to model+harness pairs. The harness is the half you own, and it compounds across model generations.
+2. Canonical state is an event graph. Each prompt is a disposable, policy-filtered context revision with a reproducible manifest.
 3. Tools execute through versioned action transactions with authority, read/write, retry, uncertainty, and reconciliation semantics.
-4. The model claims; the harness verifies. Ground truth in the loop or a human at the gate.
+4. The model claims. The harness verifies. Ground truth in the loop or a human at the gate.
 5. Security lives in the permission boundary and sandbox: prompt text is advice, harness code is policy.
 6. Verify the runtime with deterministic state-machine and fault-injection tests, then evaluate the model–harness pair statistically.
-7. Version and progressively roll out the whole runtime tuple; long-running state needs explicit compatibility and migration semantics.
+7. Version and progressively roll out the whole runtime tuple. Long-running state needs explicit compatibility and migration semantics.
 
 ---
 

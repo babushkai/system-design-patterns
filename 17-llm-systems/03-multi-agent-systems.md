@@ -1,10 +1,10 @@
 # Multi-Agent Systems
 
-## TL;DR
+## Overview {#tl-dr}
 
-Treat a multi-agent system as a distributed system with probabilistic, context-dependent workers. Its design hinges on work decomposition, state ownership, message semantics, concurrency control, failure isolation, admission control, provenance, and whether extra calls add independent information.
+Add a worker when it can contribute independent evidence or complete a separable piece of work. Decide who owns each write, how workers report results, and what happens when a worker times out. Those decisions determine whether parallel work helps the task finish.
 
-A robust starting topology inside one trust domain is an orchestrator with read-only workers. The orchestrator owns the goal, dependency graph, budgets, authoritative state, and final commit; workers explore bounded subproblems and return typed evidence. Multiple writers require enforced disjoint write sets or explicit concurrency control. Debate or aggregation buys evidence only when branches add meaningfully different information or failure modes: five correlated samples do not constitute five independent experts.
+A robust starting topology inside one trust domain is an orchestrator with read-only workers. The orchestrator owns the goal, dependency graph, budgets, authoritative state, and final commit. Workers explore bounded subproblems and return typed evidence. Multiple writers require enforced disjoint write sets or explicit concurrency control. Debate or aggregation buys evidence only when branches add meaningfully different information or failure modes: five correlated samples do not constitute five independent experts.
 
 Multi-agent execution is justified when the task contains parallel information acquisition or separable deliverables whose value exceeds duplicated context, coordination, synthesis, and tail-latency costs. It is usually the wrong answer for one tightly coupled code change, one coherent document, a latency-sensitive interaction, or any decision without a reliable verifier.
 
@@ -37,9 +37,9 @@ where $\Delta Q$ is the measured quality improvement over the best single-agent 
 
 | Workload | Likely architecture | Reason |
 |---|---|---|
-| Breadth-first research over independent sources | Orchestrator plus parallel researchers | Retrieval dominates; evidence can be unioned and deduplicated. |
-| Large read-only audit | Partitioned reviewers plus one synthesizer | Read sets overlap safely; findings retain file/source coordinates. |
-| One tightly coupled repository change | One writer, optional read-only investigators | Design intent and mutable state are shared; semantic merge conflicts dominate. |
+| Breadth-first research over independent sources | Orchestrator plus parallel researchers | Retrieval dominates. Evidence can be unioned and deduplicated. |
+| Large read-only audit | Partitioned reviewers plus one synthesizer | Read sets overlap safely. Findings retain file/source coordinates. |
+| One tightly coupled repository change | One writer, optional read-only investigators | Design intent and mutable state are shared. Semantic merge conflicts dominate. |
 | Independent services with versioned interfaces | Owner per service plus contract/integration stage | Write sets are separable and integration has an executable boundary. |
 | Classification with weak single-sample accuracy | Ensemble only after correlation analysis | Voting may help, but shared errors can erase the theoretical gain. |
 | High-impact decision with no ground truth | Human decision support | More model opinions do not create authority or truth. |
@@ -68,11 +68,11 @@ flowchart TD
 
 This topology centralizes goal interpretation and commit authority. The orchestrator creates a dependency graph, assigns bounded work, and decides whether a worker result satisfies its contract. Workers return claims, evidence references, uncertainty, actions attempted, and unresolved questions, not their entire transcript.
 
-The orchestrator is both a bottleneck and a consistency boundary. Scale it by separating deterministic scheduling from model-based planning: code tracks node state, leases, deadlines, and budgets; a model proposes decomposition or replanning at explicit decision points. Requiring the model to rediscover the whole run state on every scheduling decision is expensive and makes replay unstable.
+The orchestrator is both a bottleneck and a consistency boundary. Scale it by separating deterministic scheduling from model-based planning: code tracks node state, leases, deadlines, and budgets. A model proposes decomposition or replanning at explicit decision points. Requiring the model to rediscover the whole run state on every scheduling decision is expensive and makes replay unstable.
 
 ### Pipeline
 
-A pipeline gives each stage one input and output contract. It is appropriate when transformations are ordered and stable, such as extract → normalize → generate → verify. It is not inherently multi-agent; using separate model personas does not change the topology.
+A pipeline gives each stage one input and output contract. It is appropriate when transformations are ordered and stable, such as extract → normalize → generate → verify. It is not inherently multi-agent. Using separate model personas does not change the topology.
 
 Under an independence approximation, if stage $i$ has an undetected semantic-error probability $e_i$, the chance of at least one undetected error is
 
@@ -80,7 +80,7 @@ $$
 P(error) = 1 - \prod_i (1-e_i).
 $$
 
-Model stages often share source evidence and earlier artifacts, so their errors are dependent. Use the product only as an illustrative baseline; release evidence should estimate end-to-end outcomes or conditional error rates on complete traces.
+Model stages often share source evidence and earlier artifacts, so their errors are dependent. Use the product only as an illustrative baseline. Release evidence should estimate end-to-end outcomes or conditional error rates on complete traces.
 
 Version schemas, validate at boundaries, and retain source provenance so a later stage can distinguish a source fact from an earlier model's inference. Backtracking must be explicit: a verifier should invalidate the specific upstream artifact that failed, not merely append “try again” to the last prompt.
 
@@ -100,7 +100,7 @@ At this boundary, assume at-least-once delivery, duplicated messages, clock skew
 
 Debate can expose competing assumptions when participants receive distinct evidence, roles, or constraints. If every participant sees the same prompt and model, repeated discussion often converges socially rather than epistemically: later agents copy fluent earlier claims, minority correct answers disappear, and token cost grows each round.
 
-Use a blind first round to preserve independence. Require evidence-addressed claims. Aggregate with a verifier that sees original artifacts, not just arguments. Stop after a fixed information gain or budget threshold. Debate should produce a decision record containing disagreements and evidence; consensus alone is not a correctness criterion.
+Use a blind first round to preserve independence. Require evidence-addressed claims. Aggregate with a verifier that sees original artifacts, not just arguments. Stop after a fixed information gain or budget threshold. Debate should produce a decision record containing disagreements and evidence. Consensus alone is not a correctness criterion.
 
 ## The Core Control-Plane Model
 
@@ -113,17 +113,17 @@ A multi-agent run is a directed acyclic graph until dynamic decomposition adds n
 - **Claim:** an assertion linked to supporting or contradicting evidence.
 - **Commit:** authorized transition from proposed artifact or action to authoritative state.
 
-Use stable logical task IDs across retries and unique attempt IDs for each execution. A worker heartbeat renews a lease; lease expiry permits reassignment but does not prove the first attempt stopped. Results arriving after lease loss are marked late and may be used as evidence, but they cannot silently commit.
+Use stable logical task IDs across retries and unique attempt IDs for each execution. A worker heartbeat renews a lease. Lease expiry permits reassignment but does not prove the first attempt stopped. Results arriving after lease loss are marked late and may be used as evidence, but they cannot silently commit.
 
 ### Dynamic decomposition
 
 An orchestrator may propose new tasks at runtime, but the scheduler should validate the proposal:
 
-- every task has a bounded objective and output schema;
-- dependencies exist and do not introduce an unintended cycle;
-- the task's estimated reservation fits remaining budget and deadline;
-- its requested tools are permitted for the run principal;
-- its read and write sets do not violate ownership rules;
+- every task has a bounded objective and output schema
+- dependencies exist and do not introduce an unintended cycle
+- the task's estimated reservation fits remaining budget and deadline
+- its requested tools are permitted for the run principal
+- its read and write sets do not violate ownership rules
 - its result has an identified consumer or verifier.
 
 This turns “spawn another agent” into an admission-controlled graph mutation. It also prevents recursive delegation storms in which workers create workers faster than results can be consumed.
@@ -136,7 +136,7 @@ $$
 B_{parent} \ge B_{self} + \sum_j B_{child,j} + B_{reserve}.
 $$
 
-Track token, currency, wall-clock, tool-operation, and concurrency budgets separately. Refund unused reservations when a child finishes. Do not let a retry bypass admission. A child can request more budget with an explanation and intermediate evidence; the parent may reallocate or terminate lower-value branches.
+Track token, currency, wall-clock, tool-operation, and concurrency budgets separately. Refund unused reservations when a child finishes. Do not let a retry bypass admission. A child can request more budget with an explanation and intermediate evidence. The parent may reallocate or terminate lower-value branches.
 
 Deadlines propagate similarly. A child deadline must leave enough time for aggregation, verification, and commit. If the root has 30 seconds remaining, starting a worker with a 30-second timeout guarantees an end-to-end miss.
 
@@ -147,23 +147,23 @@ Multi-agent correctness is primarily an ownership problem. Classify state by who
 | State | Typical owner | Consistency requirement |
 |---|---|---|
 | Goal, plan, task graph | Orchestrator | Linearizable or single-writer revision history |
-| Worker scratch context | Worker | Private; disposable after result publication |
-| Evidence and artifacts | Producing worker, then immutable | Content-addressed; append-only metadata |
+| Worker scratch context | Worker | Private, disposable after result publication |
+| Evidence and artifacts | Producing worker, then immutable | Content-addressed, append-only metadata |
 | Shared derived view | Deterministic reducer | Rebuildable from events/artifacts |
 | User-facing draft | One designated writer | Optimistic version or serialized commits |
 | External side effects | Policy-authorized committer | Idempotency plus reconciliation |
 
 ### The one-writer default
 
-One writer does not mean one model performs all work. Many workers can propose patches, sections, or actions; one owner validates and commits them against the latest base revision. This is equivalent to a database primary with speculative computation around it.
+One writer does not mean one model performs all work. Many workers can propose patches, sections, or actions. One owner validates and commits them against the latest base revision. This is equivalent to a database primary with speculative computation around it.
 
-For source code, a worker output should identify the base commit, affected symbols/files, patch, assumptions, and tests. Before commit, the owner checks that the base is current, applies the patch, runs integration verification, and rejects semantic conflicts. Git can merge lines while still violating one architectural invariant in two different ways; text merge success is not a consistency proof.
+For source code, a worker output should identify the base commit, affected symbols/files, patch, assumptions, and tests. Before commit, the owner checks that the base is current, applies the patch, runs integration verification, and rejects semantic conflicts. Git can merge lines while still violating one architectural invariant in two different ways. Text merge success is not a consistency proof.
 
 ### Partitioned writers
 
 Multiple writers are safe when ownership partitions are real and enforced. Define write sets at a semantic level: service/API ownership, database tables, document sections, or resource namespaces. Integration contracts must be versioned before parallel work begins. If workers discover a cross-boundary change, they emit a contract-change proposal and pause dependent commits rather than editing another owner's domain.
 
-Use fencing tokens with leases. Every commit includes the lease generation; a store rejects writes from a stale worker even if its process is still running. Optimistic concurrency (`expected_revision`) catches lost updates. Serializable transactions may be required for coupled state, but they do not resolve contradictory design intent; that still needs one decision owner.
+Use fencing tokens with leases. Every commit includes the lease generation. A store rejects writes from a stale worker even if its process is still running. Optimistic concurrency (`expected_revision`) catches lost updates. Serializable transactions may be required for coupled state, but they do not resolve contradictory design intent. That still needs one decision owner.
 
 ### Event sourcing and projections
 
@@ -189,10 +189,10 @@ The payload is schema-validated and can include prose. The envelope supplies ded
 
 Exactly-once delivery across queues and arbitrary tools is generally unattainable. Design for at-least-once messages with idempotent consumers:
 
-1. consume a message;
-2. insert its `message_id` into an inbox table and apply the local state transition in one transaction;
-3. write any outbound messages to an outbox in that transaction;
-4. asynchronously publish the outbox; duplicates are harmless.
+1. consume a message.
+2. insert its `message_id` into an inbox table and apply the local state transition in one transaction.
+3. write any outbound messages to an outbox in that transaction.
+4. asynchronously publish the outbox. Duplicates are harmless.
 
 Ordering is usually per task or aggregate, not global. Include a sequence or expected revision. A response to a cancelled or superseded attempt remains auditable but cannot advance authoritative state.
 
@@ -202,11 +202,11 @@ Delegation is a compression boundary. A good task packet includes the objective,
 
 The worker's return packet distinguishes:
 
-- observed facts with source coordinates;
-- inferences and their premises;
-- proposed changes;
-- uncertainty and missing evidence;
-- actions performed and their receipts;
+- observed facts with source coordinates
+- inferences and their premises
+- proposed changes
+- uncertainty and missing evidence
+- actions performed and their receipts
 - a compact result intended for the parent context.
 
 This structure prevents “telephone game” provenance loss. The synthesizer can trace a claim back to source evidence instead of citing another model's summary as if it were primary evidence.
@@ -223,11 +223,11 @@ Parallel completion time is governed by the slowest required child. If child lat
 
 Mitigations depend on semantics:
 
-- use partial joins when missing branches reduce coverage rather than invalidate the answer;
-- split oversized tasks using observed cost, not equal item counts;
-- speculatively duplicate only idempotent, high-tail read tasks and accept the first valid result;
-- cancel redundant attempts and account for leaked provider work;
-- reserve synthesis time and stop admitting children near the deadline;
+- use partial joins when missing branches reduce coverage rather than invalidate the answer
+- split oversized tasks using observed cost, not equal item counts
+- speculatively duplicate only idempotent, high-tail read tasks and accept the first valid result
+- cancel redundant attempts and account for leaked provider work
+- reserve synthesis time and stop admitting children near the deadline
 - checkpoint long searches so a replacement worker resumes rather than starts over.
 
 Estimate task size from input tokens, number and type of tools, expected output, historical slice, and model tier. A model-generated estimate can be one feature, but scheduler decisions should be corrected by observed durations and token usage.
@@ -255,7 +255,7 @@ An agent is not a principal merely because it has a name. Authority derives from
 
 Treat worker messages, retrieved documents, peer-agent cards, and tool output as untrusted data. None may modify system policy, grant capabilities, or alter destination routing through natural-language instructions. Validate schemas, enforce egress and resource allowlists, and isolate execution for untrusted code or files.
 
-Cross-agent privacy requires field-level data classification. A task packet should include only necessary fields; secrets remain in a tool-side vault and are referenced by opaque handles. Logs and traces must redact model inputs, tool arguments, and artifacts according to tenant and retention policy. Immutable provenance does not justify retaining sensitive content indefinitely: retain hashes and deletion tombstones where full payload retention is prohibited.
+Cross-agent privacy requires field-level data classification. A task packet should include only necessary fields. Secrets remain in a tool-side vault and are referenced by opaque handles. Logs and traces must redact model inputs, tool arguments, and artifacts according to tenant and retention policy. Immutable provenance does not justify retaining sensitive content indefinitely: retain hashes and deletion tombstones where full payload retention is prohibited.
 
 Approvals bind to the action digest, resource version, principal, and expiry. A reviewer approving “send this draft” does not authorize a worker to change the recipient or regenerate the body afterward. Policy is re-evaluated at commit because privileges and external state may change during a long run.
 
@@ -267,26 +267,26 @@ Evaluate the system at three levels.
 
 Compare against ablations:
 
-- best single agent with equal total token budget;
-- orchestrator without parallelism;
-- workers without role-specific prompts;
-- smaller fan-out;
-- no debate or no second review;
+- best single agent with equal total token budget
+- orchestrator without parallelism
+- workers without role-specific prompts
+- smaller fan-out
+- no debate or no second review
 - deterministic decomposition where available.
 
 This identifies which complexity produces marginal value. Report quality versus cost and latency as a Pareto frontier rather than one score.
 
-A trace should connect user request → run → task → attempt → model generation → tool call → artifact → claim → verifier → commit. Record model/provider resolution, prompt and tool-schema versions, token usage, cache status, queue and execution times, termination reason, retry cause, lease generation, and policy decisions. Do not store hidden reasoning; store observable actions, concise rationales where required, evidence, and state transitions.
+A trace should connect user request → run → task → attempt → model generation → tool call → artifact → claim → verifier → commit. Record model/provider resolution, prompt and tool-schema versions, token usage, cache status, queue and execution times, termination reason, retry cause, lease generation, and policy decisions. Do not store hidden reasoning. Store observable actions, concise rationales where required, evidence, and state transitions.
 
 Operational metrics include:
 
-- useful completion rate and verified completion rate;
-- tasks, attempts, and retries per run;
-- fan-out and active-agent concurrency distributions;
-- queue wait, worker time, join wait, synthesis time, and end-to-end percentiles;
-- tokens and currency per successful run, not merely per call;
-- stale-result, duplicate-message, orphan-attempt, and write-conflict rates;
-- verifier disagreement, human override, and unsupported-claim rates;
+- useful completion rate and verified completion rate
+- tasks, attempts, and retries per run
+- fan-out and active-agent concurrency distributions
+- queue wait, worker time, join wait, synthesis time, and end-to-end percentiles
+- tokens and currency per successful run, not merely per call
+- stale-result, duplicate-message, orphan-attempt, and write-conflict rates
+- verifier disagreement, human override, and unsupported-claim rates
 - cancellation acknowledgement and post-cancellation spend.
 
 Alerts should be slice-aware. A global completion rate can remain stable while one tenant, tool, language, or task type fails completely.
@@ -301,13 +301,13 @@ Alerts should be slice-aware. A global completion rate can remain stable while o
 
 **Correlated consensus.** Multiple agents repeat the same false retrieved claim and voting increases confidence. Preserve blind independence, diversify evidence, and use ground-truth verifiers.
 
-**Delegation explosion.** Recursive spawning grows geometrically. Only the scheduler may admit tasks; depth, fan-out, concurrency, deadline, and spend budgets are hierarchical.
+**Delegation explosion.** Recursive spawning grows geometrically. Only the scheduler may admit tasks. Depth, fan-out, concurrency, deadline, and spend budgets are hierarchical.
 
 **Stale worker commit.** A timed-out worker returns after replacement and overwrites newer state. Lease fencing and expected revisions reject the late commit.
 
 **Orphaned execution.** A parent cancels or crashes while children continue spending or causing effects. Durable parent-child state, propagated cancellation, and orphan reconciliation are required.
 
-**Natural-language protocol ambiguity.** “Done,” “approved,” or “retry” means different things to different agents. Protocol state uses enums and schemas; prose is payload.
+**Natural-language protocol ambiguity.** “Done,” “approved,” or “retry” means different things to different agents. Protocol state uses enums and schemas. Prose is payload.
 
 **Shared blackboard race.** Read-modify-write on a mutable collection loses contributions despite local locks in each process. Use transactional append, compare-and-swap, or an authoritative reducer.
 
@@ -333,10 +333,10 @@ Use multi-agent execution only after answering these questions with workload evi
 
 Choose the topology from state semantics:
 
-- central authoritative goal and coupled output → orchestrator–worker;
-- stable ordered transformation → pipeline;
-- opportunistic independent contributions → versioned blackboard;
-- organizational boundary → federated peer protocol;
+- central authoritative goal and coupled output → orchestrator–worker
+- stable ordered transformation → pipeline
+- opportunistic independent contributions → versioned blackboard
+- organizational boundary → federated peer protocol
 - independent hypotheses plus external verifier → ensemble or debate.
 
 Then define ownership, logical identities, message delivery, budget propagation, cancellation, and observability before tuning prompts. If those fields cannot be written down precisely, adding more agents will make the system harder to reason about rather than more capable.
@@ -344,11 +344,11 @@ Then define ownership, logical identities, message delivery, budget propagation,
 ## Key Takeaways
 
 - Multi-agent design is distributed-systems design: ownership, consistency, delivery, leases, backpressure, and recovery dominate personas.
-- Parallelize independent reads freely; serialize coupled writes unless write sets and integration contracts are enforceably separate.
+- Parallelize independent reads freely. Serialize coupled writes unless write sets and integration contracts are enforceably separate.
 - Delegation is lossy context compression. Exchange typed task and evidence packets with provenance, not raw conversational summaries.
 - A scheduler (not an unconstrained model) admits dynamic tasks and subdivides deadlines, spend, tokens, tools, and concurrency.
 - At-least-once messaging, stale attempts, uncertain side effects, and cancellation leakage must be normal states in the design.
-- Consensus helps only when errors or evidence are sufficiently independent; agreement is not ground truth.
+- Consensus helps only when errors or evidence are sufficiently independent. Agreement is not ground truth.
 - Evaluate every multi-agent topology against an equal-budget single-agent baseline and keep only complexity with measured marginal value.
 
 ## References

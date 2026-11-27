@@ -1,8 +1,8 @@
 # Agent Orchestration Patterns
 
-## TL;DR
+## Overview {#tl-dr}
 
-Orchestration assigns control authority: which transitions are fixed in code, which choices a model may propose, which effects require policy or human approval, and which observations permit the run to advance. A workflow owns the graph in code; an agent selects paths from environment feedback. Chaining, routing, parallelization, orchestrator–workers, evaluator–optimizer loops, and autonomous loops are therefore different graph and join semantics, not a catalog of prompt recipes.
+Orchestration determines who chooses the next step and what evidence allows it to proceed. In a workflow, code defines the paths. In an agent loop, the model chooses a path based on what it observes. When branches run in parallel, the orchestrator also decides which results to wait for.
 
 Choose the least adaptive graph that reaches the required workload. Every adaptive branch needs a typed state transition, budget reservation, termination rule, and verifier. Model-internal reasoning can change the amount of external search that is useful, but it cannot replace durable state, authority boundaries, idempotency, or independent verification.
 
@@ -19,7 +19,7 @@ graph TD
     Q2 -->|No| HITL["Human-in-the-loop<br/>or don't automate it"]
 ```
 
-This distinction, popularized by Anthropic's *Building Effective Agents*, separates two control authorities. Workflows trade flexibility for explicit state transitions; agents trade predictability for input-dependent reach. When the valid transitions and exceptional branches can be enumerated, code can enforce them, replay them, and attach exact retry policy. Asking a model to rediscover that graph adds variance without adding reach. Agency earns its cost only where observations reveal useful branches that cannot be specified economically in advance.
+This distinction, popularized by Anthropic's *Building Effective Agents*, separates two control authorities. Workflows trade flexibility for explicit state transitions. Agents trade predictability for input-dependent reach. When the valid transitions and exceptional branches can be enumerated, code can enforce them, replay them, and attach exact retry policy. Asking a model to rediscover that graph adds variance without adding reach. Agency earns its cost only where observations reveal useful branches that cannot be specified economically in advance.
 
 A useful corollary: **autonomy is a dial, not a binary.** The same task can ship as a workflow with one agentic step inside it, or as an agent constrained by a workflow-shaped plan. Move the dial toward autonomy only when evals show the rigid version failing on real inputs.
 
@@ -29,7 +29,7 @@ A useful corollary: **autonomy is a dial, not a binary.** The same task can ship
 
 ### Prompt Chaining
 
-Decompose a task into a fixed sequence where each call consumes a versioned intermediate artifact. A gate decides whether that artifact satisfies the next transition's preconditions. Gates may be deterministic assertions, executable verification, calibrated semantic evaluation, or human authority; calling every gate “validation” hides very different error profiles.
+Decompose a task into a fixed sequence where each call consumes a versioned intermediate artifact. A gate decides whether that artifact satisfies the next transition's preconditions. Gates may be deterministic assertions, executable verification, calibrated semantic evaluation, or human authority. Calling every gate “validation” hides very different error profiles.
 
 ```mermaid
 graph LR
@@ -42,7 +42,7 @@ graph LR
     S3 --> OUT["Output"]
 ```
 
-Each stage record includes its input revision, output artifact, evaluator revision, attempt, and decision. On failure, retry only if the failure class is transient or the next attempt changes evidence or strategy; repeatedly regenerating behind the same gate produces correlated samples. Backtracking should invalidate the precise upstream artifact whose contract failed rather than append criticism to an ever-growing prompt.
+Each stage record includes its input revision, output artifact, evaluator revision, attempt, and decision. On failure, retry only if the failure class is transient or the next attempt changes evidence or strategy. Repeatedly regenerating behind the same gate produces correlated samples. Backtracking should invalidate the precise upstream artifact whose contract failed rather than append criticism to an ever-growing prompt.
 
 The pattern fits a stable decomposition whose intermediate artifacts have checkable contracts. Its correctness boundary is the gate: without schema, provenance, or semantic verification between stages, a chain merely serializes and amplifies an early error.
 
@@ -86,7 +86,7 @@ proposals = await asyncio.gather(*[
 decision = aggregate(proposals, rule=qualified_join_policy)
 ```
 
-Sectioning requires independence of both reads and writes; otherwise branches race or reason from inconsistent state. Voting requires sufficiently independent errors and a decision rule tied to evidence. A parallel join observes the slowest required branch, so fan-out trades serial latency for tail amplification and higher spend rather than making work free.
+Sectioning requires independence of both reads and writes. Otherwise branches race or reason from inconsistent state. Voting requires sufficiently independent errors and a decision rule tied to evidence. A parallel join observes the slowest required branch, so fan-out trades serial latency for tail amplification and higher spend rather than making work free.
 
 ### Orchestrator–Workers
 
@@ -103,17 +103,17 @@ graph TD
 
 ### Evaluator–Optimizer
 
-One node generates; another evaluates explicit criteria and returns defect-addressed feedback. The loop is justified only when evaluation has a useful operating point and the revision step produces measurable progress. Persist criterion-level results, protect dimensions that already pass, and stop on pass, budget exhaustion, score stagnation, or oscillation. If generator and evaluator share evidence, model family, or prompt assumptions, their errors may be correlated; a fluent `PASS` is not independent evidence. [LLM Evaluation](./10-llm-evaluation.md) owns judge qualification and uncertainty.
+One node generates. Another evaluates explicit criteria and returns defect-addressed feedback. The loop is justified only when evaluation has a useful operating point and the revision step produces measurable progress. Persist criterion-level results, protect dimensions that already pass, and stop on pass, budget exhaustion, score stagnation, or oscillation. If generator and evaluator share evidence, model family, or prompt assumptions, their errors may be correlated. A fluent `PASS` is not independent evidence. [LLM Evaluation](./10-llm-evaluation.md) owns judge qualification and uncertainty.
 
 ---
 
 ## The Agent Loop
 
-When steps can't be enumerated, hand control flow to the model: tools in a loop, environment feedback each turn, harness-enforced budgets. The mechanics live in [Agent Fundamentals](./01-agent-fundamentals.md); what matters here is the macro-structure that makes loops reliable.
+When steps can't be enumerated, hand control flow to the model: tools in a loop, environment feedback each turn, harness-enforced budgets. The mechanics live in [Agent Fundamentals](./01-agent-fundamentals.md). What matters here is the macro-structure that makes loops reliable.
 
 ### Plan, Context Fork, and Durable Resume
 
-A long agentic run externalizes a versioned plan as durable state, executes one admissible increment, and verifies the resulting environment before authorizing dependent work. The plan records task IDs, dependencies, ownership, base revisions, acceptance conditions, and status; it is an operational projection of run state, not a markdown narrative.
+A long agentic run externalizes a versioned plan as durable state, executes one admissible increment, and verifies the resulting environment before authorizing dependent work. The plan records task IDs, dependencies, ownership, base revisions, acceptance conditions, and status. It is an operational projection of run state, not a markdown narrative.
 
 ```mermaid
 graph LR
@@ -126,9 +126,9 @@ graph LR
     PLAN -.->|"human approves plan<br/>before execution"| EXEC
 ```
 
-The plan changes only through recorded transitions: new evidence may add or invalidate nodes, but completed effects and rejected alternatives remain in history. A context fork receives a bounded task packet from one plan revision and returns typed evidence; it does not acquire implicit authority over shared state. Delegation is useful for context isolation or independent work even when it provides no wall-clock benefit. Tightly coupled work remains under one decision owner because every handoff discards latent context.
+The plan changes only through recorded transitions: new evidence may add or invalidate nodes, but completed effects and rejected alternatives remain in history. A context fork receives a bounded task packet from one plan revision and returns typed evidence. It does not acquire implicit authority over shared state. Delegation is useful for context isolation or independent work even when it provides no wall-clock benefit. Tightly coupled work remains under one decision owner because every handoff discards latent context.
 
-Compacted prompts, files, and model messages are context representations, not the authoritative run. A durable engine persists node transitions and external-action receipts, resumes from checkpoints, and replays recorded nondeterministic observations. Tool calls declare retry and reconciliation semantics; human decisions arrive as versioned signals. [Context Management](./08-context-management.md) owns context revisions, while [Harness Engineering](./09-harness-engineering.md) owns the runtime boundary.
+Compacted prompts, files, and model messages are context representations, not the authoritative run. A durable engine persists node transitions and external-action receipts, resumes from checkpoints, and replays recorded nondeterministic observations. Tool calls declare retry and reconciliation semantics. Human decisions arrive as versioned signals. [Context Management](./08-context-management.md) owns context revisions, while [Harness Engineering](./09-harness-engineering.md) owns the runtime boundary.
 
 ## Orchestration as a Typed State Graph
 
@@ -162,7 +162,7 @@ Persist transitions in an append-only event log and derive the current state fro
 
 Control-plane decisions and data-plane effects should commit in a deliberate order. For a read-only model call, writing the result before advancing the graph is enough. For a side-effecting call, the orchestrator usually cannot atomically commit both its database transaction and a third-party API. It therefore needs one of three patterns: an idempotent remote operation, an outbox/inbox protocol, or reconciliation of an **uncertain** outcome. Treating a network timeout as evidence that an operation failed is a correctness bug.
 
-Branching introduces another semantic choice: what does a join mean? `all` requires every child to satisfy its success predicate; `any` accepts the first valid child and cancels or ignores the rest; `quorum(k)` waits for enough independent evidence; `best-of-n` requires a ranking function and a deterministic tie policy. The join policy belongs in persisted workflow state. If it exists only in a prompt such as “combine the best answers,” restart behavior and auditability are undefined.
+Branching introduces another semantic choice: what does a join mean? `all` requires every child to satisfy its success predicate. `any` accepts the first valid child and cancels or ignores the rest. `quorum(k)` waits for enough independent evidence. `best-of-n` requires a ranking function and a deterministic tie policy. The join policy belongs in persisted workflow state. If it exists only in a prompt such as “combine the best answers,” restart behavior and auditability are undefined.
 
 Cancellation is a propagated state transition, not process termination. Stop scheduling descendants, signal cancellable work, let non-cancellable external effects finish, and reconcile them before declaring the run cancelled. Compensation is similarly domain-specific: deleting an unpublished draft may reverse an action, while a sent email cannot be unsent and must instead be followed by a corrective action. “Rollback” is an unsafe abstraction unless every tool declares what reversal actually means.
 
@@ -198,9 +198,9 @@ C_{run} = \sum_{a \in attempts}
   (t^{in}_a c^{in}_{m_a} + t^{out}_a c^{out}_{m_a} + c^{tool}_a + c^{infra}_a).
 $$
 
-Budget admission must happen before expensive fan-out. Each child receives a reservation; unused budget returns to the parent; overruns cannot silently borrow from unrelated runs. A max-turn count alone is insufficient because one turn may contain a large context, multiple tool calls, or a high reasoning budget. Track tokens, currency, wall time, external operations, and concurrency separately.
+Budget admission must happen before expensive fan-out. Each child receives a reservation. Unused budget returns to the parent. Overruns cannot silently borrow from unrelated runs. A max-turn count alone is insufficient because one turn may contain a large context, multiple tool calls, or a high reasoning budget. Track tokens, currency, wall time, external operations, and concurrency separately.
 
-Voting deserves special caution. If five samples share a model, prompt, retrieved context, and decoding regime, their errors are correlated; the textbook binomial majority-vote gain does not apply. Diversity must come from evidence sources, decomposition, model families, prompts, or independent execution paths. Even then, majority agreement establishes consensus, not truth. High-impact decisions need a ground-truth verifier or human authority.
+Voting deserves special caution. If five samples share a model, prompt, retrieved context, and decoding regime, their errors are correlated. The textbook binomial majority-vote gain does not apply. Diversity must come from evidence sources, decomposition, model families, prompts, or independent execution paths. Even then, majority agreement establishes consensus, not truth. High-impact decisions need a ground-truth verifier or human authority.
 
 Evaluator–optimizer loops need a **progress measure**. Store rubric scores by dimension, require the next revision to address named defects, reject regressions on dimensions that previously passed, and terminate when improvement falls below a threshold. Otherwise the loop can oscillate between two stylistic variants while spending until its cap.
 
@@ -208,9 +208,9 @@ Evaluator–optimizer loops need a **progress measure**. Store rubric scores by 
 
 Human review is most reliable when represented as a first-class state with a frozen evidence package: proposed action, diff from prior state, tool arguments, provenance, predicted impact, and the policy rule that requested approval. An approval should authorize that exact action digest, not a vague future intent. If the action changes after feedback, its digest changes and previous approval no longer applies.
 
-Policy enforcement belongs outside the model. The model may propose a route or claim that an action is safe; a policy service decides whether the authenticated principal, tenant, environment, data classification, and action parameters permit it. This prevents a retrieved document or tool response from “instructing” the agent to expand its own authority. The orchestrator should mint short-lived, least-privilege credentials for the selected tool call rather than place broad credentials in the model-visible environment.
+Policy enforcement belongs outside the model. The model may propose a route or claim that an action is safe. A policy service decides whether the authenticated principal, tenant, environment, data classification, and action parameters permit it. This prevents a retrieved document or tool response from “instructing” the agent to expand its own authority. The orchestrator should mint short-lived, least-privilege credentials for the selected tool call rather than place broad credentials in the model-visible environment.
 
-Pause and resume are also policy operations. A paused run must release compute leases while retaining durable state; secrets or signed URLs may expire and need re-issuance on resume; the policy must be evaluated again because permissions and environment state may have changed. A month-old approved plan is not automatically authorized to execute against today's production system.
+Pause and resume are also policy operations. A paused run must release compute leases while retaining durable state. Secrets or signed URLs may expire and need re-issuance on resume. The policy must be evaluated again because permissions and environment state may have changed. A month-old approved plan is not automatically authorized to execute against today's production system.
 
 ---
 
@@ -220,11 +220,11 @@ ReAct, Chain-of-Thought, Tree-of-Thought, self-consistency, and Reflexion expose
 
 | Technique | Computation it exposes | External orchestration role |
 |---|---|---|
-| ReAct (`Thought:/Action:` text) | Interleaved reasoning + tool use via parsed text | Structured tool protocols usually replace text parsing; the observe–act feedback pattern remains. |
-| Chain-of-Thought ("think step by step") | Elicited intermediate reasoning | May be redundant on reasoning-oriented models; explicit concise rationales remain useful when the product requires reviewable decision evidence. |
+| ReAct (`Thought:/Action:` text) | Interleaved reasoning + tool use via parsed text | Structured tool protocols usually replace text parsing. The observe–act feedback pattern remains. |
+| Chain-of-Thought ("think step by step") | Elicited intermediate reasoning | May be redundant on reasoning-oriented models. Explicit concise rationales remain useful when the product requires reviewable decision evidence. |
 | Self-consistency (sample N, vote) | Reliability via diversity | Survives as the voting form of parallelization: applied at the *task* level where verification is hard. |
 | Tree-of-Thought (explicit search) | Explored alternative reasoning paths | External search remains valuable where candidates can be checkpointed, evaluated independently, or distributed. |
-| Reflexion (verbal self-critique across retries) | Revision conditioned on a prior attempt | Useful only when feedback adds evidence or a qualified evaluator; self-critique alone can preserve the original blind spot. |
+| Reflexion (verbal self-critique across retries) | Revision conditioned on a prior attempt | Useful only when feedback adds evidence or a qualified evaluator. Self-critique alone can preserve the original blind spot. |
 
 Do not assume a reasoning scaffold transfers across models, tasks, or tool environments. Compare it with the simplest goal-and-constraint request using paired evaluation. Allocate more internal or external search only while its marginal verified-success gain exceeds latency and cost, and distinguish private model reasoning from the concise decision evidence an auditor needs. External search remains appropriate when branches require different evidence, independent execution, checkpointing, or explicit control over termination.
 
@@ -241,7 +241,7 @@ Do not assume a reasoning scaffold transfers across models, tasks, or tool envir
 | Parallel: voting | Code | n× concurrent | Medium | Reliability below bar, weak verifiers |
 | Orchestrator–workers | Model plans, code executes | Variable | High | Unpredictable decomposition (research, search) |
 | Evaluator–optimizer | Code loop | Generation plus bounded evaluation/revision attempts | Medium | Qualified grading is easier than generating |
-| Agent loop | Model | Input-dependent; bounded by admission | High | Open-ended, verifiable, tool-rich tasks |
+| Agent loop | Model | Input-dependent and bounded by admission | High | Open-ended, verifiable, tool-rich tasks |
 
 Patterns can compose, but their contracts compose too. A router changes the eligible graph, an agent loop adds dynamic nodes, and a replicated branch adds a join and cancellation policy. Record each boundary in one run graph and admit each addition only when measured marginal value exceeds its latency, spend, and failure surface.
 
@@ -253,13 +253,13 @@ Patterns can compose, but their contracts compose too. A router changes the elig
 
 **Grader drift and shared blindness** turn an evaluator into a confidence amplifier. LLM judges can anchor on length, fluent explanations, or the same false premise used by the generator. Calibrate each rubric dimension against blinded human labels, track disagreement by slice, and send objective claims to executable or retrieval-backed verifiers. A grader's `PASS` is an observation with a known error rate, not a proof.
 
-**Silent loop divergence** appears as repeated tool calls with cosmetically changed arguments, cyclic edits, or plans that grow without retiring work. Detect normalized action-signature repetition, unchanged environment state, score oscillation, and failure to reduce the open-goal set. The harness should force a strategy transition, request missing information, or terminate; another unconstrained retry is not recovery.
+**Silent loop divergence** appears as repeated tool calls with cosmetically changed arguments, cyclic edits, or plans that grow without retiring work. Detect normalized action-signature repetition, unchanged environment state, score oscillation, and failure to reduce the open-goal set. The harness should force a strategy transition, request missing information, or terminate. Another unconstrained retry is not recovery.
 
 **Ambiguous side effects** are the most dangerous retry failure. A tool times out after committing, the orchestrator marks the node failed, and a retry repeats the operation. Idempotency keys and reconciliation of uncertain attempts must be designed before enabling automatic retries on write tools.
 
 **Budget-free autonomy** converts a correctness bug into an unbounded resource incident. Parent deadlines and spend ceilings must be subdivided across children, and every retry or fan-out decision must reserve budget. Use observed workload distributions and product loss limits, not a convenient fixed number copied across tasks.
 
-**Coordination without ownership** lets parallel workers mutate the same artifact or external state from inconsistent snapshots. The result may be syntactically mergeable and semantically contradictory. Partition write sets, use optimistic version checks at commit, and make synthesis a controlled merge step; [Multi-Agent Systems](./03-multi-agent-systems.md) develops these consistency models.
+**Coordination without ownership** lets parallel workers mutate the same artifact or external state from inconsistent snapshots. The result may be syntactically mergeable and semantically contradictory. Partition write sets, use optimistic version checks at commit, and make synthesis a controlled merge step. [Multi-Agent Systems](./03-multi-agent-systems.md) develops these consistency models.
 
 **Cancellation leakage** happens when the root run is reported cancelled while child jobs, provider streams, or tool operations continue. Propagate cancellation tokens, record which activities acknowledge them, and reconcile non-cancellable work. Otherwise a user sees a stopped workflow while costs and side effects continue in the background.
 
@@ -269,11 +269,11 @@ Start from the shape of uncertainty rather than from a fashionable agent pattern
 
 | Design question | Architectural consequence |
 |---|---|
-| Can valid steps be enumerated before seeing the request? | Encode them as a workflow; use the model only inside bounded nodes. |
+| Can valid steps be enumerated before seeing the request? | Encode them as a workflow. Use the model only inside bounded nodes. |
 | Is decomposition input-dependent but the final result cheaply verifiable? | Use orchestrator–workers or an agent loop with verifier-controlled commit. |
-| Are subtasks independent in both reads and writes? | Parallel sectioning is safe; otherwise establish ownership or serialize commits. |
-| Is failure transient, semantic, or an uncertain side effect? | Retry transient faults; revise strategy for semantic faults; reconcile uncertain effects. |
-| Does evaluation have lower entropy than generation? | An evaluator–optimizer loop may pay for itself; otherwise it compounds model opinion. |
+| Are subtasks independent in both reads and writes? | Parallel sectioning is safe. Otherwise establish ownership or serialize commits. |
+| Is failure transient, semantic, or an uncertain side effect? | Retry transient faults. Revise strategy for semantic faults. Reconcile uncertain effects. |
+| Does evaluation have lower entropy than generation? | An evaluator–optimizer loop may pay for itself. Otherwise it compounds model opinion. |
 | Must a human authorize impact? | Persist an approval state bound to an exact action digest and revalidate on change. |
 | Is p99 latency strict? | Bound fan-out, stream partial results, route by deadline, and avoid slowest-child joins. |
 | Is spend strict? | Reserve hierarchical budgets before calls and degrade to cheaper bounded paths. |
@@ -282,22 +282,22 @@ Build the minimum graph that passes offline evaluations and shadow traffic. Then
 
 ## Key Takeaways
 
-- An orchestration step is a typed, versioned state transition with explicit retry and side-effect semantics; a prompt alone is not a runtime node.
+- An orchestration step is a typed, versioned state transition with explicit retry and side-effect semantics. A prompt alone is not a runtime node.
 - Workflow reliability multiplies across sequential stages, parallel latency inherits the slowest branch, and all attempted work contributes to cost.
 - Durable execution requires stable logical identities, recorded nondeterminism, idempotency or reconciliation, versioned replay, and propagated cancellation.
 - Voting and LLM grading reduce error only when their failures are sufficiently independent and calibrated against real ground truth.
-- Models propose actions; policy code controls authority, approvals bind to exact actions, and external effects determine what compensation can mean.
+- Models propose actions. Policy code controls authority, approvals bind to exact actions, and external effects determine what compensation can mean.
 - Choose autonomy only for uncertainty that code cannot enumerate and outcomes that the system can verify.
 
 ---
 
 ## References
 
-- [Building Effective Agents](https://www.anthropic.com/research/building-effective-agents): Anthropic; the workflow/agent taxonomy this article follows
+- [Building Effective Agents](https://www.anthropic.com/research/building-effective-agents): Anthropic. The workflow/agent taxonomy this article follows
 - [DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning](https://arxiv.org/abs/2501.12948): how reasoning got internalized
 - [ReAct: Synergizing Reasoning and Acting](https://arxiv.org/abs/2210.03629), [Tree of Thoughts](https://arxiv.org/abs/2305.10601), [Reflexion](https://arxiv.org/abs/2303.11366), [Self-Consistency](https://arxiv.org/abs/2203.11171): the historical scaffolds and what they taught the field
 - [How We Built Our Multi-Agent Research System](https://www.anthropic.com/engineering/built-multi-agent-research-system): orchestrator–workers at production scale
-- [Don't Build Multi-Agents](https://cognition.ai/blog/dont-build-multi-agents): Cognition; the context-sharing counterargument
+- [Don't Build Multi-Agents](https://cognition.ai/blog/dont-build-multi-agents): Cognition. The context-sharing counterargument
 - [Temporal](https://temporal.io/): durable execution for long-running workflows
 
 ---

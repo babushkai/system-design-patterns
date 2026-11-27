@@ -62,7 +62,7 @@ DEEP_SYSTEM_SECTIONS = [
     Path("17-llm-systems"),
 ]
 DEEP_SYSTEM_REQUIRED_HEADINGS = [
-    re.compile(r"^## TL;DR$", re.MULTILINE),
+    re.compile(r"^## (?:TL;DR|Overview \{#tl-dr\})$", re.MULTILINE),
     re.compile(r"^## Failure Modes(?:\b|:)", re.MULTILINE),
     re.compile(r"^## Decision Framework(?:\b|:)", re.MULTILINE),
     re.compile(r"^## Key Takeaways$", re.MULTILINE),
@@ -457,10 +457,15 @@ def validate_chapter_contract(errors: list[str]) -> None:
                 continue
 
             first_lineno, first = headings[0]
-            if normalize_heading(first) != LEAD_SUMMARY_HEADING.casefold():
+            lead = (
+                "Overview {#tl-dr}"
+                if not prefix and Path(relative).parts[0] == "17-llm-systems"
+                else LEAD_SUMMARY_HEADING
+            )
+            if normalize_heading(first) != lead.casefold():
                 errors.append(
                     f"{rel(path)}:{first_lineno}: the first H2 must be "
-                    + f"'## {LEAD_SUMMARY_HEADING}', found '## {first}'"
+                    + f"'## {lead}', found '## {first}'"
                 )
 
             references: list[int] = []
@@ -736,6 +741,7 @@ def validate_english_section_casing(errors: list[str]) -> None:
         if path.relative_to(ROOT).parts[0] == "ja":
             continue
         for lineno, heading in h2_headings(strip_fenced_code(path.read_text(encoding="utf-8"))):
+            heading = re.sub(r"\s+\{#[^}]+\}$", "", heading)
             body = SECTION_CASE_NUMBERING_RE.sub("", heading)
             numbering = heading[: len(heading) - len(body)]
             canonical = canonical_section_heading(body)
